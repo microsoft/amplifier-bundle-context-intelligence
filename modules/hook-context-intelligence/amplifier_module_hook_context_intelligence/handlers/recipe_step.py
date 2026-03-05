@@ -10,7 +10,7 @@ from ..services import HookStateService
 
 
 class RecipeStepHandler:
-    handled_events: set[str] = frozenset(
+    handled_events: frozenset[str] = frozenset(
         {
             "recipe:step_started",
             "recipe:step_completed",

@@ -10,7 +10,7 @@ from ..services import HookStateService
 
 
 class SessionHandler:
-    handled_events: set[str] = frozenset(
+    handled_events: frozenset[str] = frozenset(
         {
             "session:start",
             "session:fork",

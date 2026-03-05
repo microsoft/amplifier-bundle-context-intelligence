@@ -10,7 +10,7 @@ from ..services import HookStateService
 
 
 class OrchestratorRunHandler:
-    handled_events: set[str] = frozenset(
+    handled_events: frozenset[str] = frozenset(
         {
             "prompt:submit",
             "execution:start",

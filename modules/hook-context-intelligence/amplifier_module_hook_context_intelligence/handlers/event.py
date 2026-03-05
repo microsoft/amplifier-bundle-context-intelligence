@@ -12,7 +12,7 @@ from ..services import HookStateService
 class SystemEventHandler:
     """Labels preserve full event scope: :Event:ContextCompaction, :Event:CancelRequested, etc."""
 
-    handled_events: set[str] = frozenset(
+    handled_events: frozenset[str] = frozenset(
         {
             "context:compaction",
             "cancel:requested",

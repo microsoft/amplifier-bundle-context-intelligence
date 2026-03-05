@@ -10,7 +10,7 @@ from ..services import HookStateService
 
 
 class StepHandler:
-    handled_events: set[str] = frozenset(
+    handled_events: frozenset[str] = frozenset(
         {
             "provider:request",
             "llm:response",

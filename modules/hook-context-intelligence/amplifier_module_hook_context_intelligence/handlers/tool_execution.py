@@ -10,7 +10,7 @@ from ..services import HookStateService
 
 
 class ToolExecutionHandler:
-    handled_events: set[str] = frozenset(
+    handled_events: frozenset[str] = frozenset(
         {
             "tool:pre",
             "tool:post",
