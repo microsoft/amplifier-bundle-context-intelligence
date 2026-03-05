@@ -84,3 +84,11 @@ def test_missing_flush_fails_isinstance():
 
     store = BadStore()
     assert not isinstance(store, GraphStore)
+
+
+def test_graph_state_conforms_to_graph_store():
+    from amplifier_module_hook_context_intelligence.graph_store import GraphStore
+    from amplifier_module_hook_context_intelligence.services import GraphState
+
+    graph = GraphState()
+    assert isinstance(graph, GraphStore)
