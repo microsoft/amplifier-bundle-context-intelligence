@@ -52,14 +52,17 @@ class TestHookStateServiceIntegration:
         service = HookStateService(raw_config={})
         assert isinstance(service.graph, DuckDBGraphStore)
 
-    def test_nested_graph_store_config_passed_through(self, tmp_path):
+    async def test_nested_graph_store_config_passed_through(self, tmp_path):
         from amplifier_module_hook_context_intelligence.services import HookStateService
 
         db_path = str(tmp_path / "test.db")
         service = HookStateService(
             raw_config={"graph_store": {"type": "duckdb", "connection": db_path}}
         )
-        assert service.graph._connection_str == db_path  # type: ignore[attr-defined]
+        try:
+            assert service.graph._connection_str == db_path  # type: ignore[attr-defined]
+        finally:
+            await service.graph.close()
 
     def test_unknown_store_type_raises(self):
         from amplifier_module_hook_context_intelligence.services import HookStateService
