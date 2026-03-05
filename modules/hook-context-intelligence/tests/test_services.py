@@ -61,6 +61,7 @@ class TestGraphState:
         await graph.upsert_node("s1", labels={"Session"}, properties={"started": True})
         await graph.upsert_node("s1", labels={"Session"}, properties={"ended": True})
         node = await graph.get_node("s1")
+        assert node is not None
         assert node["properties"]["started"] is True
         assert node["properties"]["ended"] is True
 
@@ -78,6 +79,7 @@ class TestGraphState:
         await graph.upsert_node("s1", labels={"Session", "Root"}, properties={})
         await graph.upsert_node("s1", labels={"Resumed"}, properties={})
         node = await graph.get_node("s1")
+        assert node is not None
         assert node["labels"] == {"Session", "Root", "Resumed"}
 
     async def test_upsert_edge_creates_edge(self):
