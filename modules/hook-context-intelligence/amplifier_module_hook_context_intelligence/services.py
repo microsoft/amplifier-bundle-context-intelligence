@@ -79,7 +79,7 @@ class GraphState:
         pass
 
     async def close(self) -> None:
-        pass
+        await self.flush()
 
 
 class HookStateService:
