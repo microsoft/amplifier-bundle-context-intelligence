@@ -80,10 +80,10 @@ class TestPyprojectStructure:
         assert attr == "mount"
         assert module_path == "amplifier_module_hook_context_intelligence"
 
-    def test_no_runtime_dependencies(self):
+    def test_runtime_dependencies(self):
         data = self._load_pyproject()
         deps = data["project"].get("dependencies", [])
-        assert deps == [], f"Expected zero runtime dependencies, got: {deps}"
+        assert "duckdb>=1.0" in deps, f"Expected duckdb>=1.0 in runtime dependencies, got: {deps}"
 
     def test_hatchling_build_backend(self):
         data = self._load_pyproject()

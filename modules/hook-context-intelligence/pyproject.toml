@@ -5,7 +5,7 @@ description = "Context intelligence hook — event-driven property graph builder
 requires-python = ">=3.11"
 license = "MIT"
 
-dependencies = []
+dependencies = ["duckdb>=1.0"]
 
 [project.entry-points."amplifier.modules"]
 hook-context-intelligence = "amplifier_module_hook_context_intelligence:mount"
