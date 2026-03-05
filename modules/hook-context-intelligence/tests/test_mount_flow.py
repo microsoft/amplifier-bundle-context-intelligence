@@ -218,7 +218,7 @@ class TestSpecificRegisteredToReady:
 
 
 class TestKeyInvariant:
-    async def test_total_registrations_equals_remaining_events(self):
+    async def test_every_remaining_event_has_at_least_one_registration(self):
         events = [
             "session:start",
             "session:end",
@@ -234,7 +234,8 @@ class TestKeyInvariant:
         await flow.discover_events(coordinator)
         flow.register_specific_handlers(coordinator)
         flow.register_default_handler(coordinator)
-        assert coordinator.hooks.register.call_count == len(flow.remaining_events)
+        registered_events = {c.args[0] for c in coordinator.hooks.register.call_args_list}
+        assert flow.remaining_events == registered_events
 
     async def test_deterministic_registrations(self):
         events = ["session:start", "tool:pre", "custom:event"]

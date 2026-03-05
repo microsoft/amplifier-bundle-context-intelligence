@@ -2,7 +2,7 @@
 
 ## Goal
 
-Design the hook mount and event registration flow for the context-intelligence bundle — a deterministic state machine that discovers events, matches them to handlers via a protocol contract, and guarantees every non-excluded event gets exactly one handler.
+Design the hook mount and event registration flow for the context-intelligence bundle — a deterministic state machine that discovers events, matches them to handlers via a protocol contract, and guarantees every non-excluded event gets at least one handler.
 
 ## Background
 
@@ -11,7 +11,7 @@ The context-intelligence bundle observes orchestrator events and builds a proper
 1. Stand up shared services (graph state, configuration)
 2. Instantiate handlers that know which events they own
 3. Discover what events actually exist in the running system
-4. Register each discovered event to exactly one handler
+4. Register each discovered event to at least one handler
 
 This mount flow is the foundation for all subsequent handler implementation. It must be deterministic — same inputs (modules loaded, config) always produce the same registrations — and testable at every state transition.
 
@@ -168,11 +168,11 @@ The default handler derives `:Event:{FullScope}` labels from the event name stri
 
 #### State 6: READY
 
-Hook is fully mounted. Every discovered non-excluded event has exactly one handler registered.
+Hook is fully mounted. Every discovered non-excluded event has at least one handler registered.
 
 ### Key Invariant
 
-**Every discovered non-excluded event gets exactly one handler** — either a specific entity handler or the default handler. No event is unhandled. No event has duplicate handlers.
+**Every discovered non-excluded event gets at least one handler** — either a specific entity handler (or multiple, if their claims overlap) or the default handler. No event is unhandled.
 
 ### Summary Flow
 
@@ -221,5 +221,5 @@ Each state transition is independently testable:
 ## Open Questions
 
 - **Wildcard event matching:** Handlers like `StepHandler` declare `llm:request:*` patterns. How does the mount flow match discovered events like `llm:request:anthropic` against the `llm:request:*` pattern? This needs a defined matching strategy (prefix match, glob, regex).
-- **Handler ordering within specific registration:** If two entity handlers could theoretically claim the same event (they shouldn't by design), what happens? Current assumption: handler sets are disjoint by construction, validated at mount time.
+- **Handler ordering within specific registration:** Multiple entity handlers can claim the same event. When this happens, all matching handlers are registered via `coordinator.hooks.register()`, which dispatches to each by priority. The default handler is only registered for events that no entity handler claims.
 - **GraphState flush semantics:** When does GraphState flush pending state to the backend? On `session:end`? On a timer? On every upsert? This is a backend concern but affects handler design.

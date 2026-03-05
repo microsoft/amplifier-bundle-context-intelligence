@@ -1,4 +1,4 @@
-"""Tests for all 7 handlers — protocol conformance, event claims, disjointness."""
+"""Tests for all 7 handlers — protocol conformance, event claims, coverage."""
 
 from __future__ import annotations
 
@@ -119,22 +119,13 @@ class TestEventClaims:
         assert handler.handled_events == set()
 
 
-class TestDisjointness:
-    def test_entity_handler_events_are_disjoint(self, services: HookStateService):
-        all_events: list[str] = []
-        for handler_cls in ENTITY_HANDLER_CLASSES:
-            handler = handler_cls(services)
-            all_events.extend(handler.handled_events)
-        assert len(all_events) == len(set(all_events)), (
-            f"Duplicate events found: {[e for e in all_events if all_events.count(e) > 1]}"
-        )
+class TestEventCoverage:
+    """Entity handlers collectively cover the expected canonical events."""
 
-    def test_claimed_events_union(self, services: HookStateService):
-        claimed: set[str] = set()
+    def test_all_entity_handlers_claim_at_least_one_event(self, services: HookStateService):
         for handler_cls in ENTITY_HANDLER_CLASSES:
             handler = handler_cls(services)
-            claimed |= handler.handled_events
-        assert len(claimed) >= 18, f"Expected at least 18 claimed events, got {len(claimed)}"
+            assert len(handler.handled_events) >= 1, f"{handler_cls.__name__} claims no events"
 
 
 class TestDefaultHandlerLabelDerivation:

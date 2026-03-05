@@ -1,0 +1,239 @@
+// Hook Event Discovery, Handler Registration & Runtime Dispatch
+//
+// Architecture extracted from amplifier-bundle-context-intelligence-cxdb.
+// This diagram captures the pattern we are carrying forward into
+// the new context-intelligence bundle — open-ended event handling
+// where the hook discovers events dynamically and never drops unknowns.
+//
+// Three phases:
+//   Phase 1 — Mount-time: Event discovery & handler registration
+//   Phase 2 — Runtime: Dual-path dispatch (dedicated vs default)
+//   Phase 3 — Write pipeline (handler → storage)
+//
+// Render: dot -Tpng docs/hook-event-discovery-and-dispatch.dot -o docs/hook-event-discovery-and-dispatch.png
+
+digraph HookArchitecture {
+    rankdir=TB;
+    fontname="Helvetica";
+    node [fontname="Helvetica", fontsize=9];
+    edge [fontname="Helvetica", fontsize=7];
+    compound=true;
+    splines=ortho;
+    nodesep=0.5;
+    ranksep=0.6;
+
+    labelloc="t";
+    label="Hook Event Discovery, Handler Registration & Runtime Dispatch\nOpen-ended event system — unknown events are stored, never dropped";
+
+    // ═══════════════════════════════════════
+    // PHASE 1: MOUNT-TIME — EVENT DISCOVERY
+    // ═══════════════════════════════════════
+
+    subgraph cluster_mount {
+        label="Phase 1: Mount-Time — Event Discovery & Registration\n(hooks mount LAST — all other modules have already advertised their events)";
+        style=rounded;
+        color="#1565C0";
+        fontcolor="#1565C0";
+        bgcolor="#E3F2FD";
+
+        // --- Sources of event knowledge ---
+
+        node [shape=cylinder, fillcolor="#BBDEFB", style=filled];
+
+        handler_groups [label="13 Handler Groups\n(EventHandler protocol)\n\neach implements event_map()\n→ dict[event_name, handler_fn]\n\n46 dedicated events total"];
+
+        config_include [label="Config: include_events\n\nExplicit event patterns\nfrom bundle configuration\n(glob patterns supported)"];
+
+        node [shape=cylinder, fillcolor="#B3E5FC", style=filled];
+
+        cap_legacy [label="coordinator\n.get_capability(\n  'observability.events'\n)\n\nLegacy list accumulation\n(modules append events\nat their mount time)"];
+
+        cap_contrib [label="coordinator\n.collect_contributions(\n  'observability.events'\n)\n\nCanonical contribution\nchannel pattern\n(modules declare events)"];
+
+        // --- The build_event_map aggregation ---
+
+        node [shape=box, fillcolor="#C8E6C9", style="filled,bold"];
+
+        build_map [label="build_event_map()\n\nAggregate all 13 group.event_map() dicts\ninto unified _event_map\n→ {event: _dispatch} for ALL dedicated events\n\nOrder: pipeline, recipe, skills, approval,\ncancel, artifacts, provider, context,\nllm, turn, tool, delegation, session\n(last wins on conflict)"];
+
+        // --- Registration with coordinator ---
+
+        node [shape=box, fillcolor="#FFF9C4", style="filled,bold"];
+
+        reg_dedicated [label="Register Dedicated Handlers\n\nfor event in _event_map:\n  coordinator.hooks.register(\n    event, hook._dispatch,\n    priority=90,\n    name=f'cxdb-{event}'\n  )"];
+
+        reg_default [label="Register Default Handler\n\nfor event in (config ∪ discovered)\n  if event NOT in _event_map:\n    coordinator.hooks.register(\n      event, hook._handle_default_event,\n      priority=80,\n      name=f'cxdb-default-{event}'\n    )"];
+
+        reg_fs [label="Register FS Snapshot\n(optional, priority=85)\n\nif config.fs_snapshot.enabled:\n  register for tool:post,\n  artifact:write"];
+
+        // --- Exclusion filter ---
+
+        node [shape=diamond, fillcolor="#FFCDD2", style=filled];
+
+        exclude_filter [label="Exclusion Filter\n\nexclude_events patterns\n+ verbosity tier:\n  base → skip *:debug, *:raw\n  debug → skip *:raw\n  raw → skip nothing\n\nApplied BEFORE registration"];
+
+        // --- Edges ---
+
+        handler_groups -> build_map [label="  event_map() × 13  ", color="#2E7D32"];
+        build_map -> reg_dedicated [label="  _event_map keys  ", color="#2E7D32"];
+
+        config_include -> exclude_filter [color="#0277BD"];
+        cap_legacy -> exclude_filter [label="  dynamic discovery  ", color="#0277BD"];
+        cap_contrib -> exclude_filter [label="  dynamic discovery  ", color="#0277BD"];
+
+        exclude_filter -> reg_default [label="  surviving events\n  not in _event_map  ", color="#E65100"];
+    }
+
+    // ═══════════════════════════════════════
+    // PHASE 2: RUNTIME — DUAL-PATH DISPATCH
+    // ═══════════════════════════════════════
+
+    subgraph cluster_runtime {
+        label="Phase 2: Runtime — Event Dispatch";
+        style=rounded;
+        color="#2E7D32";
+        fontcolor="#2E7D32";
+        bgcolor="#E8F5E9";
+
+        // --- Amplifier event system ---
+
+        node [shape=doubleoctagon, fillcolor="#A5D6A7", style=filled];
+
+        event_emit [label="Amplifier Event System\n\ncoordinator.hooks.emit(event, data)\n\nAny module can emit any event string.\nEvents are open-ended — not a fixed enum.\nThe hook registry dispatches to all\nregistered handlers by priority order."];
+
+        // --- Connection gate ---
+
+        node [shape=hexagon, fillcolor="#FFF9C4", style=filled];
+
+        conn_gate [label="Connection Gate\n_ensure_connected()\n\nasyncio.Lock + double-check\nLazy: zero I/O at mount time\n\nCircuit breaker:\n  OSError → _gave_up = True\n  Reset on next session:start\n  (fresh chance per session)"];
+
+        // --- The two dispatch paths ---
+
+        node [shape=box, fillcolor="#C8E6C9", style="filled,bold"];
+
+        dispatch_dedicated [label="Path A: _dispatch(event, data)\nPriority 90\n\n_event_map.get(event)\n→ specific handler method\n  (e.g. SessionHandlers._on_start,\n   ToolHandlers._on_tool_pre,\n   LlmHandlers._on_response)\n\nBusiness logic per event type:\n  create turns, track tokens,\n  correlate delegations, etc."];
+
+        node [shape=box, fillcolor="#FFE082", style="filled,bold"];
+
+        dispatch_default [label="Path B: _handle_default_event(event, data)\nPriority 80\n\nDefaultEventHandler.handle(event, data)\n\nGeneric storage:\n  1. Serialize full payload as JSON\n  2. Trim oversized properties → blob store\n  3. Correlate to parent turn if exists\n  4. Write as system turn (kind=event_name)\n\nUnknown events are STORED, never dropped."];
+
+        // --- Shared guard wrapper ---
+
+        node [shape=box, fillcolor="#E1BEE7", style=filled];
+
+        guarded [label="_guarded_call(handler, event, data)\n\n1. _ensure_connected() — lazy gate\n2. filter.should_exclude(event)? → skip\n3. handler(event, data)\n4. Exception? → log, return _CONTINUE\n\nNever raises — purely observational"];
+
+        // --- Edges ---
+
+        event_emit -> guarded [label="  emit(event, data)  "];
+        guarded -> conn_gate [label="  check connection  "];
+        conn_gate -> dispatch_dedicated [label="  known event\n  (in _event_map)  ", color="#2E7D32"];
+        conn_gate -> dispatch_default [label="  discovered/config event\n  (not in _event_map)  ", color="#E65100"];
+    }
+
+    // ═══════════════════════════════════════
+    // PHASE 3: HANDLER GROUPS DETAIL
+    // ═══════════════════════════════════════
+
+    subgraph cluster_handlers {
+        label="Handler Groups (EventHandler protocol)\nEach group owns a domain of events and implements event_map() → dict[event, handler]";
+        style=rounded;
+        color="#6A1B9A";
+        fontcolor="#6A1B9A";
+        bgcolor="#F3E5F5";
+
+        node [shape=record, fillcolor="#E1BEE7", style=filled, fontsize=8];
+
+        h_session [label="{SessionHandlers|session:start, session:fork\lsession:end, session:resume\l|Clears HookState\lCreates/closes sessions\l}"];
+        h_turn [label="{TurnHandlers|prompt:submit, execution:start\lexecution:end, orchestrator:complete\lprompt:complete, +blob events\l|Writes turn_counter\lManages turn lifecycle\l}"];
+        h_tool [label="{ToolHandlers|tool:pre, tool:post\ltool:error\l|Writes pending_delegate_tool_call\lCreates tool turns\l}"];
+        h_delegation [label="{DelegationHandlers|delegate:agent_spawned\ldelegate:agent_completed\ldelegate:context_inherited\ldelegate:session_resumed\l|Reads pending_delegate_tool_call\lCorrelates parent↔child\l}"];
+        h_llm [label="{LlmHandlers|llm:response, llm:response:raw\l+3 no-ops (llm:request:*)\l|Reads HookState\lTracks tokens/models\l}"];
+        h_provider [label="{ProviderHandlers|provider:retry\l|Stateless\l}"];
+        h_context [label="{ContextHandlers|context:compaction\l|Stateless\l}"];
+        h_cancel [label="{CancelHandlers|cancel:requested\lcancel:completed\l|Stateless\l}"];
+        h_pipeline [label="{PipelineHandlers|8 × pipeline:*\l|Stateless\l}"];
+        h_recipe [label="{RecipeHandlers|6 × recipe:*\l|Stateless\l}"];
+        h_skills [label="{SkillHandlers|3 × skill(s):*\l|Stateless\l}"];
+        h_approval [label="{ApprovalHandlers|3 × approval:*\l|Stateless\l}"];
+        h_artifacts [label="{ArtifactHandlers|2 × artifact:*\l|Stateless\l}"];
+    }
+
+    // ═══════════════════════════════════════
+    // SHARED STATE
+    // ═══════════════════════════════════════
+
+    subgraph cluster_state {
+        label="Shared State (cross-handler coordination)";
+        style=rounded;
+        color="#5D4037";
+        fontcolor="#5D4037";
+        bgcolor="#EFEBE9";
+
+        node [shape=record, fillcolor="#D7CCC8", style=filled, fontsize=8];
+
+        hook_state [label="{HookState|turn_counter: dict[session_id → int]\lpending_delegate_tool_call: dict[session_id → tool_call_id]\l|Written by: TurnHandlers, ToolHandlers\lRead by: LlmHandlers, DelegationHandlers\lCleared by: SessionHandlers\l}"];
+
+        service_refs [label="{ServiceRefs|client, http_client, write_queue\l|Set lazily by _ensure_connected()\lUsed by all handlers\l}"];
+    }
+
+    // ═══════════════════════════════════════
+    // PHASE 3: WRITE PIPELINE
+    // ═══════════════════════════════════════
+
+    subgraph cluster_write {
+        label="Phase 3: Write Pipeline";
+        style=rounded;
+        color="#E65100";
+        fontcolor="#E65100";
+        bgcolor="#FFF3E0";
+
+        node [shape=box, fillcolor="#FFE0B2", style=filled];
+
+        assembler [label="TurnAssembler\n\nAssembles handler output\ninto structured turns\n(system turns, user turns,\nassistant turns)"];
+
+        write_queue [label="WriteQueue\n\nAsync fire-and-forget\nbuffered writes\n\nShut down on session:end"];
+
+        node [shape=cylinder, fillcolor="#FFCC80", style=filled];
+
+        storage [label="Storage Backend\n\n(CXDB in original impl;\nabstracted for new bundle)"];
+
+        assembler -> write_queue [label="  enqueue  "];
+        write_queue -> storage [label="  async write  "];
+    }
+
+    // ═══════════════════════════════════════
+    // CROSS-CLUSTER EDGES
+    // ═══════════════════════════════════════
+
+    // Mount → Runtime
+    reg_dedicated -> dispatch_dedicated [style=dashed, color="#1565C0", label="  registered at priority 90  ", lhead=cluster_runtime];
+    reg_default -> dispatch_default [style=dashed, color="#E65100", label="  registered at priority 80  ", lhead=cluster_runtime];
+
+    // Dispatch → Handlers
+    dispatch_dedicated -> h_session [style=dashed, color="#6A1B9A", lhead=cluster_handlers];
+
+    // Dispatch → Write pipeline
+    dispatch_dedicated -> assembler [label="  handler output  ", color="#E65100", lhead=cluster_write];
+    dispatch_default -> assembler [label="  serialized JSON  ", color="#E65100", lhead=cluster_write];
+
+    // State connections
+    dispatch_dedicated -> hook_state [style=dotted, color="#5D4037", label="  read/write  ", lhead=cluster_state];
+    conn_gate -> service_refs [style=dotted, color="#5D4037", label="  lazy init  "];
+
+    // ═══════════════════════════════════════
+    // KEY DESIGN PRINCIPLES
+    // ═══════════════════════════════════════
+
+    subgraph cluster_principles {
+        label="Key Design Principles for New Bundle";
+        style=dashed;
+        color="#616161";
+        fontcolor="#616161";
+        bgcolor="#FAFAFA";
+
+        node [shape=note, fillcolor="#FFFDE7", style=filled, fontsize=8];
+
+        principles [label="1. OPEN-ENDED EVENTS — Amplifier events are NOT a fixed enum.\l   Any module can emit any string. The hook must handle the unknown.\l\l2. NEVER DROP — Unknown events go to DefaultEventHandler → stored as\l   generic JSON. Zero silent data loss.\l\l3. HOOKS MOUNT LAST — By the time mount() runs, all other modules\l   (orchestrators, providers, tools) have already registered their\l   events via observability.events. Discovery is complete.\l\l4. DUAL DISCOVERY — Both get_capability() (legacy) and\l   collect_contributions() (canonical) are queried.\l   Belt and suspenders.\l\l5. PRIORITY LAYERING — Dedicated handlers (90) fire before\l   default (80). Both fire for the same event if registered at both.\l   FS snapshots (85) sit between.\l\l6. LAZY CONNECTION — Zero I/O at mount time. Connection established\l   on first event. Circuit breaker resets per session:start.\l\l7. PURELY OBSERVATIONAL — Every handler returns _CONTINUE.\l   The hook never blocks, never modifies, never fails loudly.\l   Exceptions are caught and logged.\l\l8. STORAGE-AGNOSTIC HANDLERS — Handler logic produces structured\l   output. Write pipeline is separate. Storage backend is swappable.\l"];
+    }
+}
