@@ -9,15 +9,5 @@ hooks:
   - module: hook-context-intelligence
     source: context-intelligence:modules/hook-context-intelligence
     config:
-      exclude_events:
-        - "content_block:delta"
-        - "thinking:delta"
-        - "session-naming:*"
-        - "orchestrator:rate_limit_delay"
-        - "provider:request"
-        - "provider:response"
-        - "provider:error"
-        - "provider:tool_sequence_repaired"
-        - "provider:background_status"
-        - "provider:incomplete_continuation"
+      exclude_events: []
       log_level: "${CI_LOG_LEVEL:WARNING}"
