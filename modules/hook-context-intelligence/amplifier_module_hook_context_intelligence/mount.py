@@ -48,9 +48,9 @@ class MountFlow:
         self.remaining_events: set[str] = set()
         self._unregister_fns: list[Callable] = []
 
-    def create_services(self) -> None:
+    def create_services(self, coordinator: Any) -> None:
         """INIT → STATE_CREATED: Instantiate HookStateService from config."""
-        self.services = HookStateService(self._config)
+        self.services = HookStateService(self._config, coordinator=coordinator)
         self.state = MountState.STATE_CREATED
 
     def instantiate_handlers(self) -> None:
@@ -144,7 +144,7 @@ class MountFlow:
         The cleanup callable calls every unregister function returned by
         ``coordinator.hooks.register``, tearing down all registered hooks.
         """
-        self.create_services()
+        self.create_services(coordinator)
         self.instantiate_handlers()
         await self.discover_events(coordinator)
         self.register_specific_handlers(coordinator)

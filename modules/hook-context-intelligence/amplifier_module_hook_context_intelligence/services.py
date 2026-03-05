@@ -85,6 +85,7 @@ class GraphState:
 class HookStateService:
     """Top-level service container shared across all handlers."""
 
-    def __init__(self, raw_config: dict[str, Any]) -> None:
+    def __init__(self, raw_config: dict[str, Any], coordinator: Any = None) -> None:
         self.config = HookConfig(raw_config)
+        self.coordinator = coordinator
         self.graph = GraphState()
