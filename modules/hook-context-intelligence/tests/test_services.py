@@ -44,45 +44,89 @@ class TestGraphState:
         assert graph.current_step is None
         assert graph.step_counter == 0
 
-    def test_upsert_node_creates_node(self):
+    async def test_upsert_node_creates_node(self):
         from amplifier_module_hook_context_intelligence.services import GraphState
 
         graph = GraphState()
-        graph.upsert_node("s1", labels={"Session"}, properties={"started": True})
-        node = graph.get_node("s1")
+        await graph.upsert_node("s1", labels={"Session"}, properties={"started": True})
+        node = await graph.get_node("s1")
         assert node is not None
         assert node["labels"] == {"Session"}
         assert node["properties"]["started"] is True
 
-    def test_upsert_node_updates_existing(self):
+    async def test_upsert_node_updates_existing(self):
         from amplifier_module_hook_context_intelligence.services import GraphState
 
         graph = GraphState()
-        graph.upsert_node("s1", labels={"Session"}, properties={"started": True})
-        graph.upsert_node("s1", labels={"Session"}, properties={"ended": True})
-        node = graph.get_node("s1")
+        await graph.upsert_node("s1", labels={"Session"}, properties={"started": True})
+        await graph.upsert_node("s1", labels={"Session"}, properties={"ended": True})
+        node = await graph.get_node("s1")
         assert node["properties"]["started"] is True
         assert node["properties"]["ended"] is True
 
-    def test_upsert_edge_creates_edge(self):
+    async def test_upsert_node_returns_none(self):
         from amplifier_module_hook_context_intelligence.services import GraphState
 
         graph = GraphState()
-        graph.upsert_edge("s1", "r1", edge_type="CONTAINS_RUN", properties={})
-        edge = graph.get_edge("s1", "r1", edge_type="CONTAINS_RUN")
+        result = await graph.upsert_node("s1", labels={"Session"}, properties={})
+        assert result is None
+
+    async def test_upsert_node_merges_labels(self):
+        from amplifier_module_hook_context_intelligence.services import GraphState
+
+        graph = GraphState()
+        await graph.upsert_node("s1", labels={"Session", "Root"}, properties={})
+        await graph.upsert_node("s1", labels={"Resumed"}, properties={})
+        node = await graph.get_node("s1")
+        assert node["labels"] == {"Session", "Root", "Resumed"}
+
+    async def test_upsert_edge_creates_edge(self):
+        from amplifier_module_hook_context_intelligence.services import GraphState
+
+        graph = GraphState()
+        await graph.upsert_edge("s1", "r1", edge_type="CONTAINS_RUN", properties={})
+        edge = await graph.get_edge("s1", "r1", edge_type="CONTAINS_RUN")
         assert edge is not None
 
-    def test_get_nonexistent_node_returns_none(self):
+    async def test_upsert_edge_returns_none(self):
         from amplifier_module_hook_context_intelligence.services import GraphState
 
         graph = GraphState()
-        assert graph.get_node("nonexistent") is None
+        result = await graph.upsert_edge("s1", "r1", edge_type="CONTAINS_RUN", properties={})
+        assert result is None
 
-    def test_get_nonexistent_edge_returns_none(self):
+    async def test_get_nonexistent_node_returns_none(self):
         from amplifier_module_hook_context_intelligence.services import GraphState
 
         graph = GraphState()
-        assert graph.get_edge("a", "b", edge_type="X") is None
+        assert await graph.get_node("nonexistent") is None
+
+    async def test_get_nonexistent_edge_returns_none(self):
+        from amplifier_module_hook_context_intelligence.services import GraphState
+
+        graph = GraphState()
+        assert await graph.get_edge("a", "b", edge_type="X") is None
+
+    async def test_flush_is_noop(self):
+        from amplifier_module_hook_context_intelligence.services import GraphState
+
+        graph = GraphState()
+        await graph.flush()
+
+    async def test_close_is_noop(self):
+        from amplifier_module_hook_context_intelligence.services import GraphState
+
+        graph = GraphState()
+        await graph.close()
+
+    async def test_execute_query_raises_not_implemented(self):
+        import pytest
+
+        from amplifier_module_hook_context_intelligence.services import GraphState
+
+        graph = GraphState()
+        with pytest.raises(NotImplementedError):
+            await graph.execute_query("MATCH (n) RETURN n")
 
 
 class TestHookStateService:
@@ -97,12 +141,12 @@ class TestHookStateService:
         assert isinstance(service.graph, GraphState)
         assert isinstance(service.config, HookConfig)
 
-    def test_graph_accessible(self):
+    async def test_graph_accessible(self):
         from amplifier_module_hook_context_intelligence.services import HookStateService
 
         service = HookStateService(raw_config={})
-        service.graph.upsert_node("test", labels={"Test"}, properties={})
-        assert service.graph.get_node("test") is not None
+        await service.graph.upsert_node("test", labels={"Test"}, properties={})
+        assert await service.graph.get_node("test") is not None
 
     def test_config_accessible(self):
         from amplifier_module_hook_context_intelligence.services import HookStateService
