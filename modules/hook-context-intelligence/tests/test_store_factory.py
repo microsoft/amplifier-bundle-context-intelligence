@@ -24,12 +24,12 @@ class TestCreateGraphStore:
 
     def test_default_connection_is_memory(self):
         store = create_graph_store({})
-        assert store._connection_str == ":memory:"
+        assert store._connection_str == ":memory:"  # type: ignore[attr-defined]
 
     def test_passes_connection_string_through(self, tmp_path):
         db_path = str(tmp_path / "test.db")
         store = create_graph_store({"type": "duckdb", "connection": db_path})
-        assert store._connection_str == db_path
+        assert store._connection_str == db_path  # type: ignore[attr-defined]
 
     def test_raises_for_unknown_type(self):
         with pytest.raises(ValueError, match="Unknown graph_store type: neo4j"):
