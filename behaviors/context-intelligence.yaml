@@ -1,0 +1,23 @@
+bundle:
+  name: context-intelligence-behavior
+  version: 0.1.0
+  description: |
+    Context intelligence hooks for building a property graph
+    from orchestrator events.
+
+hooks:
+  - module: hook-context-intelligence
+    source: context-intelligence:modules/hook-context-intelligence
+    config:
+      exclude_events:
+        - "content_block:delta"
+        - "thinking:delta"
+        - "session-naming:*"
+        - "orchestrator:rate_limit_delay"
+        - "provider:request"
+        - "provider:response"
+        - "provider:error"
+        - "provider:tool_sequence_repaired"
+        - "provider:background_status"
+        - "provider:incomplete_continuation"
+      log_level: "${CI_LOG_LEVEL:WARNING}"
