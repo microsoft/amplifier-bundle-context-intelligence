@@ -161,7 +161,7 @@ class TestSessionFork:
         )
         node = await services.graph.get_node("f1")
         assert node is not None
-        assert "Session" in node["labels"]
+        assert node["labels"] == {"Session", "Root", "ForkedSession"}
 
 
 class TestSessionEnd:
