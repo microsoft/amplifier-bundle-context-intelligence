@@ -27,13 +27,13 @@ def test_mount_signature_accepts_coordinator_and_config():
 
 
 async def test_mount_returns_cleanup_callable():
-    from unittest.mock import MagicMock
+    from unittest.mock import AsyncMock, MagicMock
     from amplifier_module_hook_context_intelligence import mount
 
     coordinator = MagicMock()
     coordinator.hooks = MagicMock()
     coordinator.hooks.register = MagicMock(return_value=MagicMock())
-    coordinator.collect_contributions = MagicMock(return_value=[])
+    coordinator.collect_contributions = AsyncMock(return_value=[])
     coordinator.get_capability = MagicMock(return_value=None)
 
     result = await mount(coordinator, config={})
