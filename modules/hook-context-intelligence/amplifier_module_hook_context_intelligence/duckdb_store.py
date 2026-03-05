@@ -62,7 +62,7 @@ class DuckDBGraphStore:
 
     def _run(self, fn: Any) -> Any:  # noqa: ANN401
         """Run a blocking callable in the default executor."""
-        return asyncio.get_event_loop().run_in_executor(None, fn)
+        return asyncio.get_running_loop().run_in_executor(None, fn)
 
     # ------------------------------------------------------------------
     # Writes (buffer only, no I/O)

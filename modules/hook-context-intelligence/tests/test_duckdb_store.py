@@ -8,6 +8,24 @@ import pytest
 
 
 # ---------------------------------------------------------------------------
+# TestRunUsesGetRunningLoop
+# ---------------------------------------------------------------------------
+class TestRunUsesGetRunningLoop:
+    """_run must use asyncio.get_running_loop(), not the deprecated get_event_loop()."""
+
+    async def test_run_calls_get_running_loop(self):
+        import asyncio
+        from unittest.mock import patch
+
+        from amplifier_module_hook_context_intelligence.duckdb_store import DuckDBGraphStore
+
+        store = DuckDBGraphStore()
+        with patch.object(asyncio, "get_running_loop", wraps=asyncio.get_running_loop) as mock_grl:
+            await store.get_node("nonexistent")
+            mock_grl.assert_called()
+
+
+# ---------------------------------------------------------------------------
 # TestProtocolConformance
 # ---------------------------------------------------------------------------
 class TestProtocolConformance:
