@@ -40,3 +40,29 @@ class TestCreateGraphStore:
 
         store = create_graph_store({})
         assert isinstance(store, GraphStore)
+
+
+class TestHookStateServiceIntegration:
+    """Verify HookStateService uses the store factory."""
+
+    def test_default_config_creates_duckdb_store(self):
+        from amplifier_module_hook_context_intelligence.duckdb_store import DuckDBGraphStore
+        from amplifier_module_hook_context_intelligence.services import HookStateService
+
+        service = HookStateService(raw_config={})
+        assert isinstance(service.graph, DuckDBGraphStore)
+
+    def test_nested_graph_store_config_passed_through(self, tmp_path):
+        from amplifier_module_hook_context_intelligence.services import HookStateService
+
+        db_path = str(tmp_path / "test.db")
+        service = HookStateService(
+            raw_config={"graph_store": {"type": "duckdb", "connection": db_path}}
+        )
+        assert service.graph._connection_str == db_path  # type: ignore[attr-defined]
+
+    def test_unknown_store_type_raises(self):
+        from amplifier_module_hook_context_intelligence.services import HookStateService
+
+        with pytest.raises(ValueError, match="Unknown graph_store type"):
+            HookStateService(raw_config={"graph_store": {"type": "bogus"}})

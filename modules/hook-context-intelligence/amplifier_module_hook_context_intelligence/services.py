@@ -5,6 +5,8 @@ from __future__ import annotations
 import fnmatch
 from typing import Any
 
+from .store_factory import create_graph_store
+
 
 class HookConfig:
     """Configuration for the context-intelligence hook."""
@@ -88,4 +90,5 @@ class HookStateService:
     def __init__(self, raw_config: dict[str, Any], coordinator: Any = None) -> None:
         self.config = HookConfig(raw_config)
         self.coordinator = coordinator
-        self.graph = GraphState()
+        store_config = raw_config.get("graph_store", {})
+        self.graph = create_graph_store(store_config)

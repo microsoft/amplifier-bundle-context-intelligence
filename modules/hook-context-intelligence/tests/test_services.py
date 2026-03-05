@@ -133,14 +133,14 @@ class TestGraphState:
 
 class TestHookStateService:
     def test_construction(self):
+        from amplifier_module_hook_context_intelligence.graph_store import GraphStore
         from amplifier_module_hook_context_intelligence.services import (
-            GraphState,
             HookConfig,
             HookStateService,
         )
 
         service = HookStateService(raw_config={})
-        assert isinstance(service.graph, GraphState)
+        assert isinstance(service.graph, GraphStore)
         assert isinstance(service.config, HookConfig)
 
     async def test_graph_accessible(self):
