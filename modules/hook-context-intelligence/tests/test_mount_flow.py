@@ -46,7 +46,7 @@ class TestInitToStateCreated:
 
     def test_create_services(self):
         flow = MountFlow(config={"exclude_events": ["foo:bar"]})
-        flow.create_services()
+        flow.create_services(None)
         assert flow.state == MountState.STATE_CREATED
         assert isinstance(flow.services, HookStateService)
         assert flow.services.config.is_excluded("foo:bar")
@@ -55,7 +55,7 @@ class TestInitToStateCreated:
 class TestStateCreatedToHandlersInstantiated:
     def test_instantiate_handlers(self):
         flow = MountFlow(config={})
-        flow.create_services()
+        flow.create_services(None)
         flow.instantiate_handlers()
         assert flow.state == MountState.HANDLERS_INSTANTIATED
         assert len(flow.entity_handlers) == 6
@@ -63,7 +63,7 @@ class TestStateCreatedToHandlersInstantiated:
 
     def test_all_handlers_conform_to_protocol(self):
         flow = MountFlow(config={})
-        flow.create_services()
+        flow.create_services(None)
         flow.instantiate_handlers()
         for handler in flow.entity_handlers:
             assert isinstance(handler, EventHandler)
@@ -71,13 +71,13 @@ class TestStateCreatedToHandlersInstantiated:
 
     def test_claimed_events_computed(self):
         flow = MountFlow(config={})
-        flow.create_services()
+        flow.create_services(None)
         flow.instantiate_handlers()
         assert len(flow.claimed_events) >= 18
 
     def test_default_handler_starts_empty(self):
         flow = MountFlow(config={})
-        flow.create_services()
+        flow.create_services(None)
         flow.instantiate_handlers()
         assert flow.default_handler is not None
         assert flow.default_handler.handled_events == set()
@@ -89,7 +89,7 @@ class TestHandlersInstantiatedToEventsDiscovered:
             contributed_events=[["session:start", "session:end"], ["tool:pre", "tool:post"]]
         )
         flow = MountFlow(config={})
-        flow.create_services()
+        flow.create_services(None)
         flow.instantiate_handlers()
         await flow.discover_events(coordinator)
         assert flow.state == MountState.EVENTS_DISCOVERED
@@ -99,7 +99,7 @@ class TestHandlersInstantiatedToEventsDiscovered:
     async def test_discover_events_from_legacy_capability(self):
         coordinator = _make_coordinator(capability_events=["custom:event1", "custom:event2"])
         flow = MountFlow(config={})
-        flow.create_services()
+        flow.create_services(None)
         flow.instantiate_handlers()
         await flow.discover_events(coordinator)
         assert "custom:event1" in flow.remaining_events
@@ -110,7 +110,7 @@ class TestHandlersInstantiatedToEventsDiscovered:
             capability_events=["custom:event"],
         )
         flow = MountFlow(config={})
-        flow.create_services()
+        flow.create_services(None)
         flow.instantiate_handlers()
         await flow.discover_events(coordinator)
         assert "session:start" in flow.remaining_events
@@ -121,7 +121,7 @@ class TestHandlersInstantiatedToEventsDiscovered:
             contributed_events=[["session:start", "content_block:delta"]]
         )
         flow = MountFlow(config={"exclude_events": ["content_block:delta"]})
-        flow.create_services()
+        flow.create_services(None)
         flow.instantiate_handlers()
         await flow.discover_events(coordinator)
         assert "session:start" in flow.remaining_events
@@ -132,7 +132,7 @@ class TestHandlersInstantiatedToEventsDiscovered:
             contributed_events=[["session-naming:foo", "session-naming:bar", "session:start"]]
         )
         flow = MountFlow(config={"exclude_events": ["session-naming:*"]})
-        flow.create_services()
+        flow.create_services(None)
         flow.instantiate_handlers()
         await flow.discover_events(coordinator)
         assert "session-naming:foo" not in flow.remaining_events
@@ -142,7 +142,7 @@ class TestHandlersInstantiatedToEventsDiscovered:
     async def test_empty_discovery_is_valid(self):
         coordinator = _make_coordinator()
         flow = MountFlow(config={})
-        flow.create_services()
+        flow.create_services(None)
         flow.instantiate_handlers()
         await flow.discover_events(coordinator)
         assert flow.state == MountState.EVENTS_DISCOVERED
@@ -155,7 +155,7 @@ class TestEventsDiscoveredToSpecificRegistered:
             contributed_events=[["session:start", "session:end", "tool:pre"]]
         )
         flow = MountFlow(config={})
-        flow.create_services()
+        flow.create_services(None)
         flow.instantiate_handlers()
         await flow.discover_events(coordinator)
         flow.register_specific_handlers(coordinator)
@@ -165,7 +165,7 @@ class TestEventsDiscoveredToSpecificRegistered:
     async def test_only_remaining_events_registered(self):
         coordinator = _make_coordinator(contributed_events=[["session:start"]])
         flow = MountFlow(config={})
-        flow.create_services()
+        flow.create_services(None)
         flow.instantiate_handlers()
         await flow.discover_events(coordinator)
         flow.register_specific_handlers(coordinator)
@@ -178,7 +178,7 @@ class TestEventsDiscoveredToSpecificRegistered:
             contributed_events=[["llm:request:anthropic", "llm:request:openai"]]
         )
         flow = MountFlow(config={})
-        flow.create_services()
+        flow.create_services(None)
         flow.instantiate_handlers()
         await flow.discover_events(coordinator)
         flow.register_specific_handlers(coordinator)
@@ -193,7 +193,7 @@ class TestSpecificRegisteredToReady:
             contributed_events=[["session:start", "custom:unknown_event"]]
         )
         flow = MountFlow(config={})
-        flow.create_services()
+        flow.create_services(None)
         flow.instantiate_handlers()
         await flow.discover_events(coordinator)
         flow.register_specific_handlers(coordinator)
@@ -207,7 +207,7 @@ class TestSpecificRegisteredToReady:
             contributed_events=[["session:start", "custom:one", "custom:two"]]
         )
         flow = MountFlow(config={})
-        flow.create_services()
+        flow.create_services(None)
         flow.instantiate_handlers()
         await flow.discover_events(coordinator)
         flow.register_specific_handlers(coordinator)
@@ -229,7 +229,7 @@ class TestKeyInvariant:
         ]
         coordinator = _make_coordinator(contributed_events=[events])
         flow = MountFlow(config={})
-        flow.create_services()
+        flow.create_services(None)
         flow.instantiate_handlers()
         await flow.discover_events(coordinator)
         flow.register_specific_handlers(coordinator)
@@ -243,7 +243,7 @@ class TestKeyInvariant:
         for _ in range(2):
             coordinator = _make_coordinator(contributed_events=[events])
             flow = MountFlow(config={})
-            flow.create_services()
+            flow.create_services(None)
             flow.instantiate_handlers()
             await flow.discover_events(coordinator)
             flow.register_specific_handlers(coordinator)
