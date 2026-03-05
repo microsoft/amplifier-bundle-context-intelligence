@@ -1,0 +1,46 @@
+[project]
+name = "amplifier-module-hook-context-intelligence"
+version = "0.1.0"
+description = "Context intelligence hook — event-driven property graph builder for Amplifier sessions"
+requires-python = ">=3.11"
+license = "MIT"
+
+dependencies = []
+
+[project.entry-points."amplifier.modules"]
+hook-context-intelligence = "amplifier_module_hook_context_intelligence:mount"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.uv]
+package = true
+
+[tool.hatch.build.targets.wheel]
+packages = ["amplifier_module_hook_context_intelligence"]
+
+[dependency-groups]
+dev = [
+    "amplifier-core",
+    "pytest>=8.0",
+    "pytest-asyncio>=0.24",
+    "pyyaml>=6.0",
+    "pyright>=1.1",
+    "ruff>=0.4",
+]
+
+[tool.uv.sources]
+amplifier-core = { git = "https://github.com/microsoft/amplifier-core", branch = "main" }
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+
+[tool.pyright]
+pythonVersion = "3.11"
+typeCheckingMode = "basic"
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
