@@ -8,6 +8,13 @@ from amplifier_module_hook_context_intelligence.handlers.session import SessionH
 from amplifier_module_hook_context_intelligence.services import HookStateService
 
 
+class TestSessionIdGuard:
+    async def test_missing_session_id_returns_continue(self, services: HookStateService) -> None:
+        handler = SessionHandler(services)
+        result = await handler("session:start", {"timestamp": "2026-01-01T00:00:00Z"})
+        assert result.action == "continue"
+
+
 class TestSessionStart:
     async def test_root_session(self, services: HookStateService) -> None:
         handler = SessionHandler(services)
@@ -204,6 +211,7 @@ class TestSessionEnd:
         )
         node = await services.graph.get_node("s1")
         assert node is not None
+        # membership checks: end upsert merges into labels created by start
         assert "Session" in node["labels"]
         assert "Root" in node["labels"]
 
@@ -239,6 +247,7 @@ class TestSessionResume:
         )
         node = await services.graph.get_node("s1")
         assert node is not None
+        # membership checks: resume upsert merges into labels created by start
         assert "Resumed" in node["labels"]
         assert "Session" in node["labels"]
         assert "Root" in node["labels"]
@@ -283,5 +292,6 @@ class TestSessionResume:
         )
         node = await services.graph.get_node("s1")
         assert node is not None
+        # membership checks: resume creates node via upsert, labels are the full set here
         assert "Session" in node["labels"]
         assert "Resumed" in node["labels"]
