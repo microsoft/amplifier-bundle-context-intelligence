@@ -1,0 +1,47 @@
+digraph write_path {
+    rankdir=LR;
+    label="GraphStore Write Path (Non-Blocking)\nCore Protocol Requirement: upsert_node/upsert_edge MUST return immediately";
+    labelloc=t;
+    fontsize=14;
+    fontname="Helvetica";
+    node [fontname="Helvetica", fontsize=9];
+    edge [fontname="Helvetica", fontsize=7];
+
+    // Actors
+    event [label="Event\n(from coordinator)" shape=oval];
+    handler [label="Handler\n__call__()" shape=box];
+    buffer [label="In-Memory Buffer\n(dict-based)\nnon-blocking writes"
+            shape=cylinder style=filled fillcolor="#D4E6F1"];
+    hook_result [label="HookResult\n(continue)" shape=oval];
+
+    // Background
+    flush_trigger [label="Flush Trigger\n• orchestrator:complete\n• session:end\n• buffer threshold\n• periodic timer"
+                   shape=diamond style=filled fillcolor="#FCF3CF"];
+    flush_task [label="Background\nasyncio.Task\nbatch write" shape=box
+                style=filled fillcolor="#FADBD8"];
+    duckdb [label="DuckDB\n(disk file)\ngraph.duckdb"
+            shape=cylinder style=filled fillcolor="#D5F5E3"];
+
+    // Hot path (fast)
+    event -> handler [label="async"];
+    handler -> buffer [label="upsert_node()\nupsert_edge()\nnon-blocking"];
+    buffer -> hook_result [label="returns\nimmediately"];
+
+    // Background flush (decoupled)
+    flush_trigger -> flush_task [label="triggers"];
+    buffer -> flush_task [label="drain pending\noperations" style=dashed];
+    flush_task -> duckdb [label="BEGIN;\nINSERT batch;\nCOMMIT;"
+                          style=dashed];
+
+    // Subgraph for visual grouping
+    subgraph cluster_hot {
+        label="Hot Path (microseconds)";
+        style=dashed; color=green;
+        handler; buffer; hook_result;
+    }
+    subgraph cluster_background {
+        label="Background (milliseconds)";
+        style=dashed; color=orange;
+        flush_trigger; flush_task; duckdb;
+    }
+}

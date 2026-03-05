@@ -1,0 +1,39 @@
+digraph lifecycle {
+    rankdir=TB;
+    label="GraphStore Lifecycle\nState machine from mount to close, including error recovery";
+    labelloc=t;
+    fontsize=14;
+    fontname="Helvetica";
+    node [fontname="Helvetica", fontsize=9];
+    edge [fontname="Helvetica", fontsize=7];
+
+    // States
+    unmounted [label="Unmounted" shape=oval];
+    opening [label="Opening\nDuckDB connection\nCREATE IF NOT EXISTS"
+             shape=box style=filled fillcolor="#D4E6F1"];
+    ready [label="Ready\nbuffer empty\nawaiting events"
+           shape=box style=filled fillcolor="#D5F5E3"];
+    receiving [label="Receiving Events\nbuffer accumulating\nupserts"
+               shape=box style=filled fillcolor="#D5F5E3"];
+    flushing [label="Flushing\nbatch write to DuckDB\nbuffer draining"
+              shape=box style=filled fillcolor="#FCF3CF"];
+    closing [label="Closing\nfinal flush\nDuckDB close()"
+             shape=box style=filled fillcolor="#FADBD8"];
+    closed [label="Closed" shape=oval];
+
+    // Transitions
+    unmounted -> opening [label="mount()"];
+    opening -> ready [label="tables exist\nconnection open"];
+    ready -> receiving [label="first event arrives"];
+    receiving -> receiving [label="upsert_node/edge\n(accumulate)"];
+    receiving -> flushing [label="flush trigger\n(orchestrator:complete,\nthreshold, timer)"];
+    flushing -> ready [label="flush complete\nbuffer drained"];
+    flushing -> receiving [label="events arrived\nduring flush"];
+    receiving -> closing [label="session:end\nor cleanup()"];
+    ready -> closing [label="cleanup()"];
+    closing -> closed [label="final flush done\nconnection released"];
+
+    // Error path
+    flushing -> receiving [label="flush error\nlog warning\nretry next trigger"
+                           style=dashed color=red];
+}

@@ -1,0 +1,37 @@
+digraph read_path {
+    rankdir=LR;
+    label="GraphStore Read Path (Dual Source)\nHandlers see latest state (buffer-first). Analysis sees flushed state (DuckDB-only).";
+    labelloc=t;
+    fontsize=14;
+    fontname="Helvetica";
+    node [fontname="Helvetica", fontsize=9];
+    edge [fontname="Helvetica", fontsize=7];
+
+    // Callers
+    handler_read [label="Handler\nget_node()\nget_edge()"
+                  shape=box];
+    analysis [label="Analysis Tool\nexecute_query()\nSQL/PGQ"
+              shape=box style=filled fillcolor="#E8DAEF"];
+
+    // Stores
+    buffer [label="In-Memory Buffer\n(latest state)"
+            shape=cylinder style=filled fillcolor="#D4E6F1"];
+    duckdb [label="DuckDB\n(persisted state)"
+            shape=cylinder style=filled fillcolor="#D5F5E3"];
+
+    // Read paths
+    handler_read -> buffer [label="check first"];
+    buffer -> duckdb [label="fallback if\nnot in buffer"
+                      style=dashed];
+
+    analysis -> duckdb [label="direct\nSQL/PGQ queries"];
+
+    // Notes
+    note_handler [label="Handlers see latest state\n(buffer + DuckDB merged)"
+                  shape=note style=filled fillcolor="#FDEBD0"];
+    note_analysis [label="Analysis sees flushed state\n(DuckDB only, post-flush)"
+                   shape=note style=filled fillcolor="#FDEBD0"];
+
+    handler_read -> note_handler [style=invis];
+    analysis -> note_analysis [style=invis];
+}
