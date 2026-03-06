@@ -17,10 +17,13 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any
+from typing import Any, TypeVar
 
 import duckdb
+
+_T = TypeVar("_T")
 
 logger = logging.getLogger(__name__)
 
@@ -58,6 +61,8 @@ CREATE TABLE IF NOT EXISTS search_index (
 """
 
 
+# Registry of (label, property) -> field_name mappings for search_index population.
+# Add new entries here when additional node types or properties become searchable.
 _INDEXABLE_FIELDS: dict[tuple[str, str], str] = {
     ("PromptStep", "prompt_text"): "prompt_text",
 }
@@ -89,7 +94,7 @@ class DuckDBGraphStore:
     # Internal helpers
     # ------------------------------------------------------------------
 
-    def _run(self, fn: Any) -> Any:  # noqa: ANN401
+    def _run(self, fn: Callable[[], _T]) -> asyncio.Future[_T]:
         """Run a blocking callable in the default executor."""
         return asyncio.get_running_loop().run_in_executor(None, fn)
 

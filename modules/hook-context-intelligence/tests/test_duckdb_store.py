@@ -16,7 +16,9 @@ def store():
     """Fresh in-memory DuckDBGraphStore for test isolation."""
     from amplifier_module_hook_context_intelligence.duckdb_store import DuckDBGraphStore
 
-    return DuckDBGraphStore()
+    s = DuckDBGraphStore()
+    yield s
+    s._conn.close()
 
 
 # ---------------------------------------------------------------------------
@@ -24,6 +26,18 @@ def store():
 # ---------------------------------------------------------------------------
 class TestRunUsesGetRunningLoop:
     """_run must use asyncio.get_running_loop(), not the deprecated get_event_loop()."""
+
+    def test_run_signature_uses_callable_not_any(self):
+        """_run should accept Callable[[], _T] and return Future[_T], not Any -> Any."""
+        import inspect
+
+        from amplifier_module_hook_context_intelligence.duckdb_store import DuckDBGraphStore
+
+        source = inspect.getsource(DuckDBGraphStore._run)
+        # The fn parameter must use Callable, not plain Any
+        assert "Callable" in source, "_run 'fn' param should be Callable[[], _T], not Any"
+        # The return type must not be bare Any
+        assert "-> Any" not in source, "_run return type should be Future[_T], not Any"
 
     async def test_run_calls_get_running_loop(self):
         import asyncio
