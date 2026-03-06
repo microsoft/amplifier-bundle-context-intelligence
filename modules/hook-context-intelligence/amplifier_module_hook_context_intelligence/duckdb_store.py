@@ -113,6 +113,11 @@ class DuckDBGraphStore:
                     }
                 )
 
+    @property
+    def supported_dialects(self) -> frozenset[str]:
+        """The set of query dialects this backend can execute."""
+        return frozenset({"sql"})
+
     async def upsert_node(self, node_id: str, labels: set[str], properties: dict[str, Any]) -> None:
         existing = self._node_buffer.get(node_id)
         if existing is not None:
@@ -263,11 +268,6 @@ class DuckDBGraphStore:
     # ------------------------------------------------------------------
     # QueryableStore
     # ------------------------------------------------------------------
-
-    @property
-    def supported_dialects(self) -> frozenset[str]:
-        """DuckDB speaks SQL and PGQ."""
-        return frozenset({"sql", "pgq"})
 
     async def execute_query(
         self,
