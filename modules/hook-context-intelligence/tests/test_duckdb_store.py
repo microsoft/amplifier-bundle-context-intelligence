@@ -240,10 +240,7 @@ class TestFlush:
 class TestExecuteQuery:
     """execute_query returns list of dicts and supports dialect validation."""
 
-    async def test_execute_query_returns_list_of_dicts(self):
-        from amplifier_module_hook_context_intelligence.duckdb_store import DuckDBGraphStore
-
-        store = DuckDBGraphStore()
+    async def test_execute_query_returns_list_of_dicts(self, store):
         await store.upsert_node("n1", {"Person"}, {"name": "Alice"})
         await store.flush()
         rows = await store.execute_query("SELECT node_id, labels FROM nodes")
@@ -253,18 +250,12 @@ class TestExecuteQuery:
         assert "labels" in rows[0]
         assert rows[0]["node_id"] == "n1"
 
-    def test_supported_dialects_returns_frozenset(self):
-        from amplifier_module_hook_context_intelligence.duckdb_store import DuckDBGraphStore
-
-        store = DuckDBGraphStore()
+    def test_supported_dialects_returns_frozenset(self, store):
         dialects = store.supported_dialects
         assert isinstance(dialects, frozenset)
         assert "sql" in dialects
 
-    async def test_execute_query_with_explicit_sql_dialect(self):
-        from amplifier_module_hook_context_intelligence.duckdb_store import DuckDBGraphStore
-
-        store = DuckDBGraphStore()
+    async def test_execute_query_with_explicit_sql_dialect(self, store):
         await store.upsert_node("n1", {"Person"}, {"name": "Alice"})
         await store.flush()
         rows = await store.execute_query("SELECT node_id FROM nodes", dialect="sql")
@@ -272,10 +263,7 @@ class TestExecuteQuery:
         assert len(rows) == 1
         assert rows[0]["node_id"] == "n1"
 
-    async def test_execute_query_with_none_dialect_uses_default(self):
-        from amplifier_module_hook_context_intelligence.duckdb_store import DuckDBGraphStore
-
-        store = DuckDBGraphStore()
+    async def test_execute_query_with_none_dialect_uses_default(self, store):
         await store.upsert_node("n1", {"Person"}, {"name": "Alice"})
         await store.flush()
         rows = await store.execute_query("SELECT node_id FROM nodes", dialect=None)
@@ -283,10 +271,7 @@ class TestExecuteQuery:
         assert len(rows) == 1
         assert rows[0]["node_id"] == "n1"
 
-    async def test_execute_query_with_invalid_dialect_raises(self):
-        from amplifier_module_hook_context_intelligence.duckdb_store import DuckDBGraphStore
-
-        store = DuckDBGraphStore()
+    async def test_execute_query_with_invalid_dialect_raises(self, store):
         with pytest.raises(ValueError, match="Unsupported dialect"):
             await store.execute_query("SELECT 1", dialect="cypher")
 

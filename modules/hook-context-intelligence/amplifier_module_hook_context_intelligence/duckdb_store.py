@@ -281,6 +281,7 @@ class DuckDBGraphStore:
             )
 
         def _query() -> list[dict[str, Any]]:
+            # DuckDB requires omitting params arg when none provided
             if params:
                 result = self._conn.execute(query, params)
             else:
