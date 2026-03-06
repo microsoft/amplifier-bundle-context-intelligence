@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -358,6 +359,23 @@ class TestSearchIndexTable:
 # ---------------------------------------------------------------------------
 # TestSearchIndexFlush
 # ---------------------------------------------------------------------------
+def _make_search_entry(
+    node_id: str = "n1",
+    session_id: str = "sess1",
+    field_name: str = "summary",
+    content: str = "hello world",
+    occurred_at: str | None = None,
+) -> dict[str, Any]:
+    """Build a search_index entry dict with sensible defaults."""
+    return {
+        "node_id": node_id,
+        "session_id": session_id,
+        "field_name": field_name,
+        "content": content,
+        "occurred_at": occurred_at,
+    }
+
+
 class TestSearchIndexFlush:
     """flush() persists search buffer entries to DuckDB search_index table."""
 
@@ -368,15 +386,7 @@ class TestSearchIndexFlush:
         return DuckDBGraphStore()
 
     async def test_flush_writes_search_entries_to_duckdb(self, store):
-        store._search_buffer.append(
-            {
-                "node_id": "n1",
-                "session_id": "sess1",
-                "field_name": "summary",
-                "content": "hello world",
-                "occurred_at": None,
-            }
-        )
+        store._search_buffer.append(_make_search_entry())
         await store.flush()
         row = store._conn.execute(
             "SELECT node_id, session_id, field_name, content FROM search_index WHERE node_id = 'n1'"
@@ -388,15 +398,7 @@ class TestSearchIndexFlush:
         assert row[3] == "hello world"
 
     async def test_flush_clears_search_buffer(self, store):
-        store._search_buffer.append(
-            {
-                "node_id": "n1",
-                "session_id": "sess1",
-                "field_name": "summary",
-                "content": "hello world",
-                "occurred_at": None,
-            }
-        )
+        store._search_buffer.append(_make_search_entry())
         await store.flush()
         assert store._search_buffer == []
 
@@ -408,23 +410,11 @@ class TestSearchIndexFlush:
         assert rows == []
 
     async def test_flush_writes_multiple_search_entries(self, store):
+        store._search_buffer.append(_make_search_entry(node_id="n1", content="first"))
         store._search_buffer.append(
-            {
-                "node_id": "n1",
-                "session_id": "sess1",
-                "field_name": "summary",
-                "content": "first",
-                "occurred_at": None,
-            }
-        )
-        store._search_buffer.append(
-            {
-                "node_id": "n2",
-                "session_id": "sess2",
-                "field_name": "description",
-                "content": "second",
-                "occurred_at": None,
-            }
+            _make_search_entry(
+                node_id="n2", session_id="sess2", field_name="description", content="second"
+            )
         )
         await store.flush()
         rows = store._conn.execute(
@@ -435,13 +425,7 @@ class TestSearchIndexFlush:
         assert rows[1] == ("n2", "description", "second")
 
     async def test_flush_restores_search_buffer_on_failure(self, store):
-        entry = {
-            "node_id": "n1",
-            "session_id": "sess1",
-            "field_name": "summary",
-            "content": "hello",
-            "occurred_at": None,
-        }
+        entry = _make_search_entry(content="hello")
         store._search_buffer.append(entry)
 
         # DuckDB C extension's execute is read-only, so we wrap the connection

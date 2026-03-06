@@ -215,7 +215,7 @@ class DuckDBGraphStore:
                 try:
                     self._conn.execute("ROLLBACK")
                 except Exception:
-                    pass
+                    logger.debug("rollback also failed", exc_info=True)
                 # Put items back for retry
                 self._node_buffer.update(nodes)
                 self._edge_buffer.update(edges)
