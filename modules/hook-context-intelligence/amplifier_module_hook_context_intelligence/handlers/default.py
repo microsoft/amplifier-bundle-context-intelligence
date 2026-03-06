@@ -2,16 +2,30 @@
 
 from __future__ import annotations
 
+import logging
 import re
 from typing import Any
 
 from amplifier_core.models import HookResult
 
 from ..services import HookStateService
+from ..utils import make_node_id
+
+logger = logging.getLogger(__name__)
 
 
 class DefaultHandler:
-    """Derives :Event:{FullScope} labels from event name dynamically."""
+    """Creates :Event:{DerivedLabel} nodes from unclaimed events.
+
+    For every event that no entity handler claims, the DefaultHandler:
+    1. Derives a PascalCase label from the event name.
+    2. Creates an Event node with labels {Event, DerivedLabel}.
+    3. Attaches it to the session via a HAS_EVENT edge.
+
+    This covers app-level events (e.g. session:resume) that don't need
+    special entity-node mutations — they are simply recorded as Event
+    nodes in the graph.
+    """
 
     handled_events: set[str]
 
@@ -20,6 +34,27 @@ class DefaultHandler:
         self.handled_events = set()
 
     async def __call__(self, event: str, data: dict[str, Any]) -> HookResult:
+        session_id = data.get("session_id")
+        if not session_id:
+            logger.debug("DefaultHandler: no session_id in %s, skipping", event)
+            return HookResult(action="continue")
+
+        timestamp = data.get("timestamp", "")
+        derived = self.derive_label(event)
+
+        # Create Event node
+        event_node_id = make_node_id(session_id, event, timestamp)
+        await self.services.graph.upsert_node(
+            event_node_id,
+            {"Event", derived},
+            {"event_name": event, "occurred_at": timestamp},
+        )
+
+        # Attach to session via HAS_EVENT
+        await self.services.graph.upsert_edge(
+            session_id, event_node_id, "HAS_EVENT", {"occurred_at": timestamp}
+        )
+
         return HookResult(action="continue")
 
     @staticmethod

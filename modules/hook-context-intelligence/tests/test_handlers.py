@@ -63,7 +63,6 @@ class TestEventClaims:
             "session:start",
             "session:fork",
             "session:end",
-            "session:resume",
         }
 
     def test_orchestrator_run_handler_events(self, services: HookStateService):
