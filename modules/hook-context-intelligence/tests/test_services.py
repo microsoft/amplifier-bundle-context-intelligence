@@ -132,26 +132,35 @@ class TestGraphState:
 
 
 class TestHookStateService:
-    def test_construction(self):
+    def test_construction_with_explicit_duckdb(self):
         from amplifier_module_hook_context_intelligence.graph_store import GraphStore
         from amplifier_module_hook_context_intelligence.services import (
             HookConfig,
             HookStateService,
         )
 
-        service = HookStateService(raw_config={})
+        service = HookStateService(
+            raw_config={"graph_store": {"type": "duckdb", "config": {"connection": ":memory:"}}}
+        )
         assert isinstance(service.graph, GraphStore)
         assert isinstance(service.config, HookConfig)
 
-    async def test_graph_accessible(self):
+    async def test_graph_accessible_with_explicit_duckdb(self):
         from amplifier_module_hook_context_intelligence.services import HookStateService
 
-        service = HookStateService(raw_config={})
+        service = HookStateService(
+            raw_config={"graph_store": {"type": "duckdb", "config": {"connection": ":memory:"}}}
+        )
         await service.graph.upsert_node("test", labels={"Test"}, properties={})
         assert await service.graph.get_node("test") is not None
 
     def test_config_accessible(self):
         from amplifier_module_hook_context_intelligence.services import HookStateService
 
-        service = HookStateService(raw_config={"exclude_events": ["foo:bar"]})
+        service = HookStateService(
+            raw_config={
+                "exclude_events": ["foo:bar"],
+                "graph_store": {"type": "duckdb", "config": {"connection": ":memory:"}},
+            }
+        )
         assert service.config.is_excluded("foo:bar") is True

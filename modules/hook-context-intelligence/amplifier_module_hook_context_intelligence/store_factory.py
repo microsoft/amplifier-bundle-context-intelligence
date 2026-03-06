@@ -13,15 +13,24 @@ def create_graph_store(store_config: dict[str, Any]) -> GraphStore:
     Parameters
     ----------
     store_config:
-        Dictionary with optional ``type`` (default ``"duckdb"``) and
-        backend-specific keys such as ``connection``.
+        Dictionary with optional ``type`` (default ``"file"``) and optional
+        ``config`` dict containing backend-specific kwargs.
+
+        Example::
+
+            {"type": "duckdb", "config": {"connection": ":memory:"}}
     """
-    store_type = store_config.get("type", "duckdb")
+    store_type = store_config.get("type", "file")
+    impl_config = store_config.get("config", {})
+
+    if store_type == "file":
+        from .file_store import FileGraphStore
+
+        return FileGraphStore(**impl_config)
 
     if store_type == "duckdb":
         from .duckdb_store import DuckDBGraphStore
 
-        connection = store_config.get("connection", ":memory:")
-        return DuckDBGraphStore(connection=connection)
+        return DuckDBGraphStore(**impl_config)
 
     raise ValueError(f"Unknown graph_store type: {store_type}")
