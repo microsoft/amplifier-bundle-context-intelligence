@@ -19,7 +19,7 @@ SKILL_DIR = (
 )
 SKILL_FILE = SKILL_DIR / "SKILL.md"
 
-# Read once at module level — avoids 25 redundant disk reads.
+# Read and parse once at module level — avoids redundant disk reads and re-parsing.
 _SKILL_CONTENT: str = SKILL_FILE.read_text() if SKILL_FILE.exists() else ""
 
 
@@ -28,6 +28,9 @@ def _parse_frontmatter(content: str) -> dict:
     match = re.match(r"^---\n(.*?)\n---", content, re.DOTALL)
     assert match, "YAML frontmatter not found (must start with --- and end with ---)"
     return yaml.safe_load(match.group(1))
+
+
+_FRONTMATTER: dict = _parse_frontmatter(_SKILL_CONTENT) if _SKILL_CONTENT else {}
 
 
 def _extract_section(content: str, heading: str) -> str:
@@ -53,38 +56,34 @@ def test_skill_directory_exists() -> None:
 
 
 def test_frontmatter_name() -> None:
-    fm = _parse_frontmatter(_SKILL_CONTENT)
-    assert fm["name"] == "context-intelligence-graph-search"
+    assert _FRONTMATTER["name"] == "context-intelligence-graph-search"
 
 
 def test_frontmatter_version() -> None:
-    fm = _parse_frontmatter(_SKILL_CONTENT)
-    assert fm["version"] == "0.1.0"
+    assert _FRONTMATTER["version"] == "0.1.0"
 
 
 def test_frontmatter_license() -> None:
-    fm = _parse_frontmatter(_SKILL_CONTENT)
-    assert fm["license"] == "MIT"
+    assert _FRONTMATTER["license"] == "MIT"
 
 
 def test_frontmatter_description_present() -> None:
-    fm = _parse_frontmatter(_SKILL_CONTENT)
-    assert "description" in fm
-    assert len(fm["description"]) > 0
+    assert "description" in _FRONTMATTER
+    assert len(_FRONTMATTER["description"]) > 0
 
 
 # —— AC-3: Schema section with 3 tables ———————————————————
 
 
 def test_schema_nodes_table() -> None:
-    assert "node_id" in _SKILL_CONTENT
-    assert "VARCHAR" in _SKILL_CONTENT
-    # Check all columns of nodes table
+    schema = _extract_section(_SKILL_CONTENT, "Schema")
+    assert "VARCHAR" in schema
     for col in ["node_id", "session_id", "labels", "occurred_at", "properties"]:
-        assert col in _SKILL_CONTENT, f"nodes table missing column: {col}"
+        assert col in schema, f"nodes table missing column: {col}"
 
 
 def test_schema_edges_table() -> None:
+    schema = _extract_section(_SKILL_CONTENT, "Schema")
     for col in [
         "source",
         "target",
@@ -94,22 +93,20 @@ def test_schema_edges_table() -> None:
         "seq",
         "properties",
     ]:
-        assert col in _SKILL_CONTENT, f"edges table missing column: {col}"
-    # Primary key on source/target/edge_type
-    assert "source" in _SKILL_CONTENT
-    assert "target" in _SKILL_CONTENT
-    assert "edge_type" in _SKILL_CONTENT
+        assert col in schema, f"edges table missing column: {col}"
 
 
 def test_schema_search_index_table() -> None:
+    schema = _extract_section(_SKILL_CONTENT, "Schema")
     for col in ["node_id", "field_name", "content"]:
-        assert col in _SKILL_CONTENT, f"search_index table missing column: {col}"
+        assert col in schema, f"search_index table missing column: {col}"
 
 
 def test_schema_mentions_all_three_tables() -> None:
-    assert "nodes" in _SKILL_CONTENT
-    assert "edges" in _SKILL_CONTENT
-    assert "search_index" in _SKILL_CONTENT
+    schema = _extract_section(_SKILL_CONTENT, "Schema")
+    assert "nodes" in schema
+    assert "edges" in schema
+    assert "search_index" in schema
 
 
 # —— AC-4: Label system with 13 labels ————————————————————
