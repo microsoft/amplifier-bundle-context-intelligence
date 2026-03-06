@@ -111,21 +111,6 @@ Every node carries one or more labels in the `labels VARCHAR[]` column.
 | `Delegation` | A ToolExecution that spawned a child session via the delegate tool |
 | `Event` | Any lifecycle or custom event not part of the core structural chain |
 
-### Querying by label
-
-```sql
--- All session nodes
-SELECT * FROM nodes WHERE list_contains(labels, 'Session');
-
--- All PromptStep nodes
-SELECT * FROM nodes WHERE list_contains(labels, 'PromptStep');
-
--- Nodes with multiple labels (e.g. Session + Root)
-SELECT * FROM nodes
- WHERE list_contains(labels, 'Session')
-   AND list_contains(labels, 'Root');
-```
-
 ---
 
 ## Edge Types
@@ -140,26 +125,6 @@ SELECT * FROM nodes
 | `SPAWNED` | ToolExecution | Session | Delegation created a child session |
 | `SUBSESSION_OF` | Session | Session | Child session to parent lineage |
 | `HAS_EVENT` | Session / OrchestratorRun / Step | Event | Attaches lifecycle/custom events to their scope |
-
-### Querying edges
-
-```sql
--- All steps belonging to a specific run
-SELECT target FROM edges
- WHERE source = 'run-node-id' AND edge_type = 'HAS_STEP'
- ORDER BY seq;
-
--- Walk the NEXT chain from a PromptStep
-WITH RECURSIVE chain AS (
-    SELECT target AS step_id FROM edges
-     WHERE source = 'prompt-step-id' AND edge_type = 'NEXT'
-    UNION ALL
-    SELECT e.target FROM edges e
-      JOIN chain c ON e.source = c.step_id
-     WHERE e.edge_type = 'NEXT'
-)
-SELECT * FROM chain;
-```
 
 ---
 
