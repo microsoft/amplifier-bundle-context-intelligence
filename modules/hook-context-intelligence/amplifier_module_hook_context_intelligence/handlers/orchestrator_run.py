@@ -8,9 +8,11 @@ from typing import Any
 from amplifier_core.models import HookResult
 
 from ..services import HookStateService
-from ..utils import HandlerLogger, make_node_id
+from ..utils import EventLogContext, HandlerLogger, make_node_id
 
 logger = logging.getLogger(__name__)
+
+PREVIEW_MAX_LEN = 200
 
 
 class OrchestratorRunHandler:
@@ -36,7 +38,7 @@ class OrchestratorRunHandler:
         # Stub: execution:start, execution:end, orchestrator:complete
         return HookResult(action="continue")
 
-    async def _handle_prompt_submit(self, data: dict[str, Any], log: Any) -> HookResult:
+    async def _handle_prompt_submit(self, data: dict[str, Any], log: EventLogContext) -> HookResult:
         session_id = data.get("session_id")
         if not session_id:
             log.error("received event without session_id")
@@ -55,7 +57,7 @@ class OrchestratorRunHandler:
 
         # Build properties
         prompt_text = data.get("prompt", "")
-        prompt_preview = prompt_text[:200]
+        prompt_preview = prompt_text[:PREVIEW_MAX_LEN]
 
         properties: dict[str, Any] = {
             "iteration": 0,
