@@ -1,0 +1,49 @@
+digraph prompt_submit_handler {
+    rankdir=TB;
+    label="prompt:submit Handler — PromptStep Creation\nCreates Step:PromptStep node linked to Session via HAS_STEP";
+    labelloc=t;
+    fontsize=14;
+    fontname="Helvetica";
+    node [fontname="Helvetica", fontsize=9];
+    edge [fontname="Helvetica", fontsize=7];
+
+    // Entry
+    event_arrives [label="prompt:submit\narrives" shape=oval];
+
+    // Extract
+    extract [label="Extract\nsession_id, timestamp,\nprompt from data"
+             shape=box style=filled fillcolor="#D4E6F1"];
+
+    // Validate session exists
+    validate_session [label="Retrieve Session node\nawait get_node(session_id)"
+                      shape=box style=filled fillcolor="#D4E6F1"];
+    session_missing [label="ERROR\nSession node not found\nfor session_id\nlog.error()"
+                     shape=octagon style=filled fillcolor="#FF8A80"];
+    error_exit [label="return\nHookResult(continue)\nno graph mutations"
+                shape=oval style=filled fillcolor="#FADBD8"];
+
+    // Generate node ID
+    gen_node_id [label="Generate node_id\nmake_node_id(\n  session_id,\n  'prompt:submit',\n  timestamp\n)\ne.g. abc:prompt:submit:1709683200123"
+                 shape=box style=filled fillcolor="#D5F5E3"];
+
+    // Create PromptStep
+    create_step [label="upsert_node(\n  node_id,\n  labels={Step, PromptStep},\n  properties={\n    iteration: 0,\n    prompt_text: data.prompt,\n    prompt_preview: data.prompt[:200],\n    occurred_at: timestamp,\n    session_id: session_id\n  }\n)"
+                 shape=box style=filled fillcolor="#E8DAEF"];
+
+    // Create edge
+    create_edge [label="upsert_edge(\n  source=session_id,\n  target=node_id,\n  edge_type=HAS_STEP,\n  properties={\n    occurred_at: timestamp\n  }\n)"
+                 shape=box style=filled fillcolor="#FCF3CF"];
+
+    // Exit
+    done [label="return\nHookResult(continue)" shape=oval];
+
+    // Flow
+    event_arrives -> extract;
+    extract -> validate_session;
+    validate_session -> session_missing [label="None"];
+    session_missing -> error_exit;
+    validate_session -> gen_node_id [label="exists"];
+    gen_node_id -> create_step;
+    create_step -> create_edge;
+    create_edge -> done;
+}
