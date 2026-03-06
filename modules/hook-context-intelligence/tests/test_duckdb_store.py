@@ -533,3 +533,51 @@ class TestSearchIndexAutoPopulate:
             {"prompt_text": "Updated prompt"},
         )
         assert len(store._search_buffer) == 1
+
+
+# ---------------------------------------------------------------------------
+# TestStandingRuleDocstring
+# ---------------------------------------------------------------------------
+class TestStandingRuleDocstring:
+    """Module docstring must contain the standing rule for skill synchronization."""
+
+    def test_docstring_contains_standing_rule_section(self):
+        import amplifier_module_hook_context_intelligence.duckdb_store as mod
+
+        doc = mod.__doc__
+        assert doc is not None, "Module docstring must not be None"
+        assert "STANDING RULE" in doc
+
+    def test_docstring_references_skill_path(self):
+        import amplifier_module_hook_context_intelligence.duckdb_store as mod
+
+        doc = mod.__doc__
+        assert doc is not None
+        assert "skills/context-intelligence-graph-search/SKILL.md" in doc
+
+    def test_docstring_lists_all_schema_triggers(self):
+        import amplifier_module_hook_context_intelligence.duckdb_store as mod
+
+        doc = mod.__doc__
+        assert doc is not None
+        required_triggers = [
+            "tables",
+            "columns",
+            "property graph definition",
+            "search_index",
+            "FTS indexes",
+            "new label types",
+            "new edge types",
+            "new field_name values",
+            "_INDEXABLE_FIELDS",
+        ]
+        for trigger in required_triggers:
+            assert trigger in doc, f"Docstring missing trigger: {trigger!r}"
+
+    def test_docstring_preserves_original_description(self):
+        import amplifier_module_hook_context_intelligence.duckdb_store as mod
+
+        doc = mod.__doc__
+        assert doc is not None
+        assert "DuckDBGraphStore" in doc
+        assert "buffer-first reads with async DuckDB persistence" in doc

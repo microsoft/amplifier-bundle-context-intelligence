@@ -1,4 +1,16 @@
-"""DuckDBGraphStore – buffer-first reads with async DuckDB persistence."""
+"""DuckDBGraphStore – buffer-first reads with async DuckDB persistence.
+
+STANDING RULE — Skill Synchronization
+--------------------------------------
+Any change to the schema (tables, columns, property graph definition,
+search_index, FTS indexes, new label types, new edge types,
+new field_name values in search_index, _INDEXABLE_FIELDS entries)
+MUST be accompanied by an update to the SQL/PGQ skill at
+``skills/context-intelligence-graph-search/SKILL.md``.
+
+The skill is the contract between this storage layer and agents that generate
+queries.  Stale skill = broken agent query generation.
+"""
 
 from __future__ import annotations
 
