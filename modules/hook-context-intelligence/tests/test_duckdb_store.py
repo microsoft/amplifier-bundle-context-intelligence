@@ -763,3 +763,165 @@ class TestPGQ:
             """
         ).fetchall()
         assert len(result) >= 1
+
+
+# ---------------------------------------------------------------------------
+# TestFTS — Full-text search via DuckDB FTS extension on search_index
+# ---------------------------------------------------------------------------
+class TestFTS:
+    """Full-text search via DuckDB FTS extension on search_index."""
+
+    async def test_rebuild_fts_index_creates_searchable_index(self, store):
+        """After rebuild, BM25 scoring function becomes available."""
+        await store.upsert_node(
+            "ps1",
+            {"PromptStep"},
+            {"prompt_text": "Help me refactor authentication", "session_id": "s1"},
+        )
+        await store.flush()
+        await store.rebuild_fts_index()
+        rows = await store.execute_query(
+            "SELECT node_id, fts_main_search_index.match_bm25(rowid, 'authentication') AS score "
+            "FROM search_index WHERE score IS NOT NULL"
+        )
+        assert len(rows) == 1
+        assert rows[0]["node_id"] == "ps1"
+        assert rows[0]["score"] is not None
+
+    async def test_fts_without_rebuild_has_no_index(self, store):
+        """Without rebuild, BM25 function does not exist."""
+        import duckdb
+
+        await store.upsert_node(
+            "ps1",
+            {"PromptStep"},
+            {"prompt_text": "Help me refactor authentication", "session_id": "s1"},
+        )
+        await store.flush()
+        with pytest.raises(duckdb.CatalogException):
+            await store.execute_query(
+                "SELECT fts_main_search_index.match_bm25(rowid, 'authentication') AS score "
+                "FROM search_index WHERE score IS NOT NULL"
+            )
+
+    async def test_rebuild_fts_index_idempotent(self, store):
+        """Calling rebuild twice works without error."""
+        await store.upsert_node(
+            "ps1",
+            {"PromptStep"},
+            {"prompt_text": "test content", "session_id": "s1"},
+        )
+        await store.flush()
+        await store.rebuild_fts_index()
+        await store.rebuild_fts_index()
+
+    async def test_fts_finds_prompt_text_content(self, store):
+        """BM25 search finds the right node by content."""
+        await store.upsert_node(
+            "ps1",
+            {"PromptStep"},
+            {"prompt_text": "Help me refactor the authentication module", "session_id": "s1"},
+        )
+        await store.upsert_node(
+            "ps2",
+            {"PromptStep"},
+            {"prompt_text": "Write unit tests for the parser", "session_id": "s2"},
+        )
+        await store.flush()
+        await store.rebuild_fts_index()
+        rows = await store.execute_query(
+            "SELECT node_id, fts_main_search_index.match_bm25(rowid, 'authentication') AS score "
+            "FROM search_index WHERE score IS NOT NULL ORDER BY score DESC"
+        )
+        assert len(rows) == 1
+        assert rows[0]["node_id"] == "ps1"
+
+    async def test_bm25_pattern_1_from_skill(self, store):
+        """Pattern 1 from SKILL.md: Direct FTS with BM25 scoring."""
+        from tests.conftest import PROMPT_NODE_ID, SESSION_ID
+
+        await store.upsert_node(
+            PROMPT_NODE_ID,
+            {"Step", "PromptStep"},
+            {
+                "prompt_text": "Help me refactor the authentication module",
+                "session_id": SESSION_ID,
+                "occurred_at": "2026-01-15T10:00:01Z",
+            },
+        )
+        await store.flush()
+        await store.rebuild_fts_index()
+        rows = await store.execute_query(
+            "SELECT si.node_id, si.session_id, si.field_name, "
+            "fts_main_search_index.match_bm25(si.rowid, 'refactor') AS score "
+            "FROM search_index si WHERE score IS NOT NULL ORDER BY score DESC"
+        )
+        assert len(rows) >= 1
+        assert rows[0]["session_id"] == SESSION_ID
+        assert rows[0]["field_name"] == "prompt_text"
+
+
+# ---------------------------------------------------------------------------
+# TestFTSPlusPGQ — Combined FTS + PGQ queries (Pattern 2 from SKILL.md)
+# ---------------------------------------------------------------------------
+class TestFTSPlusPGQ:
+    """Combined FTS + PGQ queries — Pattern 2 from SKILL.md."""
+
+    async def test_fts_then_pgq_traversal(self, store):
+        """Find prompt by text search, then walk to parent session via PGQ.
+
+        Pattern 2 from SKILL.md: FTS identifies candidate nodes, PGQ traverses
+        the graph from those nodes to their parent sessions. Executed as two
+        coordinated queries — FTS results feed the PGQ WHERE filter.
+        """
+        from tests.conftest import (
+            PROMPT_NODE_ID,
+            SESSION_NODE_ID,
+            reference_edges,
+            reference_nodes,
+        )
+
+        # Seed the full reference graph
+        for node_id, labels, props in reference_nodes():
+            await store.upsert_node(node_id, labels, props)
+        for src, tgt, etype, props in reference_edges():
+            await store.upsert_edge(src, tgt, etype, props)
+        await store.flush()
+        await store.rebuild_fts_index()
+
+        # Step 1 — FTS: find nodes whose content matches 'refactor'
+        fts_hits = await store.execute_query(
+            "SELECT node_id, fts_main_search_index.match_bm25(rowid, 'refactor') AS score "
+            "FROM search_index WHERE score IS NOT NULL ORDER BY score DESC"
+        )
+        assert len(fts_hits) >= 1
+        assert fts_hits[0]["node_id"] == PROMPT_NODE_ID
+
+        # Step 2 — PGQ: for each FTS hit, traverse Session->Run->Step to find parent session
+        top_hit_node_id = fts_hits[0]["node_id"]
+        pgq_rows = await store.execute_query(
+            "SELECT gt.session_node, gt.step_node "
+            "FROM GRAPH_TABLE(context_graph "
+            "  MATCH (s:Session)-[hr:HAS_RUN]->(r:Session)-[hs:HAS_STEP]->(step:Session) "
+            f"  WHERE step.node_id = '{top_hit_node_id}' "
+            "  COLUMNS (s.node_id AS session_node, step.node_id AS step_node) "
+            ") gt",
+            dialect="pgq",
+        )
+        assert len(pgq_rows) >= 1
+        assert pgq_rows[0]["session_node"] == SESSION_NODE_ID
+        assert pgq_rows[0]["step_node"] == PROMPT_NODE_ID
+
+        # Combine: enrich PGQ traversal result with BM25 scores from FTS hits
+        scores = {r["node_id"]: r["score"] for r in fts_hits}
+        combined = [
+            {
+                "session_node": r["session_node"],
+                "step_node": r["step_node"],
+                "score": scores.get(r["step_node"]),
+            }
+            for r in pgq_rows
+        ]
+        assert combined[0]["session_node"] == SESSION_NODE_ID
+        assert combined[0]["step_node"] == PROMPT_NODE_ID
+        assert combined[0]["score"] is not None

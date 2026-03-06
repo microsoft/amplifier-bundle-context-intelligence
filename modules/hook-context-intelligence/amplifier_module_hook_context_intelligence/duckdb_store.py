@@ -132,6 +132,7 @@ class DuckDBGraphStore:
         self._edge_buffer: dict[tuple[str, str, str], dict[str, Any]] = {}
         self._search_buffer: list[dict[str, Any]] = []
         self._pgq_ready: bool = False
+        self._fts_ready: bool = False
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -363,6 +364,27 @@ class DuckDBGraphStore:
             return [dict(zip(columns, row)) for row in result.fetchall()]
 
         return await self._run(_query)
+
+    # ------------------------------------------------------------------
+    # Full-Text Search
+    # ------------------------------------------------------------------
+
+    def _build_fts_index(self) -> None:
+        """Build FTS index on search_index table. Drops existing index first."""
+        try:
+            self._conn.execute("PRAGMA drop_fts_index('search_index')")
+        except Exception:
+            pass  # Index may not exist yet
+        self._conn.execute("PRAGMA create_fts_index('search_index', 'rowid', 'content')")
+        self._fts_ready = True
+
+    async def rebuild_fts_index(self) -> None:
+        """Rebuild the FTS index on search_index.
+
+        Call after flush() when search results need to be current.
+        NOT called automatically by flush() — this is an explicit action.
+        """
+        await self._run(self._build_fts_index)
 
     # ------------------------------------------------------------------
     # Lifecycle
