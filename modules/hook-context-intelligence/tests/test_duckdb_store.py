@@ -12,6 +12,7 @@ from tests.conftest import (
     RUN_NODE_ID,
     SESSION_ID,
     SESSION_NODE_ID,
+    TOOL_NODE_ID,
 )
 
 
@@ -674,3 +675,91 @@ class TestStandingRuleDocstring:
         assert doc is not None
         assert "DuckDBGraphStore" in doc
         assert "buffer-first reads with async DuckDB persistence" in doc
+
+
+# ---------------------------------------------------------------------------
+# TestPGQ — DuckPGQ property graph overlay (lazy init + structural queries)
+# ---------------------------------------------------------------------------
+class TestPGQ:
+    """PGQ dialect support via DuckPGQ: lazy property graph creation and GRAPH_TABLE queries."""
+
+    def test_pgq_in_supported_dialects(self, store):
+        """'pgq' must be listed in supported_dialects."""
+        assert "pgq" in store.supported_dialects
+
+    async def test_ensure_pgq_creates_property_graph(self, store, seed_reference_graph):
+        """_ensure_pgq() must create the 'context_graph' property graph queryable via GRAPH_TABLE."""
+        store._ensure_pgq()
+        result = store._conn.execute(
+            """
+            SELECT s.node_id AS session_id, step.node_id AS step_id
+            FROM GRAPH_TABLE(context_graph
+                MATCH (s:Session)-[hr:HAS_RUN]->(r)-[hs:HAS_STEP]->(step)
+                WHERE s.node_id = '55c8841a-test'
+                COLUMNS (s.node_id, step.node_id)
+            )
+            """
+        ).fetchall()
+        assert len(result) >= 1
+
+    async def test_pgq_dialect_triggers_ensure_pgq(self, store, seed_reference_graph):
+        """execute_query with dialect='pgq' auto-calls _ensure_pgq and runs GRAPH_TABLE query."""
+        rows = await store.execute_query(
+            """
+            SELECT s.node_id AS session_id, step.node_id AS step_id
+            FROM GRAPH_TABLE(context_graph
+                MATCH (s:Session)-[hr:HAS_RUN]->(r)-[hs:HAS_STEP]->(step)
+                WHERE s.node_id = '55c8841a-test'
+                COLUMNS (s.node_id, step.node_id)
+            )
+            """,
+            dialect="pgq",
+        )
+        assert rows[0]["step_id"] == PROMPT_NODE_ID
+
+    async def test_pgq_structural_query_steps_in_session(self, store, seed_reference_graph):
+        """Find all steps in a session's runs via GRAPH_TABLE."""
+        rows = await store.execute_query(
+            """
+            SELECT step.node_id AS step_id
+            FROM GRAPH_TABLE(context_graph
+                MATCH (s:Session)-[hr:HAS_RUN]->(r)-[hs:HAS_STEP]->(step)
+                WHERE s.node_id = '55c8841a-test'
+                COLUMNS (step.node_id)
+            )
+            """,
+            dialect="pgq",
+        )
+        step_ids = [r["step_id"] for r in rows]
+        assert PROMPT_NODE_ID in step_ids
+
+    async def test_pgq_triggered_tools_query(self, store, seed_reference_graph):
+        """Query tools triggered by a step via TRIGGERED edge in GRAPH_TABLE."""
+        rows = await store.execute_query(
+            """
+            SELECT tool.node_id AS tool_id
+            FROM GRAPH_TABLE(context_graph
+                MATCH (step)-[t:TRIGGERED]->(tool)
+                WHERE step.node_id = '55c8841a-test__prompt_submit__1737972001000'
+                COLUMNS (tool.node_id)
+            )
+            """,
+            dialect="pgq",
+        )
+        tool_ids = [r["tool_id"] for r in rows]
+        assert TOOL_NODE_ID in tool_ids
+
+    async def test_ensure_pgq_idempotent(self, store, seed_reference_graph):
+        """Calling _ensure_pgq() twice must not raise and GRAPH_TABLE must still work."""
+        store._ensure_pgq()
+        store._ensure_pgq()
+        result = store._conn.execute(
+            """
+            SELECT s.node_id AS session_id
+            FROM GRAPH_TABLE(context_graph
+                MATCH (s:Session)-[hr:HAS_RUN]->(r)
+                COLUMNS (s.node_id)
+            )
+            """
+        ).fetchall()
+        assert len(result) >= 1
