@@ -121,15 +121,6 @@ class TestGraphState:
         graph = GraphState()
         await graph.close()
 
-    async def test_execute_query_raises_not_implemented(self):
-        import pytest
-
-        from amplifier_module_hook_context_intelligence.services import GraphState
-
-        graph = GraphState()
-        with pytest.raises(NotImplementedError):
-            await graph.execute_query("MATCH (n) RETURN n")
-
 
 class TestHookStateService:
     def test_construction_with_explicit_duckdb(self):

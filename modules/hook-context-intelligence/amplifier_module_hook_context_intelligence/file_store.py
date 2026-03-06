@@ -209,18 +209,6 @@ class FileGraphStore:
         await self._run(_write)
 
     # ------------------------------------------------------------------
-    # Query
-    # ------------------------------------------------------------------
-
-    async def execute_query(
-        self, query: str, params: dict[str, Any] | None = None
-    ) -> list[dict[str, Any]]:
-        """Not supported — use grep/jq on the JSON files directly."""
-        raise NotImplementedError(
-            "FileGraphStore does not support execute_query. Use grep/jq on the JSON files directly."
-        )
-
-    # ------------------------------------------------------------------
     # Lifecycle
     # ------------------------------------------------------------------
 

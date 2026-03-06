@@ -273,21 +273,7 @@ class TestFlush:
 
 
 # ---------------------------------------------------------------------------
-# 6. execute_query
-# ---------------------------------------------------------------------------
-
-
-class TestExecuteQuery:
-    """execute_query is not supported for file store."""
-
-    async def test_raises_not_implemented(self, tmp_path: Path) -> None:
-        store = FileGraphStore(location=str(tmp_path / "graph"))
-        with pytest.raises(NotImplementedError, match="grep.*jq"):
-            await store.execute_query("SELECT 1")
-
-
-# ---------------------------------------------------------------------------
-# 7. close
+# 6. close
 # ---------------------------------------------------------------------------
 
 
@@ -304,7 +290,7 @@ class TestClose:
 
 
 # ---------------------------------------------------------------------------
-# 8. Persistence (close + reopen)
+# 7. Persistence (close + reopen)
 # ---------------------------------------------------------------------------
 
 

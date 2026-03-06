@@ -69,14 +69,6 @@ class GraphState:
         }
         self._edges[key] = edge
 
-    async def execute_query(
-        self, query: str, params: dict[str, Any] | None = None
-    ) -> list[dict[str, Any]]:
-        raise NotImplementedError(
-            "In-memory GraphState does not support execute_query. "
-            "Use a DuckDB-backed GraphStore for query support."
-        )
-
     async def flush(self) -> None:
         pass
 
