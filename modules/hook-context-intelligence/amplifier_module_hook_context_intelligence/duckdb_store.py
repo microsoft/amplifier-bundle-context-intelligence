@@ -96,7 +96,7 @@ class DuckDBGraphStore:
                         "node_id": node_id,
                         "session_id": properties.get("session_id", ""),
                         "field_name": field_name,
-                        "content": properties[prop_key],
+                        "content": str(properties[prop_key]),
                         "occurred_at": properties.get("occurred_at"),
                     }
                 )
