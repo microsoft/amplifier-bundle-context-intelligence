@@ -54,13 +54,14 @@ class TestConstructor:
         assert (loc / "edges").is_dir()
 
     def test_tilde_expansion(self) -> None:
-        store = FileGraphStore(location="~/test-graph-store")
-        expected = Path.home() / "test-graph-store"
-        assert store._location == expected
-        # Cleanup
         import shutil
 
-        shutil.rmtree(expected, ignore_errors=True)
+        expected = Path.home() / "test-graph-store"
+        try:
+            store = FileGraphStore(location="~/test-graph-store")
+            assert store._location == expected
+        finally:
+            shutil.rmtree(expected, ignore_errors=True)
 
     def test_empty_buffers(self, tmp_path: Path) -> None:
         store = FileGraphStore(location=str(tmp_path / "graph"))

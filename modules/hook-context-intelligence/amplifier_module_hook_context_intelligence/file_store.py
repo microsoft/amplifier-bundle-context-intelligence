@@ -17,9 +17,12 @@ import asyncio
 import json
 import logging
 from pathlib import Path
-from typing import Any
+from collections.abc import Callable
+from typing import Any, TypeVar
 
 from .utils import make_edge_id
+
+_T = TypeVar("_T")
 
 logger = logging.getLogger(__name__)
 
@@ -46,7 +49,7 @@ class FileGraphStore:
     # Internal helpers
     # ------------------------------------------------------------------
 
-    def _run(self, fn: Any) -> Any:  # noqa: ANN401
+    def _run(self, fn: Callable[[], _T]) -> asyncio.Future[_T]:
         """Run a blocking callable in the default executor."""
         return asyncio.get_running_loop().run_in_executor(None, fn)
 
@@ -153,14 +156,14 @@ class FileGraphStore:
                             set(existing.get("labels", [])) | node["labels"]
                         )
                         existing["properties"].update(node["properties"])
-                        path.write_text(json.dumps(existing))
+                        path.write_text(json.dumps(existing, indent=2))
                     else:
                         data = {
                             "id": node["id"],
                             "labels": sorted(node["labels"]),
                             "properties": node["properties"],
                         }
-                        path.write_text(json.dumps(data))
+                        path.write_text(json.dumps(data, indent=2))
 
                 for (source, target, edge_type), edge in edges.items():
                     edge_id = make_edge_id(source, target, edge_type)
@@ -168,7 +171,7 @@ class FileGraphStore:
                     if path.exists():
                         existing = json.loads(path.read_text())
                         existing["properties"].update(edge["properties"])
-                        path.write_text(json.dumps(existing))
+                        path.write_text(json.dumps(existing, indent=2))
                     else:
                         data = {
                             "source": edge["source"],
@@ -176,7 +179,7 @@ class FileGraphStore:
                             "type": edge["type"],
                             "properties": edge["properties"],
                         }
-                        path.write_text(json.dumps(data))
+                        path.write_text(json.dumps(data, indent=2))
             except Exception:
                 self._node_buffer.update(nodes)
                 self._edge_buffer.update(edges)
