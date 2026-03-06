@@ -74,7 +74,7 @@ class TestHandlerLogger:
 
 
 class TestEventLogContext:
-    """3 tests for the EventLogContext prefix formatting."""
+    """6 tests for the EventLogContext prefix formatting."""
 
     def test_info_includes_prefix(self, caplog):
         """info() produces log record with correct prefix format."""
@@ -133,6 +133,23 @@ class TestEventLogContext:
         assert (
             caplog.records[0].message
             == "[RunHandler] [s1] [prompt:submit] Created PromptStep node node-123"
+        )
+
+    def test_error_supports_lazy_formatting_args(self, caplog):
+        """error() accepts *args for lazy %-style formatting."""
+        logger = logging.getLogger("test.event_log_context.error_args")
+        ctx = EventLogContext(
+            handler_name="RunHandler",
+            session_id="s1",
+            event="prompt:submit",
+            logger=logger,
+        )
+        with caplog.at_level(logging.ERROR, logger="test.event_log_context.error_args"):
+            ctx.error("Failed to create node %s: %s", "node-456", "timeout")
+        assert len(caplog.records) == 1
+        assert (
+            caplog.records[0].message
+            == "[RunHandler] [s1] [prompt:submit] Failed to create node node-456: timeout"
         )
 
     def test_warning_supports_lazy_formatting_args(self, caplog):
