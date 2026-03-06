@@ -7,6 +7,13 @@ from typing import Any
 
 import pytest
 
+from tests.conftest import (
+    PROMPT_NODE_ID,
+    RUN_NODE_ID,
+    SESSION_ID,
+    SESSION_NODE_ID,
+)
+
 
 # ---------------------------------------------------------------------------
 # Shared fixtures
@@ -160,21 +167,31 @@ class TestBufferFirstReads:
     """get_node / get_edge must reflect buffered state."""
 
     async def test_get_node_returns_buffered_data(self, store):
-        await store.upsert_node("n1", {"Person"}, {"name": "Alice"})
-        node = await store.get_node("n1")
+        await store.upsert_node(
+            PROMPT_NODE_ID,
+            {"Step", "PromptStep"},
+            {
+                "session_id": SESSION_ID,
+                "iteration": 0,
+                "prompt_text": "Hello, world!",
+                "prompt_preview": "Hello, world!",
+                "occurred_at": "2025-01-27T10:00:01Z",
+            },
+        )
+        node = await store.get_node(PROMPT_NODE_ID)
         assert node is not None
-        assert node["id"] == "n1"
-        assert node["labels"] == {"Person"}
-        assert node["properties"] == {"name": "Alice"}
+        assert node["id"] == PROMPT_NODE_ID
+        assert node["labels"] == {"Step", "PromptStep"}
+        assert node["properties"]["prompt_text"] == "Hello, world!"
 
     async def test_get_edge_returns_buffered_data(self, store):
-        await store.upsert_edge("a", "b", "KNOWS", {"since": 2020})
-        edge = await store.get_edge("a", "b", "KNOWS")
+        await store.upsert_edge(SESSION_NODE_ID, RUN_NODE_ID, "HAS_RUN", {"seq": 1})
+        edge = await store.get_edge(SESSION_NODE_ID, RUN_NODE_ID, "HAS_RUN")
         assert edge is not None
-        assert edge["source"] == "a"
-        assert edge["target"] == "b"
-        assert edge["type"] == "KNOWS"
-        assert edge["properties"] == {"since": 2020}
+        assert edge["source"] == SESSION_NODE_ID
+        assert edge["target"] == RUN_NODE_ID
+        assert edge["type"] == "HAS_RUN"
+        assert edge["properties"] == {"seq": 1}
 
     async def test_get_nonexistent_node_returns_none(self, store):
         result = await store.get_node("nope")
@@ -186,14 +203,21 @@ class TestBufferFirstReads:
 
     async def test_buffer_wins_over_stale_duckdb(self, store):
         """Upsert after flush: buffer value should override stale DuckDB data."""
-        await store.upsert_node("n1", {"V1"}, {"version": 1})
+        await store.upsert_node(
+            SESSION_NODE_ID,
+            {"Session", "Root"},
+            {"session_id": SESSION_ID, "status": "running"},
+        )
         await store.flush()
         # Now upsert a newer version into buffer
-        await store.upsert_node("n1", {"V2"}, {"version": 2})
-        node = await store.get_node("n1")
+        await store.upsert_node(
+            SESSION_NODE_ID,
+            {"Session", "Root"},
+            {"session_id": SESSION_ID, "status": "completed"},
+        )
+        node = await store.get_node(SESSION_NODE_ID)
         assert node is not None
-        assert node["labels"] == {"V2"}
-        assert node["properties"] == {"version": 2}
+        assert node["properties"]["status"] == "completed"
 
 
 # ---------------------------------------------------------------------------
@@ -203,50 +227,68 @@ class TestFlush:
     """flush() persists buffers to DuckDB and clears them."""
 
     async def test_flush_writes_nodes_to_duckdb(self, store):
-        await store.upsert_node("n1", {"Person"}, {"name": "Alice"})
+        await store.upsert_node(
+            SESSION_NODE_ID,
+            {"Session", "Root"},
+            {"session_id": SESSION_ID, "status": "running"},
+        )
         await store.flush()
-        row = store._conn.execute("SELECT node_id FROM nodes WHERE node_id = 'n1'").fetchone()
+        row = store._conn.execute(
+            "SELECT node_id FROM nodes WHERE node_id = ?", [SESSION_NODE_ID]
+        ).fetchone()
         assert row is not None
-        assert row[0] == "n1"
+        assert row[0] == SESSION_NODE_ID
 
     async def test_flush_writes_edges_to_duckdb(self, store):
-        await store.upsert_edge("a", "b", "KNOWS", {"w": 1})
+        await store.upsert_edge(SESSION_NODE_ID, RUN_NODE_ID, "HAS_RUN", {"seq": 1})
         await store.flush()
         row = store._conn.execute(
             "SELECT source, target, edge_type FROM edges "
-            "WHERE source = 'a' AND target = 'b' AND edge_type = 'KNOWS'"
+            "WHERE source = ? AND target = ? AND edge_type = 'HAS_RUN'",
+            [SESSION_NODE_ID, RUN_NODE_ID],
         ).fetchone()
         assert row is not None
-        assert row == ("a", "b", "KNOWS")
+        assert row == (SESSION_NODE_ID, RUN_NODE_ID, "HAS_RUN")
 
-    async def test_flush_clears_both_buffers(self, store):
-        await store.upsert_node("n1", {"X"}, {})
-        await store.upsert_edge("a", "b", "R", {})
+    async def test_flush_clears_node_buffer(self, store):
+        await store.upsert_node(
+            SESSION_NODE_ID,
+            {"Session", "Root"},
+            {"session_id": SESSION_ID},
+        )
         await store.flush()
         assert len(store._node_buffer) == 0
+
+    async def test_flush_clears_edge_buffer(self, store):
+        await store.upsert_edge(SESSION_NODE_ID, RUN_NODE_ID, "HAS_RUN", {"seq": 1})
+        await store.flush()
         assert len(store._edge_buffer) == 0
 
     async def test_get_node_from_duckdb_after_flush(self, store):
-        await store.upsert_node("n1", {"Person"}, {"name": "Alice"})
+        await store.upsert_node(
+            SESSION_NODE_ID,
+            {"Session", "Root"},
+            {"session_id": SESSION_ID, "status": "running"},
+        )
         await store.flush()
         # Buffer is empty now; read must come from DuckDB
         assert len(store._node_buffer) == 0
-        node = await store.get_node("n1")
+        node = await store.get_node(SESSION_NODE_ID)
         assert node is not None
-        assert node["id"] == "n1"
-        assert node["labels"] == {"Person"}
-        assert node["properties"] == {"name": "Alice"}
+        assert node["id"] == SESSION_NODE_ID
+        assert node["labels"] == {"Session", "Root"}
+        assert node["properties"]["session_id"] == SESSION_ID
 
     async def test_get_edge_from_duckdb_after_flush(self, store):
-        await store.upsert_edge("a", "b", "KNOWS", {"w": 1})
+        await store.upsert_edge(SESSION_NODE_ID, RUN_NODE_ID, "HAS_RUN", {"seq": 1})
         await store.flush()
         assert len(store._edge_buffer) == 0
-        edge = await store.get_edge("a", "b", "KNOWS")
+        edge = await store.get_edge(SESSION_NODE_ID, RUN_NODE_ID, "HAS_RUN")
         assert edge is not None
-        assert edge["source"] == "a"
-        assert edge["target"] == "b"
-        assert edge["type"] == "KNOWS"
-        assert edge["properties"] == {"w": 1}
+        assert edge["source"] == SESSION_NODE_ID
+        assert edge["target"] == RUN_NODE_ID
+        assert edge["type"] == "HAS_RUN"
+        assert edge["properties"] == {"seq": 1}
 
     async def test_flush_empty_buffer_is_noop(self, store):
         # Should not raise
@@ -260,47 +302,35 @@ class TestFlush:
 class TestExecuteQuery:
     """execute_query returns list of dicts and supports dialect validation."""
 
-    async def test_execute_query_returns_list_of_dicts(self, store):
-        await store.upsert_node("n1", {"Person"}, {"name": "Alice"})
-        await store.flush()
+    async def test_execute_query_returns_list_of_dicts(self, store, seed_reference_graph):
         rows = await store.execute_query("SELECT node_id, labels FROM nodes")
         assert isinstance(rows, list)
-        assert len(rows) == 1
+        assert len(rows) == 4
         assert "node_id" in rows[0]
         assert "labels" in rows[0]
-        assert rows[0]["node_id"] == "n1"
 
     def test_supported_dialects_returns_frozenset(self, store):
         dialects = store.supported_dialects
         assert isinstance(dialects, frozenset)
         assert "sql" in dialects
 
-    async def test_execute_query_with_explicit_sql_dialect(self, store):
-        await store.upsert_node("n1", {"Person"}, {"name": "Alice"})
-        await store.flush()
+    async def test_execute_query_with_explicit_sql_dialect(self, store, seed_reference_graph):
         rows = await store.execute_query("SELECT node_id FROM nodes", dialect="sql")
         assert isinstance(rows, list)
-        assert len(rows) == 1
-        assert rows[0]["node_id"] == "n1"
+        assert len(rows) == 4
 
-    async def test_execute_query_with_none_dialect_uses_default(self, store):
-        await store.upsert_node("n1", {"Person"}, {"name": "Alice"})
-        await store.flush()
+    async def test_execute_query_with_none_dialect_uses_default(self, store, seed_reference_graph):
         rows = await store.execute_query("SELECT node_id FROM nodes", dialect=None)
         assert isinstance(rows, list)
-        assert len(rows) == 1
-        assert rows[0]["node_id"] == "n1"
+        assert len(rows) == 4
 
-    async def test_execute_query_with_params(self, store):
-        await store.upsert_node("n1", {"Person"}, {"name": "Alice"})
-        await store.upsert_node("n2", {"Person"}, {"name": "Bob"})
-        await store.flush()
+    async def test_execute_query_with_params(self, store, seed_reference_graph):
         rows = await store.execute_query(
             "SELECT node_id FROM nodes WHERE node_id = $node_id",
-            params={"node_id": "n1"},
+            params={"node_id": SESSION_NODE_ID},
         )
         assert len(rows) == 1
-        assert rows[0]["node_id"] == "n1"
+        assert rows[0]["node_id"] == SESSION_NODE_ID
 
     async def test_execute_query_with_invalid_dialect_raises(self, store):
         with pytest.raises(ValueError, match="Unsupported dialect"):
@@ -318,17 +348,23 @@ class TestClose:
 
         db_path = tmp_path / "close_test.db"
         store = DuckDBGraphStore(connection=str(db_path))
-        await store.upsert_node("n1", {"X"}, {"val": 42})
+        await store.upsert_node(
+            SESSION_NODE_ID,
+            {"Session", "Root"},
+            {"session_id": SESSION_ID, "status": "running"},
+        )
         await store.close()
 
         # Reopen and verify data was persisted
         import duckdb
 
         conn = duckdb.connect(str(db_path))
-        row = conn.execute("SELECT node_id FROM nodes WHERE node_id = 'n1'").fetchone()
+        row = conn.execute(
+            "SELECT node_id FROM nodes WHERE node_id = ?", [SESSION_NODE_ID]
+        ).fetchone()
         conn.close()
         assert row is not None
-        assert row[0] == "n1"
+        assert row[0] == SESSION_NODE_ID
 
 
 # ---------------------------------------------------------------------------
@@ -344,24 +380,27 @@ class TestPersistence:
 
         # Write data and close
         store = DuckDBGraphStore(connection=str(db_path))
-        await store.upsert_node("n1", {"Person"}, {"name": "Bob"})
-        await store.upsert_edge("n1", "n2", "KNOWS", {"since": 2021})
+        await store.upsert_node(
+            SESSION_NODE_ID,
+            {"Session", "Root"},
+            {"session_id": SESSION_ID, "status": "running"},
+        )
+        await store.upsert_edge(SESSION_NODE_ID, RUN_NODE_ID, "HAS_RUN", {"seq": 1})
         await store.close()
 
         # Reopen and read back
         store2 = DuckDBGraphStore(connection=str(db_path))
-        node = await store2.get_node("n1")
+        node = await store2.get_node(SESSION_NODE_ID)
         assert node is not None
-        assert node["id"] == "n1"
-        assert node["labels"] == {"Person"}
-        assert node["properties"] == {"name": "Bob"}
+        assert node["id"] == SESSION_NODE_ID
+        assert node["labels"] == {"Session", "Root"}
 
-        edge = await store2.get_edge("n1", "n2", "KNOWS")
+        edge = await store2.get_edge(SESSION_NODE_ID, RUN_NODE_ID, "HAS_RUN")
         assert edge is not None
-        assert edge["source"] == "n1"
-        assert edge["target"] == "n2"
-        assert edge["type"] == "KNOWS"
-        assert edge["properties"] == {"since": 2021}
+        assert edge["source"] == SESSION_NODE_ID
+        assert edge["target"] == RUN_NODE_ID
+        assert edge["type"] == "HAS_RUN"
+        assert edge["properties"] == {"seq": 1}
         await store2.close()
 
 
@@ -499,49 +538,49 @@ class TestSearchIndexAutoPopulate:
     async def test_promptstep_with_prompt_text_populates_search_buffer(self, store):
         """PromptStep with prompt_text populates search buffer with correct fields."""
         await store.upsert_node(
-            "ps1",
-            {"PromptStep"},
+            PROMPT_NODE_ID,
+            {"Step", "PromptStep"},
             {
-                "prompt_text": "What is the meaning of life?",
-                "session_id": "sess-abc",
-                "occurred_at": "2025-01-15T10:30:00",
+                "prompt_text": "Hello, world!",
+                "session_id": SESSION_ID,
+                "occurred_at": "2025-01-27T10:00:01Z",
             },
         )
         assert len(store._search_buffer) == 1
         entry = store._search_buffer[0]
-        assert entry["node_id"] == "ps1"
-        assert entry["session_id"] == "sess-abc"
+        assert entry["node_id"] == PROMPT_NODE_ID
+        assert entry["session_id"] == SESSION_ID
         assert entry["field_name"] == "prompt_text"
-        assert entry["content"] == "What is the meaning of life?"
-        assert entry["occurred_at"] == "2025-01-15T10:30:00"
+        assert entry["content"] == "Hello, world!"
+        assert entry["occurred_at"] == "2025-01-27T10:00:01Z"
 
     async def test_session_node_does_not_populate_search_buffer(self, store):
         """Session node does NOT populate search buffer."""
         await store.upsert_node(
-            "s1",
-            {"Session"},
-            {"session_id": "sess-abc", "prompt_text": "should not matter"},
+            SESSION_NODE_ID,
+            {"Session", "Root"},
+            {"session_id": SESSION_ID, "prompt_text": "should not matter"},
         )
         assert len(store._search_buffer) == 0
 
     async def test_promptstep_without_prompt_text_does_not_populate(self, store):
         """PromptStep WITHOUT prompt_text does NOT populate search buffer."""
         await store.upsert_node(
-            "ps2",
-            {"PromptStep"},
-            {"session_id": "sess-abc", "occurred_at": "2025-01-15T10:30:00"},
+            PROMPT_NODE_ID,
+            {"Step", "PromptStep"},
+            {"session_id": SESSION_ID, "occurred_at": "2025-01-27T10:00:01Z"},
         )
         assert len(store._search_buffer) == 0
 
     async def test_promptstep_with_empty_prompt_text_does_not_populate(self, store):
         """PromptStep with EMPTY prompt_text does NOT populate search buffer."""
         await store.upsert_node(
-            "ps3",
-            {"PromptStep"},
+            PROMPT_NODE_ID,
+            {"Step", "PromptStep"},
             {
                 "prompt_text": "",
-                "session_id": "sess-abc",
-                "occurred_at": "2025-01-15T10:30:00",
+                "session_id": SESSION_ID,
+                "occurred_at": "2025-01-27T10:00:01Z",
             },
         )
         assert len(store._search_buffer) == 0
@@ -549,40 +588,41 @@ class TestSearchIndexAutoPopulate:
     async def test_auto_populate_flows_through_to_duckdb_on_flush(self, store):
         """Auto-populated entries flow through flush() to DuckDB."""
         await store.upsert_node(
-            "ps4",
-            {"PromptStep"},
+            PROMPT_NODE_ID,
+            {"Step", "PromptStep"},
             {
-                "prompt_text": "Tell me about AI",
-                "session_id": "sess-xyz",
-                "occurred_at": "2025-02-01T12:00:00",
+                "prompt_text": "Hello, world!",
+                "session_id": SESSION_ID,
+                "occurred_at": "2025-01-27T10:00:01Z",
             },
         )
         await store.flush()
         row = store._conn.execute(
-            "SELECT node_id, session_id, field_name, content FROM search_index WHERE node_id = 'ps4'"
+            "SELECT node_id, session_id, field_name, content FROM search_index WHERE node_id = ?",
+            [PROMPT_NODE_ID],
         ).fetchone()
         assert row is not None
-        assert row[0] == "ps4"
-        assert row[1] == "sess-xyz"
+        assert row[0] == PROMPT_NODE_ID
+        assert row[1] == SESSION_ID
         assert row[2] == "prompt_text"
-        assert row[3] == "Tell me about AI"
+        assert row[3] == "Hello, world!"
 
     async def test_upsert_existing_node_does_not_duplicate_search_entry(self, store):
         """Second upsert to same node_id does NOT add duplicate search entry."""
         await store.upsert_node(
-            "ps5",
-            {"PromptStep"},
+            PROMPT_NODE_ID,
+            {"Step", "PromptStep"},
             {
-                "prompt_text": "Original prompt",
-                "session_id": "sess-dup",
-                "occurred_at": "2025-03-01T08:00:00",
+                "prompt_text": "Hello, world!",
+                "session_id": SESSION_ID,
+                "occurred_at": "2025-01-27T10:00:01Z",
             },
         )
         assert len(store._search_buffer) == 1
         # Second upsert to same node_id - should NOT add another entry
         await store.upsert_node(
-            "ps5",
-            {"PromptStep"},
+            PROMPT_NODE_ID,
+            {"Step", "PromptStep"},
             {"prompt_text": "Updated prompt"},
         )
         assert len(store._search_buffer) == 1
