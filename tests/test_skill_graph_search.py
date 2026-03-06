@@ -55,6 +55,12 @@ _SCHEMA_SECTION: str = (
     _extract_section(_SKILL_CONTENT, "Schema") if _SKILL_CONTENT else ""
 )
 
+# Pre-extract the Multiple Storage Backends subsection — referenced by five tests.
+_backends_start = _SCHEMA_SECTION.find("### Multiple Storage Backends")
+_BACKENDS_SECTION: str = (
+    _SCHEMA_SECTION[_backends_start:] if _backends_start >= 0 else ""
+)
+
 
 # —— AC-1: File exists ——————————————————————————————————————————
 
@@ -124,16 +130,14 @@ def test_dialect_scope_note_present() -> None:
 
 def test_dialect_scope_note_mentions_duckdb() -> None:
     """Dialect scope note should mention DuckDB as current backend."""
-    # Find the opening section (between title and first ---)
+    # Extract the opening section: text between the title and the first "---" after it.
     title_match = re.search(
         r"^# Context Intelligence Graph Search", _SKILL_CONTENT, re.MULTILINE
     )
-    first_hr = _SKILL_CONTENT.find("---", title_match.end() if title_match else 0)
-    opening = _SKILL_CONTENT[
-        title_match.end() if title_match else 0 : first_hr
-        if first_hr > 0
-        else len(_SKILL_CONTENT)
-    ]
+    start = title_match.end() if title_match else 0
+    first_hr = _SKILL_CONTENT.find("---", start)
+    end = first_hr if first_hr > 0 else len(_SKILL_CONTENT)
+    opening = _SKILL_CONTENT[start:end]
     assert "DuckDB" in opening, (
         "Opening section should mention DuckDB as current backend"
     )
@@ -451,49 +455,39 @@ def test_multiple_storage_backends_section_exists() -> None:
 
 def test_multiple_storage_backends_queryablestore_protocol() -> None:
     """References QueryableStore protocol."""
-    backends_start = _SCHEMA_SECTION.find("### Multiple Storage Backends")
-    backends_text = _SCHEMA_SECTION[backends_start:]
-    assert "QueryableStore" in backends_text, (
+    assert "QueryableStore" in _BACKENDS_SECTION, (
         "Multiple Storage Backends should reference QueryableStore protocol"
     )
 
 
 def test_multiple_storage_backends_supported_dialects() -> None:
     """References store.supported_dialects discovery."""
-    backends_start = _SCHEMA_SECTION.find("### Multiple Storage Backends")
-    backends_text = _SCHEMA_SECTION[backends_start:]
-    assert "supported_dialects" in backends_text, (
+    assert "supported_dialects" in _BACKENDS_SECTION, (
         "Multiple Storage Backends should reference supported_dialects"
     )
 
 
 def test_multiple_storage_backends_sql_dialect() -> None:
     """Mentions this skill covers the 'sql' dialect."""
-    backends_start = _SCHEMA_SECTION.find("### Multiple Storage Backends")
-    backends_text = _SCHEMA_SECTION[backends_start:]
-    assert re.search(r'"sql".*dialect|sql.*dialect', backends_text, re.IGNORECASE), (
-        "Multiple Storage Backends should mention 'sql' dialect"
-    )
+    assert re.search(
+        r'"sql".*dialect|sql.*dialect', _BACKENDS_SECTION, re.IGNORECASE
+    ), "Multiple Storage Backends should mention 'sql' dialect"
 
 
 def test_multiple_storage_backends_duckdb_schema_note() -> None:
     """Notes that DuckDB schema applies only to DuckDB backend."""
-    backends_start = _SCHEMA_SECTION.find("### Multiple Storage Backends")
-    backends_text = _SCHEMA_SECTION[backends_start:]
     assert re.search(
         r"DuckDB.*schema.*appl.*only.*DuckDB|schema.*below.*only.*DuckDB",
-        backends_text,
+        _BACKENDS_SECTION,
         re.IGNORECASE,
     ), "Should note DuckDB schema applies only to DuckDB backend"
 
 
 def test_multiple_storage_backends_future_dialects() -> None:
     """Mentions future dialect-specific skills for other backends."""
-    backends_start = _SCHEMA_SECTION.find("### Multiple Storage Backends")
-    backends_text = _SCHEMA_SECTION[backends_start:]
     assert re.search(
         r"future|other.*backend|dialect.specific.*skill",
-        backends_text,
+        _BACKENDS_SECTION,
         re.IGNORECASE,
     ), "Should mention future dialect-specific skills for other backends"
 
