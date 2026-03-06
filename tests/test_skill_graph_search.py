@@ -19,11 +19,8 @@ SKILL_DIR = (
 )
 SKILL_FILE = SKILL_DIR / "SKILL.md"
 
-
-def _read_skill() -> str:
-    """Read SKILL.md content."""
-    assert SKILL_FILE.exists(), f"SKILL.md not found at {SKILL_FILE}"
-    return SKILL_FILE.read_text()
+# Read once at module level — avoids 25 redundant disk reads.
+_SKILL_CONTENT: str = SKILL_FILE.read_text() if SKILL_FILE.exists() else ""
 
 
 def _parse_frontmatter(content: str) -> dict:
@@ -33,7 +30,15 @@ def _parse_frontmatter(content: str) -> dict:
     return yaml.safe_load(match.group(1))
 
 
-# ── AC-1: File exists ──────────────────────────────────────────────
+def _extract_section(content: str, heading: str) -> str:
+    """Extract content under a markdown ## heading, up to the next ## or end."""
+    pattern = rf"^## {re.escape(heading)}\s*\n(.*?)(?=^## |\Z)"
+    match = re.search(pattern, content, re.MULTILINE | re.DOTALL)
+    assert match, f"Section '## {heading}' not found in SKILL.md"
+    return match.group(1)
+
+
+# —— AC-1: File exists ——————————————————————————————————————
 
 
 def test_skill_file_exists() -> None:
@@ -44,44 +49,42 @@ def test_skill_directory_exists() -> None:
     assert SKILL_DIR.is_dir(), f"Skill directory not found at {SKILL_DIR}"
 
 
-# ── AC-2: YAML frontmatter ─────────────────────────────────────────
+# —— AC-2: YAML frontmatter ———————————————————————————————
 
 
 def test_frontmatter_name() -> None:
-    fm = _parse_frontmatter(_read_skill())
+    fm = _parse_frontmatter(_SKILL_CONTENT)
     assert fm["name"] == "context-intelligence-graph-search"
 
 
 def test_frontmatter_version() -> None:
-    fm = _parse_frontmatter(_read_skill())
+    fm = _parse_frontmatter(_SKILL_CONTENT)
     assert fm["version"] == "0.1.0"
 
 
 def test_frontmatter_license() -> None:
-    fm = _parse_frontmatter(_read_skill())
+    fm = _parse_frontmatter(_SKILL_CONTENT)
     assert fm["license"] == "MIT"
 
 
 def test_frontmatter_description_present() -> None:
-    fm = _parse_frontmatter(_read_skill())
+    fm = _parse_frontmatter(_SKILL_CONTENT)
     assert "description" in fm
     assert len(fm["description"]) > 0
 
 
-# ── AC-3: Schema section with 3 tables ─────────────────────────────
+# —— AC-3: Schema section with 3 tables ———————————————————
 
 
 def test_schema_nodes_table() -> None:
-    content = _read_skill()
-    assert "node_id" in content
-    assert "VARCHAR" in content
+    assert "node_id" in _SKILL_CONTENT
+    assert "VARCHAR" in _SKILL_CONTENT
     # Check all columns of nodes table
     for col in ["node_id", "session_id", "labels", "occurred_at", "properties"]:
-        assert col in content, f"nodes table missing column: {col}"
+        assert col in _SKILL_CONTENT, f"nodes table missing column: {col}"
 
 
 def test_schema_edges_table() -> None:
-    content = _read_skill()
     for col in [
         "source",
         "target",
@@ -91,27 +94,25 @@ def test_schema_edges_table() -> None:
         "seq",
         "properties",
     ]:
-        assert col in content, f"edges table missing column: {col}"
+        assert col in _SKILL_CONTENT, f"edges table missing column: {col}"
     # Primary key on source/target/edge_type
-    assert "source" in content
-    assert "target" in content
-    assert "edge_type" in content
+    assert "source" in _SKILL_CONTENT
+    assert "target" in _SKILL_CONTENT
+    assert "edge_type" in _SKILL_CONTENT
 
 
 def test_schema_search_index_table() -> None:
-    content = _read_skill()
     for col in ["node_id", "field_name", "content"]:
-        assert col in content, f"search_index table missing column: {col}"
+        assert col in _SKILL_CONTENT, f"search_index table missing column: {col}"
 
 
 def test_schema_mentions_all_three_tables() -> None:
-    content = _read_skill()
-    assert "nodes" in content
-    assert "edges" in content
-    assert "search_index" in content
+    assert "nodes" in _SKILL_CONTENT
+    assert "edges" in _SKILL_CONTENT
+    assert "search_index" in _SKILL_CONTENT
 
 
-# ── AC-4: Label system with 13 labels ──────────────────────────────
+# —— AC-4: Label system with 13 labels ————————————————————
 
 EXPECTED_LABELS = [
     "Session",
@@ -131,16 +132,21 @@ EXPECTED_LABELS = [
 
 
 def test_all_13_labels_present() -> None:
-    content = _read_skill()
     for label in EXPECTED_LABELS:
-        assert label in content, f"Label missing: {label}"
+        assert label in _SKILL_CONTENT, f"Label missing: {label}"
 
 
 def test_label_count() -> None:
-    assert len(EXPECTED_LABELS) == 13
+    """Verify the Label System table in SKILL.md contains exactly 13 labels."""
+    label_section = _extract_section(_SKILL_CONTENT, "Label System")
+    # Each label row starts with "| `LabelName`" in the markdown table.
+    label_rows = re.findall(r"^\| `(\w+)`", label_section, re.MULTILINE)
+    assert len(label_rows) == 13, (
+        f"Expected 13 labels in SKILL.md table, found {len(label_rows)}: {label_rows}"
+    )
 
 
-# ── AC-5: Edge types with 8 types ──────────────────────────────────
+# —— AC-5: Edge types with 8 types ————————————————————————
 
 EXPECTED_EDGE_TYPES = [
     "HAS_RUN",
@@ -155,114 +161,113 @@ EXPECTED_EDGE_TYPES = [
 
 
 def test_all_8_edge_types_present() -> None:
-    content = _read_skill()
     for edge_type in EXPECTED_EDGE_TYPES:
-        assert edge_type in content, f"Edge type missing: {edge_type}"
+        assert edge_type in _SKILL_CONTENT, f"Edge type missing: {edge_type}"
 
 
 def test_edge_types_have_from_to() -> None:
-    """Each edge type should document from and to."""
-    content = _read_skill()
-    # Check that from/to information is in the edge types section
-    # We check for table structure with From and To columns
-    assert re.search(r"From|from", content), (
-        "Edge types should document 'from' direction"
-    )
-    assert re.search(r"To|to", content), "Edge types should document 'to' direction"
+    """Edge Types table should have From and To columns."""
+    edge_section = _extract_section(_SKILL_CONTENT, "Edge Types")
+    # Verify the table header row contains "From" and "To" columns
+    header_match = re.search(r"^\|.*From.*\|.*To.*\|", edge_section, re.MULTILINE)
+    assert header_match, "Edge Types table should have 'From' and 'To' column headers"
 
 
-# ── AC-6: Search index field_name ───────────────────────────────────
+# —— AC-6: Search index field_name ———————————————————————
 
 
 def test_search_index_prompt_text() -> None:
-    content = _read_skill()
-    assert "prompt_text" in content, (
+    assert "prompt_text" in _SKILL_CONTENT, (
         "search_index field_name 'prompt_text' not documented"
     )
-    assert "PromptStep" in content, "prompt_text source (PromptStep) not documented"
+    assert "PromptStep" in _SKILL_CONTENT, (
+        "prompt_text source (PromptStep) not documented"
+    )
 
 
-# ── AC-7: Three query patterns ─────────────────────────────────────
+# —— AC-7: Three query patterns —————————————————————————
 
 
 def test_query_pattern_fts_bm25() -> None:
     """Pattern 1: Direct FTS with BM25."""
-    content = _read_skill()
-    assert "fts_main_search_index" in content, "FTS BM25 function reference missing"
-    assert "match_bm25" in content, "match_bm25 function reference missing"
+    assert "fts_main_search_index" in _SKILL_CONTENT, (
+        "FTS BM25 function reference missing"
+    )
+    assert "match_bm25" in _SKILL_CONTENT, "match_bm25 function reference missing"
 
 
 def test_query_pattern_fts_pgq_traversal() -> None:
     """Pattern 2: FTS + PGQ Traversal."""
-    content = _read_skill()
-    assert "GRAPH_TABLE" in content, "GRAPH_TABLE keyword missing for PGQ traversal"
+    assert "GRAPH_TABLE" in _SKILL_CONTENT, (
+        "GRAPH_TABLE keyword missing for PGQ traversal"
+    )
     # Should use CTE pattern
-    assert "WITH" in content, "CTE (WITH) pattern missing for FTS+PGQ"
+    assert "WITH" in _SKILL_CONTENT, "CTE (WITH) pattern missing for FTS+PGQ"
 
 
 def test_query_pattern_pure_pgq() -> None:
     """Pattern 3: Pure PGQ without text search."""
-    content = _read_skill()
     # Pure PGQ should have GRAPH_TABLE and MATCH pattern
-    assert "GRAPH_TABLE" in content
+    assert "GRAPH_TABLE" in _SKILL_CONTENT
     # Should have at least one query that doesn't use search_index/FTS
-    assert "MATCH" in content, "PGQ MATCH keyword missing"
+    assert "MATCH" in _SKILL_CONTENT, "PGQ MATCH keyword missing"
 
 
 def test_three_query_patterns_exist() -> None:
     """Verify exactly 3 distinct query pattern sections."""
-    content = _read_skill()
-    pattern_matches = re.findall(r"Pattern\s+\d", content, re.IGNORECASE)
+    pattern_matches = re.findall(r"Pattern\s+\d", _SKILL_CONTENT, re.IGNORECASE)
     assert len(pattern_matches) >= 3, (
         f"Expected 3+ pattern references, found {len(pattern_matches)}"
     )
 
 
-# ── AC-8: Notes section ────────────────────────────────────────────
+# —— AC-8: Notes section ——————————————————————————————————
 
 
 def test_notes_fts_rebuild_timing() -> None:
-    content = _read_skill()
     # Should mention FTS index rebuild
     assert re.search(
-        r"FTS.*rebuild|rebuild.*FTS|PRAGMA.*create_fts_index", content, re.IGNORECASE
+        r"FTS.*rebuild|rebuild.*FTS|PRAGMA.*create_fts_index",
+        _SKILL_CONTENT,
+        re.IGNORECASE,
     ), "Notes should cover FTS index rebuild timing"
 
 
 def test_notes_property_graph_creation() -> None:
-    content = _read_skill()
     # Should mention property graph created on demand
     assert re.search(
-        r"property.graph.*creat|CREATE\s+PROPERTY\s+GRAPH", content, re.IGNORECASE
+        r"property.graph.*creat|CREATE\s+PROPERTY\s+GRAPH",
+        _SKILL_CONTENT,
+        re.IGNORECASE,
     ), "Notes should cover property graph creation timing"
 
 
 def test_notes_json_access() -> None:
-    content = _read_skill()
     # Should mention JSON property access syntax
     assert re.search(
-        r"JSON|json.*access|properties\s*->>|json_extract", content, re.IGNORECASE
+        r"JSON|json.*access|properties\s*->>|json_extract",
+        _SKILL_CONTENT,
+        re.IGNORECASE,
     ), "Notes should cover JSON property access syntax"
 
 
-# ── Property Graph Overlay section ──────────────────────────────────
+# —— Property Graph Overlay section ——————————————————————
 
 
 def test_duckpgq_install_load() -> None:
-    content = _read_skill()
-    assert "INSTALL" in content, "DuckPGQ INSTALL missing"
-    assert "LOAD" in content, "DuckPGQ LOAD missing"
+    assert "INSTALL" in _SKILL_CONTENT, "DuckPGQ INSTALL missing"
+    assert "LOAD" in _SKILL_CONTENT, "DuckPGQ LOAD missing"
 
 
 def test_create_property_graph_ddl() -> None:
-    content = _read_skill()
-    assert "CREATE PROPERTY GRAPH" in content, "CREATE PROPERTY GRAPH DDL missing"
+    assert "CREATE PROPERTY GRAPH" in _SKILL_CONTENT, (
+        "CREATE PROPERTY GRAPH DDL missing"
+    )
 
 
 def test_property_graph_on_demand() -> None:
-    content = _read_skill()
     assert re.search(
         r"on.demand|not.*startup|when.*needed|lazy|created.*demand",
-        content,
+        _SKILL_CONTENT,
         re.IGNORECASE,
     ), "Should note property graph is created on demand, not at startup"
