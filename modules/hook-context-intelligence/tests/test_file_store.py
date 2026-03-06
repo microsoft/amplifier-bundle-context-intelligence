@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
@@ -238,6 +239,20 @@ class TestFlush:
     async def test_empty_flush_noop(self, tmp_path: Path) -> None:
         store = FileGraphStore(location=str(tmp_path / "graph"))
         await store.flush()  # should not raise
+
+    async def test_flush_restores_buffers_on_write_failure(self, tmp_path: Path) -> None:
+        loc = tmp_path / "graph"
+        store = FileGraphStore(location=str(loc))
+        await store.upsert_node("n1", {"A"}, {"k": "v"})
+        await store.upsert_edge("a", "b", "REL", {"w": 1})
+
+        # Patch _atomic_write to simulate an I/O error during flush
+        with patch.object(FileGraphStore, "_atomic_write", side_effect=OSError("disk full")):
+            await store.flush()
+
+        # Buffers should be restored for retry
+        assert "n1" in store._node_buffer
+        assert ("a", "b", "REL") in store._edge_buffer
 
     async def test_merge_with_existing_file(self, tmp_path: Path) -> None:
         loc = tmp_path / "graph"

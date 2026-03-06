@@ -16,6 +16,8 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
+import tempfile
 from pathlib import Path
 from collections.abc import Callable
 from typing import Any, TypeVar
@@ -52,6 +54,25 @@ class FileGraphStore:
     def _run(self, fn: Callable[[], _T]) -> asyncio.Future[_T]:
         """Run a blocking callable in the default executor."""
         return asyncio.get_running_loop().run_in_executor(None, fn)
+
+    @staticmethod
+    def _atomic_write(path: Path, content: str) -> None:
+        """Write *content* to *path* atomically via temp-file + rename."""
+        fd, tmp = tempfile.mkstemp(dir=path.parent, suffix=".tmp")
+        closed = False
+        try:
+            os.write(fd, content.encode())
+            os.close(fd)
+            closed = True
+            os.replace(tmp, path)
+        except BaseException:
+            if not closed:
+                os.close(fd)
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+            raise
 
     # ------------------------------------------------------------------
     # Writes (buffer only, no I/O)
@@ -156,14 +177,14 @@ class FileGraphStore:
                             set(existing.get("labels", [])) | node["labels"]
                         )
                         existing["properties"].update(node["properties"])
-                        path.write_text(json.dumps(existing, indent=2))
+                        self._atomic_write(path, json.dumps(existing, indent=2))
                     else:
                         data = {
                             "id": node["id"],
                             "labels": sorted(node["labels"]),
                             "properties": node["properties"],
                         }
-                        path.write_text(json.dumps(data, indent=2))
+                        self._atomic_write(path, json.dumps(data, indent=2))
 
                 for (source, target, edge_type), edge in edges.items():
                     edge_id = make_edge_id(source, target, edge_type)
@@ -171,7 +192,7 @@ class FileGraphStore:
                     if path.exists():
                         existing = json.loads(path.read_text())
                         existing["properties"].update(edge["properties"])
-                        path.write_text(json.dumps(existing, indent=2))
+                        self._atomic_write(path, json.dumps(existing, indent=2))
                     else:
                         data = {
                             "source": edge["source"],
@@ -179,7 +200,7 @@ class FileGraphStore:
                             "type": edge["type"],
                             "properties": edge["properties"],
                         }
-                        path.write_text(json.dumps(data, indent=2))
+                        self._atomic_write(path, json.dumps(data, indent=2))
             except Exception:
                 self._node_buffer.update(nodes)
                 self._edge_buffer.update(edges)
