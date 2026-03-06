@@ -8,16 +8,30 @@ from typing import Any
 
 
 def make_node_id(session_id: str, event_name: str, timestamp: str) -> str:
-    """Generate a deterministic node ID from event data.
+    """Generate a deterministic, filesystem-safe node ID from event data.
 
-    Pattern: {session_id}:{event_name}:{timestamp_ms}
+    Pattern: {session_id}__{safe_event}__{timestamp_ms}
 
-    Parses ISO-8601 timestamps (with fractional seconds and timezone offsets)
-    and converts to epoch milliseconds.
+    Colons in *event_name* are replaced with underscores so the ID is safe
+    for use as a filename component.  Parses ISO-8601 timestamps (with
+    fractional seconds and timezone offsets) and converts to epoch
+    milliseconds.
     """
+    safe_event = event_name.replace(":", "_")
     dt = datetime.fromisoformat(timestamp)
     epoch_ms = int(dt.astimezone(timezone.utc).timestamp() * 1000)
-    return f"{session_id}:{event_name}:{epoch_ms}"
+    return f"{session_id}__{safe_event}__{epoch_ms}"
+
+
+def make_edge_id(source_id: str, target_id: str, edge_type: str) -> str:
+    """Generate a deterministic edge ID from source, target, and type.
+
+    Pattern: {source_id}==[{edge_type}]=={target_id}
+
+    The ``==[`` and ``]==`` separators never appear in node IDs, so edge
+    IDs are always unambiguously parseable back into their three components.
+    """
+    return f"{source_id}==[{edge_type}]=={target_id}"
 
 
 class EventLogContext:

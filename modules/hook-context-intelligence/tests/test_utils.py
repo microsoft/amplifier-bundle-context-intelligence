@@ -7,6 +7,7 @@ import logging
 from amplifier_module_hook_context_intelligence.utils import (
     EventLogContext,
     HandlerLogger,
+    make_edge_id,
     make_node_id,
 )
 
@@ -15,19 +16,19 @@ class TestMakeNodeId:
     """7 tests for the make_node_id utility."""
 
     def test_basic_iso_timestamp(self):
-        """Basic ISO-8601 with trailing Z produces correct epoch ms."""
+        """Basic ISO-8601 with trailing Z produces correct epoch ms with __ separators."""
         result = make_node_id("s1", "prompt:submit", "2026-01-01T00:00:00Z")
-        assert result == "s1:prompt:submit:1767225600000"
+        assert result == "s1__prompt_submit__1767225600000"
 
     def test_fractional_seconds(self):
         """Fractional seconds (.500) are preserved as milliseconds."""
         result = make_node_id("s1", "prompt:submit", "2026-01-01T00:00:00.500Z")
-        assert result == "s1:prompt:submit:1767225600500"
+        assert result == "s1__prompt_submit__1767225600500"
 
     def test_timezone_offset(self):
         """Timezone offset +00:00 is handled correctly."""
         result = make_node_id("s1", "session:resume", "2026-01-01T02:00:00+00:00")
-        assert result == "s1:session:resume:1767232800000"
+        assert result == "s1__session_resume__1767232800000"
 
     def test_deterministic(self):
         """Same inputs always produce the same output."""
@@ -50,7 +51,46 @@ class TestMakeNodeId:
     def test_resume_pattern(self):
         """session:resume event follows the standard pattern, not the session exception."""
         result = make_node_id("sess-abc", "session:resume", "2026-01-01T02:00:00+00:00")
-        assert result == "sess-abc:session:resume:1767232800000"
+        assert result == "sess-abc__session_resume__1767232800000"
+
+
+class TestMakeEdgeId:
+    """5 tests for the make_edge_id utility."""
+
+    def test_basic_construction(self):
+        """Basic edge ID with simple source and target."""
+        result = make_edge_id("session-1", "node-2", "HAS_STEP")
+        assert result == "session-1==[HAS_STEP]==node-2"
+
+    def test_real_node_ids_with_double_underscore_separators(self):
+        """Edge ID works with real make_node_id output containing __ separators."""
+        src = make_node_id("s1", "prompt:submit", "2026-01-01T00:00:00Z")
+        tgt = make_node_id("s1", "response:complete", "2026-01-01T00:00:01Z")
+        result = make_edge_id(src, tgt, "FOLLOWED_BY")
+        assert result == f"{src}==[FOLLOWED_BY]=={tgt}"
+
+    def test_parseable_back_to_components(self):
+        """Edge ID can be split back into source, edge_type, target."""
+        edge_id = make_edge_id("src-node", "tgt-node", "HAS_STEP")
+        parts = edge_id.split("==[")
+        source = parts[0]
+        rest = parts[1]
+        edge_type, target = rest.split("]==")
+        assert source == "src-node"
+        assert edge_type == "HAS_STEP"
+        assert target == "tgt-node"
+
+    def test_deterministic(self):
+        """Same inputs always produce the same edge ID."""
+        a = make_edge_id("src", "tgt", "HAS_STEP")
+        b = make_edge_id("src", "tgt", "HAS_STEP")
+        assert a == b
+
+    def test_different_edge_types_produce_different_ids(self):
+        """Different edge types produce different edge IDs."""
+        a = make_edge_id("src", "tgt", "HAS_STEP")
+        b = make_edge_id("src", "tgt", "FOLLOWED_BY")
+        assert a != b
 
 
 class TestHandlerLogger:
