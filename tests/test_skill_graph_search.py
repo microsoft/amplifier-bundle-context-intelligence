@@ -120,14 +120,13 @@ def test_schema_mentions_all_three_tables() -> None:
     assert "search_index" in _SCHEMA_SECTION
 
 
-# —— AC-4: Label system with 13 labels ————————————————————————
+# —— AC-4: Label system with 12 labels ————————————————————————
 
 EXPECTED_LABELS = [
     "Session",
     "Root",
     "Subsession",
     "ForkedSession",
-    "Resumed",
     "OrchestratorRun",
     "Step",
     "PromptStep",
@@ -139,18 +138,18 @@ EXPECTED_LABELS = [
 ]
 
 
-def test_all_13_labels_present() -> None:
+def test_all_12_labels_present() -> None:
     for label in EXPECTED_LABELS:
         assert label in _SKILL_CONTENT, f"Label missing: {label}"
 
 
 def test_label_count() -> None:
-    """Verify the Label System table in SKILL.md contains exactly 13 labels."""
+    """Verify the Label System table in SKILL.md contains exactly 12 labels."""
     label_section = _extract_section(_SKILL_CONTENT, "Label System")
     # Each label row starts with "| `LabelName`" in the markdown table.
     label_rows = re.findall(r"^\| `(\w+)`", label_section, re.MULTILINE)
-    assert len(label_rows) == 13, (
-        f"Expected 13 labels in SKILL.md table, found {len(label_rows)}: {label_rows}"
+    assert len(label_rows) == 12, (
+        f"Expected 12 labels in SKILL.md table, found {len(label_rows)}: {label_rows}"
     )
 
 
