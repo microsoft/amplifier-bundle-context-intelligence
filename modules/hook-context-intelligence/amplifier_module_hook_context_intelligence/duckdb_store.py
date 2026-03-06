@@ -46,6 +46,11 @@ CREATE TABLE IF NOT EXISTS search_index (
 """
 
 
+_INDEXABLE_FIELDS: dict[tuple[str, str], str] = {
+    ("PromptStep", "prompt_text"): "prompt_text",
+}
+
+
 class DuckDBGraphStore:
     """Graph store backed by DuckDB with in-memory write buffer.
 
@@ -80,6 +85,22 @@ class DuckDBGraphStore:
     # Writes (buffer only, no I/O)
     # ------------------------------------------------------------------
 
+    def _index_searchable_content(
+        self, node_id: str, labels: set[str], properties: dict[str, Any]
+    ) -> None:
+        """Append search entries to _search_buffer for indexable fields."""
+        for (label, prop_key), field_name in _INDEXABLE_FIELDS.items():
+            if label in labels and properties.get(prop_key):
+                self._search_buffer.append(
+                    {
+                        "node_id": node_id,
+                        "session_id": properties.get("session_id", ""),
+                        "field_name": field_name,
+                        "content": properties[prop_key],
+                        "occurred_at": properties.get("occurred_at"),
+                    }
+                )
+
     async def upsert_node(self, node_id: str, labels: set[str], properties: dict[str, Any]) -> None:
         existing = self._node_buffer.get(node_id)
         if existing is not None:
@@ -91,6 +112,7 @@ class DuckDBGraphStore:
             "labels": set(labels),
             "properties": dict(properties),
         }
+        self._index_searchable_content(node_id, labels, properties)
 
     async def upsert_edge(
         self, source: str, target: str, edge_type: str, properties: dict[str, Any]

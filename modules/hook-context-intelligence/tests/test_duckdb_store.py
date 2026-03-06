@@ -448,3 +448,107 @@ class TestSearchIndexFlush:
 
         assert len(store._search_buffer) == 1
         assert store._search_buffer[0] == entry
+
+
+# ---------------------------------------------------------------------------
+# TestSearchIndexAutoPopulate
+# ---------------------------------------------------------------------------
+class TestSearchIndexAutoPopulate:
+    """upsert_node auto-populates _search_buffer for indexable PromptStep nodes."""
+
+    @pytest.fixture
+    def store(self):
+        from amplifier_module_hook_context_intelligence.duckdb_store import DuckDBGraphStore
+
+        return DuckDBGraphStore()
+
+    async def test_promptstep_with_prompt_text_populates_search_buffer(self, store):
+        """PromptStep with prompt_text populates search buffer with correct fields."""
+        await store.upsert_node(
+            "ps1",
+            {"PromptStep"},
+            {
+                "prompt_text": "What is the meaning of life?",
+                "session_id": "sess-abc",
+                "occurred_at": "2025-01-15T10:30:00",
+            },
+        )
+        assert len(store._search_buffer) == 1
+        entry = store._search_buffer[0]
+        assert entry["node_id"] == "ps1"
+        assert entry["session_id"] == "sess-abc"
+        assert entry["field_name"] == "prompt_text"
+        assert entry["content"] == "What is the meaning of life?"
+        assert entry["occurred_at"] == "2025-01-15T10:30:00"
+
+    async def test_session_node_does_not_populate_search_buffer(self, store):
+        """Session node does NOT populate search buffer."""
+        await store.upsert_node(
+            "s1",
+            {"Session"},
+            {"session_id": "sess-abc", "prompt_text": "should not matter"},
+        )
+        assert len(store._search_buffer) == 0
+
+    async def test_promptstep_without_prompt_text_does_not_populate(self, store):
+        """PromptStep WITHOUT prompt_text does NOT populate search buffer."""
+        await store.upsert_node(
+            "ps2",
+            {"PromptStep"},
+            {"session_id": "sess-abc", "occurred_at": "2025-01-15T10:30:00"},
+        )
+        assert len(store._search_buffer) == 0
+
+    async def test_promptstep_with_empty_prompt_text_does_not_populate(self, store):
+        """PromptStep with EMPTY prompt_text does NOT populate search buffer."""
+        await store.upsert_node(
+            "ps3",
+            {"PromptStep"},
+            {
+                "prompt_text": "",
+                "session_id": "sess-abc",
+                "occurred_at": "2025-01-15T10:30:00",
+            },
+        )
+        assert len(store._search_buffer) == 0
+
+    async def test_auto_populate_flows_through_to_duckdb_on_flush(self, store):
+        """Auto-populated entries flow through flush() to DuckDB."""
+        await store.upsert_node(
+            "ps4",
+            {"PromptStep"},
+            {
+                "prompt_text": "Tell me about AI",
+                "session_id": "sess-xyz",
+                "occurred_at": "2025-02-01T12:00:00",
+            },
+        )
+        await store.flush()
+        row = store._conn.execute(
+            "SELECT node_id, session_id, field_name, content FROM search_index WHERE node_id = 'ps4'"
+        ).fetchone()
+        assert row is not None
+        assert row[0] == "ps4"
+        assert row[1] == "sess-xyz"
+        assert row[2] == "prompt_text"
+        assert row[3] == "Tell me about AI"
+
+    async def test_upsert_existing_node_does_not_duplicate_search_entry(self, store):
+        """Second upsert to same node_id does NOT add duplicate search entry."""
+        await store.upsert_node(
+            "ps5",
+            {"PromptStep"},
+            {
+                "prompt_text": "Original prompt",
+                "session_id": "sess-dup",
+                "occurred_at": "2025-03-01T08:00:00",
+            },
+        )
+        assert len(store._search_buffer) == 1
+        # Second upsert to same node_id - should NOT add another entry
+        await store.upsert_node(
+            "ps5",
+            {"PromptStep"},
+            {"prompt_text": "Updated prompt"},
+        )
+        assert len(store._search_buffer) == 1
