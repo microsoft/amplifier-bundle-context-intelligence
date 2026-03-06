@@ -41,7 +41,13 @@ def _extract_section(content: str, heading: str) -> str:
     return match.group(1)
 
 
-# —— AC-1: File exists ——————————————————————————————————————
+# Pre-extract sections referenced by multiple tests.
+_SCHEMA_SECTION: str = (
+    _extract_section(_SKILL_CONTENT, "Schema") if _SKILL_CONTENT else ""
+)
+
+
+# —— AC-1: File exists ——————————————————————————————————————————
 
 
 def test_skill_file_exists() -> None:
@@ -52,7 +58,7 @@ def test_skill_directory_exists() -> None:
     assert SKILL_DIR.is_dir(), f"Skill directory not found at {SKILL_DIR}"
 
 
-# —— AC-2: YAML frontmatter ———————————————————————————————
+# —— AC-2: YAML frontmatter ———————————————————————————————————
 
 
 def test_frontmatter_name() -> None:
@@ -72,18 +78,16 @@ def test_frontmatter_description_present() -> None:
     assert len(_FRONTMATTER["description"]) > 0
 
 
-# —— AC-3: Schema section with 3 tables ———————————————————
+# —— AC-3: Schema section with 3 tables ———————————————————————
 
 
 def test_schema_nodes_table() -> None:
-    schema = _extract_section(_SKILL_CONTENT, "Schema")
-    assert "VARCHAR" in schema
+    assert "VARCHAR" in _SCHEMA_SECTION
     for col in ["node_id", "session_id", "labels", "occurred_at", "properties"]:
-        assert col in schema, f"nodes table missing column: {col}"
+        assert col in _SCHEMA_SECTION, f"nodes table missing column: {col}"
 
 
 def test_schema_edges_table() -> None:
-    schema = _extract_section(_SKILL_CONTENT, "Schema")
     for col in [
         "source",
         "target",
@@ -93,23 +97,21 @@ def test_schema_edges_table() -> None:
         "seq",
         "properties",
     ]:
-        assert col in schema, f"edges table missing column: {col}"
+        assert col in _SCHEMA_SECTION, f"edges table missing column: {col}"
 
 
 def test_schema_search_index_table() -> None:
-    schema = _extract_section(_SKILL_CONTENT, "Schema")
     for col in ["node_id", "field_name", "content"]:
-        assert col in schema, f"search_index table missing column: {col}"
+        assert col in _SCHEMA_SECTION, f"search_index table missing column: {col}"
 
 
 def test_schema_mentions_all_three_tables() -> None:
-    schema = _extract_section(_SKILL_CONTENT, "Schema")
-    assert "nodes" in schema
-    assert "edges" in schema
-    assert "search_index" in schema
+    assert "nodes" in _SCHEMA_SECTION
+    assert "edges" in _SCHEMA_SECTION
+    assert "search_index" in _SCHEMA_SECTION
 
 
-# —— AC-4: Label system with 13 labels ————————————————————
+# —— AC-4: Label system with 13 labels ————————————————————————
 
 EXPECTED_LABELS = [
     "Session",
@@ -143,7 +145,7 @@ def test_label_count() -> None:
     )
 
 
-# —— AC-5: Edge types with 8 types ————————————————————————
+# —— AC-5: Edge types with 8 types ————————————————————————————
 
 EXPECTED_EDGE_TYPES = [
     "HAS_RUN",
@@ -170,19 +172,20 @@ def test_edge_types_have_from_to() -> None:
     assert header_match, "Edge Types table should have 'From' and 'To' column headers"
 
 
-# —— AC-6: Search index field_name ———————————————————————
+# —— AC-6: Search index field_name ————————————————————————————
 
 
 def test_search_index_prompt_text() -> None:
-    assert "prompt_text" in _SKILL_CONTENT, (
+    search_section = _extract_section(_SKILL_CONTENT, "Search Index")
+    assert "prompt_text" in search_section, (
         "search_index field_name 'prompt_text' not documented"
     )
-    assert "PromptStep" in _SKILL_CONTENT, (
+    assert "PromptStep" in search_section, (
         "prompt_text source (PromptStep) not documented"
     )
 
 
-# —— AC-7: Three query patterns —————————————————————————
+# —— AC-7: Three query patterns ———————————————————————————————
 
 
 def test_query_pattern_fts_bm25() -> None:
@@ -195,11 +198,12 @@ def test_query_pattern_fts_bm25() -> None:
 
 def test_query_pattern_fts_pgq_traversal() -> None:
     """Pattern 2: FTS + PGQ Traversal."""
-    assert "GRAPH_TABLE" in _SKILL_CONTENT, (
+    query_section = _extract_section(_SKILL_CONTENT, "Query Patterns")
+    assert "GRAPH_TABLE" in query_section, (
         "GRAPH_TABLE keyword missing for PGQ traversal"
     )
     # Should use CTE pattern
-    assert "WITH" in _SKILL_CONTENT, "CTE (WITH) pattern missing for FTS+PGQ"
+    assert "WITH" in query_section, "CTE (WITH) pattern missing for FTS+PGQ"
 
 
 def test_query_pattern_pure_pgq() -> None:
@@ -218,7 +222,7 @@ def test_three_query_patterns_exist() -> None:
     )
 
 
-# —— AC-8: Notes section ——————————————————————————————————
+# —— AC-8: Notes section ——————————————————————————————————————
 
 
 def test_notes_fts_rebuild_timing() -> None:
@@ -248,7 +252,7 @@ def test_notes_json_access() -> None:
     ), "Notes should cover JSON property access syntax"
 
 
-# —— Property Graph Overlay section ——————————————————————
+# —— Property Graph Overlay section ———————————————————————————
 
 
 def test_duckpgq_install_load() -> None:
