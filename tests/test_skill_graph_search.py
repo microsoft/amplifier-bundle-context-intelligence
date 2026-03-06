@@ -281,3 +281,179 @@ def test_property_graph_on_demand() -> None:
         _SKILL_CONTENT,
         re.IGNORECASE,
     ), "Should note property graph is created on demand, not at startup"
+
+
+# —— AC-9: Node ID Format section ——————————————————————————————
+
+
+def test_node_id_format_section_exists() -> None:
+    """Node ID Format section exists within Schema."""
+    assert "### Node ID Format" in _SCHEMA_SECTION, (
+        "Schema section should contain '### Node ID Format' subsection"
+    )
+
+
+def test_node_id_format_documents_make_node_id() -> None:
+    """References make_node_id() in utils.py."""
+    assert "make_node_id()" in _SCHEMA_SECTION, (
+        "Node ID Format should reference make_node_id()"
+    )
+    assert "utils.py" in _SCHEMA_SECTION, "Node ID Format should reference utils.py"
+
+
+def test_node_id_format_pattern() -> None:
+    """Documents the {session_id}__{event_name}__{timestamp_ms} pattern."""
+    assert "{session_id}__{event_name}__{timestamp_ms}" in _SCHEMA_SECTION, (
+        "Node ID Format should document the pattern"
+    )
+
+
+def test_node_id_format_double_underscore_separator() -> None:
+    """Documents __ as segment separator."""
+    assert re.search(r"`__`.*separator", _SCHEMA_SECTION, re.IGNORECASE), (
+        "Node ID Format should document __ as segment separator"
+    )
+
+
+def test_node_id_format_colon_replacement() -> None:
+    """Documents colons becoming underscores."""
+    assert "prompt:submit" in _SCHEMA_SECTION, (
+        "Node ID Format should show colon example"
+    )
+    assert "prompt_submit" in _SCHEMA_SECTION, (
+        "Node ID Format should show underscore replacement"
+    )
+
+
+def test_node_id_format_session_nodes_raw_uuid() -> None:
+    """Documents that session nodes use raw UUID."""
+    assert re.search(
+        r"[Ss]ession.*node.*raw.*session_id|raw.*session_id.*UUID",
+        _SCHEMA_SECTION,
+    ), "Node ID Format should note session nodes use raw session_id"
+
+
+def test_node_id_format_example() -> None:
+    """Includes a concrete example."""
+    assert (
+        "6afb3613-7041-4735-9c0f-c2171452ed18__prompt_submit__1741270343000"
+        in _SCHEMA_SECTION
+    ), "Node ID Format should include a concrete example"
+
+
+# —— AC-10: Edge ID Format section —————————————————————————————
+
+
+def test_edge_id_format_section_exists() -> None:
+    """Edge ID Format section exists within Schema."""
+    assert "### Edge ID Format" in _SCHEMA_SECTION, (
+        "Schema section should contain '### Edge ID Format' subsection"
+    )
+
+
+def test_edge_id_format_documents_make_edge_id() -> None:
+    """References make_edge_id() in utils.py."""
+    assert "make_edge_id()" in _SCHEMA_SECTION, (
+        "Edge ID Format should reference make_edge_id()"
+    )
+
+
+def test_edge_id_format_pattern() -> None:
+    """Documents the {source_id}==[{edge_type}]=={target_id} pattern."""
+    assert "{source_id}==[{edge_type}]=={target_id}" in _SCHEMA_SECTION, (
+        "Edge ID Format should document the pattern"
+    )
+
+
+def test_edge_id_format_separators() -> None:
+    """Documents ==[  and ]== as separators."""
+    assert "==[" in _SCHEMA_SECTION, "Edge ID Format should document ==[ separator"
+    assert "]==" in _SCHEMA_SECTION, "Edge ID Format should document ]== separator"
+
+
+def test_edge_id_format_example() -> None:
+    """Includes a concrete example with ==[HAS_STEP]==."""
+    assert "==[HAS_STEP]==" in _SCHEMA_SECTION, (
+        "Edge ID Format should include an example with ==[HAS_STEP]=="
+    )
+
+
+def test_edge_id_format_parse_instructions() -> None:
+    """Includes parse instructions."""
+    assert 'split("==[", 1)' in _SCHEMA_SECTION, (
+        "Edge ID Format should include parse instructions"
+    )
+    assert 'split("]==", 1)' in _SCHEMA_SECTION, (
+        "Edge ID Format should include parse instructions for ]==  separator"
+    )
+
+
+# —— AC-11: Multiple Storage Backends section ——————————————————
+
+
+def test_multiple_storage_backends_section_exists() -> None:
+    """Multiple Storage Backends section exists within Schema."""
+    assert "### Multiple Storage Backends" in _SCHEMA_SECTION, (
+        "Schema section should contain '### Multiple Storage Backends' subsection"
+    )
+
+
+def test_multiple_storage_backends_duckdb_mentioned() -> None:
+    """Mentions DuckDB backend."""
+    assert re.search(
+        r"Multiple Storage Backends.*DuckDB", _SCHEMA_SECTION, re.DOTALL
+    ), "Multiple Storage Backends should mention DuckDB"
+
+
+def test_multiple_storage_backends_file_based_mentioned() -> None:
+    """Mentions file-based / flat JSON files backend."""
+    assert re.search(
+        r"Multiple Storage Backends.*flat JSON files|Multiple Storage Backends.*file-based",
+        _SCHEMA_SECTION,
+        re.DOTALL,
+    ), "Multiple Storage Backends should mention flat JSON files"
+
+
+def test_multiple_storage_backends_ids_identical() -> None:
+    """Documents that IDs are identical across backends."""
+    assert re.search(r"identical across backends", _SCHEMA_SECTION, re.IGNORECASE), (
+        "Multiple Storage Backends should note IDs are identical across backends"
+    )
+
+
+def test_multiple_storage_backends_nodes_edges_dirs() -> None:
+    """Documents nodes/ and edges/ directories for file backend."""
+    assert "`nodes/`" in _SCHEMA_SECTION, (
+        "Multiple Storage Backends should mention nodes/ directory"
+    )
+    assert "`edges/`" in _SCHEMA_SECTION, (
+        "Multiple Storage Backends should mention edges/ directory"
+    )
+
+
+def test_new_sections_appear_before_nodes_table() -> None:
+    """All three new sections appear between ## Schema and ### `nodes`."""
+    schema_match = re.search(r"^## Schema\s*\n", _SKILL_CONTENT, re.MULTILINE)
+    nodes_match = re.search(r"^### `nodes`", _SKILL_CONTENT, re.MULTILINE)
+    assert schema_match and nodes_match, "Both ## Schema and ### `nodes` must exist"
+
+    between = _SKILL_CONTENT[schema_match.end() : nodes_match.start()]
+    assert "### Node ID Format" in between, (
+        "Node ID Format must appear between ## Schema and ### `nodes`"
+    )
+    assert "### Edge ID Format" in between, (
+        "Edge ID Format must appear between ## Schema and ### `nodes`"
+    )
+    assert "### Multiple Storage Backends" in between, (
+        "Multiple Storage Backends must appear between ## Schema and ### `nodes`"
+    )
+
+
+def test_new_sections_ordering() -> None:
+    """Node ID Format comes before Edge ID Format which comes before Multiple Storage Backends."""
+    node_pos = _SKILL_CONTENT.find("### Node ID Format")
+    edge_pos = _SKILL_CONTENT.find("### Edge ID Format")
+    backends_pos = _SKILL_CONTENT.find("### Multiple Storage Backends")
+    assert node_pos < edge_pos < backends_pos, (
+        "Sections must be ordered: Node ID Format, Edge ID Format, Multiple Storage Backends"
+    )
