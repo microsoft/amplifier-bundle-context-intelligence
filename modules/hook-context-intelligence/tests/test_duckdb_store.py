@@ -9,6 +9,17 @@ import pytest
 
 
 # ---------------------------------------------------------------------------
+# Shared fixtures
+# ---------------------------------------------------------------------------
+@pytest.fixture
+def store():
+    """Fresh in-memory DuckDBGraphStore for test isolation."""
+    from amplifier_module_hook_context_intelligence.duckdb_store import DuckDBGraphStore
+
+    return DuckDBGraphStore()
+
+
+# ---------------------------------------------------------------------------
 # TestRunUsesGetRunningLoop
 # ---------------------------------------------------------------------------
 class TestRunUsesGetRunningLoop:
@@ -89,12 +100,6 @@ class TestConstructor:
 class TestBufferWrites:
     """upsert_node / upsert_edge write to in-memory buffers only."""
 
-    @pytest.fixture
-    def store(self):
-        from amplifier_module_hook_context_intelligence.duckdb_store import DuckDBGraphStore
-
-        return DuckDBGraphStore()
-
     async def test_upsert_node_writes_to_buffer(self, store):
         await store.upsert_node("n1", {"Label"}, {"key": "val"})
         assert "n1" in store._node_buffer
@@ -133,12 +138,6 @@ class TestBufferWrites:
 # ---------------------------------------------------------------------------
 class TestBufferFirstReads:
     """get_node / get_edge must reflect buffered state."""
-
-    @pytest.fixture
-    def store(self):
-        from amplifier_module_hook_context_intelligence.duckdb_store import DuckDBGraphStore
-
-        return DuckDBGraphStore()
 
     async def test_get_node_returns_buffered_data(self, store):
         await store.upsert_node("n1", {"Person"}, {"name": "Alice"})
@@ -182,12 +181,6 @@ class TestBufferFirstReads:
 # ---------------------------------------------------------------------------
 class TestFlush:
     """flush() persists buffers to DuckDB and clears them."""
-
-    @pytest.fixture
-    def store(self):
-        from amplifier_module_hook_context_intelligence.duckdb_store import DuckDBGraphStore
-
-        return DuckDBGraphStore()
 
     async def test_flush_writes_nodes_to_duckdb(self, store):
         await store.upsert_node("n1", {"Person"}, {"name": "Alice"})
@@ -379,12 +372,6 @@ def _make_search_entry(
 class TestSearchIndexFlush:
     """flush() persists search buffer entries to DuckDB search_index table."""
 
-    @pytest.fixture
-    def store(self):
-        from amplifier_module_hook_context_intelligence.duckdb_store import DuckDBGraphStore
-
-        return DuckDBGraphStore()
-
     async def test_flush_writes_search_entries_to_duckdb(self, store):
         store._search_buffer.append(_make_search_entry())
         await store.flush()
@@ -455,12 +442,6 @@ class TestSearchIndexFlush:
 # ---------------------------------------------------------------------------
 class TestSearchIndexAutoPopulate:
     """upsert_node auto-populates _search_buffer for indexable PromptStep nodes."""
-
-    @pytest.fixture
-    def store(self):
-        from amplifier_module_hook_context_intelligence.duckdb_store import DuckDBGraphStore
-
-        return DuckDBGraphStore()
 
     async def test_promptstep_with_prompt_text_populates_search_buffer(self, store):
         """PromptStep with prompt_text populates search buffer with correct fields."""
