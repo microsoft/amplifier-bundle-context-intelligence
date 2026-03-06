@@ -691,11 +691,11 @@ class TestPGQ:
         """_ensure_pgq() must create the 'context_graph' property graph queryable via GRAPH_TABLE."""
         store._ensure_pgq()
         result = store._conn.execute(
-            """
+            f"""
             SELECT s.node_id AS session_id, step.node_id AS step_id
             FROM GRAPH_TABLE(context_graph
                 MATCH (s:Session)-[hr:HAS_RUN]->(r)-[hs:HAS_STEP]->(step)
-                WHERE s.node_id = '55c8841a-test'
+                WHERE s.node_id = '{SESSION_NODE_ID}'
                 COLUMNS (s.node_id, step.node_id)
             )
             """
@@ -705,11 +705,11 @@ class TestPGQ:
     async def test_pgq_dialect_triggers_ensure_pgq(self, store, seed_reference_graph):
         """execute_query with dialect='pgq' auto-calls _ensure_pgq and runs GRAPH_TABLE query."""
         rows = await store.execute_query(
-            """
+            f"""
             SELECT s.node_id AS session_id, step.node_id AS step_id
             FROM GRAPH_TABLE(context_graph
                 MATCH (s:Session)-[hr:HAS_RUN]->(r)-[hs:HAS_STEP]->(step)
-                WHERE s.node_id = '55c8841a-test'
+                WHERE s.node_id = '{SESSION_NODE_ID}'
                 COLUMNS (s.node_id, step.node_id)
             )
             """,
@@ -720,11 +720,11 @@ class TestPGQ:
     async def test_pgq_structural_query_steps_in_session(self, store, seed_reference_graph):
         """Find all steps in a session's runs via GRAPH_TABLE."""
         rows = await store.execute_query(
-            """
+            f"""
             SELECT step.node_id AS step_id
             FROM GRAPH_TABLE(context_graph
                 MATCH (s:Session)-[hr:HAS_RUN]->(r)-[hs:HAS_STEP]->(step)
-                WHERE s.node_id = '55c8841a-test'
+                WHERE s.node_id = '{SESSION_NODE_ID}'
                 COLUMNS (step.node_id)
             )
             """,
@@ -736,11 +736,11 @@ class TestPGQ:
     async def test_pgq_triggered_tools_query(self, store, seed_reference_graph):
         """Query tools triggered by a step via TRIGGERED edge in GRAPH_TABLE."""
         rows = await store.execute_query(
-            """
+            f"""
             SELECT tool.node_id AS tool_id
             FROM GRAPH_TABLE(context_graph
                 MATCH (step)-[t:TRIGGERED]->(tool)
-                WHERE step.node_id = '55c8841a-test__prompt_submit__1737972001000'
+                WHERE step.node_id = '{PROMPT_NODE_ID}'
                 COLUMNS (tool.node_id)
             )
             """,
