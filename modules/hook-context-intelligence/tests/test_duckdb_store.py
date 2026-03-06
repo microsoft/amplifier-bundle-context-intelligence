@@ -73,12 +73,13 @@ class TestConstructor:
         # Query information_schema to verify tables exist
         result = store._conn.execute(
             "SELECT table_name FROM information_schema.tables "
-            "WHERE table_schema = 'main' AND table_name IN ('nodes', 'edges') "
+            "WHERE table_schema = 'main' AND table_name IN ('nodes', 'edges', 'search_index') "
             "ORDER BY table_name"
         ).fetchall()
         table_names = [row[0] for row in result]
         assert "edges" in table_names
         assert "nodes" in table_names
+        assert "search_index" in table_names
 
 
 # ---------------------------------------------------------------------------
@@ -315,3 +316,151 @@ class TestPersistence:
         assert edge["type"] == "KNOWS"
         assert edge["properties"] == {"since": 2021}
         await store2.close()
+
+
+# ---------------------------------------------------------------------------
+# TestSearchIndexTable
+# ---------------------------------------------------------------------------
+class TestSearchIndexTable:
+    """Verify search_index table creation and schema."""
+
+    def test_search_index_table_created_on_init(self):
+        from amplifier_module_hook_context_intelligence.duckdb_store import DuckDBGraphStore
+
+        store = DuckDBGraphStore()
+        result = store._conn.execute(
+            "SELECT table_name FROM information_schema.tables "
+            "WHERE table_schema = 'main' AND table_name = 'search_index'"
+        ).fetchall()
+        assert len(result) == 1
+        assert result[0][0] == "search_index"
+
+    def test_search_index_has_expected_columns(self):
+        from amplifier_module_hook_context_intelligence.duckdb_store import DuckDBGraphStore
+
+        store = DuckDBGraphStore()
+        result = store._conn.execute(
+            "SELECT column_name FROM information_schema.columns "
+            "WHERE table_name = 'search_index' ORDER BY ordinal_position"
+        ).fetchall()
+        column_names = [row[0] for row in result]
+        assert column_names == ["node_id", "session_id", "field_name", "content", "occurred_at"]
+
+    def test_search_buffer_exists_and_empty_on_init(self):
+        from amplifier_module_hook_context_intelligence.duckdb_store import DuckDBGraphStore
+
+        store = DuckDBGraphStore()
+        assert hasattr(store, "_search_buffer")
+        assert store._search_buffer == []
+        assert isinstance(store._search_buffer, list)
+
+
+# ---------------------------------------------------------------------------
+# TestSearchIndexFlush
+# ---------------------------------------------------------------------------
+class TestSearchIndexFlush:
+    """flush() persists search buffer entries to DuckDB search_index table."""
+
+    @pytest.fixture
+    def store(self):
+        from amplifier_module_hook_context_intelligence.duckdb_store import DuckDBGraphStore
+
+        return DuckDBGraphStore()
+
+    async def test_flush_writes_search_entries_to_duckdb(self, store):
+        store._search_buffer.append(
+            {
+                "node_id": "n1",
+                "session_id": "sess1",
+                "field_name": "summary",
+                "content": "hello world",
+                "occurred_at": None,
+            }
+        )
+        await store.flush()
+        row = store._conn.execute(
+            "SELECT node_id, session_id, field_name, content FROM search_index WHERE node_id = 'n1'"
+        ).fetchone()
+        assert row is not None
+        assert row[0] == "n1"
+        assert row[1] == "sess1"
+        assert row[2] == "summary"
+        assert row[3] == "hello world"
+
+    async def test_flush_clears_search_buffer(self, store):
+        store._search_buffer.append(
+            {
+                "node_id": "n1",
+                "session_id": "sess1",
+                "field_name": "summary",
+                "content": "hello world",
+                "occurred_at": None,
+            }
+        )
+        await store.flush()
+        assert store._search_buffer == []
+
+    async def test_flush_empty_search_buffer_is_noop(self, store):
+        # All buffers empty - should not raise
+        await store.flush()
+        await store.flush()
+        rows = store._conn.execute("SELECT * FROM search_index").fetchall()
+        assert rows == []
+
+    async def test_flush_writes_multiple_search_entries(self, store):
+        store._search_buffer.append(
+            {
+                "node_id": "n1",
+                "session_id": "sess1",
+                "field_name": "summary",
+                "content": "first",
+                "occurred_at": None,
+            }
+        )
+        store._search_buffer.append(
+            {
+                "node_id": "n2",
+                "session_id": "sess2",
+                "field_name": "description",
+                "content": "second",
+                "occurred_at": None,
+            }
+        )
+        await store.flush()
+        rows = store._conn.execute(
+            "SELECT node_id, field_name, content FROM search_index ORDER BY node_id"
+        ).fetchall()
+        assert len(rows) == 2
+        assert rows[0] == ("n1", "summary", "first")
+        assert rows[1] == ("n2", "description", "second")
+
+    async def test_flush_restores_search_buffer_on_failure(self, store):
+        entry = {
+            "node_id": "n1",
+            "session_id": "sess1",
+            "field_name": "summary",
+            "content": "hello",
+            "occurred_at": None,
+        }
+        store._search_buffer.append(entry)
+
+        # DuckDB C extension's execute is read-only, so we wrap the connection
+        original_conn = store._conn
+
+        class FailingConn:
+            """Proxy that raises on search_index INSERT."""
+
+            def __getattr__(self, name):
+                return getattr(original_conn, name)
+
+            def execute(self, sql, *args, **kwargs):
+                if sql.startswith("INSERT") and "search_index" in sql:
+                    raise RuntimeError("simulated failure")
+                return original_conn.execute(sql, *args, **kwargs)
+
+        store._conn = FailingConn()
+        await store.flush()
+        store._conn = original_conn  # restore for cleanup
+
+        assert len(store._search_buffer) == 1
+        assert store._search_buffer[0] == entry

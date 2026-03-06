@@ -35,6 +35,16 @@ CREATE TABLE IF NOT EXISTS edges (
 )
 """
 
+_CREATE_SEARCH_INDEX = """
+CREATE TABLE IF NOT EXISTS search_index (
+    node_id     VARCHAR NOT NULL,
+    session_id  VARCHAR NOT NULL,
+    field_name  VARCHAR NOT NULL,
+    content     VARCHAR NOT NULL,
+    occurred_at TIMESTAMP
+)
+"""
+
 
 class DuckDBGraphStore:
     """Graph store backed by DuckDB with in-memory write buffer.
@@ -53,8 +63,10 @@ class DuckDBGraphStore:
         self._conn = duckdb.connect(self._connection_str)
         self._conn.execute(_CREATE_NODES)
         self._conn.execute(_CREATE_EDGES)
+        self._conn.execute(_CREATE_SEARCH_INDEX)
         self._node_buffer: dict[str, dict[str, Any]] = {}
         self._edge_buffer: dict[tuple[str, str, str], dict[str, Any]] = {}
+        self._search_buffer: list[dict[str, Any]] = []
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -150,10 +162,12 @@ class DuckDBGraphStore:
         # Snapshot and clear
         nodes = self._node_buffer
         edges = self._edge_buffer
+        search = self._search_buffer
         self._node_buffer = {}
         self._edge_buffer = {}
+        self._search_buffer = []
 
-        if not nodes and not edges:
+        if not nodes and not edges and not search:
             return
 
         def _write() -> None:
@@ -183,6 +197,19 @@ class DuckDBGraphStore:
                             json.dumps(edge["properties"]),
                         ],
                     )
+                for entry in search:
+                    self._conn.execute(
+                        "INSERT INTO search_index "
+                        "(node_id, session_id, field_name, content, occurred_at) "
+                        "VALUES (?, ?, ?, ?, ?)",
+                        [
+                            entry["node_id"],
+                            entry["session_id"],
+                            entry["field_name"],
+                            entry["content"],
+                            entry["occurred_at"],
+                        ],
+                    )
                 self._conn.execute("COMMIT")
             except Exception:
                 try:
@@ -192,6 +219,7 @@ class DuckDBGraphStore:
                 # Put items back for retry
                 self._node_buffer.update(nodes)
                 self._edge_buffer.update(edges)
+                self._search_buffer.extend(search)
                 logger.warning("flush failed; buffers restored for retry", exc_info=True)
 
         await self._run(_write)
