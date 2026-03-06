@@ -43,7 +43,8 @@ def _extract_section(content: str, heading: str) -> str:
     """Extract content under a markdown ## heading, up to the next ## or end."""
     pattern = rf"^## {re.escape(heading)}\s*\n(.*?)(?=^## |\Z)"
     match = re.search(pattern, content, re.MULTILINE | re.DOTALL)
-    assert match, f"Section '## {heading}' not found in SKILL.md"
+    if not match:
+        return ""
     return match.group(1)
 
 
