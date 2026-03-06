@@ -50,8 +50,6 @@ class TestCreateGraphStore:
 
     def test_file_missing_location_raises(self):
         """FileGraphStore requires a location; omitting it should raise."""
-        from amplifier_module_hook_context_intelligence.file_store import FileGraphStore  # noqa: F401
-
         with pytest.raises(TypeError):
             create_graph_store({"type": "file", "config": {}})
 
