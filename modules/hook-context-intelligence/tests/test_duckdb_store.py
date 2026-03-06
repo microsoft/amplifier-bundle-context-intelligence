@@ -33,11 +33,17 @@ class TestRunUsesGetRunningLoop:
 
         from amplifier_module_hook_context_intelligence.duckdb_store import DuckDBGraphStore
 
-        source = inspect.getsource(DuckDBGraphStore._run)
-        # The fn parameter must use Callable, not plain Any
-        assert "Callable" in source, "_run 'fn' param should be Callable[[], _T], not Any"
+        sig = inspect.signature(DuckDBGraphStore._run)
+        fn_annotation = str(sig.parameters["fn"].annotation)
+        ret_annotation = str(sig.return_annotation)
+        # The fn parameter must reference Callable, not plain Any
+        assert "Callable" in fn_annotation, (
+            f"_run 'fn' param should be Callable[[], _T], not {fn_annotation}"
+        )
         # The return type must not be bare Any
-        assert "-> Any" not in source, "_run return type should be Future[_T], not Any"
+        assert ret_annotation != "Any", (
+            f"_run return type should be Future[_T], not {ret_annotation}"
+        )
 
     async def test_run_calls_get_running_loop(self):
         import asyncio
