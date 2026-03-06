@@ -248,7 +248,7 @@ class TestSessionResume:
         node = await services.graph.get_node("s1")
         assert node is not None
         # membership checks: resume upsert merges into labels created by start
-        assert "Resumed" in node["labels"]
+        assert "ResumedSession" in node["labels"]
         assert "Session" in node["labels"]
         assert "Root" in node["labels"]
 
@@ -294,4 +294,93 @@ class TestSessionResume:
         assert node is not None
         # membership checks: resume creates node via upsert, labels are the full set here
         assert "Session" in node["labels"]
-        assert "Resumed" in node["labels"]
+        assert "ResumedSession" in node["labels"]
+
+    async def test_resume_with_parent_id_adds_subsession_label(
+        self, services: HookStateService
+    ) -> None:
+        """Late arrival path B: session:resume carries parent_id for sub-sessions."""
+        handler = SessionHandler(services)
+        await handler(
+            "session:resume",
+            {
+                "session_id": "child1",
+                "parent_id": "parent1",
+                "timestamp": "2026-01-01T02:00:00Z",
+            },
+        )
+        node = await services.graph.get_node("child1")
+        assert node is not None
+        assert "Session" in node["labels"]
+        assert "ResumedSession" in node["labels"]
+        assert "Subsession" in node["labels"]
+        assert node["properties"]["parent_id"] == "parent1"
+
+    async def test_resume_with_parent_id_creates_subsession_of_edge(
+        self, services: HookStateService
+    ) -> None:
+        """Late arrival: SUBSESSION_OF edge created even without prior session:start."""
+        handler = SessionHandler(services)
+        await handler(
+            "session:resume",
+            {
+                "session_id": "child1",
+                "parent_id": "parent1",
+                "timestamp": "2026-01-01T02:00:00Z",
+            },
+        )
+        edge = await services.graph.get_edge("child1", "parent1", "SUBSESSION_OF")
+        assert edge is not None
+        assert edge["properties"]["occurred_at"] == "2026-01-01T02:00:00Z"
+
+    async def test_resume_without_parent_id_no_subsession_label(
+        self, services: HookStateService
+    ) -> None:
+        handler = SessionHandler(services)
+        await handler(
+            "session:resume",
+            {
+                "session_id": "s1",
+                "timestamp": "2026-01-01T02:00:00Z",
+            },
+        )
+        node = await services.graph.get_node("s1")
+        assert node is not None
+        assert "Subsession" not in node["labels"]
+
+    async def test_resume_then_start_merges_labels(self, services: HookStateService) -> None:
+        """Idempotency: session:resume before session:start (Path B double-emit).
+
+        Both events fire for the same session_id. The upsert merge must produce
+        the union of all labels and the merge of all properties.
+        """
+        handler = SessionHandler(services)
+        # Path B: app emits session:resume first
+        await handler(
+            "session:resume",
+            {
+                "session_id": "s1",
+                "parent_id": "parent1",
+                "timestamp": "2026-01-01T02:00:00Z",
+            },
+        )
+        # Then kernel emits session:start (is_resumed=False bug #115)
+        await handler(
+            "session:start",
+            {
+                "session_id": "s1",
+                "parent_id": "parent1",
+                "timestamp": "2026-01-01T02:00:01Z",
+            },
+        )
+        node = await services.graph.get_node("s1")
+        assert node is not None
+        # Labels: union of resume ({Session, ResumedSession, Subsession})
+        #         and start ({Session, Subsession})
+        assert "Session" in node["labels"]
+        assert "ResumedSession" in node["labels"]
+        assert "Subsession" in node["labels"]
+        # Properties: start's properties merged on top of resume's
+        assert node["properties"]["status"] == "running"
+        assert node["properties"]["started_at"] == "2026-01-01T02:00:01Z"
+        assert node["properties"]["parent_id"] == "parent1"

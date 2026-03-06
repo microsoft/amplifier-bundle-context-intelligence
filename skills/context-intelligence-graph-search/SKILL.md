@@ -101,7 +101,7 @@ Every node carries one or more labels in the `labels VARCHAR[]` column.
 | `Root` | Top-level session with no parent |
 | `Subsession` | Child session with a parent |
 | `ForkedSession` | Session created via `session:fork` (inherits parent context) |
-| `Resumed` | Session that was resumed from a prior run |
+| `ResumedSession` | Session that was resumed from a prior run |
 | `OrchestratorRun` | One `execution:start` to `execution:end` bracket (one user turn) |
 | `Step` | A unit of work within an OrchestratorRun |
 | `PromptStep` | The causal trigger step (iteration 0); carries the user prompt or delegation instruction |

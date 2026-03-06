@@ -103,8 +103,24 @@ class SessionHandler:
         await self.services.graph.upsert_node(session_id, labels, properties)
 
     async def _handle_resume(self, session_id: str, timestamp: str, data: dict[str, Any]) -> None:
-        # Add Resumed label to the session node
-        await self.services.graph.upsert_node(session_id, {"Session", "Resumed"}, {})
+        # Build labels and properties for the session node.
+        # Late-arrival path: session:resume may arrive BEFORE session:start
+        # (sub-session resume bug #115), so we must carry parent_id and add
+        # :Subsession here — session:start will merge via upsert if it arrives later.
+        parent_id = (data.get("parent_id") or "").strip()
+        labels: set[str] = {"Session", "ResumedSession"}
+        properties: dict[str, Any] = {}
+
+        if parent_id:
+            labels.add("Subsession")
+            properties["parent_id"] = parent_id
+
+        await self.services.graph.upsert_node(session_id, labels, properties)
+
+        if parent_id:
+            await self.services.graph.upsert_edge(
+                session_id, parent_id, "SUBSESSION_OF", {"occurred_at": timestamp}
+            )
 
         # Create Event node
         event_node_id = make_node_id(session_id, "session:resume", timestamp)
