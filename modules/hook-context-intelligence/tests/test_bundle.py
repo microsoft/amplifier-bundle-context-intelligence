@@ -8,6 +8,12 @@ REPO_ROOT = Path(__file__).parent.parent.parent.parent
 MODULE_ROOT = Path(__file__).parent.parent
 
 
+def _load_behavior() -> dict:
+    """Load and parse the behavior YAML file."""
+    path = REPO_ROOT / "behaviors" / "context-intelligence.yaml"
+    return yaml.safe_load(path.read_text())
+
+
 class TestBundleRoot:
     """Validate bundle.md exists and has correct frontmatter."""
 
@@ -48,37 +54,33 @@ class TestBundleRoot:
 class TestBehaviorYaml:
     """Validate behavior YAML structure."""
 
-    def _load_behavior(self) -> dict:
-        path = REPO_ROOT / "behaviors" / "context-intelligence.yaml"
-        return yaml.safe_load(path.read_text())
-
     def test_behavior_yaml_exists(self):
         assert (REPO_ROOT / "behaviors" / "context-intelligence.yaml").is_file()
 
     def test_behavior_has_hooks_section(self):
-        data = self._load_behavior()
+        data = _load_behavior()
         assert "hooks" in data, "Behavior YAML must have a hooks: section"
 
     def test_behavior_hook_module_name(self):
-        data = self._load_behavior()
+        data = _load_behavior()
         hook_specs = data.get("hooks", [])
         assert len(hook_specs) >= 1
         assert hook_specs[0]["module"] == "hook-context-intelligence"
 
     def test_behavior_hook_has_source(self):
-        data = self._load_behavior()
+        data = _load_behavior()
         hook_spec = data["hooks"][0]
         assert "source" in hook_spec, "Hook spec must have a source field"
 
     def test_behavior_hook_has_config(self):
-        data = self._load_behavior()
+        data = _load_behavior()
         hook_spec = data["hooks"][0]
         assert "config" in hook_spec, "Hook spec must have a config field"
         config = hook_spec["config"]
         assert "exclude_events" in config
 
     def test_behavior_hook_is_in_hooks_section_not_tools(self):
-        data = self._load_behavior()
+        data = _load_behavior()
         hook_modules = [h["module"] for h in data.get("hooks", [])]
         assert "hook-context-intelligence" in hook_modules
         tool_modules = [t["module"] for t in data.get("tools", [])]
@@ -88,36 +90,36 @@ class TestBehaviorYaml:
 class TestSkillRegistration:
     """Validate tool-skills module registration in the behavior YAML."""
 
-    def _load_behavior(self) -> dict:
-        path = REPO_ROOT / "behaviors" / "context-intelligence.yaml"
-        return yaml.safe_load(path.read_text())
+    def _find_tool_skills_spec(self) -> dict:
+        """Find the tool-skills module spec, or fail with a clear message."""
+        data = _load_behavior()
+        spec = next((t for t in data.get("tools", []) if t["module"] == "tool-skills"), None)
+        assert spec is not None, "tool-skills module not found in tools section"
+        return spec
 
     def test_behavior_has_tools_section(self):
-        data = self._load_behavior()
+        data = _load_behavior()
         assert "tools" in data, "Behavior YAML must have a tools: section"
 
     def test_tools_section_has_tool_skills_module(self):
-        data = self._load_behavior()
+        data = _load_behavior()
         tool_modules = [t["module"] for t in data.get("tools", [])]
         assert "tool-skills" in tool_modules, "tools section must include tool-skills module"
 
     def test_tool_skills_config_has_skills_list(self):
-        data = self._load_behavior()
-        tool_spec = next(t for t in data["tools"] if t["module"] == "tool-skills")
+        tool_spec = self._find_tool_skills_spec()
         skills = tool_spec.get("config", {}).get("skills", [])
         assert len(skills) >= 2, "tool-skills config.skills must have at least 2 entries"
 
     def test_skills_list_includes_curated_skills(self):
-        data = self._load_behavior()
-        tool_spec = next(t for t in data["tools"] if t["module"] == "tool-skills")
+        tool_spec = self._find_tool_skills_spec()
         skills = tool_spec["config"]["skills"]
         assert any("amplifier-bundle-skills" in s for s in skills), (
             "skills list must include curated skills from amplifier-bundle-skills"
         )
 
     def test_skills_list_includes_bundle_skills(self):
-        data = self._load_behavior()
-        tool_spec = next(t for t in data["tools"] if t["module"] == "tool-skills")
+        tool_spec = self._find_tool_skills_spec()
         skills = tool_spec["config"]["skills"]
         assert any("context-intelligence" in s and "skills" in s for s in skills), (
             "skills list must include bundle skills from context-intelligence"
