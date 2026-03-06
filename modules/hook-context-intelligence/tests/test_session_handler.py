@@ -261,7 +261,7 @@ class TestSessionResume:
                 "timestamp": "2026-01-01T02:00:00Z",
             },
         )
-        event_id = "s1:event:session_resume:2026-01-01T02:00:00Z"
+        event_id = "s1:session:resume:1767232800000"
         node = await services.graph.get_node(event_id)
         assert node is not None
         assert node["labels"] == {"Event", "SessionResume"}
@@ -276,7 +276,7 @@ class TestSessionResume:
                 "timestamp": "2026-01-01T02:00:00Z",
             },
         )
-        event_id = "s1:event:session_resume:2026-01-01T02:00:00Z"
+        event_id = "s1:session:resume:1767232800000"
         edge = await services.graph.get_edge("s1", event_id, "HAS_EVENT")
         assert edge is not None
         assert edge["properties"]["occurred_at"] == "2026-01-01T02:00:00Z"

@@ -8,6 +8,7 @@ from typing import Any
 from amplifier_core.models import HookResult
 
 from ..services import HookStateService
+from ..utils import EventLogContext, HandlerLogger, make_node_id
 
 logger = logging.getLogger(__name__)
 
@@ -24,11 +25,14 @@ class SessionHandler:
 
     def __init__(self, services: HookStateService) -> None:
         self.services = services
+        self._log = HandlerLogger("SessionHandler", logger)
 
     async def __call__(self, event: str, data: dict[str, Any]) -> HookResult:
+        log = self._log.with_event(event, data)
+
         session_id = data.get("session_id")
         if not session_id:
-            logger.error("SessionHandler received event %r without session_id", event)
+            log.error("received event without session_id")
             return HookResult(action="continue")
 
         timestamp = data.get("timestamp", "")
@@ -36,7 +40,7 @@ class SessionHandler:
         if event == "session:start":
             await self._handle_start(session_id, timestamp, data)
         elif event == "session:fork":
-            await self._handle_fork(session_id, timestamp, data)
+            await self._handle_fork(session_id, timestamp, data, log)
         elif event == "session:end":
             await self._handle_end(session_id, timestamp, data)
         elif event == "session:resume":
@@ -65,14 +69,16 @@ class SessionHandler:
                 session_id, parent_id, "SUBSESSION_OF", {"occurred_at": timestamp}
             )
 
-    async def _handle_fork(self, session_id: str, timestamp: str, data: dict[str, Any]) -> None:
+    async def _handle_fork(
+        self, session_id: str, timestamp: str, data: dict[str, Any], log: EventLogContext
+    ) -> None:
         parent = data.get("parent")
 
         if parent:
             labels: set[str] = {"Session", "Subsession", "ForkedSession"}
         else:
             labels = {"Session", "Root", "ForkedSession"}
-            logger.warning("session:fork for %r has no parent — degrading to Root", session_id)
+            log.warning(f"session:fork for {session_id!r} has no parent — degrading to Root")
 
         properties: dict[str, Any] = {
             "started_at": timestamp,
@@ -101,7 +107,7 @@ class SessionHandler:
         await self.services.graph.upsert_node(session_id, {"Session", "Resumed"}, {})
 
         # Create Event node
-        event_node_id = f"{session_id}:event:session_resume:{timestamp}"
+        event_node_id = make_node_id(session_id, "session:resume", timestamp)
         await self.services.graph.upsert_node(
             event_node_id,
             {"Event", "SessionResume"},
