@@ -75,7 +75,7 @@ def test_frontmatter_name() -> None:
 
 
 def test_frontmatter_version() -> None:
-    assert _FRONTMATTER["version"] == "0.1.0"
+    assert _FRONTMATTER["version"] == "0.2.0"
 
 
 def test_frontmatter_license() -> None:
@@ -85,6 +85,58 @@ def test_frontmatter_license() -> None:
 def test_frontmatter_description_present() -> None:
     assert "description" in _FRONTMATTER
     assert len(_FRONTMATTER["description"]) > 0
+
+
+def test_frontmatter_description_mentions_queryablestore() -> None:
+    """Description should mention QueryableStore and supported_dialects."""
+    desc = _FRONTMATTER.get("description", "")
+    assert "QueryableStore" in desc, (
+        "Frontmatter description should mention QueryableStore"
+    )
+    assert "supported_dialects" in desc, (
+        "Frontmatter description should mention supported_dialects"
+    )
+
+
+# —— AC-2b: Title and dialect scope ————————————————————————————————
+
+
+def test_title_includes_sql_dialect() -> None:
+    """Title should include '(SQL Dialect)'."""
+    assert "# Context Intelligence Graph Search (SQL Dialect)" in _SKILL_CONTENT, (
+        "Title should include '(SQL Dialect)'"
+    )
+
+
+def test_dialect_scope_note_present() -> None:
+    """Dialect scope note should mention QueryableStore and supported_dialects."""
+    assert "QueryableStore" in _SKILL_CONTENT, (
+        "Dialect scope note should mention QueryableStore"
+    )
+    assert re.search(
+        r'backends that report.*"sql".*supported_dialects',
+        _SKILL_CONTENT,
+        re.IGNORECASE | re.DOTALL,
+    ), (
+        "Dialect scope note should mention backends reporting 'sql' in supported_dialects"
+    )
+
+
+def test_dialect_scope_note_mentions_duckdb() -> None:
+    """Dialect scope note should mention DuckDB as current backend."""
+    # Find the opening section (between title and first ---)
+    title_match = re.search(
+        r"^# Context Intelligence Graph Search", _SKILL_CONTENT, re.MULTILINE
+    )
+    first_hr = _SKILL_CONTENT.find("---", title_match.end() if title_match else 0)
+    opening = _SKILL_CONTENT[
+        title_match.end() if title_match else 0 : first_hr
+        if first_hr > 0
+        else len(_SKILL_CONTENT)
+    ]
+    assert "DuckDB" in opening, (
+        "Opening section should mention DuckDB as current backend"
+    )
 
 
 # —— AC-3: Schema section with 3 tables ———————————————————————
@@ -397,37 +449,53 @@ def test_multiple_storage_backends_section_exists() -> None:
     )
 
 
-def test_multiple_storage_backends_duckdb_mentioned() -> None:
-    """Mentions DuckDB backend."""
+def test_multiple_storage_backends_queryablestore_protocol() -> None:
+    """References QueryableStore protocol."""
+    backends_start = _SCHEMA_SECTION.find("### Multiple Storage Backends")
+    backends_text = _SCHEMA_SECTION[backends_start:]
+    assert "QueryableStore" in backends_text, (
+        "Multiple Storage Backends should reference QueryableStore protocol"
+    )
+
+
+def test_multiple_storage_backends_supported_dialects() -> None:
+    """References store.supported_dialects discovery."""
+    backends_start = _SCHEMA_SECTION.find("### Multiple Storage Backends")
+    backends_text = _SCHEMA_SECTION[backends_start:]
+    assert "supported_dialects" in backends_text, (
+        "Multiple Storage Backends should reference supported_dialects"
+    )
+
+
+def test_multiple_storage_backends_sql_dialect() -> None:
+    """Mentions this skill covers the 'sql' dialect."""
+    backends_start = _SCHEMA_SECTION.find("### Multiple Storage Backends")
+    backends_text = _SCHEMA_SECTION[backends_start:]
+    assert re.search(r'"sql".*dialect|sql.*dialect', backends_text, re.IGNORECASE), (
+        "Multiple Storage Backends should mention 'sql' dialect"
+    )
+
+
+def test_multiple_storage_backends_duckdb_schema_note() -> None:
+    """Notes that DuckDB schema applies only to DuckDB backend."""
+    backends_start = _SCHEMA_SECTION.find("### Multiple Storage Backends")
+    backends_text = _SCHEMA_SECTION[backends_start:]
     assert re.search(
-        r"Multiple Storage Backends.*DuckDB", _SCHEMA_SECTION, re.DOTALL
-    ), "Multiple Storage Backends should mention DuckDB"
+        r"DuckDB.*schema.*appl.*only.*DuckDB|schema.*below.*only.*DuckDB",
+        backends_text,
+        re.IGNORECASE,
+    ), "Should note DuckDB schema applies only to DuckDB backend"
 
 
-def test_multiple_storage_backends_file_based_mentioned() -> None:
-    """Mentions file-based / flat JSON files backend."""
+def test_multiple_storage_backends_future_dialects() -> None:
+    """Mentions future dialect-specific skills for other backends."""
+    backends_start = _SCHEMA_SECTION.find("### Multiple Storage Backends")
+    backends_text = _SCHEMA_SECTION[backends_start:]
     assert re.search(
-        r"Multiple Storage Backends.*flat JSON files|Multiple Storage Backends.*file-based",
-        _SCHEMA_SECTION,
-        re.DOTALL,
-    ), "Multiple Storage Backends should mention flat JSON files"
-
-
-def test_multiple_storage_backends_ids_identical() -> None:
-    """Documents that IDs are identical across backends."""
-    assert re.search(r"identical across backends", _SCHEMA_SECTION, re.IGNORECASE), (
-        "Multiple Storage Backends should note IDs are identical across backends"
-    )
-
-
-def test_multiple_storage_backends_nodes_edges_dirs() -> None:
-    """Documents nodes/ and edges/ directories for file backend."""
-    assert "`nodes/`" in _SCHEMA_SECTION, (
-        "Multiple Storage Backends should mention nodes/ directory"
-    )
-    assert "`edges/`" in _SCHEMA_SECTION, (
-        "Multiple Storage Backends should mention edges/ directory"
-    )
+        r"future|other.*backend|dialect.specific.*skill",
+        backends_text,
+        re.IGNORECASE,
+    ), "Should mention future dialect-specific skills for other backends"
 
 
 def test_new_sections_appear_before_nodes_table() -> None:
