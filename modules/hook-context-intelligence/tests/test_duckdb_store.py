@@ -692,11 +692,11 @@ class TestPGQ:
         store._ensure_pgq()
         result = store._conn.execute(
             f"""
-            SELECT s.node_id AS session_id, step.node_id AS step_id
+            SELECT session_id, step_id
             FROM GRAPH_TABLE(context_graph
-                MATCH (s:Session)-[hr:HAS_RUN]->(r)-[hs:HAS_STEP]->(step)
+                MATCH (s:Session)-[hr:HAS_RUN]->(r:Session)-[hs:HAS_STEP]->(step:Session)
                 WHERE s.node_id = '{SESSION_NODE_ID}'
-                COLUMNS (s.node_id, step.node_id)
+                COLUMNS (s.node_id AS session_id, step.node_id AS step_id)
             )
             """
         ).fetchall()
@@ -706,11 +706,11 @@ class TestPGQ:
         """execute_query with dialect='pgq' auto-calls _ensure_pgq and runs GRAPH_TABLE query."""
         rows = await store.execute_query(
             f"""
-            SELECT s.node_id AS session_id, step.node_id AS step_id
+            SELECT session_id, step_id
             FROM GRAPH_TABLE(context_graph
-                MATCH (s:Session)-[hr:HAS_RUN]->(r)-[hs:HAS_STEP]->(step)
+                MATCH (s:Session)-[hr:HAS_RUN]->(r:Session)-[hs:HAS_STEP]->(step:Session)
                 WHERE s.node_id = '{SESSION_NODE_ID}'
-                COLUMNS (s.node_id, step.node_id)
+                COLUMNS (s.node_id AS session_id, step.node_id AS step_id)
             )
             """,
             dialect="pgq",
@@ -721,11 +721,11 @@ class TestPGQ:
         """Find all steps in a session's runs via GRAPH_TABLE."""
         rows = await store.execute_query(
             f"""
-            SELECT step.node_id AS step_id
+            SELECT step_id
             FROM GRAPH_TABLE(context_graph
-                MATCH (s:Session)-[hr:HAS_RUN]->(r)-[hs:HAS_STEP]->(step)
+                MATCH (s:Session)-[hr:HAS_RUN]->(r:Session)-[hs:HAS_STEP]->(step:Session)
                 WHERE s.node_id = '{SESSION_NODE_ID}'
-                COLUMNS (step.node_id)
+                COLUMNS (step.node_id AS step_id)
             )
             """,
             dialect="pgq",
@@ -737,11 +737,11 @@ class TestPGQ:
         """Query tools triggered by a step via TRIGGERED edge in GRAPH_TABLE."""
         rows = await store.execute_query(
             f"""
-            SELECT tool.node_id AS tool_id
+            SELECT tool_id
             FROM GRAPH_TABLE(context_graph
-                MATCH (step)-[t:TRIGGERED]->(tool)
+                MATCH (step:Session)-[t:TRIGGERED]->(tool:Session)
                 WHERE step.node_id = '{PROMPT_NODE_ID}'
-                COLUMNS (tool.node_id)
+                COLUMNS (tool.node_id AS tool_id)
             )
             """,
             dialect="pgq",
@@ -755,10 +755,10 @@ class TestPGQ:
         store._ensure_pgq()
         result = store._conn.execute(
             """
-            SELECT s.node_id AS session_id
+            SELECT session_id
             FROM GRAPH_TABLE(context_graph
-                MATCH (s:Session)-[hr:HAS_RUN]->(r)
-                COLUMNS (s.node_id)
+                MATCH (s:Session)-[hr:HAS_RUN]->(r:Session)
+                COLUMNS (s.node_id AS session_id)
             )
             """
         ).fetchall()

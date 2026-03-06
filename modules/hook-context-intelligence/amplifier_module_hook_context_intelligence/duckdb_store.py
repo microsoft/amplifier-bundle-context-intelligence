@@ -60,6 +60,48 @@ CREATE TABLE IF NOT EXISTS search_index (
 )
 """
 
+# Edge types that get materialized as tables for property graph edge labels.
+# duckpgq does not support WHERE-filtered edge tables in DDL, so we materialize
+# one table per edge type and reference those in the property graph definition.
+_PGQ_EDGE_TYPES: tuple[str, ...] = (
+    "HAS_RUN",
+    "HAS_STEP",
+    "NEXT",
+    "TRIGGERED",
+    "PARALLEL_WITH",
+    "SPAWNED",
+    "SUBSESSION_OF",
+    "HAS_EVENT",
+)
+
+
+def _build_create_property_graph() -> str:
+    """Build CREATE PROPERTY GRAPH DDL referencing materialized edge tables.
+
+    duckpgq requires: (1) all MATCH patterns bind to a vertex label, so we
+    assign LABEL Session to the nodes table as a catch-all label; (2) separate
+    physical tables per edge type because WHERE filtering in edge DDL is not
+    supported.
+    """
+    edge_clauses = []
+    for etype in _PGQ_EDGE_TYPES:
+        tbl = f"pgq_e_{etype.lower()}"
+        edge_clauses.append(
+            f"    {tbl} SOURCE KEY (source) REFERENCES nodes (node_id)\n"
+            f"          DESTINATION KEY (target) REFERENCES nodes (node_id)\n"
+            f"          LABEL {etype}"
+        )
+    edges_sql = ",\n".join(edge_clauses)
+    return (
+        "CREATE PROPERTY GRAPH context_graph\n"
+        "VERTEX TABLES (\n"
+        "    nodes LABEL Session\n"
+        ")\n"
+        "EDGE TABLES (\n"
+        f"{edges_sql}\n"
+        ")"
+    )
+
 
 # Registry of (label, property) -> field_name mappings for search_index population.
 # Add new entries here when additional node types or properties become searchable.
@@ -89,6 +131,7 @@ class DuckDBGraphStore:
         self._node_buffer: dict[str, dict[str, Any]] = {}
         self._edge_buffer: dict[tuple[str, str, str], dict[str, Any]] = {}
         self._search_buffer: list[dict[str, Any]] = []
+        self._pgq_ready: bool = False
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -97,6 +140,29 @@ class DuckDBGraphStore:
     def _run(self, fn: Callable[[], _T]) -> asyncio.Future[_T]:
         """Run a blocking callable in the default executor."""
         return asyncio.get_running_loop().run_in_executor(None, fn)
+
+    def _ensure_pgq(self) -> None:
+        """Lazily load duckpgq and create the property graph (idempotent)."""
+        if self._pgq_ready:
+            return
+        _install_err = (duckdb.CatalogException, duckdb.HTTPException, duckdb.IOException)
+        try:
+            self._conn.execute("INSTALL duckpgq; LOAD duckpgq;")
+        except _install_err:
+            try:
+                self._conn.execute("INSTALL duckpgq FROM community; LOAD duckpgq;")
+            except _install_err:
+                self._conn.execute("LOAD duckpgq;")
+        # Materialize per-edge-type tables for the property graph.
+        for etype in _PGQ_EDGE_TYPES:
+            tbl = f"pgq_e_{etype.lower()}"
+            self._conn.execute(f"DROP TABLE IF EXISTS {tbl}")
+            self._conn.execute(
+                f"CREATE TABLE {tbl} AS SELECT * FROM edges WHERE edge_type = '{etype}'"
+            )
+        self._conn.execute("DROP PROPERTY GRAPH IF EXISTS context_graph")
+        self._conn.execute(_build_create_property_graph())
+        self._pgq_ready = True
 
     # ------------------------------------------------------------------
     # Writes (buffer only, no I/O)
@@ -121,7 +187,7 @@ class DuckDBGraphStore:
     @property
     def supported_dialects(self) -> frozenset[str]:
         """The set of query dialects this backend can execute."""
-        return frozenset({"sql"})
+        return frozenset({"sql", "pgq"})
 
     async def upsert_node(self, node_id: str, labels: set[str], properties: dict[str, Any]) -> None:
         existing = self._node_buffer.get(node_id)
@@ -286,6 +352,8 @@ class DuckDBGraphStore:
             )
 
         def _query() -> list[dict[str, Any]]:
+            if dialect == "pgq":
+                self._ensure_pgq()
             # DuckDB requires omitting params arg when none provided
             if params is not None:
                 result = self._conn.execute(query, params)
