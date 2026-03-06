@@ -33,17 +33,17 @@ class EventLogContext:
         self._logger = logger
         self._prefix = f"[{handler_name}] [{session_id}] [{event}]"
 
-    def info(self, message: str) -> None:
+    def info(self, message: str, *args: object) -> None:
         """Log an info message with the pre-bound prefix."""
-        self._logger.info("%s %s", self._prefix, message)
+        self._logger.info("%s " + message, self._prefix, *args)
 
-    def warning(self, message: str) -> None:
+    def warning(self, message: str, *args: object) -> None:
         """Log a warning message with the pre-bound prefix."""
-        self._logger.warning("%s %s", self._prefix, message)
+        self._logger.warning("%s " + message, self._prefix, *args)
 
-    def error(self, message: str) -> None:
+    def error(self, message: str, *args: object) -> None:
         """Log an error message with the pre-bound prefix."""
-        self._logger.error("%s %s", self._prefix, message)
+        self._logger.error("%s " + message, self._prefix, *args)
 
 
 class HandlerLogger:

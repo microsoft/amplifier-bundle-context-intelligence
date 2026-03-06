@@ -78,7 +78,7 @@ class SessionHandler:
             labels: set[str] = {"Session", "Subsession", "ForkedSession"}
         else:
             labels = {"Session", "Root", "ForkedSession"}
-            log.warning(f"session:fork for {session_id!r} has no parent — degrading to Root")
+            log.warning("session:fork for %r has no parent — degrading to Root", session_id)
 
         properties: dict[str, Any] = {
             "started_at": timestamp,

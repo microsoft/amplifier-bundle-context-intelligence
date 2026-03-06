@@ -117,3 +117,37 @@ class TestEventLogContext:
             ctx.error("something broke")
         assert len(caplog.records) == 1
         assert caplog.records[0].message == "[SessionHandler] [s1] [session:start] something broke"
+
+    def test_info_supports_lazy_formatting_args(self, caplog):
+        """info() accepts *args for lazy %-style formatting."""
+        logger = logging.getLogger("test.event_log_context.info_args")
+        ctx = EventLogContext(
+            handler_name="RunHandler",
+            session_id="s1",
+            event="prompt:submit",
+            logger=logger,
+        )
+        with caplog.at_level(logging.INFO, logger="test.event_log_context.info_args"):
+            ctx.info("Created PromptStep node %s", "node-123")
+        assert len(caplog.records) == 1
+        assert (
+            caplog.records[0].message
+            == "[RunHandler] [s1] [prompt:submit] Created PromptStep node node-123"
+        )
+
+    def test_warning_supports_lazy_formatting_args(self, caplog):
+        """warning() accepts *args for lazy %-style formatting."""
+        logger = logging.getLogger("test.event_log_context.warning_args")
+        ctx = EventLogContext(
+            handler_name="SessionHandler",
+            session_id="s1",
+            event="session:fork",
+            logger=logger,
+        )
+        with caplog.at_level(logging.WARNING, logger="test.event_log_context.warning_args"):
+            ctx.warning("session:fork for %r has no parent", "s1")
+        assert len(caplog.records) == 1
+        assert (
+            caplog.records[0].message
+            == "[SessionHandler] [s1] [session:fork] session:fork for 's1' has no parent"
+        )

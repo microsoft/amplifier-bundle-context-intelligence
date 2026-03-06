@@ -75,6 +75,6 @@ class OrchestratorRunHandler:
             session_id, node_id, "HAS_STEP", {"occurred_at": timestamp}
         )
 
-        log.info(f"Created PromptStep node {node_id}")
+        log.info("Created PromptStep node %s", node_id)
 
         return HookResult(action="continue")
