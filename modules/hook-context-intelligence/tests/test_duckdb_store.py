@@ -271,6 +271,17 @@ class TestExecuteQuery:
         assert len(rows) == 1
         assert rows[0]["node_id"] == "n1"
 
+    async def test_execute_query_with_params(self, store):
+        await store.upsert_node("n1", {"Person"}, {"name": "Alice"})
+        await store.upsert_node("n2", {"Person"}, {"name": "Bob"})
+        await store.flush()
+        rows = await store.execute_query(
+            "SELECT node_id FROM nodes WHERE node_id = $node_id",
+            params={"node_id": "n1"},
+        )
+        assert len(rows) == 1
+        assert rows[0]["node_id"] == "n1"
+
     async def test_execute_query_with_invalid_dialect_raises(self, store):
         with pytest.raises(ValueError, match="Unsupported dialect"):
             await store.execute_query("SELECT 1", dialect="cypher")
