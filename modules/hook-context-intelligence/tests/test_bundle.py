@@ -83,3 +83,61 @@ class TestBehaviorYaml:
         assert "hook-context-intelligence" in hook_modules
         tool_modules = [t["module"] for t in data.get("tools", [])]
         assert "hook-context-intelligence" not in tool_modules
+
+
+class TestSkillRegistration:
+    """Validate tool-skills module registration in the behavior YAML."""
+
+    def _load_behavior(self) -> dict:
+        path = REPO_ROOT / "behaviors" / "context-intelligence.yaml"
+        return yaml.safe_load(path.read_text())
+
+    def test_behavior_has_tools_section(self):
+        data = self._load_behavior()
+        assert "tools" in data, "Behavior YAML must have a tools: section"
+
+    def test_tools_section_has_tool_skills_module(self):
+        data = self._load_behavior()
+        tool_modules = [t["module"] for t in data.get("tools", [])]
+        assert "tool-skills" in tool_modules, "tools section must include tool-skills module"
+
+    def test_tool_skills_config_has_skills_list(self):
+        data = self._load_behavior()
+        tool_spec = next(t for t in data["tools"] if t["module"] == "tool-skills")
+        skills = tool_spec.get("config", {}).get("skills", [])
+        assert len(skills) >= 2, "tool-skills config.skills must have at least 2 entries"
+
+    def test_skills_list_includes_curated_skills(self):
+        data = self._load_behavior()
+        tool_spec = next(t for t in data["tools"] if t["module"] == "tool-skills")
+        skills = tool_spec["config"]["skills"]
+        assert any("amplifier-bundle-skills" in s for s in skills), (
+            "skills list must include curated skills from amplifier-bundle-skills"
+        )
+
+    def test_skills_list_includes_bundle_skills(self):
+        data = self._load_behavior()
+        tool_spec = next(t for t in data["tools"] if t["module"] == "tool-skills")
+        skills = tool_spec["config"]["skills"]
+        assert any("context-intelligence" in s and "skills" in s for s in skills), (
+            "skills list must include bundle skills from context-intelligence"
+        )
+
+    def test_skill_directory_exists(self):
+        skill_dir = REPO_ROOT / "skills" / "context-intelligence-graph-search"
+        assert skill_dir.is_dir(), "Skill directory must exist"
+
+    def test_skill_md_file_exists(self):
+        skill_md = REPO_ROOT / "skills" / "context-intelligence-graph-search" / "SKILL.md"
+        assert skill_md.is_file(), "SKILL.md must exist in skill directory"
+
+    def test_skill_md_has_valid_frontmatter(self):
+        skill_md = REPO_ROOT / "skills" / "context-intelligence-graph-search" / "SKILL.md"
+        content = skill_md.read_text()
+        assert content.startswith("---"), "SKILL.md must start with frontmatter delimiter"
+        parts = content.split("---", 2)
+        assert len(parts) >= 3, "SKILL.md must have YAML frontmatter between --- delimiters"
+        fm = yaml.safe_load(parts[1])
+        assert fm["name"] == "context-intelligence-graph-search"
+        assert "description" in fm and len(fm["description"]) > 0
+        assert fm.get("license") == "MIT"

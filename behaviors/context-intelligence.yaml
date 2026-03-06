@@ -11,3 +11,11 @@ hooks:
     config:
       exclude_events: []
       log_level: "${CI_LOG_LEVEL:WARNING}"
+
+tools:
+  - module: tool-skills
+    source: git+https://github.com/microsoft/amplifier-module-tool-skills@main
+    config:
+      skills:
+        - git+https://github.com/microsoft/amplifier-bundle-skills@main#subdirectory=skills
+        - git+https://github.com/microsoft/amplifier-bundle-context-intelligence@main#subdirectory=skills
