@@ -20,13 +20,19 @@ SKILL_DIR = (
 SKILL_FILE = SKILL_DIR / "SKILL.md"
 
 # Read and parse once at module level — avoids redundant disk reads and re-parsing.
-_SKILL_CONTENT: str = SKILL_FILE.read_text() if SKILL_FILE.exists() else ""
+# Wrapped in try/except so a missing or unreadable SKILL.md produces clean test
+# failures (individual assertions) rather than an import-time crash.
+try:
+    _SKILL_CONTENT: str = SKILL_FILE.read_text() if SKILL_FILE.exists() else ""
+except OSError:
+    _SKILL_CONTENT = ""
 
 
 def _parse_frontmatter(content: str) -> dict:
     """Extract YAML frontmatter from markdown content."""
     match = re.match(r"^---\n(.*?)\n---", content, re.DOTALL)
-    assert match, "YAML frontmatter not found (must start with --- and end with ---)"
+    if not match:
+        return {}
     return yaml.safe_load(match.group(1))
 
 
@@ -42,6 +48,8 @@ def _extract_section(content: str, heading: str) -> str:
 
 
 # Pre-extract sections referenced by multiple tests.
+# Guard: if _SKILL_CONTENT is empty (file missing), skip extraction so individual
+# tests fail with clear assertions rather than crashing at import time.
 _SCHEMA_SECTION: str = (
     _extract_section(_SKILL_CONTENT, "Schema") if _SKILL_CONTENT else ""
 )

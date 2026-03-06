@@ -118,6 +118,8 @@ class DuckDBGraphStore:
         if existing is not None:
             existing["labels"] |= labels
             existing["properties"].update(properties)
+            # Early return also prevents duplicate search indexing — _index_searchable_content
+            # is only called on first insert (below), not on subsequent updates.
             return
         self._node_buffer[node_id] = {
             "id": node_id,
@@ -213,7 +215,7 @@ class DuckDBGraphStore:
                         "VALUES (?, ?, ?, ?)",
                         [
                             node["id"],
-                            "",
+                            "",  # session_id: lives in properties; column reserved for future use
                             list(node["labels"]),
                             json.dumps(node["properties"]),
                         ],
@@ -227,7 +229,7 @@ class DuckDBGraphStore:
                             edge["source"],
                             edge["target"],
                             edge["type"],
-                            "",
+                            "",  # session_id: lives in properties; column reserved for future use
                             json.dumps(edge["properties"]),
                         ],
                     )
