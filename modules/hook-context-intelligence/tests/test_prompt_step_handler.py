@@ -10,7 +10,7 @@ from amplifier_module_hook_context_intelligence.services import HookStateService
 from amplifier_module_hook_context_intelligence.utils import make_node_id
 
 TIMESTAMP = "2026-03-06T01:00:00Z"
-EXPECTED_NODE_ID = "s1:prompt:submit:1772758800000"
+EXPECTED_NODE_ID = "s1__prompt_submit__1772758800000"
 
 
 async def _seed_session(services: HookStateService, session_id: str = "s1") -> None:
