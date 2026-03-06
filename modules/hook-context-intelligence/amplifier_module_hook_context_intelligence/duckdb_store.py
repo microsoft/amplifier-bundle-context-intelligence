@@ -261,12 +261,25 @@ class DuckDBGraphStore:
         await self._run(_write)
 
     # ------------------------------------------------------------------
-    # Query
+    # QueryableStore
     # ------------------------------------------------------------------
 
+    @property
+    def supported_dialects(self) -> frozenset[str]:
+        """DuckDB speaks SQL and PGQ."""
+        return frozenset({"sql", "pgq"})
+
     async def execute_query(
-        self, query: str, params: dict[str, Any] | None = None
+        self,
+        query: str,
+        params: dict[str, Any] | None = None,
+        dialect: str | None = None,
     ) -> list[dict[str, Any]]:
+        if dialect is not None and dialect not in self.supported_dialects:
+            raise ValueError(
+                f"Unsupported dialect {dialect!r}; supported: {sorted(self.supported_dialects)}"
+            )
+
         def _query() -> list[dict[str, Any]]:
             if params:
                 result = self._conn.execute(query, params)
