@@ -34,8 +34,10 @@ class OrchestratorRunHandler:
 
         if event == "prompt:submit":
             return await self._handle_prompt_submit(data, log)
+        if event == "execution:start":
+            return await self._handle_execution_start(data, log)
 
-        # Stub: execution:start, execution:end, orchestrator:complete
+        # Stub: execution:end, orchestrator:complete
         return HookResult(action="continue")
 
     async def _handle_prompt_submit(self, data: dict[str, Any], log: EventLogContext) -> HookResult:
@@ -78,5 +80,57 @@ class OrchestratorRunHandler:
         cursors.prompt_preview = prompt_preview
 
         log.info("Created PromptStep node %s", node_id)
+
+        return HookResult(action="continue")
+
+    async def _handle_execution_start(
+        self, data: dict[str, Any], log: EventLogContext
+    ) -> HookResult:
+        session_id = data.get("session_id")
+        if not session_id:
+            log.error("received event without session_id")
+            return HookResult(action="continue")
+
+        timestamp = data.get("timestamp", "")
+
+        # Generate deterministic node ID
+        run_id = make_node_id(session_id, "execution:start", timestamp)
+
+        # Read cursor state populated by prompt:submit
+        cursors = self.services.get_cursors(session_id)
+
+        # Build OrchestratorRun node properties
+        properties: dict[str, Any] = {
+            "run_number": cursors.run_counter,
+            "started_at": timestamp,
+            "status": "in_progress",
+            "prompt_preview": cursors.prompt_preview,
+            "session_id": session_id,
+        }
+
+        # Create OrchestratorRun node
+        await self.services.graph.upsert_node(run_id, {"OrchestratorRun"}, properties)
+
+        # Create HAS_RUN edge: Session → OrchestratorRun
+        await self.services.graph.upsert_edge(
+            session_id,
+            run_id,
+            "HAS_RUN",
+            {"seq": cursors.run_counter, "occurred_at": timestamp},
+        )
+
+        # Create HAS_STEP edge: OrchestratorRun → PromptStep (if prompt step exists)
+        if cursors.current_step_id:
+            await self.services.graph.upsert_edge(
+                run_id,
+                cursors.current_step_id,
+                "HAS_STEP",
+                {"seq": 0, "occurred_at": timestamp},
+            )
+
+        # Update cursor state
+        cursors.current_run_id = run_id
+
+        log.info("Created OrchestratorRun node %s", run_id)
 
         return HookResult(action="continue")

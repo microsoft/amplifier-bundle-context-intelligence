@@ -1,4 +1,4 @@
-"""Tests for OrchestratorRunHandler — prompt:submit creates PromptStep nodes (no edges)."""
+"""Tests for OrchestratorRunHandler — prompt:submit and execution:start lifecycle."""
 
 from __future__ import annotations
 
@@ -192,3 +192,122 @@ class TestPromptSubmitErrorPaths:
         )
         node = await services.graph.get_node(EXPECTED_NODE_ID)
         assert node is None
+
+
+# ── execution:start constants ────────────────────────────────────────────
+
+EXEC_TIMESTAMP = "2026-03-06T02:00:00Z"
+EXPECTED_RUN_NODE_ID = make_node_id("s1", "execution:start", EXEC_TIMESTAMP)
+
+
+async def _seed_session_and_prompt(services: HookStateService) -> None:
+    """Seed a session and a prompt:submit so cursors are populated."""
+    await _seed_session(services)
+    handler = OrchestratorRunHandler(services)
+    await handler(
+        "prompt:submit",
+        {"session_id": "s1", "timestamp": TIMESTAMP, "prompt": "Hello world"},
+    )
+
+
+# ── execution:start happy-path tests ─────────────────────────────────────
+
+
+class TestExecutionStartHappyPath:
+    async def test_creates_node(self, services: HookStateService) -> None:
+        await _seed_session_and_prompt(services)
+        handler = OrchestratorRunHandler(services)
+        await handler(
+            "execution:start",
+            {"session_id": "s1", "timestamp": EXEC_TIMESTAMP},
+        )
+        node = await services.graph.get_node(EXPECTED_RUN_NODE_ID)
+        assert node is not None
+
+    async def test_correct_labels(self, services: HookStateService) -> None:
+        await _seed_session_and_prompt(services)
+        handler = OrchestratorRunHandler(services)
+        await handler(
+            "execution:start",
+            {"session_id": "s1", "timestamp": EXEC_TIMESTAMP},
+        )
+        node = await services.graph.get_node(EXPECTED_RUN_NODE_ID)
+        assert node is not None
+        assert node["labels"] == {"OrchestratorRun"}
+
+    async def test_properties(self, services: HookStateService) -> None:
+        await _seed_session_and_prompt(services)
+        handler = OrchestratorRunHandler(services)
+        await handler(
+            "execution:start",
+            {"session_id": "s1", "timestamp": EXEC_TIMESTAMP},
+        )
+        node = await services.graph.get_node(EXPECTED_RUN_NODE_ID)
+        assert node is not None
+        props = node["properties"]
+        assert props["run_number"] == 1  # run_counter set by prompt:submit
+        assert props["started_at"] == EXEC_TIMESTAMP
+        assert props["status"] == "in_progress"
+        assert props["prompt_preview"] == "Hello world"
+        assert props["session_id"] == "s1"
+
+    async def test_has_run_edge(self, services: HookStateService) -> None:
+        await _seed_session_and_prompt(services)
+        handler = OrchestratorRunHandler(services)
+        await handler(
+            "execution:start",
+            {"session_id": "s1", "timestamp": EXEC_TIMESTAMP},
+        )
+        edge = await services.graph.get_edge("s1", EXPECTED_RUN_NODE_ID, "HAS_RUN")
+        assert edge is not None
+        assert edge["properties"]["seq"] == 1  # matches run_counter
+        assert edge["properties"]["occurred_at"] == EXEC_TIMESTAMP
+
+    async def test_has_step_edge_to_prompt_step(self, services: HookStateService) -> None:
+        await _seed_session_and_prompt(services)
+        handler = OrchestratorRunHandler(services)
+        # Grab current_step_id from cursors (set by prompt:submit)
+        cursors = services.get_cursors("s1")
+        prompt_step_id = cursors.current_step_id
+        assert prompt_step_id is not None
+
+        await handler(
+            "execution:start",
+            {"session_id": "s1", "timestamp": EXEC_TIMESTAMP},
+        )
+        edge = await services.graph.get_edge(EXPECTED_RUN_NODE_ID, prompt_step_id, "HAS_STEP")
+        assert edge is not None
+        assert edge["properties"]["seq"] == 0
+        assert edge["properties"]["occurred_at"] == EXEC_TIMESTAMP
+
+    async def test_updates_current_run_id(self, services: HookStateService) -> None:
+        await _seed_session_and_prompt(services)
+        handler = OrchestratorRunHandler(services)
+        await handler(
+            "execution:start",
+            {"session_id": "s1", "timestamp": EXEC_TIMESTAMP},
+        )
+        cursors = services.get_cursors("s1")
+        assert cursors.current_run_id == EXPECTED_RUN_NODE_ID
+
+    async def test_returns_continue(self, services: HookStateService) -> None:
+        await _seed_session_and_prompt(services)
+        handler = OrchestratorRunHandler(services)
+        result = await handler(
+            "execution:start",
+            {"session_id": "s1", "timestamp": EXEC_TIMESTAMP},
+        )
+        assert result.action == "continue"
+
+
+# ── execution:start error-path tests ─────────────────────────────────────
+
+
+class TestExecutionStartErrorPaths:
+    async def test_missing_session_id_returns_continue(self, services: HookStateService) -> None:
+        handler = OrchestratorRunHandler(services)
+        result = await handler(
+            "execution:start",
+            {"timestamp": EXEC_TIMESTAMP},
+        )
+        assert result.action == "continue"
