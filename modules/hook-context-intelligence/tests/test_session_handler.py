@@ -275,10 +275,12 @@ class TestSessionCursors:
 
     def test_remove_cursors(self, services: HookStateService) -> None:
         """remove_cursors deletes the cursor entry for a session."""
-        services.get_cursors("sess-1")
+        original = services.get_cursors("sess-1")
+        original.run_counter = 5  # mutate to distinguish from fresh
         services.remove_cursors("sess-1")
-        # After removal, a new call should create a fresh instance
+        # After removal, a new call should create a fresh, different instance
         new = services.get_cursors("sess-1")
+        assert new is not original
         assert new.run_counter == 0  # fresh defaults
 
     def test_remove_nonexistent_is_safe(self, services: HookStateService) -> None:
