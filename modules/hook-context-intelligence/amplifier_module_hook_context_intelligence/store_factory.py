@@ -7,7 +7,8 @@ from typing import Any
 
 from .graph_store import GraphStore
 
-_DEFAULT_FILE_LOCATION = str(Path("~/.amplifier/graph"))
+_DEFAULT_FILE_ROOT = str(Path("~/.amplifier/graphs"))
+_DEFAULT_FOREST_NAME = "default"
 
 
 def create_graph_store(store_config: dict[str, Any]) -> GraphStore:
@@ -16,31 +17,32 @@ def create_graph_store(store_config: dict[str, Any]) -> GraphStore:
     Parameters
     ----------
     store_config:
-        Dictionary with optional ``type`` (default ``"file"``) and optional
+        Dictionary with optional ``type`` (default ``"file"``), optional
+        ``graph_forest_name`` (default ``"default"``), and optional
         ``config`` dict containing backend-specific kwargs.
 
-        When ``type`` is ``"file"`` and no ``config`` key is present, a
-        default location of ``~/.amplifier/graph`` is used.  Pass an
-        explicit ``config`` dict to override (or omit ``location`` to get
-        a ``TypeError``).
+        ``graph_forest_name`` is read at the top level of *store_config*
+        (not inside ``config``) and passed to every backend constructor.
 
         Example::
 
-            {"type": "duckdb", "config": {"connection": ":memory:"}}
+            {"type": "duckdb", "graph_forest_name": "my-project",
+             "config": {"connection": ":memory:"}}
     """
     store_type = store_config.get("type", "file")
     impl_config = store_config.get("config", {})
+    forest_name = store_config.get("graph_forest_name", _DEFAULT_FOREST_NAME)
 
     if store_type == "file":
         from .file_store import FileGraphStore
 
-        if "config" not in store_config:
-            impl_config.setdefault("location", _DEFAULT_FILE_LOCATION)
-        return FileGraphStore(**impl_config)
+        root = impl_config.get("graph_store_root", _DEFAULT_FILE_ROOT)
+        return FileGraphStore(graph_store_root=root, graph_forest_name=forest_name)
 
     if store_type == "duckdb":
         from .duckdb_store import DuckDBGraphStore
 
-        return DuckDBGraphStore(**impl_config)
+        connection = impl_config.get("connection", ":memory:")
+        return DuckDBGraphStore(connection=connection, graph_forest_name=forest_name)
 
     raise ValueError(f"Unknown graph_store type: {store_type}")

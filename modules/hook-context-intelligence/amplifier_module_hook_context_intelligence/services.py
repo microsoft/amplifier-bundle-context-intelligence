@@ -29,7 +29,8 @@ class HookConfig:
 class GraphState:
     """In-memory property graph state conforming to the GraphStore protocol."""
 
-    def __init__(self) -> None:
+    def __init__(self, graph_forest_name: str = "default") -> None:
+        self._graph_forest_name = graph_forest_name
         self._nodes: dict[str, dict[str, Any]] = {}
         self._edges: dict[tuple[str, str, str], dict[str, Any]] = {}
         self.current_session: str | None = None
@@ -37,6 +38,10 @@ class GraphState:
         self.current_step: str | None = None
         self.step_counter: int = 0
         self.pending_delegate_tool_call_id: str | None = None
+
+    @property
+    def graph_forest_name(self) -> str:
+        return self._graph_forest_name
 
     async def get_node(self, node_id: str) -> dict[str, Any] | None:
         return self._nodes.get(node_id)

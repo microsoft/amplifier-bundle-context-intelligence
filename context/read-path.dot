@@ -10,7 +10,7 @@ digraph read_path {
     // Callers
     handler_read [label="Handler\nget_node()\nget_edge()"
                   shape=box];
-    analysis [label="Analysis Tool\nexecute_query()\nSQL/PGQ"
+    analysis [label="Analysis Tool\nexecute_query()\nSQL/PGQ\nforest-scoped"
               shape=box style=filled fillcolor="#E8DAEF"];
 
     // Stores
@@ -32,6 +32,10 @@ digraph read_path {
     note_analysis [label="Analysis sees flushed state\n(DuckDB only, post-flush)"
                    shape=note style=filled fillcolor="#FDEBD0"];
 
+    note_forest [label="Forest filtering rules:\nNone \u2192 own forest\nexplicit \u2192 that forest\n'*' \u2192 cross-forest"
+                 shape=note style=filled fillcolor="#FDEBD0"];
+
     handler_read -> note_handler [style=invis];
     analysis -> note_analysis [style=invis];
+    analysis -> note_forest [style=invis];
 }

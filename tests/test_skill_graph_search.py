@@ -81,7 +81,7 @@ def test_frontmatter_name() -> None:
 
 
 def test_frontmatter_version() -> None:
-    assert _FRONTMATTER["version"] == "0.2.0"
+    assert _FRONTMATTER["version"] == "0.3.0"
 
 
 def test_frontmatter_license() -> None:
@@ -517,4 +517,177 @@ def test_new_sections_ordering() -> None:
     backends_pos = _SKILL_CONTENT.find("### Multiple Storage Backends")
     assert node_pos < edge_pos < backends_pos, (
         "Sections must be ordered: Node ID Format, Edge ID Format, Multiple Storage Backends"
+    )
+
+
+# —— AC-12: graph_forest_name column covered by test_frontmatter_version (AC-2) ——
+
+# —— AC-13: graph_forest_name column in all three tables ——————————
+
+
+def _extract_table_section(content: str, table_heading: str) -> str:
+    """Extract the content under a ### `table_name` heading up to the next ### or ##."""
+    pattern = rf"^### `{re.escape(table_heading)}`\s*\n(.*?)(?=^###? |\Z)"
+    match = re.search(pattern, content, re.MULTILINE | re.DOTALL)
+    return match.group(1) if match else ""
+
+
+def test_nodes_table_has_graph_forest_name() -> None:
+    """nodes table schema includes graph_forest_name column."""
+    nodes_section = _extract_table_section(_SKILL_CONTENT, "nodes")
+    assert "graph_forest_name" in nodes_section, (
+        "nodes table should have graph_forest_name column"
+    )
+
+
+def test_nodes_graph_forest_name_type_and_constraints() -> None:
+    """nodes graph_forest_name has correct type and constraints."""
+    nodes_section = _extract_table_section(_SKILL_CONTENT, "nodes")
+    assert "VARCHAR" in nodes_section, "graph_forest_name should be VARCHAR"
+    assert re.search(
+        r"graph_forest_name.*NOT NULL.*DEFAULT.*'default'",
+        nodes_section,
+        re.DOTALL,
+    ), "graph_forest_name should be NOT NULL DEFAULT 'default'"
+
+
+def test_nodes_graph_forest_name_position() -> None:
+    """graph_forest_name appears after node_id and before session_id in nodes."""
+    nodes_section = _extract_table_section(_SKILL_CONTENT, "nodes")
+    node_id_pos = nodes_section.find("node_id")
+    forest_pos = nodes_section.find("graph_forest_name")
+    session_id_pos = nodes_section.find("session_id")
+    assert node_id_pos < forest_pos < session_id_pos, (
+        "graph_forest_name must be after node_id and before session_id in nodes"
+    )
+
+
+def test_edges_table_has_graph_forest_name() -> None:
+    """edges table schema includes graph_forest_name column."""
+    edges_section = _extract_table_section(_SKILL_CONTENT, "edges")
+    assert "graph_forest_name" in edges_section, (
+        "edges table should have graph_forest_name column"
+    )
+
+
+def test_edges_graph_forest_name_type_and_constraints() -> None:
+    """edges graph_forest_name has correct type and constraints."""
+    edges_section = _extract_table_section(_SKILL_CONTENT, "edges")
+    assert re.search(
+        r"graph_forest_name.*NOT NULL.*DEFAULT.*'default'",
+        edges_section,
+        re.DOTALL,
+    ), "edges graph_forest_name should be NOT NULL DEFAULT 'default'"
+
+
+def test_edges_graph_forest_name_position() -> None:
+    """graph_forest_name appears after edge_type and before session_id in edges."""
+    edges_section = _extract_table_section(_SKILL_CONTENT, "edges")
+    edge_type_pos = edges_section.find("edge_type")
+    forest_pos = edges_section.find("graph_forest_name")
+    session_id_pos = edges_section.find("session_id")
+    assert edge_type_pos < forest_pos < session_id_pos, (
+        "graph_forest_name must be after edge_type and before session_id in edges"
+    )
+
+
+def test_search_index_table_has_graph_forest_name() -> None:
+    """search_index table schema includes graph_forest_name column."""
+    search_section = _extract_table_section(_SKILL_CONTENT, "search_index")
+    assert "graph_forest_name" in search_section, (
+        "search_index table should have graph_forest_name column"
+    )
+
+
+def test_search_index_graph_forest_name_type_and_constraints() -> None:
+    """search_index graph_forest_name has correct type and constraints."""
+    search_section = _extract_table_section(_SKILL_CONTENT, "search_index")
+    assert re.search(
+        r"graph_forest_name.*NOT NULL.*DEFAULT.*'default'",
+        search_section,
+        re.DOTALL,
+    ), "search_index graph_forest_name should be NOT NULL DEFAULT 'default'"
+
+
+def test_search_index_graph_forest_name_position() -> None:
+    """graph_forest_name appears after node_id and before session_id in search_index."""
+    search_section = _extract_table_section(_SKILL_CONTENT, "search_index")
+    node_id_pos = search_section.find("node_id")
+    forest_pos = search_section.find("graph_forest_name")
+    session_id_pos = search_section.find("session_id")
+    assert node_id_pos < forest_pos < session_id_pos, (
+        "graph_forest_name must be after node_id and before session_id in search_index"
+    )
+
+
+# —— AC-14: Forest-Scoped Queries section ————————————————————————
+
+
+_FOREST_SECTION: str = (
+    _extract_section(_SKILL_CONTENT, "Forest-Scoped Queries") if _SKILL_CONTENT else ""
+)
+
+
+def test_forest_scoped_queries_section_exists() -> None:
+    """Forest-Scoped Queries section exists."""
+    assert "## Forest-Scoped Queries" in _SKILL_CONTENT, (
+        "SKILL.md should have a '## Forest-Scoped Queries' section"
+    )
+
+
+def test_forest_scoped_queries_after_query_patterns() -> None:
+    """Forest-Scoped Queries section comes after Query Patterns."""
+    query_pos = _SKILL_CONTENT.find("## Query Patterns")
+    forest_pos = _SKILL_CONTENT.find("## Forest-Scoped Queries")
+    notes_pos = _SKILL_CONTENT.find("## Notes")
+    assert query_pos < forest_pos < notes_pos, (
+        "Forest-Scoped Queries must appear after Query Patterns and before Notes"
+    )
+
+
+def test_forest_default_query_example() -> None:
+    """Example 1: default query (no param, scopes to own forest)."""
+    # Should show a query with no explicit forest parameter
+    assert re.search(
+        r"default|no param|own forest",
+        _FOREST_SECTION,
+        re.IGNORECASE,
+    ), "Should have a default query example (scopes to own forest)"
+
+
+def test_forest_explicit_query_example() -> None:
+    """Example 2: explicit forest query with graph_forest_name=\"other-project\"."""
+    assert 'graph_forest_name="other-project"' in _FOREST_SECTION, (
+        'Should have explicit forest query example with graph_forest_name="other-project"'
+    )
+
+
+def test_forest_cross_forest_query_example() -> None:
+    """Example 3: cross-forest query with graph_forest_name=\"*\"."""
+    assert 'graph_forest_name="*"' in _FOREST_SECTION, (
+        'Should have cross-forest query example with graph_forest_name="*"'
+    )
+
+
+def test_forest_cte_wrapper_explanation() -> None:
+    """Explains that forest filter is injected automatically as CTE wrappers."""
+    assert re.search(r"CTE.*wrapper", _FOREST_SECTION, re.IGNORECASE), (
+        "Should explain that forest filter is injected as CTE wrappers"
+    )
+
+
+def test_forest_raw_sql_example() -> None:
+    """Shows raw SQL example with graph_forest_name='*' and manual WHERE clause."""
+    assert "WHERE" in _FOREST_SECTION, "Should show raw SQL with manual WHERE clause"
+    assert "graph_forest_name" in _FOREST_SECTION, (
+        "Raw SQL example should reference graph_forest_name column"
+    )
+
+
+def test_forest_section_has_three_code_examples() -> None:
+    """Forest-Scoped Queries section has at least 3 code blocks."""
+    code_blocks = re.findall(r"```", _FOREST_SECTION)
+    # Each code block has opening and closing ```, so pairs = len / 2
+    assert len(code_blocks) >= 6, (
+        f"Expected at least 3 code blocks (6 markers), found {len(code_blocks)} markers"
     )

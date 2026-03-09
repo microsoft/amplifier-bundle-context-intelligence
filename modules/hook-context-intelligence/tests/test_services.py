@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 
 class TestHookConfig:
     def test_construction_with_empty_config(self):
@@ -120,6 +122,25 @@ class TestGraphState:
 
         graph = GraphState()
         await graph.close()
+
+    def test_graph_forest_name_default(self):
+        from amplifier_module_hook_context_intelligence.services import GraphState
+
+        graph = GraphState()
+        assert graph.graph_forest_name == "default"
+
+    def test_graph_forest_name_explicit(self):
+        from amplifier_module_hook_context_intelligence.services import GraphState
+
+        graph = GraphState(graph_forest_name="my-project")
+        assert graph.graph_forest_name == "my-project"
+
+    def test_graph_forest_name_is_readonly(self):
+        from amplifier_module_hook_context_intelligence.services import GraphState
+
+        graph = GraphState()
+        with pytest.raises(AttributeError):
+            graph.graph_forest_name = "other"
 
 
 class TestHookStateService:

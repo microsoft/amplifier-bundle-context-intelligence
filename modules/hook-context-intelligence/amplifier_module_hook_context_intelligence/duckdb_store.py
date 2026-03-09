@@ -30,6 +30,7 @@ logger = logging.getLogger(__name__)
 _CREATE_NODES = """
 CREATE TABLE IF NOT EXISTS nodes (
     node_id    VARCHAR PRIMARY KEY,
+    graph_forest_name VARCHAR NOT NULL DEFAULT 'default',
     session_id VARCHAR DEFAULT '',
     labels     VARCHAR[],
     occurred_at TIMESTAMP,
@@ -42,6 +43,7 @@ CREATE TABLE IF NOT EXISTS edges (
     source     VARCHAR,
     target     VARCHAR,
     edge_type  VARCHAR,
+    graph_forest_name VARCHAR NOT NULL DEFAULT 'default',
     session_id VARCHAR DEFAULT '',
     occurred_at TIMESTAMP,
     seq        INTEGER,
@@ -53,6 +55,7 @@ CREATE TABLE IF NOT EXISTS edges (
 _CREATE_SEARCH_INDEX = """
 CREATE TABLE IF NOT EXISTS search_index (
     node_id     VARCHAR NOT NULL,
+    graph_forest_name VARCHAR NOT NULL DEFAULT 'default',
     session_id  VARCHAR NOT NULL,
     field_name  VARCHAR NOT NULL,
     content     VARCHAR NOT NULL,
@@ -109,6 +112,36 @@ _INDEXABLE_FIELDS: dict[tuple[str, str], str] = {
     ("PromptStep", "prompt_text"): "prompt_text",
 }
 
+# Tables that get forest-scoped CTE wrappers when a forest filter is active.
+_FOREST_FILTERED_TABLES: tuple[str, ...] = ("nodes", "edges", "search_index")
+
+
+def _inject_forest_filter(
+    query: str, forest: str, params: dict[str, Any]
+) -> tuple[str, dict[str, Any]]:
+    """Wrap *query* with CTEs that shadow base tables filtered by forest.
+
+    Creates ``WITH nodes AS (...), edges AS (...), search_index AS (...)``
+    CTEs so that any downstream SQL referencing those table names only sees
+    rows belonging to *forest*.  Injects ``$forest`` into *params*.
+    """
+    cte_parts = []
+    for tbl in _FOREST_FILTERED_TABLES:
+        if tbl == "search_index":
+            # Preserve the physical rowid so FTS match_bm25 correlates correctly.
+            cte_parts.append(
+                f"{tbl} AS ("
+                f"SELECT rowid, t.* FROM main.{tbl} t "
+                f"WHERE t.graph_forest_name = $forest)"
+            )
+        else:
+            cte_parts.append(
+                f"{tbl} AS (SELECT * FROM main.{tbl} WHERE graph_forest_name = $forest)"
+            )
+    cte_sql = "WITH " + ", ".join(cte_parts) + " "
+    params["forest"] = forest
+    return cte_sql + query, params
+
 
 class DuckDBGraphStore:
     """Graph store backed by DuckDB with in-memory write buffer.
@@ -118,8 +151,9 @@ class DuckDBGraphStore:
     buffer first, falling back to DuckDB only when the buffer has no entry.
     """
 
-    def __init__(self, connection: str = ":memory:") -> None:
+    def __init__(self, connection: str = ":memory:", graph_forest_name: str = "default") -> None:
         self._connection_str = connection
+        self._graph_forest_name = graph_forest_name
         if connection != ":memory:":
             path = Path(connection).expanduser()
             path.parent.mkdir(parents=True, exist_ok=True)
@@ -154,12 +188,16 @@ class DuckDBGraphStore:
                 self._conn.execute("INSTALL duckpgq FROM community; LOAD duckpgq;")
             except _install_err:
                 self._conn.execute("LOAD duckpgq;")
-        # Materialize per-edge-type tables for the property graph.
+        # Materialize per-edge-type tables for the property graph,
+        # filtered to the current forest so PGQ queries are forest-scoped.
+        forest = self._graph_forest_name
         for etype in _PGQ_EDGE_TYPES:
             tbl = f"pgq_e_{etype.lower()}"
             self._conn.execute(f"DROP TABLE IF EXISTS {tbl}")
             self._conn.execute(
-                f"CREATE TABLE {tbl} AS SELECT * FROM edges WHERE edge_type = '{etype}'"
+                f"CREATE TABLE {tbl} AS SELECT * FROM edges "
+                "WHERE edge_type = $etype AND graph_forest_name = $forest",
+                {"etype": etype, "forest": forest},
             )
         self._conn.execute("DROP PROPERTY GRAPH IF EXISTS context_graph")
         self._conn.execute(_build_create_property_graph())
@@ -184,6 +222,11 @@ class DuckDBGraphStore:
                         "occurred_at": properties.get("occurred_at"),
                     }
                 )
+
+    @property
+    def graph_forest_name(self) -> str:
+        """The graph forest name for this store instance."""
+        return self._graph_forest_name
 
     @property
     def supported_dialects(self) -> frozenset[str]:
@@ -273,6 +316,7 @@ class DuckDBGraphStore:
 
     async def flush(self) -> None:
         # Snapshot and clear
+        forest = self._graph_forest_name
         nodes = self._node_buffer
         edges = self._edge_buffer
         search = self._search_buffer
@@ -284,15 +328,19 @@ class DuckDBGraphStore:
             return
 
         def _write() -> None:
+            # session_id columns in nodes/edges are reserved for future use;
+            # the authoritative session_id lives in the properties JSON.
             try:
                 self._conn.execute("BEGIN TRANSACTION")
                 for node in nodes.values():
                     self._conn.execute(
-                        "INSERT OR REPLACE INTO nodes (node_id, session_id, labels, properties) "
-                        "VALUES (?, ?, ?, ?)",
+                        "INSERT OR REPLACE INTO nodes "
+                        "(node_id, graph_forest_name, session_id, labels, properties) "
+                        "VALUES (?, ?, ?, ?, ?)",
                         [
                             node["id"],
-                            "",  # session_id: lives in properties; column reserved for future use
+                            forest,
+                            "",
                             list(node["labels"]),
                             json.dumps(node["properties"]),
                         ],
@@ -300,23 +348,25 @@ class DuckDBGraphStore:
                 for edge in edges.values():
                     self._conn.execute(
                         "INSERT OR REPLACE INTO edges "
-                        "(source, target, edge_type, session_id, properties) "
-                        "VALUES (?, ?, ?, ?, ?)",
+                        "(source, target, edge_type, graph_forest_name, session_id, properties) "
+                        "VALUES (?, ?, ?, ?, ?, ?)",
                         [
                             edge["source"],
                             edge["target"],
                             edge["type"],
-                            "",  # session_id: lives in properties; column reserved for future use
+                            forest,
+                            "",
                             json.dumps(edge["properties"]),
                         ],
                     )
                 for entry in search:
                     self._conn.execute(
                         "INSERT INTO search_index "
-                        "(node_id, session_id, field_name, content, occurred_at) "
-                        "VALUES (?, ?, ?, ?, ?)",
+                        "(node_id, graph_forest_name, session_id, field_name, content, occurred_at) "
+                        "VALUES (?, ?, ?, ?, ?, ?)",
                         [
                             entry["node_id"],
+                            forest,
                             entry["session_id"],
                             entry["field_name"],
                             entry["content"],
@@ -346,15 +396,26 @@ class DuckDBGraphStore:
         query: str,
         params: dict[str, Any] | None = None,
         dialect: str | None = None,
+        graph_forest_name: str | None = None,
     ) -> list[dict[str, Any]]:
         if dialect is not None and dialect not in self.supported_dialects:
             raise ValueError(
                 f"Unsupported dialect {dialect!r}; supported: {sorted(self.supported_dialects)}"
             )
 
+        # Resolve forest: caller override > instance default
+        forest = self._graph_forest_name if graph_forest_name is None else graph_forest_name
+
         def _query() -> list[dict[str, Any]]:
+            nonlocal query, params
             if dialect == "pgq":
                 self._ensure_pgq()
+            # Inject CTE forest filters for non-PGQ queries unless wildcard.
+            # PGQ queries are already forest-scoped via _ensure_pgq materialization.
+            if forest != "*" and dialect != "pgq":
+                p = dict(params) if params is not None else {}
+                query, p = _inject_forest_filter(query, forest, p)
+                params = p
             # DuckDB requires omitting params arg when none provided
             if params is not None:
                 result = self._conn.execute(query, params)

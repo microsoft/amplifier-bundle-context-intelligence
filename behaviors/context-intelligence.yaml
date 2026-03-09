@@ -10,7 +10,13 @@ hooks:
     source: context-intelligence:modules/hook-context-intelligence
     config:
       exclude_events: []
-      log_level: "${CI_LOG_LEVEL:WARNING}"
+      log_level: "WARNING"
+      graph_store:
+        # graph_forest_name is a cross-protocol concept — it partitions
+        # the store independently of which backend (file, duckdb, etc.) is active.
+        graph_forest_name: "default"
+        config:
+          graph_store_root: "~/.amplifier/graphs"
 
 tools:
   - module: tool-skills

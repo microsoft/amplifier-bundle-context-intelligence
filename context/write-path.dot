@@ -19,7 +19,7 @@ digraph write_path {
                    shape=diamond style=filled fillcolor="#FCF3CF"];
     flush_task [label="Background\nasyncio.Task\nbatch write" shape=box
                 style=filled fillcolor="#FADBD8"];
-    duckdb [label="DuckDB\n(disk file)\ngraph.duckdb"
+    duckdb [label="DuckDB\n(disk file)\ngraph.duckdb\ngraph_forest_name\nstamped on all rows"
             shape=cylinder style=filled fillcolor="#D5F5E3"];
 
     // Hot path (fast)

@@ -24,7 +24,7 @@ def store():
     """Fresh in-memory DuckDBGraphStore for test isolation."""
     from amplifier_module_hook_context_intelligence.duckdb_store import DuckDBGraphStore
 
-    s = DuckDBGraphStore()
+    s = DuckDBGraphStore(graph_forest_name="test")
     yield s
     s._conn.close()
 
@@ -59,7 +59,7 @@ class TestRunUsesGetRunningLoop:
 
         from amplifier_module_hook_context_intelligence.duckdb_store import DuckDBGraphStore
 
-        store = DuckDBGraphStore()
+        store = DuckDBGraphStore(graph_forest_name="test")
         with patch.object(asyncio, "get_running_loop", wraps=asyncio.get_running_loop) as mock_grl:
             await store.get_node("nonexistent")
             mock_grl.assert_called()
@@ -75,7 +75,7 @@ class TestProtocolConformance:
         from amplifier_module_hook_context_intelligence.duckdb_store import DuckDBGraphStore
         from amplifier_module_hook_context_intelligence.graph_store import GraphStore
 
-        store = DuckDBGraphStore()
+        store = DuckDBGraphStore(graph_forest_name="test")
         assert isinstance(store, GraphStore)
 
 
@@ -88,14 +88,14 @@ class TestConstructor:
     def test_default_connection_is_memory(self):
         from amplifier_module_hook_context_intelligence.duckdb_store import DuckDBGraphStore
 
-        store = DuckDBGraphStore()
+        store = DuckDBGraphStore(graph_forest_name="test")
         assert store._connection_str == ":memory:"
 
     def test_file_path_expands_tilde(self, tmp_path: Path):
         from amplifier_module_hook_context_intelligence.duckdb_store import DuckDBGraphStore
 
         db_path = tmp_path / "sub" / "test.db"
-        store = DuckDBGraphStore(connection=str(db_path))
+        store = DuckDBGraphStore(connection=str(db_path), graph_forest_name="test")
         assert store._connection_str == str(db_path)
         assert db_path.parent.exists()
 
@@ -103,13 +103,32 @@ class TestConstructor:
         from amplifier_module_hook_context_intelligence.duckdb_store import DuckDBGraphStore
 
         db_path = tmp_path / "deep" / "nested" / "dir" / "test.db"
-        DuckDBGraphStore(connection=str(db_path))
+        DuckDBGraphStore(connection=str(db_path), graph_forest_name="test")
         assert db_path.parent.exists()
+
+    def test_graph_forest_name_accepts_custom_value(self):
+        from amplifier_module_hook_context_intelligence.duckdb_store import DuckDBGraphStore
+
+        store = DuckDBGraphStore(graph_forest_name="my-project")
+        assert store.graph_forest_name == "my-project"
+
+    def test_graph_forest_name_uses_default_when_omitted(self):
+        from amplifier_module_hook_context_intelligence.duckdb_store import DuckDBGraphStore
+
+        store = DuckDBGraphStore()
+        assert store.graph_forest_name == "default"
+
+    def test_graph_forest_name_is_readonly(self):
+        from amplifier_module_hook_context_intelligence.duckdb_store import DuckDBGraphStore
+
+        store = DuckDBGraphStore(graph_forest_name="test")
+        with pytest.raises(AttributeError):
+            store.graph_forest_name = "nope"
 
     def test_tables_created_on_init(self):
         from amplifier_module_hook_context_intelligence.duckdb_store import DuckDBGraphStore
 
-        store = DuckDBGraphStore()
+        store = DuckDBGraphStore(graph_forest_name="test")
         # Query information_schema to verify tables exist
         result = store._conn.execute(
             "SELECT table_name FROM information_schema.tables "
@@ -348,7 +367,7 @@ class TestClose:
         from amplifier_module_hook_context_intelligence.duckdb_store import DuckDBGraphStore
 
         db_path = tmp_path / "close_test.db"
-        store = DuckDBGraphStore(connection=str(db_path))
+        store = DuckDBGraphStore(connection=str(db_path), graph_forest_name="test")
         await store.upsert_node(
             SESSION_NODE_ID,
             {"Session", "Root"},
@@ -380,7 +399,7 @@ class TestPersistence:
         db_path = tmp_path / "persist_test.db"
 
         # Write data and close
-        store = DuckDBGraphStore(connection=str(db_path))
+        store = DuckDBGraphStore(connection=str(db_path), graph_forest_name="test")
         await store.upsert_node(
             SESSION_NODE_ID,
             {"Session", "Root"},
@@ -390,7 +409,7 @@ class TestPersistence:
         await store.close()
 
         # Reopen and read back
-        store2 = DuckDBGraphStore(connection=str(db_path))
+        store2 = DuckDBGraphStore(connection=str(db_path), graph_forest_name="test")
         node = await store2.get_node(SESSION_NODE_ID)
         assert node is not None
         assert node["id"] == SESSION_NODE_ID
@@ -414,7 +433,7 @@ class TestSearchIndexTable:
     def test_search_index_table_created_on_init(self):
         from amplifier_module_hook_context_intelligence.duckdb_store import DuckDBGraphStore
 
-        store = DuckDBGraphStore()
+        store = DuckDBGraphStore(graph_forest_name="test")
         result = store._conn.execute(
             "SELECT table_name FROM information_schema.tables "
             "WHERE table_schema = 'main' AND table_name = 'search_index'"
@@ -425,18 +444,25 @@ class TestSearchIndexTable:
     def test_search_index_has_expected_columns(self):
         from amplifier_module_hook_context_intelligence.duckdb_store import DuckDBGraphStore
 
-        store = DuckDBGraphStore()
+        store = DuckDBGraphStore(graph_forest_name="test")
         result = store._conn.execute(
             "SELECT column_name FROM information_schema.columns "
             "WHERE table_name = 'search_index' ORDER BY ordinal_position"
         ).fetchall()
         column_names = [row[0] for row in result]
-        assert column_names == ["node_id", "session_id", "field_name", "content", "occurred_at"]
+        assert column_names == [
+            "node_id",
+            "graph_forest_name",
+            "session_id",
+            "field_name",
+            "content",
+            "occurred_at",
+        ]
 
     def test_search_buffer_exists_and_empty_on_init(self):
         from amplifier_module_hook_context_intelligence.duckdb_store import DuckDBGraphStore
 
-        store = DuckDBGraphStore()
+        store = DuckDBGraphStore(graph_forest_name="test")
         assert hasattr(store, "_search_buffer")
         assert store._search_buffer == []
         assert isinstance(store._search_buffer, list)
@@ -925,3 +951,172 @@ class TestFTSPlusPGQ:
         assert combined[0]["session_node"] == SESSION_NODE_ID
         assert combined[0]["step_node"] == PROMPT_NODE_ID
         assert combined[0]["score"] is not None
+
+
+# ---------------------------------------------------------------------------
+# TestForestSchema — graph_forest_name column in nodes, edges, search_index
+# ---------------------------------------------------------------------------
+class TestForestSchema:
+    """Verify graph_forest_name column exists in all three tables."""
+
+    def test_nodes_has_graph_forest_name_column(self):
+        from amplifier_module_hook_context_intelligence.duckdb_store import DuckDBGraphStore
+
+        store = DuckDBGraphStore(graph_forest_name="test")
+        result = store._conn.execute(
+            "SELECT column_name, data_type, is_nullable, column_default "
+            "FROM information_schema.columns "
+            "WHERE table_name = 'nodes' AND column_name = 'graph_forest_name'"
+        ).fetchone()
+        assert result is not None, "nodes table must have graph_forest_name column"
+        col_name, data_type, is_nullable, col_default = result
+        assert col_name == "graph_forest_name"
+        assert data_type == "VARCHAR"
+        assert is_nullable == "NO"
+        assert "'default'" in col_default
+
+    def test_edges_has_graph_forest_name_column(self):
+        from amplifier_module_hook_context_intelligence.duckdb_store import DuckDBGraphStore
+
+        store = DuckDBGraphStore(graph_forest_name="test")
+        result = store._conn.execute(
+            "SELECT column_name, data_type, is_nullable, column_default "
+            "FROM information_schema.columns "
+            "WHERE table_name = 'edges' AND column_name = 'graph_forest_name'"
+        ).fetchone()
+        assert result is not None, "edges table must have graph_forest_name column"
+        col_name, data_type, is_nullable, col_default = result
+        assert col_name == "graph_forest_name"
+        assert data_type == "VARCHAR"
+        assert is_nullable == "NO"
+        assert "'default'" in col_default
+
+    def test_search_index_has_graph_forest_name_column(self):
+        from amplifier_module_hook_context_intelligence.duckdb_store import DuckDBGraphStore
+
+        store = DuckDBGraphStore(graph_forest_name="test")
+        result = store._conn.execute(
+            "SELECT column_name, data_type, is_nullable, column_default "
+            "FROM information_schema.columns "
+            "WHERE table_name = 'search_index' AND column_name = 'graph_forest_name'"
+        ).fetchone()
+        assert result is not None, "search_index table must have graph_forest_name column"
+        col_name, data_type, is_nullable, col_default = result
+        assert col_name == "graph_forest_name"
+        assert data_type == "VARCHAR"
+        assert is_nullable == "NO"
+        assert "'default'" in col_default
+
+
+# ---------------------------------------------------------------------------
+# TestForestWrites — flush() stamps graph_forest_name on all writes
+# ---------------------------------------------------------------------------
+class TestForestWrites:
+    """flush() must stamp self._graph_forest_name on all INSERT statements."""
+
+    @pytest.fixture()
+    def forest_store(self):
+        """DuckDBGraphStore with a non-default graph_forest_name for write tests."""
+        from amplifier_module_hook_context_intelligence.duckdb_store import DuckDBGraphStore
+
+        s = DuckDBGraphStore(graph_forest_name="my-project")
+        yield s
+        s._conn.close()
+
+    async def test_flush_stamps_forest_on_nodes(self, forest_store):
+        """Upsert node, flush, verify graph_forest_name column value via raw SQL."""
+        await forest_store.upsert_node("n1", {"Session"}, {"key": "val"})
+        await forest_store.flush()
+        row = forest_store._conn.execute(
+            "SELECT graph_forest_name FROM nodes WHERE node_id = 'n1'"
+        ).fetchone()
+        assert row is not None, "Node must be flushed to DuckDB"
+        assert row[0] == "my-project"
+
+    async def test_flush_stamps_forest_on_edges(self, forest_store):
+        """Upsert edge, flush, verify graph_forest_name column value via raw SQL."""
+        await forest_store.upsert_edge("a", "b", "KNOWS", {"weight": 1})
+        await forest_store.flush()
+        row = forest_store._conn.execute(
+            "SELECT graph_forest_name FROM edges WHERE source = 'a' AND target = 'b'"
+        ).fetchone()
+        assert row is not None, "Edge must be flushed to DuckDB"
+        assert row[0] == "my-project"
+
+    async def test_flush_stamps_forest_on_search_index(self, forest_store):
+        """Upsert a PromptStep node with prompt_text and session_id, flush, verify graph_forest_name in search_index."""
+        await forest_store.upsert_node(
+            PROMPT_NODE_ID,
+            {"Step", "PromptStep"},
+            {
+                "prompt_text": "Hello, world!",
+                "session_id": SESSION_ID,
+                "occurred_at": "2025-01-27T10:00:01Z",
+            },
+        )
+        await forest_store.flush()
+        row = forest_store._conn.execute(
+            "SELECT graph_forest_name FROM search_index WHERE node_id = ?",
+            [PROMPT_NODE_ID],
+        ).fetchone()
+        assert row is not None, "Search index entry must be flushed to DuckDB"
+        assert row[0] == "my-project"
+
+
+# ---------------------------------------------------------------------------
+# TestForestQueryFiltering — execute_query forest-scoped filtering
+# ---------------------------------------------------------------------------
+class TestForestQueryFiltering:
+    """execute_query must scope results by graph_forest_name."""
+
+    async def _seed_two_forests(self):
+        """Create one store, write n1 in forest-a, n2 in forest-b, reset to forest-a."""
+        from amplifier_module_hook_context_intelligence.duckdb_store import DuckDBGraphStore
+
+        store = DuckDBGraphStore(graph_forest_name="forest-a")
+        await store.upsert_node("n1", {"Session"}, {"key": "val1"})
+        await store.flush()
+        # Mutate to forest-b and write n2
+        store._graph_forest_name = "forest-b"
+        await store.upsert_node("n2", {"Session"}, {"key": "val2"})
+        await store.flush()
+        # Reset to forest-a
+        store._graph_forest_name = "forest-a"
+        return store
+
+    async def test_default_scopes_to_own_forest(self):
+        """SELECT without graph_forest_name returns only nodes from own forest (forest-a)."""
+        store = await self._seed_two_forests()
+        rows = await store.execute_query("SELECT node_id FROM nodes ORDER BY node_id")
+        node_ids = [r["node_id"] for r in rows]
+        assert node_ids == ["n1"]
+
+    async def test_explicit_forest_scopes_to_that_forest(self):
+        """graph_forest_name='forest-b' returns only n2."""
+        store = await self._seed_two_forests()
+        rows = await store.execute_query(
+            "SELECT node_id FROM nodes ORDER BY node_id",
+            graph_forest_name="forest-b",
+        )
+        node_ids = [r["node_id"] for r in rows]
+        assert node_ids == ["n2"]
+
+    async def test_star_returns_all_forests(self):
+        """graph_forest_name='*' returns both n1 and n2."""
+        store = await self._seed_two_forests()
+        rows = await store.execute_query(
+            "SELECT node_id FROM nodes ORDER BY node_id",
+            graph_forest_name="*",
+        )
+        node_ids = [r["node_id"] for r in rows]
+        assert node_ids == ["n1", "n2"]
+
+    async def test_none_is_same_as_default(self):
+        """None produces same result as omitting graph_forest_name param."""
+        store = await self._seed_two_forests()
+        rows_default = await store.execute_query("SELECT node_id FROM nodes ORDER BY node_id")
+        rows_none = await store.execute_query(
+            "SELECT node_id FROM nodes ORDER BY node_id",
+            graph_forest_name=None,
+        )
+        assert rows_default == rows_none

@@ -33,19 +33,28 @@ class FileGraphStore:
     """Graph store backed by flat JSON files with in-memory write buffers.
 
     Writes are buffered in Python dicts for instant access.  ``flush()``
-    persists buffers to JSON files in ``{location}/nodes/`` and
-    ``{location}/edges/`` directories.  Reads check the buffer first,
-    falling back to disk only when the buffer has no entry.
+    persists buffers to JSON files in
+    ``{graph_store_root}/{graph_forest_name}/nodes/`` and
+    ``{graph_store_root}/{graph_forest_name}/edges/`` directories.
+    Reads check the buffer first, falling back to disk only when the
+    buffer has no entry.
     """
 
-    def __init__(self, location: str) -> None:
-        self._location = Path(location).expanduser()
+    def __init__(self, graph_store_root: str, graph_forest_name: str) -> None:
+        self._graph_store_root = Path(graph_store_root).expanduser()
+        self._graph_forest_name = graph_forest_name
+        self._location = self._graph_store_root / graph_forest_name
         self._nodes_dir = self._location / "nodes"
         self._edges_dir = self._location / "edges"
         self._nodes_dir.mkdir(parents=True, exist_ok=True)
         self._edges_dir.mkdir(parents=True, exist_ok=True)
         self._node_buffer: dict[str, dict[str, Any]] = {}
         self._edge_buffer: dict[tuple[str, str, str], dict[str, Any]] = {}
+
+    @property
+    def graph_forest_name(self) -> str:
+        """The forest this store writes to."""
+        return self._graph_forest_name
 
     # ------------------------------------------------------------------
     # Internal helpers

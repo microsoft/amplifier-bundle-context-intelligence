@@ -9,7 +9,7 @@ digraph lifecycle {
 
     // States
     unmounted [label="Unmounted" shape=oval];
-    opening [label="Opening\nDuckDB connection\nCREATE IF NOT EXISTS"
+    opening [label="Opening\nRead config \u2192 resolve\ngraph_forest_name\nCreate/connect backend\nCREATE IF NOT EXISTS"
              shape=box style=filled fillcolor="#D4E6F1"];
     ready [label="Ready\nbuffer empty\nawaiting events"
            shape=box style=filled fillcolor="#D5F5E3"];
@@ -22,7 +22,7 @@ digraph lifecycle {
     closed [label="Closed" shape=oval];
 
     // Transitions
-    unmounted -> opening [label="mount()"];
+    unmounted -> opening [label="mount()\nfactory reads\ngraph_forest_name\nfrom config"];
     opening -> ready [label="tables exist\nconnection open"];
     ready -> receiving [label="first event arrives"];
     receiving -> receiving [label="upsert_node/edge\n(accumulate)"];

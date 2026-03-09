@@ -15,6 +15,17 @@ class GraphStore(Protocol):
     The protocol enforces non-blocking writes as a core contract requirement.
     """
 
+    @property
+    def graph_forest_name(self) -> str:
+        """Return the name of the graph forest this store writes into.
+
+        A graph forest is a named collection of sessions that share
+        a storage namespace.  Every store instance belongs to exactly
+        one forest.  The value is set at construction time and MUST NOT
+        change for the lifetime of the store.
+        """
+        ...
+
     async def upsert_node(
         self, node_id: str, labels: set[str], properties: dict[str, Any]
     ) -> None:
@@ -83,7 +94,8 @@ class GraphStore(Protocol):
         ...
 
     async def execute_query(
-        self, query: str, params: dict[str, Any] | None = None
+        self, query: str, params: dict[str, Any] | None = None,
+        graph_forest_name: str | None = None,
     ) -> list[dict[str, Any]]:
         """Execute a backend-specific query against the persisted store.
 
@@ -157,6 +169,44 @@ Handlers never call `flush()` directly.
 ### 5. Failure Isolation
 
 Flush failure MUST NOT propagate to handlers. Log the error and keep the data in the buffer for the next flush attempt. The in-memory buffer is the safety net. Handlers must never see or handle storage errors.
+
+## Forest Awareness
+
+A **graph forest** is a named collection of sessions that share a storage namespace. Every `GraphStore` instance belongs to exactly one forest, determined at construction time. Forests allow multiple independent workspaces (projects, users, tenants) to coexist in the same backing store without interfering with each other.
+
+### Property Contract
+
+Every `GraphStore` implementation exposes the forest it belongs to as a read-only property:
+
+```python
+@property
+def graph_forest_name(self) -> str: ...
+```
+
+The value is fixed for the lifetime of the store instance. It is set during construction (typically derived from the session's project path or an explicit configuration key) and MUST NOT change afterward.
+
+### Write Scoping
+
+All writes are automatically scoped to the store's forest. Callers do not pass the forest name on every upsert — the store stamps it internally.
+
+- **FileGraphStore** uses the forest name as a directory tier: `{graph_store_root}/{graph_forest_name}/nodes/` and `{graph_store_root}/{graph_forest_name}/edges/`. Each forest gets its own subdirectory tree, providing natural filesystem isolation.
+- **DuckDBGraphStore** stamps a `graph_forest_name` column on all rows in the nodes and edges tables. Queries that need scoping filter on this column.
+
+### Query Scoping
+
+`execute_query` accepts an optional `graph_forest_name` parameter that controls which forest(s) the query sees:
+
+| `graph_forest_name` value | Behavior |
+|---------------------------|----------|
+| `None` (default) | Query scoped to the caller's own forest |
+| Explicit string (e.g. `"project-x"`) | Query scoped to that specific forest |
+| `"*"` | Cross-forest query — searches all forests |
+
+This gives analysis tools the flexibility to compare data across forests when needed, while keeping the default safe and scoped.
+
+### Point Lookups
+
+`get_node` and `get_edge` are forest-agnostic because node and edge IDs are globally unique. A node ID encodes enough information (session ID, event fingerprint) to be unambiguous across all forests. Point lookups therefore skip forest filtering entirely and return the match regardless of which forest it belongs to.
 
 ## Write Path
 

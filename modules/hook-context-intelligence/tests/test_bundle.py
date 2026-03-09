@@ -143,3 +143,70 @@ class TestSkillRegistration:
         assert fm["name"] == "context-intelligence-graph-search"
         assert "description" in fm and len(fm["description"]) > 0
         assert fm.get("license") == "MIT"
+
+
+class TestBehaviorYamlForestConfig:
+    """Validate forest-aware graph_store config in behavior YAML (task-7)."""
+
+    def test_log_level_is_plain_warning_no_env_var(self):
+        """log_level must be plain 'WARNING', not an env-var interpolation string."""
+        data = _load_behavior()
+        config = data["hooks"][0]["config"]
+        log_level = config["log_level"]
+        assert log_level == "WARNING", f"Expected plain 'WARNING', got {log_level!r}"
+        assert "${" not in str(log_level), "log_level must not contain env var interpolation"
+
+    def test_no_env_var_interpolation_anywhere(self):
+        """No env var interpolation patterns anywhere in the YAML."""
+        path = REPO_ROOT / "behaviors" / "context-intelligence.yaml"
+        raw_text = path.read_text()
+        assert "${" not in raw_text, "Behavior YAML must not contain env var interpolation (${...})"
+
+    def test_graph_store_section_exists(self):
+        """Hook config must have a graph_store section."""
+        data = _load_behavior()
+        config = data["hooks"][0]["config"]
+        assert "graph_store" in config, "Hook config must have a graph_store section"
+
+    def test_graph_forest_name_at_graph_store_level(self):
+        """graph_forest_name must be at graph_store level, NOT inside backend config."""
+        data = _load_behavior()
+        graph_store = data["hooks"][0]["config"]["graph_store"]
+        assert "graph_forest_name" in graph_store, "graph_forest_name must be at graph_store level"
+        assert graph_store["graph_forest_name"] == "default"
+
+    def test_graph_forest_name_not_inside_backend_config(self):
+        """graph_forest_name must NOT be inside graph_store.config."""
+        data = _load_behavior()
+        graph_store = data["hooks"][0]["config"]["graph_store"]
+        backend_config = graph_store.get("config", {})
+        assert "graph_forest_name" not in backend_config, (
+            "graph_forest_name must be at graph_store level, not inside config"
+        )
+
+    def test_graph_store_root_replaces_location(self):
+        """graph_store.config must use graph_store_root, not location."""
+        data = _load_behavior()
+        graph_store = data["hooks"][0]["config"]["graph_store"]
+        backend_config = graph_store.get("config", {})
+        assert "graph_store_root" in backend_config, "graph_store.config must have graph_store_root"
+        assert backend_config["graph_store_root"] == "~/.amplifier/graphs"
+        assert "location" not in backend_config, (
+            "graph_store.config must use graph_store_root, not location"
+        )
+
+    def test_graph_store_root_uses_graphs_plural(self):
+        """Path must end with 'graphs' (plural), not 'graph'."""
+        data = _load_behavior()
+        root = data["hooks"][0]["config"]["graph_store"]["config"]["graph_store_root"]
+        assert root.endswith("/graphs"), (
+            f"graph_store_root must end with '/graphs' (plural), got {root!r}"
+        )
+
+    def test_graph_forest_name_has_comment_in_raw_yaml(self):
+        """The YAML must include a comment explaining graph_forest_name is cross-protocol."""
+        path = REPO_ROOT / "behaviors" / "context-intelligence.yaml"
+        raw_text = path.read_text()
+        assert "cross-protocol" in raw_text.lower(), (
+            "YAML must have a comment explaining graph_forest_name is a cross-protocol concept"
+        )

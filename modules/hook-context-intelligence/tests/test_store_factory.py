@@ -16,11 +16,11 @@ class TestCreateGraphStore:
         store = create_graph_store({"type": "duckdb", "config": {"connection": ":memory:"}})
         assert isinstance(store, DuckDBGraphStore)
 
-    def test_default_type_is_file(self):
+    def test_default_type_is_file(self, tmp_path):
         """Empty config should default to type='file', not duckdb."""
         from amplifier_module_hook_context_intelligence.file_store import FileGraphStore
 
-        store = create_graph_store({})
+        store = create_graph_store({"config": {"graph_store_root": str(tmp_path)}})
         assert isinstance(store, FileGraphStore)
 
     def test_duckdb_default_connection_is_memory(self):
@@ -42,16 +42,40 @@ class TestCreateGraphStore:
         store = create_graph_store({"type": "duckdb"})
         assert isinstance(store, GraphStore)
 
-    def test_file_conforms_to_graph_store_protocol(self):
+    def test_file_conforms_to_graph_store_protocol(self, tmp_path):
         from amplifier_module_hook_context_intelligence.graph_store import GraphStore
 
-        store = create_graph_store({})
+        store = create_graph_store({"config": {"graph_store_root": str(tmp_path)}})
         assert isinstance(store, GraphStore)
 
-    def test_file_missing_location_raises(self):
-        """FileGraphStore requires a location; omitting it should raise."""
-        with pytest.raises(TypeError):
-            create_graph_store({"type": "file", "config": {}})
+    # -- graph_forest_name tests (require Tasks 5+6 to complete backends) --
+
+    def test_graph_forest_name_defaults_to_default(self):
+        """When graph_forest_name is omitted, it defaults to 'default'."""
+        store = create_graph_store({"type": "duckdb", "config": {"connection": ":memory:"}})
+        assert store.graph_forest_name == "default"
+
+    def test_graph_forest_name_passed_to_duckdb(self):
+        """Explicit graph_forest_name at config level is passed to DuckDB backend."""
+        store = create_graph_store(
+            {
+                "type": "duckdb",
+                "graph_forest_name": "my-project",
+                "config": {"connection": ":memory:"},
+            }
+        )
+        assert store.graph_forest_name == "my-project"
+
+    def test_graph_forest_name_passed_to_file(self, tmp_path):
+        """Explicit graph_forest_name at config level is passed to file backend."""
+        store = create_graph_store(
+            {
+                "type": "file",
+                "graph_forest_name": "my-project",
+                "config": {"graph_store_root": str(tmp_path)},
+            }
+        )
+        assert store.graph_forest_name == "my-project"
 
 
 class TestHookStateServiceIntegration:

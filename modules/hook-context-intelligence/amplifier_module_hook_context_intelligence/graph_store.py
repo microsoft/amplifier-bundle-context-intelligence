@@ -13,6 +13,13 @@ QueryableStore extension
 6. supported_dialects advertises the set of query languages the backend speaks.
 7. execute_query runs a query in the specified (or default) dialect.
 8. ValueError is raised when the requested dialect is not in supported_dialects.
+
+Forest awareness
+----------------
+9.  graph_forest_name is a read-only property set at construction time.
+10. All writes are scoped to the store's forest.
+11. Point lookups by ID are forest-agnostic (IDs are globally unique).
+12. execute_query supports optional graph_forest_name for cross-forest queries.
 """
 
 from __future__ import annotations
@@ -28,6 +35,16 @@ class GraphStore(Protocol):
     that handlers always see a consistent, up-to-date view without waiting for
     I/O.  Persistence is driven by lifecycle triggers via ``flush()``.
     """
+
+    @property
+    def graph_forest_name(self) -> str:
+        """The forest this store writes to.
+
+        Set at construction time and immutable for the lifetime of the store.
+        All writes are scoped to this forest.  Point lookups by ID are
+        forest-agnostic (IDs are globally unique).
+        """
+        ...
 
     async def upsert_node(self, node_id: str, labels: set[str], properties: dict[str, Any]) -> None:
         """Insert or update a node.
@@ -85,7 +102,11 @@ class QueryableStore(GraphStore, Protocol):
         ...
 
     async def execute_query(
-        self, query: str, params: dict[str, Any] | None = None, dialect: str | None = None
+        self,
+        query: str,
+        params: dict[str, Any] | None = None,
+        dialect: str | None = None,
+        graph_forest_name: str | None = None,
     ) -> list[dict[str, Any]]:
         """Execute a query in the given dialect.
 
@@ -98,5 +119,10 @@ class QueryableStore(GraphStore, Protocol):
         dialect:
             Which query language to use.  ``None`` means the backend's default.
             Raises ``ValueError`` if *dialect* is not in ``supported_dialects``.
+        graph_forest_name:
+            Forest scope for the query.  ``None`` (default) scopes to the
+            store's own forest.  An explicit string scopes to that named
+            forest.  The special value ``"*"`` disables forest filtering
+            (cross-forest query).
         """
         ...

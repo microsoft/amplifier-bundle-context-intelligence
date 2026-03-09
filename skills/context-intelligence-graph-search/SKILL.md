@@ -1,7 +1,7 @@
 ---
 name: context-intelligence-graph-search
 description: SQL and PGQ query patterns for QueryableStore backends reporting sql in supported_dialects
-version: 0.2.0
+version: 0.3.0
 license: MIT
 ---
 
@@ -49,6 +49,7 @@ The DuckDB schema below applies only to the DuckDB backend.
 | Column | Type | Constraints |
 |--------|------|-------------|
 | `node_id` | `VARCHAR` | `PRIMARY KEY` |
+| `graph_forest_name` | `VARCHAR` | `NOT NULL DEFAULT 'default'` |
 | `session_id` | `VARCHAR` | `DEFAULT ''` |
 | `labels` | `VARCHAR[]` | |
 | `occurred_at` | `TIMESTAMP` | |
@@ -61,6 +62,7 @@ The DuckDB schema below applies only to the DuckDB backend.
 | `source` | `VARCHAR` | |
 | `target` | `VARCHAR` | |
 | `edge_type` | `VARCHAR` | |
+| `graph_forest_name` | `VARCHAR` | `NOT NULL DEFAULT 'default'` |
 | `session_id` | `VARCHAR` | `DEFAULT ''` |
 | `occurred_at` | `TIMESTAMP` | |
 | `seq` | `INTEGER` | |
@@ -73,6 +75,7 @@ Primary key: `(source, target, edge_type)`.
 | Column | Type | Constraints |
 |--------|------|-------------|
 | `node_id` | `VARCHAR` | `NOT NULL` |
+| `graph_forest_name` | `VARCHAR` | `NOT NULL DEFAULT 'default'` |
 | `session_id` | `VARCHAR` | `NOT NULL` |
 | `field_name` | `VARCHAR` | `NOT NULL` |
 | `content` | `VARCHAR` | `NOT NULL` |
@@ -250,6 +253,84 @@ SELECT child_id, parent_id
     MATCH (child)-[sub:SUBSESSION_OF]->(parent)
     COLUMNS (child.node_id AS child_id, parent.node_id AS parent_id)
   );
+```
+
+---
+
+## Forest-Scoped Queries
+
+Every query is scoped to a **graph forest** — an isolated partition of the
+graph identified by the `graph_forest_name` column present on `nodes`,
+`edges`, and `search_index`. The forest filter is injected automatically
+as CTE wrappers around the raw tables before your SQL executes, so most
+queries need no changes.
+
+### 1. Default query (own forest)
+
+When no `graph_forest_name` parameter is supplied, queries are automatically
+scoped to the caller's own forest (the default forest):
+
+```sql
+-- No forest parameter needed — CTE wrappers scope to own forest automatically
+SELECT node_id, labels, occurred_at
+  FROM nodes
+ WHERE properties->>'status' = 'completed';
+```
+
+### 2. Explicit forest query
+
+Pass `graph_forest_name="other-project"` to query a specific forest:
+
+```sql
+-- graph_forest_name="other-project"
+-- CTE wrappers inject: WHERE graph_forest_name = 'other-project'
+SELECT node_id, labels, occurred_at
+  FROM nodes
+ WHERE properties->>'status' = 'completed';
+```
+
+### 3. Cross-forest query
+
+Pass `graph_forest_name="*"` to query across all forests:
+
+```sql
+-- graph_forest_name="*"
+-- CTE wrappers are omitted — full table access
+SELECT n.graph_forest_name, n.node_id, n.labels
+  FROM nodes n
+ ORDER BY n.graph_forest_name, n.occurred_at DESC;
+```
+
+### How CTE wrappers work
+
+When `graph_forest_name` is set to a specific value (including the default),
+the query engine wraps each table reference in a CTE that filters by forest:
+
+```sql
+-- Raw SQL equivalent of a specific-forest query (e.g. graph_forest_name="my-project")
+WITH nodes AS (
+    SELECT * FROM nodes WHERE graph_forest_name = 'my-project'
+),
+edges AS (
+    SELECT * FROM edges WHERE graph_forest_name = 'my-project'
+),
+search_index AS (
+    SELECT * FROM search_index WHERE graph_forest_name = 'my-project'
+)
+SELECT node_id, labels
+  FROM nodes
+ WHERE properties->>'status' = 'completed';
+```
+
+When `graph_forest_name="*"`, no CTE wrappers are injected and queries see
+all forests. Use a manual `WHERE` clause to filter as needed:
+
+```sql
+-- graph_forest_name="*" — no automatic filtering
+SELECT n.node_id, n.graph_forest_name, n.labels
+  FROM nodes n
+ WHERE n.graph_forest_name IN ('project-a', 'project-b')
+ ORDER BY n.occurred_at DESC;
 ```
 
 ---
