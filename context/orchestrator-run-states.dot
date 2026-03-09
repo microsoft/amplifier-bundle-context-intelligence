@@ -1,0 +1,105 @@
+// OrchestratorRun State Machine
+// Context-Intelligence Bundle
+//
+// Status transitions from creation to terminal state.
+// Status is exclusively controlled by orchestrator:complete.
+// execution:end provides timing enrichment but does NOT change status.
+//
+// Aligned with 11-navigation-graph-model.dot N2 node:
+//   status: complete|cancelled|error|in_progress
+//
+// Render: dot -Tsvg orchestrator-run-states.dot -o orchestrator-run-states.svg
+//         dot -Tpng orchestrator-run-states.dot -o orchestrator-run-states.png
+
+digraph OrchestratorRunStates {
+    rankdir=TB;
+    fontname="Helvetica";
+    fontsize=14;
+    labelloc=t;
+    label="OrchestratorRun State Machine\nStatus transitions from creation to terminal state\nStatus exclusively controlled by orchestrator:complete";
+    nodesep=0.8;
+    ranksep=1.0;
+    pad=0.5;
+
+    node [fontname="Helvetica", fontsize=9];
+    edge [fontname="Helvetica", fontsize=7];
+
+    // ═══════════════════════════════════════════════════════════════
+    // STATES
+    // ═══════════════════════════════════════════════════════════════
+
+    not_exists [label="(not exists)\nNo OrchestratorRun\nnode in graph" shape=oval];
+
+    in_progress [label="in_progress\n─────────────────\nOrchestratorRun created.\nSteps being added.\nTools executing."
+                  shape=box style=filled fillcolor="#C8E6C9" color="#2E7D32" penwidth=2];
+
+    complete [label="complete\n─────────────────\nRun finished\nsuccessfully.\nended_at set."
+              shape=box style=filled fillcolor="#A5D6A7" color="#1B5E20" penwidth=2];
+
+    cancelled [label="cancelled\n─────────────────\nRun was cancelled\n(user or system).\nended_at set."
+                shape=box style=filled fillcolor="#FFF9C4" color="#F57F17" penwidth=2];
+
+    error [label="error\n─────────────────\nRun failed with error.\nended_at set."
+            shape=box style=filled fillcolor="#FFCDD2" color="#C62828" penwidth=2];
+
+    // ═══════════════════════════════════════════════════════════════
+    // TRANSITIONS
+    // ═══════════════════════════════════════════════════════════════
+
+    // Creation
+    not_exists -> in_progress [label="execution:start\n─────────────────\nCreates OrchestratorRun node\nwith status='in_progress'.\nWires HAS_RUN, HAS_STEP(→PromptStep)."
+                                color="#2E7D32" fontcolor="#2E7D32" penwidth=2];
+
+    // Self-transitions (enrichment, no status change)
+    in_progress -> in_progress [label="provider:request\n(add AssistantStep)"
+                                 color="#6A1B9A" fontcolor="#6A1B9A"
+                                 penwidth=1.5 style=dashed];
+
+    in_progress -> in_progress [label="tool:pre\n(add ToolExecution)"
+                                 color="#E65100" fontcolor="#E65100"
+                                 penwidth=1.5 style=dashed];
+
+    in_progress -> in_progress [label="llm:response\n(enrich Step tokens)"
+                                 color="#F57F17" fontcolor="#F57F17"
+                                 penwidth=1.5 style=dashed];
+
+    in_progress -> in_progress [label="execution:end\n(enrich timing ONLY,\nNO status change)"
+                                 color="#455A64" fontcolor="#455A64"
+                                 penwidth=1.5 style=dotted];
+
+    // Terminal transitions (all via orchestrator:complete)
+    in_progress -> complete [label="orchestrator:complete\n{status: success}\n─────────────────\nSets ended_at, turn_count,\nstep_count, tool_call_count,\ntotal tokens."
+                              color="#1B5E20" fontcolor="#1B5E20" penwidth=2];
+
+    in_progress -> cancelled [label="orchestrator:complete\n{status: cancelled}\n─────────────────\nSets ended_at.\nPartial aggregates."
+                               color="#F57F17" fontcolor="#F57F17" penwidth=2];
+
+    in_progress -> error [label="orchestrator:complete\n{status: error}\n─────────────────\nSets ended_at.\nPartial aggregates."
+                           color="#C62828" fontcolor="#C62828" penwidth=2];
+
+    // ═══════════════════════════════════════════════════════════════
+    // NOTES
+    // ═══════════════════════════════════════════════════════════════
+
+    node [shape=note, style=filled, penwidth=1];
+
+    note_terminal [label="Terminal States\n──────────────────────────\ncomplete, cancelled, error\nare all terminal.\nNo transitions out.\nOrchestratorRun is immutable\nafter orchestrator:complete."
+                    fillcolor="#ECEFF1" color="#455A64"];
+
+    note_exec_end [label="execution:end Contract\n──────────────────────────\nexecution:end provides:\n  • execution_ended_at\n  • response_preview\nBut does NOT set status.\nStatus is EXCLUSIVELY\nset by orchestrator:complete.\n\nThis prevents race conditions\nwhere execution:end and\norchestrator:complete arrive\nin different orders."
+                    fillcolor="#FFFDE7" color="#F57F17"];
+
+    note_prompt [label="prompt:submit Role\n──────────────────────────\nprompt:submit creates the\nPromptStep node and updates\ncursors, but does NOT create\nthe OrchestratorRun node.\n\nOrchestratorRun transitions\nfrom (not exists) only at\nexecution:start."
+                  fillcolor="#E3F2FD" color="#1565C0"];
+
+    // Annotation links
+    complete -> note_terminal [style=dotted color=gray arrowhead=none constraint=false];
+    cancelled -> note_terminal [style=dotted color=gray arrowhead=none constraint=false];
+    error -> note_terminal [style=dotted color=gray arrowhead=none constraint=false];
+
+    not_exists -> note_prompt [style=dotted color=gray arrowhead=none constraint=false];
+
+    // Layout hints
+    {rank=same; complete; cancelled; error}
+    {rank=same; note_exec_end; note_terminal}
+}

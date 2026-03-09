@@ -1,0 +1,349 @@
+// OrchestratorRun Assembly — Progressive Graph Construction
+// Context-Intelligence Bundle
+//
+// Shows how the full OrchestratorRun subgraph is assembled across events
+// from 3 handlers: OrchestratorRunHandler, StepHandler, ToolExecutionHandler.
+// Aligned with 11-navigation-graph-model.dot (5 node types, 8 edge types).
+//
+// Render: dot -Tsvg orchestrator-run-assembly.dot -o orchestrator-run-assembly.svg
+//         dot -Tpng orchestrator-run-assembly.dot -o orchestrator-run-assembly.png
+
+digraph OrchestratorRunAssembly {
+    rankdir=TB;
+    fontname="Helvetica";
+    fontsize=14;
+    labelloc=t;
+    label="OrchestratorRun Assembly — Progressive Graph Construction\nBuilt across 3 handlers from prompt:submit through orchestrator:complete\nAligned with 11-navigation-graph-model.dot";
+    compound=true;
+    nodesep=0.6;
+    ranksep=0.8;
+    pad=0.5;
+
+    node [fontname="Helvetica", fontsize=9];
+    edge [fontname="Helvetica", fontsize=7];
+
+    // ═══════════════════════════════════════════════════════════════
+    // COLOR LEGEND
+    // ═══════════════════════════════════════════════════════════════
+
+    subgraph cluster_legend {
+        label="Color Key";
+        style=dashed;
+        color="#455A64";
+        node [shape=box, fontsize=8];
+        leg_create [label="Node Creation" style=filled fillcolor="#BBDEFB" color="#1565C0"];
+        leg_edge   [label="Edge Creation" style=filled fillcolor="#E1BEE7" color="#6A1B9A"];
+        leg_enrich [label="Enrichment" style=filled fillcolor="#FFF9C4" color="#F57F17"];
+        leg_cursor [label="Cursor Update" style=filled fillcolor="#C8E6C9" color="#2E7D32"];
+        leg_create -> leg_edge -> leg_enrich -> leg_cursor [style=invis];
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // EVENT TIMELINE (top-to-bottom)
+    // ═══════════════════════════════════════════════════════════════
+
+    // ─── Event 1: prompt:submit (OrchestratorRunHandler) ─────────
+
+    subgraph cluster_prompt_submit {
+        label="1. prompt:submit  [OrchestratorRunHandler]";
+        style=filled;
+        fillcolor="#F5F5F5";
+        color="#1565C0";
+        penwidth=2;
+
+        ps_event [label="prompt:submit\narrives" shape=oval];
+
+        ps_create [label="CREATE node\n:Step:PromptStep\n{\n  iteration: 0,\n  prompt_text,\n  prompt_preview,\n  occurred_at,\n  session_id\n}"
+                    shape=box style=filled fillcolor="#BBDEFB" color="#1565C0"];
+
+        ps_cursor [label="CURSORS\nrun_counter++\nstep_counter = 0\ncurrent_step_id = node_id\nprompt_preview = prompt[:200]"
+                    shape=box style=filled fillcolor="#C8E6C9" color="#2E7D32"];
+
+        ps_no_edges [label="No edges yet.\nHAS_STEP deferred to\nexecution:start."
+                      shape=note style=filled fillcolor="#FFFDE7"];
+
+        ps_event -> ps_create;
+        ps_create -> ps_cursor;
+        ps_cursor -> ps_no_edges [style=dotted arrowhead=none color=gray];
+    }
+
+    // ─── Event 2: execution:start (OrchestratorRunHandler) ───────
+
+    subgraph cluster_execution_start {
+        label="2. execution:start  [OrchestratorRunHandler]";
+        style=filled;
+        fillcolor="#F5F5F5";
+        color="#1565C0";
+        penwidth=2;
+
+        es_event [label="execution:start\narrives" shape=oval];
+
+        es_create [label="CREATE node\n:OrchestratorRun\n{\n  run_number: cursors.run_counter,\n  prompt_preview: cursors.prompt_preview,\n  started_at: timestamp,\n  status: 'in_progress'\n}"
+                    shape=box style=filled fillcolor="#BBDEFB" color="#1565C0"];
+
+        es_edge_run [label="CREATE edge\nHAS_RUN\n(Session → OrchestratorRun)\n{seq: run_counter}"
+                      shape=box style=filled fillcolor="#E1BEE7" color="#6A1B9A"];
+
+        es_edge_step [label="CREATE edge\nHAS_STEP\n(OrchestratorRun → PromptStep)\n{seq: 0}"
+                       shape=box style=filled fillcolor="#E1BEE7" color="#6A1B9A"];
+
+        es_cursor [label="CURSORS\ncurrent_run_id = run_node_id"
+                    shape=box style=filled fillcolor="#C8E6C9" color="#2E7D32"];
+
+        es_event -> es_create;
+        es_create -> es_edge_run;
+        es_edge_run -> es_edge_step;
+        es_edge_step -> es_cursor;
+    }
+
+    // ─── Event 3: provider:request (StepHandler) ─────────────────
+
+    subgraph cluster_provider_request {
+        label="3. provider:request  [StepHandler]  (repeats N times, iteration 1+)";
+        style=filled;
+        fillcolor="#F5F5F5";
+        color="#6A1B9A";
+        penwidth=2;
+
+        pr_event [label="provider:request\narrives" shape=oval];
+
+        pr_create [label="CREATE node\n:Step:AssistantStep\n{\n  iteration: cursors.step_counter + 1,\n  occurred_at: timestamp,\n  session_id\n}"
+                    shape=box style=filled fillcolor="#BBDEFB" color="#1565C0"];
+
+        pr_edge_step [label="CREATE edge\nHAS_STEP\n(OrchestratorRun → AssistantStep)\n{seq: step_counter + 1}"
+                       shape=box style=filled fillcolor="#E1BEE7" color="#6A1B9A"];
+
+        pr_edge_next [label="CREATE edge\nNEXT\n(prev_step → new_step)"
+                       shape=box style=filled fillcolor="#E1BEE7" color="#6A1B9A"];
+
+        pr_cursor [label="CURSORS\nstep_counter++\ncurrent_step_id = new_step_id"
+                    shape=box style=filled fillcolor="#C8E6C9" color="#2E7D32"];
+
+        pr_event -> pr_create;
+        pr_create -> pr_edge_step;
+        pr_edge_step -> pr_edge_next;
+        pr_edge_next -> pr_cursor;
+    }
+
+    // ─── Events 4-5: llm:request / llm:response (StepHandler) ───
+
+    subgraph cluster_llm {
+        label="4-5. llm:request + llm:response  [StepHandler]";
+        style=filled;
+        fillcolor="#F5F5F5";
+        color="#6A1B9A";
+        penwidth=2;
+
+        llm_req_event [label="llm:request\narrives" shape=oval];
+
+        llm_req_enrich [label="ENRICH current Step\nmodel, provider"
+                         shape=box style=filled fillcolor="#FFF9C4" color="#F57F17"];
+
+        llm_resp_event [label="llm:response\narrives" shape=oval];
+
+        llm_resp_enrich [label="ENRICH current Step\ninput_tokens, output_tokens,\ncached_tokens, reasoning_tokens,\nrequest_at, response_at,\nlatency_ms, finish_reason,\nhas_thinking"
+                          shape=box style=filled fillcolor="#FFF9C4" color="#F57F17"];
+
+        llm_req_event -> llm_req_enrich;
+        llm_resp_event -> llm_resp_enrich;
+        llm_req_enrich -> llm_resp_event [style=dashed color=gray label="time"];
+    }
+
+    // ─── Event 6: tool:pre (ToolExecutionHandler) ────────────────
+
+    subgraph cluster_tool_pre {
+        label="6. tool:pre  [ToolExecutionHandler]  (repeats per tool call)";
+        style=filled;
+        fillcolor="#F5F5F5";
+        color="#E65100";
+        penwidth=2;
+
+        tp_event [label="tool:pre\narrives" shape=oval];
+
+        tp_create [label="CREATE node\n:ToolExecution\n{\n  tool_call_id,\n  tool_name,\n  parallel_group_id,\n  started_at: timestamp,\n  status: 'executing'\n}"
+                    shape=box style=filled fillcolor="#BBDEFB" color="#1565C0"];
+
+        tp_edge_trig [label="CREATE edge\nTRIGGERED\n(current_step → ToolExecution)\n{seq: tool_seq}"
+                       shape=box style=filled fillcolor="#E1BEE7" color="#6A1B9A"];
+
+        tp_parallel_check [label="Same\nparallel_group_id\nas existing\nToolExecution?"
+                            shape=diamond style=filled fillcolor="#FFFDE7"];
+
+        tp_edge_parallel [label="CREATE edge\nPARALLEL_WITH\n(existing ToolExecution ↔ new)"
+                           shape=box style=filled fillcolor="#E1BEE7" color="#6A1B9A"];
+
+        tp_skip_parallel [label="No PARALLEL_WITH\n(solo tool call)" shape=note style=filled fillcolor="#FFFDE7"];
+
+        tp_event -> tp_create;
+        tp_create -> tp_edge_trig;
+        tp_edge_trig -> tp_parallel_check;
+        tp_parallel_check -> tp_edge_parallel [label="yes"];
+        tp_parallel_check -> tp_skip_parallel [label="no"];
+    }
+
+    // ─── Events 7-8: tool:post / tool:error (ToolExecutionHandler)
+
+    subgraph cluster_tool_result {
+        label="7-8. tool:post + tool:error  [ToolExecutionHandler]";
+        style=filled;
+        fillcolor="#F5F5F5";
+        color="#E65100";
+        penwidth=2;
+
+        tpost_event [label="tool:post\narrives" shape=oval];
+
+        tpost_enrich [label="ENRICH ToolExecution\nended_at, status='complete',\nresult_preview,\nduration_ms"
+                       shape=box style=filled fillcolor="#FFF9C4" color="#F57F17"];
+
+        terr_event [label="tool:error\narrives" shape=oval];
+
+        terr_enrich [label="ENRICH ToolExecution\nstatus='error',\nerror_message"
+                      shape=box style=filled fillcolor="#FFF9C4" color="#F57F17"];
+
+        tpost_event -> tpost_enrich;
+        terr_event -> terr_enrich;
+    }
+
+    // ─── Events 9-10: delegate:agent_spawned / completed ─────────
+
+    subgraph cluster_delegate {
+        label="9-10. delegate:agent_spawned + delegate:agent_completed  [ToolExecutionHandler]";
+        style=filled;
+        fillcolor="#F5F5F5";
+        color="#E65100";
+        penwidth=2;
+
+        ds_event [label="delegate:agent_spawned\narrives" shape=oval];
+
+        ds_enrich [label="ENRICH ToolExecution\nadd label :Delegation\nchild_session_id,\nchild_agent"
+                    shape=box style=filled fillcolor="#FFF9C4" color="#F57F17"];
+
+        ds_edge [label="CREATE edge\nSPAWNED\n(ToolExecution → child Session)\n{child_session_id}"
+                  shape=box style=filled fillcolor="#E1BEE7" color="#6A1B9A"];
+
+        dc_event [label="delegate:agent_completed\narrives" shape=oval];
+
+        dc_enrich [label="ENRICH ToolExecution\ncompletion confirmed,\nchild_ended_at"
+                    shape=box style=filled fillcolor="#FFF9C4" color="#F57F17"];
+
+        ds_event -> ds_enrich;
+        ds_enrich -> ds_edge;
+        dc_event -> dc_enrich;
+    }
+
+    // ─── Event 11: execution:end (OrchestratorRunHandler) ────────
+
+    subgraph cluster_execution_end {
+        label="11. execution:end  [OrchestratorRunHandler]";
+        style=filled;
+        fillcolor="#F5F5F5";
+        color="#1565C0";
+        penwidth=2;
+
+        ee_event [label="execution:end\narrives" shape=oval];
+
+        ee_enrich [label="ENRICH OrchestratorRun\nexecution_ended_at,\nresponse_preview"
+                    shape=box style=filled fillcolor="#FFF9C4" color="#F57F17"];
+
+        ee_note [label="NOTE: Does NOT change status.\nStatus exclusively controlled\nby orchestrator:complete."
+                  shape=note style=filled fillcolor="#FFFDE7"];
+
+        ee_event -> ee_enrich;
+        ee_enrich -> ee_note [style=dotted arrowhead=none color=gray];
+    }
+
+    // ─── Event 12: orchestrator:complete (OrchestratorRunHandler) ─
+
+    subgraph cluster_orch_complete {
+        label="12. orchestrator:complete  [OrchestratorRunHandler]";
+        style=filled;
+        fillcolor="#F5F5F5";
+        color="#1565C0";
+        penwidth=2;
+
+        oc_event [label="orchestrator:complete\narrives" shape=oval];
+
+        oc_enrich [label="ENRICH OrchestratorRun\nended_at: timestamp,\nstatus: success|cancelled|error,\nturn_count,\nstep_count, tool_call_count,\ntotal_input_tokens,\ntotal_output_tokens"
+                    shape=box style=filled fillcolor="#FFF9C4" color="#F57F17"];
+
+        oc_cursor [label="CURSORS\nclear current_run_id"
+                    shape=box style=filled fillcolor="#C8E6C9" color="#2E7D32"];
+
+        oc_event -> oc_enrich;
+        oc_enrich -> oc_cursor;
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // INTER-CLUSTER FLOW (event timeline)
+    // ═══════════════════════════════════════════════════════════════
+
+    ps_cursor -> es_event [ltail=cluster_prompt_submit lhead=cluster_execution_start
+                            label="next event" style=bold color="#37474F" penwidth=1.5];
+    es_cursor -> pr_event [ltail=cluster_execution_start lhead=cluster_provider_request
+                            label="next event" style=bold color="#37474F" penwidth=1.5];
+    pr_cursor -> llm_req_event [ltail=cluster_provider_request lhead=cluster_llm
+                                 label="next event" style=bold color="#37474F" penwidth=1.5];
+    llm_resp_enrich -> tp_event [ltail=cluster_llm lhead=cluster_tool_pre
+                                  label="if finish_reason\n= tool_use" style=bold color="#37474F" penwidth=1.5];
+    tp_edge_parallel -> tpost_event [ltail=cluster_tool_pre lhead=cluster_tool_result
+                                      label="tool completes" style=bold color="#37474F" penwidth=1.5];
+    tpost_enrich -> ds_event [ltail=cluster_tool_result lhead=cluster_delegate
+                               label="if tool=delegate" style=bold color="#37474F" penwidth=1.5];
+    dc_enrich -> pr_event [ltail=cluster_delegate lhead=cluster_provider_request
+                            label="loop: next\niteration" style=bold color="#37474F"
+                            penwidth=1.5 constraint=false];
+    llm_resp_enrich -> ee_event [ltail=cluster_llm lhead=cluster_execution_end
+                                  label="if finish_reason\n= end_turn" style=bold color="#37474F" penwidth=1.5];
+    ee_enrich -> oc_event [ltail=cluster_execution_end lhead=cluster_orch_complete
+                            label="next event" style=bold color="#37474F" penwidth=1.5];
+
+    // ═══════════════════════════════════════════════════════════════
+    // RESULTING GRAPH SHAPE (side panel)
+    // ═══════════════════════════════════════════════════════════════
+
+    subgraph cluster_result {
+        label="Resulting Graph Shape\n(from 11-navigation-graph-model.dot)";
+        style=dashed;
+        color="#1B5E20";
+        node [shape=record, style=filled, fontsize=8];
+
+        r_session [label=":Session" fillcolor="#BBDEFB"];
+        r_run [label=":OrchestratorRun" fillcolor="#C8E6C9"];
+        r_prompt [label=":Step:PromptStep\n{iteration:0}" fillcolor="#E1BEE7"];
+        r_assist1 [label=":Step:AssistantStep\n{iteration:1}" fillcolor="#E1BEE7"];
+        r_tool1 [label=":ToolExecution" fillcolor="#FFE082"];
+        r_tool2 [label=":ToolExecution" fillcolor="#FFE082"];
+        r_child [label=":Session\n(if :Delegation)" fillcolor="#BBDEFB"];
+        r_assist2 [label=":Step:AssistantStep\n{iteration:2}" fillcolor="#E1BEE7"];
+        r_event [label=":Event" fillcolor="#B2DFDB"];
+
+        r_session -> r_run [label="HAS_RUN\n{seq}" color="#2E7D32" penwidth=2];
+        r_run -> r_prompt [label="HAS_STEP\n{seq:0}" color="#6A1B9A" penwidth=2];
+        r_prompt -> r_assist1 [label="NEXT" color="#4527A0" style=dashed penwidth=1.5];
+        r_assist1 -> r_tool1 [label="TRIGGERED\n{seq:1}" color="#E65100" penwidth=1.5];
+        r_tool1 -> r_tool2 [label="PARALLEL_WITH" color="#00838F" style=bold];
+        r_tool1 -> r_child [label="SPAWNED" color="#6A1B9A" penwidth=2 style=bold];
+        r_assist1 -> r_assist2 [label="NEXT" color="#4527A0" style=dashed penwidth=1.5];
+        r_run -> r_event [label="HAS_EVENT" color="#00695C" style=dotted];
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // HANDLER RESPONSIBILITY SUMMARY
+    // ═══════════════════════════════════════════════════════════════
+
+    subgraph cluster_handlers {
+        label="Handler Responsibility Map";
+        style=dashed;
+        color="#455A64";
+        node [shape=record, style=filled, fontsize=8];
+
+        h_orch [label="{OrchestratorRunHandler|Events: prompt:submit,\lexecution:start,\lexecution:end,\lorchestrator:complete\l|Creates: PromptStep, OrchestratorRun\lEdges: HAS_RUN, HAS_STEP(→PromptStep)\l}"
+                 fillcolor="#E3F2FD" color="#1565C0"];
+
+        h_step [label="{StepHandler|Events: provider:request,\lllm:request,\lllm:response,\lcontent_block:*\l|Creates: AssistantStep\lEdges: HAS_STEP(→AssistantStep), NEXT\l}"
+                 fillcolor="#F3E5F5" color="#6A1B9A"];
+
+        h_tool [label="{ToolExecutionHandler|Events: tool:pre,\ltool:post,\ltool:error,\ldelegate:agent_spawned,\ldelegate:agent_completed\l|Creates: ToolExecution\lEdges: TRIGGERED, PARALLEL_WITH,\lSPAWNED\l}"
+                 fillcolor="#FFF3E0" color="#E65100"];
+    }
+}
