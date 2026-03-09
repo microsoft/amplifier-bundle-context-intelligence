@@ -1,4 +1,4 @@
-"""Tests for OrchestratorRunHandler — prompt:submit creates PromptStep nodes."""
+"""Tests for OrchestratorRunHandler — prompt:submit creates PromptStep nodes (no edges)."""
 
 from __future__ import annotations
 
@@ -99,16 +99,37 @@ class TestPromptSubmitHappyPath:
         assert props["occurred_at"] == TIMESTAMP
         assert props["session_id"] == "s1"
 
-    async def test_creates_has_step_edge(self, services: HookStateService) -> None:
+    async def test_no_edges_created(self, services: HookStateService) -> None:
         await _seed_session(services)
         handler = OrchestratorRunHandler(services)
         await handler(
             "prompt:submit",
             {"session_id": "s1", "timestamp": TIMESTAMP, "prompt": "Hi"},
         )
+        # No HAS_STEP edge should be created from session to prompt step
         edge = await services.graph.get_edge("s1", EXPECTED_NODE_ID, "HAS_STEP")
-        assert edge is not None
-        assert edge["properties"]["occurred_at"] == TIMESTAMP
+        assert edge is None
+
+    async def test_updates_cursors(self, services: HookStateService) -> None:
+        await _seed_session(services)
+        handler = OrchestratorRunHandler(services)
+        # Set initial cursor state to verify changes
+        cursors = services.get_cursors("s1")
+        cursors.run_counter = 2
+        cursors.step_counter = 5
+        cursors.current_step_id = "old_step"
+        cursors.prompt_preview = "old preview"
+
+        await handler(
+            "prompt:submit",
+            {"session_id": "s1", "timestamp": TIMESTAMP, "prompt": "Hello world"},
+        )
+
+        cursors = services.get_cursors("s1")
+        assert cursors.run_counter == 3  # incremented
+        assert cursors.step_counter == 0  # reset
+        assert cursors.current_step_id == EXPECTED_NODE_ID  # set to new node
+        assert cursors.prompt_preview == "Hello world"  # stored
 
     async def test_node_id_matches_make_node_id(self, services: HookStateService) -> None:
         await _seed_session(services)
@@ -171,41 +192,3 @@ class TestPromptSubmitErrorPaths:
         )
         node = await services.graph.get_node(EXPECTED_NODE_ID)
         assert node is None
-
-    async def test_session_not_found_creates_no_edges(self, services: HookStateService) -> None:
-        handler = OrchestratorRunHandler(services)
-        await handler(
-            "prompt:submit",
-            {"session_id": "s1", "timestamp": TIMESTAMP, "prompt": "Hi"},
-        )
-        edge = await services.graph.get_edge("s1", EXPECTED_NODE_ID, "HAS_STEP")
-        assert edge is None
-
-
-# ── Stub event tests ─────────────────────────────────────────────────
-
-
-class TestStubEvents:
-    async def test_execution_start_returns_continue(self, services: HookStateService) -> None:
-        handler = OrchestratorRunHandler(services)
-        result = await handler(
-            "execution:start",
-            {"session_id": "s1", "timestamp": TIMESTAMP},
-        )
-        assert result.action == "continue"
-
-    async def test_execution_end_returns_continue(self, services: HookStateService) -> None:
-        handler = OrchestratorRunHandler(services)
-        result = await handler(
-            "execution:end",
-            {"session_id": "s1", "timestamp": TIMESTAMP},
-        )
-        assert result.action == "continue"
-
-    async def test_orchestrator_complete_returns_continue(self, services: HookStateService) -> None:
-        handler = OrchestratorRunHandler(services)
-        result = await handler(
-            "orchestrator:complete",
-            {"session_id": "s1", "timestamp": TIMESTAMP},
-        )
-        assert result.action == "continue"

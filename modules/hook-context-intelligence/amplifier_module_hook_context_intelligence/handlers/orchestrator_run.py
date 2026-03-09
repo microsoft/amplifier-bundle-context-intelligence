@@ -67,13 +67,15 @@ class OrchestratorRunHandler:
             "session_id": session_id,
         }
 
-        # Upsert PromptStep node
+        # Upsert PromptStep node only — edges deferred to execution:start
         await self.services.graph.upsert_node(node_id, {"Step", "PromptStep"}, properties)
 
-        # Upsert HAS_STEP edge from session to prompt step
-        await self.services.graph.upsert_edge(
-            session_id, node_id, "HAS_STEP", {"occurred_at": timestamp}
-        )
+        # Update cursor state
+        cursors = self.services.get_cursors(session_id)
+        cursors.run_counter += 1
+        cursors.step_counter = 0
+        cursors.current_step_id = node_id
+        cursors.prompt_preview = prompt_preview
 
         log.info("Created PromptStep node %s", node_id)
 
