@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import dataclasses
+
 import pytest
 
 from amplifier_module_hook_context_intelligence.handlers.session import SessionHandler
-from amplifier_module_hook_context_intelligence.services import HookStateService
+from amplifier_module_hook_context_intelligence.services import HookStateService, SessionCursors
 
 
 class TestSessionIdGuard:
@@ -237,3 +239,65 @@ class TestSessionResumeNotClaimed:
 
     async def test_session_handler_does_not_claim_resume(self) -> None:
         assert "session:resume" not in SessionHandler.handled_events
+
+
+class TestSessionCursors:
+    """Tests for SessionCursors dataclass and HookStateService cursor management."""
+
+    def test_defaults(self) -> None:
+        cursors = SessionCursors()
+        assert cursors.current_run_id is None
+        assert cursors.current_step_id is None
+        assert cursors.run_counter == 0
+        assert cursors.step_counter == 0
+        assert cursors.prompt_preview == ""
+        assert cursors.parallel_groups == {}
+        assert cursors.tool_call_map == {}
+
+    def test_is_dataclass(self) -> None:
+        assert dataclasses.is_dataclass(SessionCursors)
+
+    def test_lazy_init(self, services: HookStateService) -> None:
+        """get_cursors creates a SessionCursors on first access."""
+        cursors = services.get_cursors("sess-1")
+        assert isinstance(cursors, SessionCursors)
+
+    def test_same_instance_returned(self, services: HookStateService) -> None:
+        """get_cursors returns the same object for the same session_id."""
+        a = services.get_cursors("sess-1")
+        b = services.get_cursors("sess-1")
+        assert a is b
+
+    def test_different_sessions_get_different_cursors(self, services: HookStateService) -> None:
+        a = services.get_cursors("sess-1")
+        b = services.get_cursors("sess-2")
+        assert a is not b
+
+    def test_remove_cursors(self, services: HookStateService) -> None:
+        """remove_cursors deletes the cursor entry for a session."""
+        services.get_cursors("sess-1")
+        services.remove_cursors("sess-1")
+        # After removal, a new call should create a fresh instance
+        new = services.get_cursors("sess-1")
+        assert new.run_counter == 0  # fresh defaults
+
+    def test_remove_nonexistent_is_safe(self, services: HookStateService) -> None:
+        """remove_cursors does not raise for a nonexistent session_id."""
+        services.remove_cursors("does-not-exist")  # should not raise
+
+    async def test_session_end_removes_cursors(self, services: HookStateService) -> None:
+        """session:end event calls remove_cursors for the ended session."""
+        handler = SessionHandler(services)
+        # Prime cursors and mutate to prove they existed
+        cursors = services.get_cursors("s1")
+        cursors.run_counter = 5
+
+        await handler(
+            "session:end",
+            {"session_id": "s1", "timestamp": "2026-01-01T01:00:00Z"},
+        )
+
+        # After session:end, cursors should have been removed;
+        # a fresh get_cursors returns default values
+        fresh = services.get_cursors("s1")
+        assert fresh.run_counter == 0

@@ -97,3 +97,4 @@ class SessionHandler:
         }
 
         await self.services.graph.upsert_node(session_id, labels, properties)
+        self.services.remove_cursors(session_id)

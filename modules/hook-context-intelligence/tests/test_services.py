@@ -41,10 +41,9 @@ class TestGraphState:
         from amplifier_module_hook_context_intelligence.services import GraphState
 
         graph = GraphState()
-        assert graph.current_session is None
-        assert graph.current_run is None
-        assert graph.current_step is None
-        assert graph.step_counter == 0
+        assert graph._graph_forest_name == "default"
+        assert graph._nodes == {}
+        assert graph._edges == {}
 
     async def test_upsert_node_creates_node(self):
         from amplifier_module_hook_context_intelligence.services import GraphState

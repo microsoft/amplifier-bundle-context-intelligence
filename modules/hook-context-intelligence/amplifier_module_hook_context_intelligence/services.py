@@ -2,10 +2,24 @@
 
 from __future__ import annotations
 
+import dataclasses
 import fnmatch
 from typing import Any
 
 from .store_factory import create_graph_store
+
+
+@dataclasses.dataclass
+class SessionCursors:
+    """Per-session cursor state for tracking active run/step/tool positions."""
+
+    current_run_id: str | None = None
+    current_step_id: str | None = None
+    run_counter: int = 0
+    step_counter: int = 0
+    prompt_preview: str = ""
+    parallel_groups: dict[str, list[str]] = dataclasses.field(default_factory=dict)
+    tool_call_map: dict[str, str] = dataclasses.field(default_factory=dict)
 
 
 class HookConfig:
@@ -33,11 +47,6 @@ class GraphState:
         self._graph_forest_name = graph_forest_name
         self._nodes: dict[str, dict[str, Any]] = {}
         self._edges: dict[tuple[str, str, str], dict[str, Any]] = {}
-        self.current_session: str | None = None
-        self.current_run: str | None = None
-        self.current_step: str | None = None
-        self.step_counter: int = 0
-        self.pending_delegate_tool_call_id: str | None = None
 
     @property
     def graph_forest_name(self) -> str:
@@ -89,3 +98,14 @@ class HookStateService:
         self.coordinator = coordinator
         store_config = raw_config.get("graph_store", {})
         self.graph = create_graph_store(store_config)
+        self._cursors: dict[str, SessionCursors] = {}
+
+    def get_cursors(self, session_id: str) -> SessionCursors:
+        """Return the SessionCursors for *session_id*, lazily creating one if needed."""
+        if session_id not in self._cursors:
+            self._cursors[session_id] = SessionCursors()
+        return self._cursors[session_id]
+
+    def remove_cursors(self, session_id: str) -> None:
+        """Remove cursor state for *session_id*. Safe to call for nonexistent sessions."""
+        self._cursors.pop(session_id, None)
