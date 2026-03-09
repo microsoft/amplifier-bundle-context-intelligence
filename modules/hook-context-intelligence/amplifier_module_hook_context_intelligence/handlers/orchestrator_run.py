@@ -14,6 +14,12 @@ logger = logging.getLogger(__name__)
 
 PREVIEW_MAX_LEN = 200
 
+_STATUS_MAP: dict[str, str] = {
+    "success": "complete",
+    "cancelled": "cancelled",
+    "error": "error",
+}
+
 
 class OrchestratorRunHandler:
     handled_events: frozenset[str] = frozenset(
@@ -36,8 +42,11 @@ class OrchestratorRunHandler:
             return await self._handle_prompt_submit(data, log)
         if event == "execution:start":
             return await self._handle_execution_start(data, log)
+        if event == "execution:end":
+            return await self._handle_execution_end(data, log)
+        if event == "orchestrator:complete":
+            return await self._handle_orchestrator_complete(data, log)
 
-        # Stub: execution:end, orchestrator:complete
         return HookResult(action="continue")
 
     async def _handle_prompt_submit(self, data: dict[str, Any], log: EventLogContext) -> HookResult:
@@ -132,5 +141,74 @@ class OrchestratorRunHandler:
         cursors.current_run_id = run_id
 
         log.info("Created OrchestratorRun node %s", run_id)
+
+        return HookResult(action="continue")
+
+    async def _handle_execution_end(self, data: dict[str, Any], log: EventLogContext) -> HookResult:
+        session_id = data.get("session_id")
+        if not session_id:
+            log.error("received event without session_id")
+            return HookResult(action="continue")
+
+        cursors = self.services.get_cursors(session_id)
+        run_id = cursors.current_run_id
+        if not run_id:
+            log.warning("No current_run_id for session %s", session_id)
+            return HookResult(action="continue")
+
+        timestamp = data.get("timestamp", "")
+
+        # Enrich OrchestratorRun with execution_ended_at — do NOT change status
+        properties: dict[str, Any] = {"execution_ended_at": timestamp}
+
+        # Optionally store response_preview
+        response = data.get("response")
+        if response is not None:
+            properties["response_preview"] = response[:PREVIEW_MAX_LEN]
+
+        await self.services.graph.upsert_node(run_id, set(), properties)
+
+        log.info("Enriched OrchestratorRun %s with execution_ended_at", run_id)
+
+        return HookResult(action="continue")
+
+    async def _handle_orchestrator_complete(
+        self, data: dict[str, Any], log: EventLogContext
+    ) -> HookResult:
+        session_id = data.get("session_id")
+        if not session_id:
+            log.error("received event without session_id")
+            return HookResult(action="continue")
+
+        cursors = self.services.get_cursors(session_id)
+        run_id = cursors.current_run_id
+        if not run_id:
+            log.warning("No current_run_id for session %s", session_id)
+            return HookResult(action="continue")
+
+        timestamp = data.get("timestamp", "")
+
+        # Map event status to graph status via _STATUS_MAP
+        raw_status = data.get("status", "success")
+        mapped_status = _STATUS_MAP.get(raw_status, raw_status)
+
+        # Build properties to close the OrchestratorRun
+        properties: dict[str, Any] = {
+            "ended_at": timestamp,
+            "status": mapped_status,
+        }
+
+        # Optionally store turn_count
+        turn_count = data.get("turn_count")
+        if turn_count is not None:
+            properties["turn_count"] = turn_count
+
+        await self.services.graph.upsert_node(run_id, set(), properties)
+
+        # Clear cursor state
+        cursors.current_run_id = None
+        cursors.tool_call_map.clear()
+
+        log.info("Closed OrchestratorRun %s with status %s", run_id, mapped_status)
 
         return HookResult(action="continue")
