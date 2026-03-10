@@ -132,7 +132,16 @@ class RecipeHandler:
         timestamp: str,
         log: EventLogContext,
     ) -> None:
-        """Create Event node and HAS_EVENT edge from session."""
+        """Create Event node and HAS_EVENT edge from session.
+
+        Args:
+            node_id: Unique identifier for the event node.
+            derived: Label derived from event name (e.g. ``RecipeStart``).
+            properties: Key-value pairs to store on the node.
+            session_id: Owning session, used as the edge source.
+            timestamp: ISO-8601 timestamp written to the edge.
+            log: Contextual logger for this event.
+        """
         await self.services.graph.upsert_node(
             node_id,
             {"Event", derived},

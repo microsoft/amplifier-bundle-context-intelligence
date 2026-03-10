@@ -218,6 +218,7 @@ class TestRecipeHandlerErrorPaths:
         assert node is None
 
     async def test_unknown_event_returns_continue(self, services: HookStateService) -> None:
+        # Unknown event skips both lifecycle and loop branches, returns continue.
         handler = RecipeHandler(services)
         data = _lifecycle_data()
         result = await handler("recipe:unknown_xyz", data)
