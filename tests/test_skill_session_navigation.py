@@ -55,7 +55,11 @@ _FRONTMATTER: dict = _parse_frontmatter(_SKILL_CONTENT) if _SKILL_CONTENT else {
 
 
 def _extract_section(content: str, heading: str, level: str = "##") -> str:
-    """Extract content under a markdown heading, up to the next heading of same level or end."""
+    """Extract content under a markdown heading, up to the next heading of same level or end.
+
+    Example: _extract_section(text, "Foo", "##") returns everything after
+    '## Foo\\n' up to the next '## Bar' heading or end of file.
+    """
     escaped = re.escape(heading)
     escaped_level = re.escape(level)
     pattern = rf"^{escaped_level} {escaped}\s*\n(.*?)(?=^{escaped_level} |\Z)"
@@ -329,8 +333,8 @@ def test_navigation_listing_sessions() -> None:
 
 
 def test_navigation_finding_errors() -> None:
-    assert re.search(r"error", _NAVIGATION_SECTION, re.IGNORECASE), (
-        "Navigation patterns should include finding errors"
+    assert re.search(r"orchestrator:error|tool:error", _NAVIGATION_SECTION), (
+        "Navigation patterns should include error-finding examples (orchestrator:error or tool:error)"
     )
 
 
@@ -458,16 +462,32 @@ def test_event_schema_has_delegate_events() -> None:
 
 
 def test_event_schema_has_field_tables() -> None:
-    """Each event section should have Field/Type/Description table columns."""
-    assert "Field" in _EVENT_SCHEMA_CONTENT, (
-        "event-schema.md should have Field column in tables"
-    )
-    assert "Type" in _EVENT_SCHEMA_CONTENT, (
-        "event-schema.md should have Type column in tables"
-    )
-    assert "Description" in _EVENT_SCHEMA_CONTENT, (
-        "event-schema.md should have Description column in tables"
-    )
+    """Each event section should have its own Field/Type/Description table."""
+    canonical_events = [
+        "session:start",
+        "session:fork",
+        "session:end",
+        "orchestrator:start",
+        "orchestrator:complete",
+        "orchestrator:error",
+        "prompt:submit",
+        "tool:pre",
+        "tool:post",
+        "provider:request",
+        "provider:response",
+        "llm:response",
+        "recipe:start",
+        "recipe:step_start",
+        "recipe:step_complete",
+        "recipe:complete",
+        "delegate:start",
+        "delegate:complete",
+    ]
+    for event in canonical_events:
+        section = _extract_section(_EVENT_SCHEMA_CONTENT, f"`{event}`", level="###")
+        assert "| Field" in section and "| Type" in section, (
+            f"event-schema.md: '{event}' section should have a Field/Type table"
+        )
 
 
 # ——————————————————————————————————————————————————————

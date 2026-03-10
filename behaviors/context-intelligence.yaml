@@ -9,14 +9,20 @@ hooks:
   - module: hook-context-intelligence
     source: context-intelligence:modules/hook-context-intelligence
     config:
+      base_path: '~/.amplifier/projects'
       exclude_events: []
-      log_level: "WARNING"
-      graph_store:
-        # graph_forest_name is a cross-protocol concept — it partitions
-        # the store independently of which backend (file, duckdb, etc.) is active.
-        graph_forest_name: "default"
-        config:
-          graph_store_root: "~/.amplifier/graphs"
+      log_level: 'WARNING'
+      enable_graph: false
+      graph_stores:
+        - type: 'file'
+          graph_forest_name: 'default'
+          config:
+            graph_store_root: '~/.amplifier/graphs'
+        # To use DuckDB instead, replace the entry above:
+        # - type: 'duckdb'
+        #   graph_forest_name: 'default'
+        #   config:
+        #     connection: '~/.amplifier/graphs/context.db'
 
 tools:
   - module: tool-skills

@@ -94,3 +94,64 @@ class TestPyprojectStructure:
     def test_uv_package_true(self):
         data = self._load_pyproject()
         assert data["tool"]["uv"]["package"] is True
+
+
+class TestBehaviorYamlConfigShape:
+    """Validate the behavior YAML has the expected config shape."""
+
+    def _load_behavior_yaml(self) -> dict:
+        path = REPO_ROOT / "behaviors" / "context-intelligence.yaml"
+        return yaml.safe_load(path.read_text())
+
+    def test_yaml_parses_correctly(self):
+        """YAML must parse without errors via yaml.safe_load."""
+        data = self._load_behavior_yaml()
+        assert isinstance(data, dict)
+
+    def test_hook_module_name_preserved(self):
+        """hooks[0]['module'] must be 'hook-context-intelligence' for backward compat."""
+        data = self._load_behavior_yaml()
+        assert data["hooks"][0]["module"] == "hook-context-intelligence"
+
+    def test_config_has_required_keys(self):
+        """Config must have: base_path, exclude_events, log_level, enable_graph, graph_stores."""
+        data = self._load_behavior_yaml()
+        config = data["hooks"][0]["config"]
+        expected_keys = {"base_path", "exclude_events", "log_level", "enable_graph", "graph_stores"}
+        assert expected_keys == set(config.keys())
+
+    def test_graph_stores_is_list(self):
+        """graph_stores must be a list of store config dicts."""
+        data = self._load_behavior_yaml()
+        config = data["hooks"][0]["config"]
+        assert isinstance(config["graph_stores"], list)
+        assert len(config["graph_stores"]) >= 1
+        for store in config["graph_stores"]:
+            assert isinstance(store, dict)
+
+    def test_enable_graph_defaults_to_false(self):
+        """enable_graph must default to false (logging-only by default)."""
+        data = self._load_behavior_yaml()
+        config = data["hooks"][0]["config"]
+        assert config["enable_graph"] is False
+
+    def test_base_path_present(self):
+        """base_path must be present in config."""
+        data = self._load_behavior_yaml()
+        config = data["hooks"][0]["config"]
+        assert "base_path" in config
+        assert isinstance(config["base_path"], str)
+
+    def test_graph_stores_entry_has_type_and_config(self):
+        """Each graph_stores entry must have type and config keys."""
+        data = self._load_behavior_yaml()
+        stores = data["hooks"][0]["config"]["graph_stores"]
+        for store in stores:
+            assert "type" in store
+            assert "config" in store
+
+    def test_old_graph_store_singular_removed(self):
+        """The old 'graph_store' (singular) key must not be in config."""
+        data = self._load_behavior_yaml()
+        config = data["hooks"][0]["config"]
+        assert "graph_store" not in config
