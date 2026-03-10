@@ -1,0 +1,115 @@
+digraph recipe_handler {
+    rankdir=TB;
+    label="RecipeHandler — Event Node Creation\nClaims 6 recipe events, creates Event:{DerivedLabel} nodes\nAttached to Session via HAS_EVENT";
+    labelloc=t;
+    fontsize=14;
+    fontname="Helvetica";
+    node [fontname="Helvetica", fontsize=9];
+    edge [fontname="Helvetica", fontsize=7];
+
+    // ── Entry ──────────────────────────────────────────────
+    event_arrives [label="recipe:* event\narrives\n(any of 6 claimed events)"
+                   shape=oval];
+
+    // ── Extract ────────────────────────────────────────────
+    extract [label="Extract\nsession_id, timestamp\nfrom data"
+             shape=box style=filled fillcolor="#D4E6F1"];
+
+    // ── Validate session_id ────────────────────────────────
+    validate_sid [label="session_id\npresent?"
+                   shape=diamond style=filled fillcolor="#D4E6F1"];
+    sid_missing [label="WARN\nsession_id missing\nlog.warning()"
+                  shape=octagon style=filled fillcolor="#FF8A80"];
+    error_exit [label="return\nHookResult(continue)\nno graph mutations"
+                shape=oval style=filled fillcolor="#FADBD8"];
+
+    // ── Dispatch by payload shape ──────────────────────────
+    dispatch [label="Determine\npayload shape\nby event name"
+              shape=diamond style=filled fillcolor="#FCF3CF"];
+
+    // ── LIFECYCLE PATH (blue) ──────────────────────────────
+    subgraph cluster_lifecycle {
+        label="Lifecycle Events (Shape 1)";
+        fontsize=9;
+        style=dashed;
+        color="#2471A3";
+
+        lifecycle_events [label="recipe:start\nrecipe:step\nrecipe:complete\nrecipe:approval"
+                           shape=note style=filled fillcolor="#AED6F1"];
+
+        extract_lifecycle [label="Extract lifecycle fields\nrecipe_name = data['name']\ntotal_steps = data['total_steps']\nstatus = data['status']"
+                            shape=box style=filled fillcolor="#D4E6F1"];
+
+        extract_specific [label="Extract event-specific fields\nstart: description\nstep: step_id, step_index\ncomplete: success\napproval: stage_name,\n  approval_prompt = prompt[:500]"
+                           shape=box style=filled fillcolor="#D4E6F1"];
+    }
+
+    // ── LOOP PATH (green) ──────────────────────────────────
+    subgraph cluster_loop {
+        label="Loop Events (Shape 2)";
+        fontsize=9;
+        style=dashed;
+        color="#1E8449";
+
+        loop_events [label="recipe:loop_iteration\nrecipe:loop_complete"
+                      shape=note style=filled fillcolor="#ABEBC6"];
+
+        extract_loop [label="Extract loop fields\nstep_id = data['step_id']\nmax_iterations = data['max_iterations']"
+                       shape=box style=filled fillcolor="#D5F5E3"];
+
+        extract_loop_specific [label="Extract event-specific fields\nloop_iteration: iteration\nloop_complete: iterations_completed,\n  results_count"
+                                shape=box style=filled fillcolor="#D5F5E3"];
+    }
+
+    // ── Converge: node creation ────────────────────────────
+    gen_node_id [label="Generate node_id\nmake_node_id(\n  session_id,\n  event_name,\n  timestamp\n)"
+                  shape=box style=filled fillcolor="#FCF3CF"];
+
+    derive [label="Derive label\nderive_label(event_name)\ne.g. 'recipe:start'\n  → 'RecipeStart'"
+             shape=box style=filled fillcolor="#FCF3CF"];
+
+    create_node [label="upsert_node(\n  node_id,\n  labels={Event, DerivedLabel},\n  properties={\n    ...extracted fields,\n    occurred_at: timestamp,\n    session_id: session_id\n  }\n)"
+                  shape=box style=filled fillcolor="#E8DAEF"];
+
+    create_edge [label="upsert_edge(\n  session_id,\n  node_id,\n  'HAS_EVENT',\n  {occurred_at: timestamp}\n)"
+                  shape=box style=filled fillcolor="#E8DAEF"];
+
+    // ── Exit ───────────────────────────────────────────────
+    done [label="return\nHookResult(continue)" shape=oval];
+
+    // ── Exclusion note ─────────────────────────────────────
+    exclusion_note [label="NOT stored as properties:\n• steps[] array (too large)\n• context_snapshot (too large)\nStored: scalar fields only"
+                     shape=note style=filled fillcolor="#FFFDE7"];
+
+    // ── Flow ───────────────────────────────────────────────
+    event_arrives -> extract;
+    extract -> validate_sid;
+    validate_sid -> sid_missing [label="None"];
+    sid_missing -> error_exit;
+    validate_sid -> dispatch [label="present"];
+
+    // Dispatch to shape-specific paths
+    dispatch -> lifecycle_events [label="start | step |\ncomplete | approval"
+                                  color="#2471A3" fontcolor="#2471A3"];
+    dispatch -> loop_events [label="loop_iteration |\nloop_complete"
+                              color="#1E8449" fontcolor="#1E8449"];
+
+    // Lifecycle path
+    lifecycle_events -> extract_lifecycle [color="#2471A3"];
+    extract_lifecycle -> extract_specific [color="#2471A3"];
+    extract_specific -> gen_node_id [color="#2471A3"];
+
+    // Loop path
+    loop_events -> extract_loop [color="#1E8449"];
+    extract_loop -> extract_loop_specific [color="#1E8449"];
+    extract_loop_specific -> gen_node_id [color="#1E8449"];
+
+    // Converge
+    gen_node_id -> derive;
+    derive -> create_node;
+    create_node -> create_edge;
+    create_edge -> done;
+
+    // Annotation link
+    create_node -> exclusion_note [style=dotted color=gray arrowhead=none constraint=false];
+}
