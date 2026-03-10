@@ -164,7 +164,7 @@ class OrchestratorRunHandler:
         # Optionally store response_preview
         response = data.get("response")
         if response is not None:
-            properties["response_preview"] = response[:PREVIEW_MAX_LEN]
+            properties["response_preview"] = str(response)[:PREVIEW_MAX_LEN]
 
         await self.services.graph.upsert_node(run_id, set(), properties)
 

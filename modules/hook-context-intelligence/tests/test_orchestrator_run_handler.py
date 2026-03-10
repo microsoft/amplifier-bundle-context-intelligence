@@ -362,7 +362,7 @@ class TestExecutionEnd:
         assert node["properties"]["status"] == "in_progress"
 
     async def test_stores_response_preview(self, services: HookStateService) -> None:
-        await _seed_full_run(services)
+        run_id = await _seed_full_run(services)
         handler = OrchestratorRunHandler(services)
         long_response = "y" * 300
         await handler(
@@ -373,7 +373,6 @@ class TestExecutionEnd:
                 "response": long_response,
             },
         )
-        run_id = EXPECTED_RUN_NODE_ID
         node = await services.graph.get_node(run_id)
         assert node is not None
         assert node["properties"]["response_preview"] == "y" * PREVIEW_MAX_LEN
@@ -497,6 +496,18 @@ class TestOrchestratorComplete:
             {"timestamp": COMPLETE_TIMESTAMP, "status": "success"},
         )
         assert result.action == "continue"
+
+    async def test_unknown_status_passes_through(self, services: HookStateService) -> None:
+        run_id = await _seed_full_run(services)
+        handler = OrchestratorRunHandler(services)
+        await handler(
+            "orchestrator:complete",
+            {"session_id": "s1", "timestamp": COMPLETE_TIMESTAMP, "status": "timeout"},
+        )
+        node = await services.graph.get_node(run_id)
+        assert node is not None
+        # Unknown status not in _STATUS_MAP passes through unchanged
+        assert node["properties"]["status"] == "timeout"
 
     async def test_defaults_to_success_when_status_missing(
         self, services: HookStateService
