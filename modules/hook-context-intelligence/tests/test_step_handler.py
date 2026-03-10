@@ -427,6 +427,8 @@ class TestLlmResponse:
         assert node["properties"]["response_at"] == LLM_RESP_TS
         assert "input_tokens" not in node["properties"]
         assert "output_tokens" not in node["properties"]
+        assert "cached_tokens" not in node["properties"]
+        assert "reasoning_tokens" not in node["properties"]
 
     async def test_missing_usage_key_is_safe(self, services: HookStateService) -> None:
         """No usage key at all (not just empty dict) still writes response_at."""
