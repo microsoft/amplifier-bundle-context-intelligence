@@ -1,4 +1,4 @@
-"""RecipeStepHandler — owns :Step:RecipeStep lifecycle events."""
+"""RecipeHandler — recipe orchestration events."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ from amplifier_core.models import HookResult
 from ..services import HookStateService
 
 
-class RecipeStepHandler:
+class RecipeHandler:
     handled_events: frozenset[str] = frozenset(
         {
             "recipe:step_started",

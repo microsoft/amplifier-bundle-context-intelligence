@@ -10,7 +10,7 @@ from typing import Any, Callable
 from .handlers.default import DefaultHandler
 from .handlers.event import SystemEventHandler
 from .handlers.orchestrator_run import OrchestratorRunHandler
-from .handlers.recipe_step import RecipeStepHandler
+from .handlers.recipe import RecipeHandler
 from .handlers.session import SessionHandler
 from .handlers.step import StepHandler
 from .handlers.tool_execution import ToolExecutionHandler
@@ -62,7 +62,7 @@ class MountFlow:
             SessionHandler(svc),
             OrchestratorRunHandler(svc),
             StepHandler(svc),
-            RecipeStepHandler(svc),
+            RecipeHandler(svc),
             ToolExecutionHandler(svc),
             SystemEventHandler(svc),
         ]

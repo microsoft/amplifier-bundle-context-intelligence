@@ -11,7 +11,7 @@ from amplifier_module_hook_context_intelligence.handlers.event import SystemEven
 from amplifier_module_hook_context_intelligence.handlers.orchestrator_run import (
     OrchestratorRunHandler,
 )
-from amplifier_module_hook_context_intelligence.handlers.recipe_step import RecipeStepHandler
+from amplifier_module_hook_context_intelligence.handlers.recipe import RecipeHandler
 from amplifier_module_hook_context_intelligence.handlers.session import SessionHandler
 from amplifier_module_hook_context_intelligence.handlers.step import StepHandler
 from amplifier_module_hook_context_intelligence.handlers.tool_execution import ToolExecutionHandler
@@ -22,7 +22,7 @@ ENTITY_HANDLER_CLASSES = [
     SessionHandler,
     OrchestratorRunHandler,
     StepHandler,
-    RecipeStepHandler,
+    RecipeHandler,
     ToolExecutionHandler,
     SystemEventHandler,
 ]
@@ -84,8 +84,8 @@ class TestEventClaims:
         }
         assert handler.handled_events == expected
 
-    def test_recipe_step_handler_events(self, services: HookStateService):
-        handler = RecipeStepHandler(services)
+    def test_recipe_handler_events(self, services: HookStateService):
+        handler = RecipeHandler(services)
         assert handler.handled_events == {
             "recipe:step_started",
             "recipe:step_completed",
