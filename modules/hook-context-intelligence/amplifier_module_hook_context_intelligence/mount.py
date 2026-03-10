@@ -55,7 +55,8 @@ class MountFlow:
 
     def instantiate_handlers(self) -> None:
         """STATE_CREATED → HANDLERS_INSTANTIATED: Instantiate all 7 handlers."""
-        assert self.services is not None, "create_services() must be called first"
+        if self.services is None:
+            raise RuntimeError("create_services() must be called first")
         svc = self.services
         self.entity_handlers = [
             SessionHandler(svc),
@@ -96,7 +97,8 @@ class MountFlow:
             discovered.update(capability_fn())
 
         # Apply exclusion filter from config
-        assert self.services is not None, "create_services() must be called first"
+        if self.services is None:
+            raise RuntimeError("create_services() must be called first")
         config = self.services.config
         self.remaining_events = {e for e in discovered if not config.is_excluded(e)}
 
@@ -123,7 +125,8 @@ class MountFlow:
 
     def register_default_handler(self, coordinator: Any) -> None:
         """SPECIFIC_REGISTERED → READY: Register DefaultHandler for all unclaimed events."""
-        assert self.default_handler is not None, "instantiate_handlers() must be called first"
+        if self.default_handler is None:
+            raise RuntimeError("instantiate_handlers() must be called first")
         unclaimed = {
             event for event in self.remaining_events if self._find_handler_for_event(event) is None
         }

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from unittest.mock import AsyncMock, MagicMock
 
+import pytest
 
 from amplifier_module_hook_context_intelligence.mount import MountFlow, MountState
 from amplifier_module_hook_context_intelligence.protocol import EventHandler
@@ -251,6 +252,35 @@ class TestKeyInvariant:
             registered = sorted([c.args[0] for c in coordinator.hooks.register.call_args_list])
             results.append(registered)
         assert results[0] == results[1]
+
+
+class TestPreconditionErrors:
+    """Precondition violations must raise RuntimeError, not AssertionError.
+
+    RuntimeError survives python -O (which strips assert statements).
+    """
+
+    def test_instantiate_handlers_without_services_raises_runtime_error(self):
+        flow = MountFlow(config={})
+        # services is None — must raise RuntimeError, not AssertionError
+        with pytest.raises(RuntimeError, match="create_services.*must be called first"):
+            flow.instantiate_handlers()
+
+    async def test_discover_events_without_services_raises_runtime_error(self):
+        coordinator = _make_coordinator(contributed_events=[["session:start"]])
+        flow = MountFlow(config={})
+        # Skip create_services — services is None
+        flow.state = MountState.STATE_CREATED
+        flow.entity_handlers = []
+        with pytest.raises(RuntimeError, match="create_services.*must be called first"):
+            await flow.discover_events(coordinator)
+
+    def test_register_default_handler_without_handlers_raises_runtime_error(self):
+        flow = MountFlow(config={})
+        flow.remaining_events = set()
+        # default_handler is None — must raise RuntimeError
+        with pytest.raises(RuntimeError, match="instantiate_handlers.*must be called first"):
+            flow.register_default_handler(MagicMock())
 
 
 class TestFullMount:
