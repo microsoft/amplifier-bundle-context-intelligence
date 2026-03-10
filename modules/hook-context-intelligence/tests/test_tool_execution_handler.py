@@ -467,7 +467,7 @@ class TestDelegateEvents:
         assert result.action == "continue"
 
 
-# ── TestDelegateAgentSpawned (5 tests) ───────────────────────────────────
+# ── TestDelegateAgentSpawned (6 tests) ───────────────────────────────────
 
 
 class TestDelegateAgentSpawned:
@@ -531,6 +531,30 @@ class TestDelegateAgentSpawned:
         )
         edge = await services.graph.get_edge(te_id, "child-sess-99", "SPAWNED")
         assert edge is not None
+
+    async def test_empty_child_session_id_skips_spawned_edge(
+        self, services: HookStateService
+    ) -> None:
+        """Empty child_session_id adds Delegation label but skips SPAWNED edge creation."""
+        te_id = await _seed_one_tool(services, tool_call_id="call_d5", tool_name="delegate")
+        handler = ToolExecutionHandler(services)
+        await handler(
+            "delegate:agent_spawned",
+            {
+                "session_id": "s1",
+                "timestamp": DELEGATE_SPAWNED_TIMESTAMP,
+                "tool_call_id": "call_d5",
+                "child_session_id": "",
+                "child_agent": "foundation:explorer",
+            },
+        )
+        node = await services.graph.get_node(te_id)
+        assert node is not None
+        # Delegation label is still added
+        assert "Delegation" in node["labels"]
+        # But no SPAWNED edge is created (empty child_session_id)
+        edge = await services.graph.get_edge(te_id, "", "SPAWNED")
+        assert edge is None
 
     async def test_missing_tool_call_id_gracefully_skips(self, services: HookStateService) -> None:
         """G3 gap: missing tool_call_id means no TE lookup; handler skips without adding Delegation label."""
