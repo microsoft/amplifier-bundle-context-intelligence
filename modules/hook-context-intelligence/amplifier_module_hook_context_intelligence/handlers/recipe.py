@@ -106,6 +106,7 @@ class RecipeHandler:
         node_id = make_node_id(session_id, event, timestamp)
 
         # Common properties for all loop events
+        # context_snapshot intentionally excluded — too large for graph storage
         properties: dict[str, Any] = {
             "event_name": event,
             "occurred_at": timestamp,
