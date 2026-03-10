@@ -70,13 +70,19 @@ digraph HookMountFlow {
     ];
 
     GraphState [
-        label="{GraphState|get_node(id, labels)\lget_edge(source, target, type)\lupsert_node(id, labels, props)\lupsert_edge(source, target, type, props)\l|Per-Session Tracking:\lcurrent Session\lcurrent OrchestratorRun\lcurrent Step\lstep counter\lpending delegate correlation\l}",
+        label="{GraphState|get_node(node_id: str)\lget_edge(source, target, type)\lupsert_node(id, labels, props)\lupsert_edge(source, target, type, props)\l}",
+        fillcolor="#E8F5E9",
+        color="#2E7D32"
+    ];
+
+    SessionCursors [
+        label="{SessionCursors|current_run_id\lcurrent_step_id\lrun_counter\lstep_counter\lprompt_preview\lparallel_groups\ltool_call_map\l|Managed by:\lHookStateService._cursors:\l  dict[str, SessionCursors]\l}",
         fillcolor="#E8F5E9",
         color="#2E7D32"
     ];
 
     HookConfig [
-        label="{HookConfig|exclusion_filter: set[str]\lverbosity: str\lconnection_params: dict\l}",
+        label="{HookConfig|exclude_events: set[str]\lis_excluded(event) -> bool\l}",
         fillcolor="#E8F5E9",
         color="#2E7D32"
     ];
@@ -117,7 +123,7 @@ digraph HookMountFlow {
     node [shape=note, style=filled, penwidth=1];
 
     ProtocolNote [
-        label="EventHandler Protocol\n──────────────────────\nhandled_events: set[str]\n__call__(event, data) → HookResult\nservices: HookStateService\n──────────────────────\nRuntime-checkable.\nNo inheritance.",
+        label="EventHandler Protocol\n──────────────────────\nhandled_events: frozenset[str]\n__call__(event, data) → HookResult\nservices: HookStateService\n──────────────────────\nRuntime-checkable.\nNo inheritance.\nNote: DefaultHandler uses\nmutable set[str] instead.",
         fillcolor="#F3E5F5",
         color="#6A1B9A"
     ];
@@ -218,6 +224,13 @@ digraph HookMountFlow {
         label="  contains  "
     ];
 
+    HookStateService -> SessionCursors [
+        style=dashed,
+        color="#2E7D32",
+        arrowhead=vee,
+        label="  manages (per session)  "
+    ];
+
     INIT -> HookStateService [
         style=dotted,
         color="#66BB6A",
@@ -267,5 +280,5 @@ digraph HookMountFlow {
     {rank=same; EVENTS_DISCOVERED; ProtocolNote}
     {rank=same; SPECIFIC_REGISTERED}
     {rank=same; READY; InvariantNote}
-    {rank=same; GraphState; HookConfig}
+    {rank=same; GraphState; HookConfig; SessionCursors}
 }

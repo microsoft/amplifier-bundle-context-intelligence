@@ -31,7 +31,7 @@ digraph prompt_submit_handler {
                       shape=box style=filled fillcolor="#FCF3CF"];
 
     // Generate node ID
-    gen_node_id [label="Generate node_id\nmake_node_id(\n  session_id,\n  'prompt:submit',\n  timestamp\n)\ne.g. abc:prompt:submit:1709683200123"
+    gen_node_id [label="Generate node_id\nmake_node_id(\n  session_id,\n  'prompt:submit',\n  timestamp\n)\ne.g. abc__prompt_submit__1709683200123"
                  shape=box style=filled fillcolor="#D5F5E3"];
 
     // Create PromptStep
@@ -58,7 +58,7 @@ digraph prompt_submit_handler {
     get_cursors -> update_counters;
     update_counters -> gen_node_id;
     gen_node_id -> create_step;
-    create_step -> store_cursors;
+    create_step -> store_cursors [label="cursor ops AFTER\nnode creation"];
     store_cursors -> done;
 
     // Annotation link

@@ -107,22 +107,26 @@ digraph OrchestratorRunAssembly {
 
         pr_event [label="provider:request\narrives" shape=oval];
 
-        pr_create [label="CREATE node\n:Step:AssistantStep\n{\n  iteration: cursors.step_counter + 1,\n  occurred_at: timestamp,\n  session_id\n}"
+        pr_create [label="CREATE node\n:Step:AssistantStep\n{\n  iteration: data.iteration or step_counter,\n  provider,\n  request_at: timestamp,\n  occurred_at: timestamp,\n  session_id\n}"
                     shape=box style=filled fillcolor="#BBDEFB" color="#1565C0"];
 
-        pr_edge_step [label="CREATE edge\nHAS_STEP\n(OrchestratorRun → AssistantStep)\n{seq: step_counter + 1}"
+        pr_cursor [label="CURSORS (BEFORE node creation)\nstep_counter++\nparallel_groups.clear()"
+                    shape=box style=filled fillcolor="#C8E6C9" color="#2E7D32"];
+
+        pr_edge_step [label="CREATE edge\nHAS_STEP\n(OrchestratorRun → AssistantStep)\n{seq: step_counter}"
                        shape=box style=filled fillcolor="#E1BEE7" color="#6A1B9A"];
 
         pr_edge_next [label="CREATE edge\nNEXT\n(prev_step → new_step)"
                        shape=box style=filled fillcolor="#E1BEE7" color="#6A1B9A"];
 
-        pr_cursor [label="CURSORS\nstep_counter++\ncurrent_step_id = new_step_id"
+        pr_cursor_post [label="CURSORS (AFTER)\ncurrent_step_id = new_step_id"
                     shape=box style=filled fillcolor="#C8E6C9" color="#2E7D32"];
 
-        pr_event -> pr_create;
+        pr_event -> pr_cursor;
+        pr_cursor -> pr_create;
         pr_create -> pr_edge_step;
         pr_edge_step -> pr_edge_next;
-        pr_edge_next -> pr_cursor;
+        pr_edge_next -> pr_cursor_post;
     }
 
     // ─── Events 4-5: llm:request / llm:response (StepHandler) ───
@@ -136,12 +140,12 @@ digraph OrchestratorRunAssembly {
 
         llm_req_event [label="llm:request\narrives" shape=oval];
 
-        llm_req_enrich [label="ENRICH current Step\nmodel, provider"
+        llm_req_enrich [label="ENRICH current Step\nmodel"
                          shape=box style=filled fillcolor="#FFF9C4" color="#F57F17"];
 
         llm_resp_event [label="llm:response\narrives" shape=oval];
 
-        llm_resp_enrich [label="ENRICH current Step\ninput_tokens, output_tokens,\ncached_tokens, reasoning_tokens,\nrequest_at, response_at,\nlatency_ms, finish_reason,\nhas_thinking"
+        llm_resp_enrich [label="ENRICH current Step\nresponse_at, input_tokens,\noutput_tokens, cached_tokens,\nreasoning_tokens, finish_reason"
                           shape=box style=filled fillcolor="#FFF9C4" color="#F57F17"];
 
         llm_req_event -> llm_req_enrich;
@@ -192,7 +196,7 @@ digraph OrchestratorRunAssembly {
 
         tpost_event [label="tool:post\narrives" shape=oval];
 
-        tpost_enrich [label="ENRICH ToolExecution\nended_at, status='complete',\nresult_preview,\nduration_ms"
+        tpost_enrich [label="ENRICH ToolExecution\nended_at, status='complete',\nresult_preview"
                        shape=box style=filled fillcolor="#FFF9C4" color="#F57F17"];
 
         terr_event [label="tool:error\narrives" shape=oval];
@@ -223,7 +227,7 @@ digraph OrchestratorRunAssembly {
 
         dc_event [label="delegate:agent_completed\narrives" shape=oval];
 
-        dc_enrich [label="ENRICH ToolExecution\ncompletion confirmed,\nchild_ended_at"
+        dc_enrich [label="ENRICH ToolExecution\ncompletion confirmed,\ndelegate_completed_at"
                     shape=box style=filled fillcolor="#FFF9C4" color="#F57F17"];
 
         ds_event -> ds_enrich;
@@ -263,7 +267,7 @@ digraph OrchestratorRunAssembly {
 
         oc_event [label="orchestrator:complete\narrives" shape=oval];
 
-        oc_enrich [label="ENRICH OrchestratorRun\nended_at: timestamp,\nstatus: success|cancelled|error,\nturn_count,\nstep_count, tool_call_count,\ntotal_input_tokens,\ntotal_output_tokens"
+        oc_enrich [label="ENRICH OrchestratorRun\nended_at: timestamp,\nstatus: success|cancelled|error,\nturn_count"
                     shape=box style=filled fillcolor="#FFF9C4" color="#F57F17"];
 
         oc_cursor [label="CURSORS\nclear current_run_id"
@@ -281,7 +285,7 @@ digraph OrchestratorRunAssembly {
                             label="next event" style=bold color="#37474F" penwidth=1.5];
     es_cursor -> pr_event [ltail=cluster_execution_start lhead=cluster_provider_request
                             label="next event" style=bold color="#37474F" penwidth=1.5];
-    pr_cursor -> llm_req_event [ltail=cluster_provider_request lhead=cluster_llm
+    pr_cursor_post -> llm_req_event [ltail=cluster_provider_request lhead=cluster_llm
                                  label="next event" style=bold color="#37474F" penwidth=1.5];
     llm_resp_enrich -> tp_event [ltail=cluster_llm lhead=cluster_tool_pre
                                   label="if finish_reason\n= tool_use" style=bold color="#37474F" penwidth=1.5];
@@ -324,7 +328,7 @@ digraph OrchestratorRunAssembly {
         r_tool1 -> r_tool2 [label="PARALLEL_WITH" color="#00838F" style=bold];
         r_tool1 -> r_child [label="SPAWNED" color="#6A1B9A" penwidth=2 style=bold];
         r_assist1 -> r_assist2 [label="NEXT" color="#4527A0" style=dashed penwidth=1.5];
-        r_run -> r_event [label="HAS_EVENT" color="#00695C" style=dotted];
+        r_session -> r_event [label="HAS_EVENT" color="#00695C" style=dotted];
     }
 
     // ═══════════════════════════════════════════════════════════════

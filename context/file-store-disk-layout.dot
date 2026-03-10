@@ -111,13 +111,14 @@ digraph file_store_disk_layout {
 
         g_sess [label="Session\n(Root)" shape=ellipse style=filled fillcolor="#D6EAF8"];
         g_run [label="Orchestrator\nRun" shape=ellipse style=filled fillcolor="#D5F5E3"];
-        g_step [label="Step\n(PromptStep)" shape=ellipse style=filled fillcolor="#FCF3CF"];
+        g_step [label="Step\n(AssistantStep)" shape=ellipse style=filled fillcolor="#FCF3CF"];
         g_tool [label="Tool\nExecution" shape=ellipse style=filled fillcolor="#FADBD8"];
         g_child [label="Session\n(Subsession)" shape=ellipse style=filled fillcolor="#AED6F1"];
         g_evt [label="Event" shape=ellipse style=filled fillcolor="#E8DAEF"];
 
         g_sess -> g_run [label="HAS_RUN" color="#2E86C1" fontcolor="#2E86C1"];
         g_run -> g_step [label="HAS_STEP" color="#27AE60" fontcolor="#27AE60"];
+        g_step -> g_step [label="NEXT" color="#4527A0" fontcolor="#4527A0" style=dashed];
         g_step -> g_tool [label="TRIGGERED" color="#E67E22" fontcolor="#E67E22"];
         g_tool -> g_child [label="SPAWNED" color="#8E44AD" fontcolor="#8E44AD"];
         g_child -> g_sess [label="SUBSESSION_OF" color="#8E44AD" fontcolor="#8E44AD" style=dashed];

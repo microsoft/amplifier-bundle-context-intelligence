@@ -68,13 +68,13 @@ digraph OrchestratorRunStates {
                                  penwidth=1.5 style=dotted];
 
     // Terminal transitions (all via orchestrator:complete)
-    in_progress -> complete [label="orchestrator:complete\n{status: success}\n─────────────────\nSets ended_at, turn_count,\nstep_count, tool_call_count,\ntotal tokens."
+    in_progress -> complete [label="orchestrator:complete\n{status: success}\n─────────────────\nSets ended_at, status,\nturn_count."
                               color="#1B5E20" fontcolor="#1B5E20" penwidth=2];
 
-    in_progress -> cancelled [label="orchestrator:complete\n{status: cancelled}\n─────────────────\nSets ended_at.\nPartial aggregates."
+    in_progress -> cancelled [label="orchestrator:complete\n{status: cancelled}\n─────────────────\nSets ended_at, status,\nturn_count."
                                color="#F57F17" fontcolor="#F57F17" penwidth=2];
 
-    in_progress -> error [label="orchestrator:complete\n{status: error}\n─────────────────\nSets ended_at.\nPartial aggregates."
+    in_progress -> error [label="orchestrator:complete\n{status: error}\n─────────────────\nSets ended_at, status,\nturn_count."
                            color="#C62828" fontcolor="#C62828" penwidth=2];
 
     // ═══════════════════════════════════════════════════════════════

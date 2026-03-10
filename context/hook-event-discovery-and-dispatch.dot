@@ -23,7 +23,7 @@ digraph HookArchitecture {
     ranksep=0.6;
 
     labelloc="t";
-    label="Hook Event Discovery, Handler Registration & Runtime Dispatch\nOpen-ended event system — unknown events are stored, never dropped";
+    label="HISTORICAL REFERENCE — CXDB Architecture (not current implementation)\nSee hook-mount-registration-flow.dot for current architecture\n\nHook Event Discovery, Handler Registration & Runtime Dispatch\nOpen-ended event system — unknown events are stored, never dropped";
 
     // ═══════════════════════════════════════
     // PHASE 1: MOUNT-TIME — EVENT DISCOVERY

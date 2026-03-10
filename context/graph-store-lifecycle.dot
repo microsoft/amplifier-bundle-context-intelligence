@@ -15,18 +15,18 @@ digraph lifecycle {
            shape=box style=filled fillcolor="#D5F5E3"];
     receiving [label="Receiving Events\nbuffer accumulating\nupserts"
                shape=box style=filled fillcolor="#D5F5E3"];
-    flushing [label="Flushing\nbatch write to DuckDB\nbuffer draining"
+    flushing [label="Flushing\npersist to backing store\n(DuckDB: batch SQL transaction;\nFileGraphStore: atomic JSON\nfile writes)\nbuffer draining"
               shape=box style=filled fillcolor="#FCF3CF"];
     closing [label="Closing\nfinal flush\nDuckDB close()"
              shape=box style=filled fillcolor="#FADBD8"];
     closed [label="Closed" shape=oval];
 
     // Transitions
-    unmounted -> opening [label="mount()\nfactory reads\ngraph_forest_name\nfrom config"];
+    unmounted -> opening [label="HookStateService.__init__()\nvia create_graph_store()\nfactory reads\ngraph_forest_name\nfrom config"];
     opening -> ready [label="tables exist\nconnection open"];
     ready -> receiving [label="first event arrives"];
     receiving -> receiving [label="upsert_node/edge\n(accumulate)"];
-    receiving -> flushing [label="flush trigger\n(orchestrator:complete,\nthreshold, timer)"];
+    receiving -> flushing [label="close() only\n(no handler-triggered\nflush exists yet)"];
     flushing -> ready [label="flush complete\nbuffer drained"];
     flushing -> receiving [label="events arrived\nduring flush"];
     receiving -> closing [label="session:end\nor cleanup()"];
@@ -36,4 +36,10 @@ digraph lifecycle {
     // Error path
     flushing -> receiving [label="flush error\nlog warning\nretry next trigger"
                            style=dashed color=red];
+
+    // Notes
+    node [shape=note, style=filled, penwidth=1];
+    note_flush [label="Future: flush triggers at\norchestrator:complete and\nsession:end are planned\nbut not yet implemented."
+                fillcolor="#FFFDE7" color="#F57F17"];
+    flushing -> note_flush [style=dotted color=gray arrowhead=none constraint=false];
 }

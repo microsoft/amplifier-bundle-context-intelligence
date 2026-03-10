@@ -16,7 +16,7 @@ digraph read_path {
     // Stores
     buffer [label="In-Memory Buffer\n(latest state)"
             shape=cylinder style=filled fillcolor="#D4E6F1"];
-    duckdb [label="DuckDB\n(persisted state)"
+    duckdb [label="Backing Store\n(DuckDB or JSON files)"
             shape=cylinder style=filled fillcolor="#D5F5E3"];
 
     // Read paths
@@ -29,7 +29,7 @@ digraph read_path {
     // Notes
     note_handler [label="Handlers see latest state\n(buffer + DuckDB merged)"
                   shape=note style=filled fillcolor="#FDEBD0"];
-    note_analysis [label="Analysis sees flushed state\n(DuckDB only, post-flush)"
+    note_analysis [label="Analysis sees flushed state\n(DuckDB only, post-flush)\nNote: SQL/PGQ analysis is\nDuckDB-only via QueryableStore"
                    shape=note style=filled fillcolor="#FDEBD0"];
 
     note_forest [label="Forest filtering rules:\nNone \u2192 own forest\nexplicit \u2192 that forest\n'*' \u2192 cross-forest"

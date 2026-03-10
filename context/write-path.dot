@@ -15,11 +15,11 @@ digraph write_path {
     hook_result [label="HookResult\n(continue)" shape=oval];
 
     // Background
-    flush_trigger [label="Flush Trigger\n• orchestrator:complete\n• session:end\n• buffer threshold\n• periodic timer"
+    flush_trigger [label="Flush Trigger\n• close() (currently\n  the only trigger)\n\nPlanned (not yet implemented):\n• orchestrator:complete\n• session:end"
                    shape=diamond style=filled fillcolor="#FCF3CF"];
-    flush_task [label="Background\nasyncio.Task\nbatch write" shape=box
+    flush_task [label="Executor thread\nvia loop.run_in_executor()\nCaller awaits completion" shape=box
                 style=filled fillcolor="#FADBD8"];
-    duckdb [label="DuckDB\n(disk file)\ngraph.duckdb\ngraph_forest_name\nstamped on all rows"
+    duckdb [label="Backing Store\n(DuckDB: BEGIN/INSERT/COMMIT\nor FileGraphStore: atomic\ntemp+rename per file)\ngraph_forest_name\nstamped on all rows"
             shape=cylinder style=filled fillcolor="#D5F5E3"];
 
     // Hot path (fast)
