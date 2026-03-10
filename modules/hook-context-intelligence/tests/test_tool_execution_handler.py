@@ -523,3 +523,141 @@ class TestDelegateEvents:
             {"session_id": "s1", "timestamp": DELEGATE_SPAWNED_TIMESTAMP},
         )
         assert result.action == "continue"
+
+
+# ── TestDelegateAgentSpawned (5 tests) ───────────────────────────────────
+
+
+class TestDelegateAgentSpawned:
+    """Granular tests for delegate:agent_spawned handler behaviour."""
+
+    async def test_adds_delegation_label_to_tool_execution(
+        self, services: HookStateService
+    ) -> None:
+        """delegate:agent_spawned adds 'Delegation' label alongside 'ToolExecution'."""
+        te_id = await _seed_one_tool(services, tool_call_id="call_d1", tool_name="delegate")
+        handler = ToolExecutionHandler(services)
+        await handler(
+            "delegate:agent_spawned",
+            {
+                "session_id": "s1",
+                "timestamp": DELEGATE_SPAWNED_TIMESTAMP,
+                "tool_call_id": "call_d1",
+                "child_session_id": "child-abc",
+                "child_agent": "foundation:explorer",
+            },
+        )
+        node = await services.graph.get_node(te_id)
+        assert node is not None
+        assert "ToolExecution" in node["labels"]
+        assert "Delegation" in node["labels"]
+
+    async def test_stores_child_session_id_and_child_agent(
+        self, services: HookStateService
+    ) -> None:
+        """child_session_id and child_agent stored as TE node properties."""
+        te_id = await _seed_one_tool(services, tool_call_id="call_d2", tool_name="delegate")
+        handler = ToolExecutionHandler(services)
+        await handler(
+            "delegate:agent_spawned",
+            {
+                "session_id": "s1",
+                "timestamp": DELEGATE_SPAWNED_TIMESTAMP,
+                "tool_call_id": "call_d2",
+                "child_session_id": "child-xyz",
+                "child_agent": "foundation:bug-hunter",
+            },
+        )
+        node = await services.graph.get_node(te_id)
+        assert node is not None
+        assert node["properties"]["child_session_id"] == "child-xyz"
+        assert node["properties"]["child_agent"] == "foundation:bug-hunter"
+
+    async def test_creates_spawned_edge_to_child_session(self, services: HookStateService) -> None:
+        """SPAWNED edge created from TE node to child session node."""
+        te_id = await _seed_one_tool(services, tool_call_id="call_d3", tool_name="delegate")
+        handler = ToolExecutionHandler(services)
+        await handler(
+            "delegate:agent_spawned",
+            {
+                "session_id": "s1",
+                "timestamp": DELEGATE_SPAWNED_TIMESTAMP,
+                "tool_call_id": "call_d3",
+                "child_session_id": "child-sess-99",
+                "child_agent": "self",
+            },
+        )
+        edge = await services.graph.get_edge(te_id, "child-sess-99", "SPAWNED")
+        assert edge is not None
+
+    async def test_missing_tool_call_id_gracefully_skips(self, services: HookStateService) -> None:
+        """G3 gap: missing tool_call_id means no TE lookup; handler skips without adding Delegation label."""
+        te_id = await _seed_one_tool(services, tool_call_id="call_d4", tool_name="delegate")
+        handler = ToolExecutionHandler(services)
+        # Send agent_spawned with an unmapped tool_call_id (simulates G3 gap)
+        result = await handler(
+            "delegate:agent_spawned",
+            {
+                "session_id": "s1",
+                "timestamp": DELEGATE_SPAWNED_TIMESTAMP,
+                "tool_call_id": "unmapped_call_999",
+                "child_session_id": "child-orphan",
+                "child_agent": "foundation:explorer",
+            },
+        )
+        assert result.action == "continue"
+        # The original TE should NOT have the Delegation label
+        node = await services.graph.get_node(te_id)
+        assert node is not None
+        assert "Delegation" not in node["labels"]
+
+    async def test_missing_session_id_returns_continue(self, services: HookStateService) -> None:
+        """delegate:agent_spawned without session_id returns continue gracefully."""
+        handler = ToolExecutionHandler(services)
+        result = await handler(
+            "delegate:agent_spawned",
+            {
+                "timestamp": DELEGATE_SPAWNED_TIMESTAMP,
+                "tool_call_id": "call_001",
+                "child_session_id": "child-no-parent",
+                "child_agent": "foundation:explorer",
+            },
+        )
+        assert result.action == "continue"
+
+
+# ── TestDelegateAgentCompleted (2 tests) ─────────────────────────────────
+
+
+class TestDelegateAgentCompleted:
+    """Granular tests for delegate:agent_completed handler behaviour."""
+
+    async def test_enriches_with_delegate_completed_at(self, services: HookStateService) -> None:
+        """delegate:agent_completed sets delegate_completed_at timestamp on TE node."""
+        te_id = await _seed_one_tool(services, tool_call_id="call_c1", tool_name="delegate")
+        handler = ToolExecutionHandler(services)
+        await handler(
+            "delegate:agent_completed",
+            {
+                "session_id": "s1",
+                "timestamp": DELEGATE_COMPLETED_TIMESTAMP,
+                "tool_call_id": "call_c1",
+            },
+        )
+        node = await services.graph.get_node(te_id)
+        assert node is not None
+        assert node["properties"]["delegate_completed_at"] == DELEGATE_COMPLETED_TIMESTAMP
+
+    async def test_missing_tool_call_id_returns_continue(self, services: HookStateService) -> None:
+        """delegate:agent_completed with unmapped tool_call_id returns continue gracefully."""
+        await _seed_one_tool(services, tool_call_id="call_c2", tool_name="delegate")
+        handler = ToolExecutionHandler(services)
+        result = await handler(
+            "delegate:agent_completed",
+            {
+                "session_id": "s1",
+                "timestamp": DELEGATE_COMPLETED_TIMESTAMP,
+                "tool_call_id": "unmapped_call_888",
+            },
+        )
+        assert result.action == "continue"
