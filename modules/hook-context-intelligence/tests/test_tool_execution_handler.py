@@ -65,6 +65,33 @@ async def _seed_through_step(services: HookStateService, session_id: str = "s1")
     return services.get_cursors(session_id).current_step_id  # type: ignore[return-value]
 
 
+async def _seed_one_tool(
+    services: HookStateService,
+    session_id: str = "s1",
+    tool_call_id: str = "call_001",
+    tool_name: str = "read_file",
+    parallel_group_id: str = "pg1",
+    timestamp: str = TOOL1_TIMESTAMP,
+) -> str:
+    """Seed session through step and create one ToolExecution via tool:pre.
+
+    Returns the ToolExecution node ID.
+    """
+    await _seed_through_step(services, session_id)
+    handler = ToolExecutionHandler(services)
+    await handler(
+        "tool:pre",
+        {
+            "session_id": session_id,
+            "timestamp": timestamp,
+            "tool_call_id": tool_call_id,
+            "tool_name": tool_name,
+            "parallel_group_id": parallel_group_id,
+        },
+    )
+    return make_node_id(session_id, "tool:pre", timestamp)
+
+
 # ── TestToolPreHappyPath (6 tests) ──────────────────────────────────────
 
 
@@ -305,19 +332,11 @@ class TestToolPreErrorPaths:
 
 
 class TestToolPost:
-    async def test_sets_status_complete_and_ended_at(self, services: HookStateService) -> None:
-        await _seed_through_step(services)
+    async def test_enriches_with_status_ended_at_result_preview(
+        self, services: HookStateService
+    ) -> None:
+        te_id = await _seed_one_tool(services)
         handler = ToolExecutionHandler(services)
-        await handler(
-            "tool:pre",
-            {
-                "session_id": "s1",
-                "timestamp": TOOL1_TIMESTAMP,
-                "tool_call_id": "call_001",
-                "tool_name": "read_file",
-                "parallel_group_id": "pg1",
-            },
-        )
         await handler(
             "tool:post",
             {
@@ -327,25 +346,16 @@ class TestToolPost:
                 "result": "file content here",
             },
         )
-        node = await services.graph.get_node(EXPECTED_TE1_ID)
+        node = await services.graph.get_node(te_id)
         assert node is not None
         props = node["properties"]
         assert props["status"] == "complete"
         assert props["ended_at"] == TOOL_POST_TIMESTAMP
+        assert props["result_preview"] == "file content here"
 
-    async def test_result_preview_truncated(self, services: HookStateService) -> None:
-        await _seed_through_step(services)
+    async def test_result_preview_truncated_to_500(self, services: HookStateService) -> None:
+        te_id = await _seed_one_tool(services)
         handler = ToolExecutionHandler(services)
-        await handler(
-            "tool:pre",
-            {
-                "session_id": "s1",
-                "timestamp": TOOL1_TIMESTAMP,
-                "tool_call_id": "call_001",
-                "tool_name": "read_file",
-                "parallel_group_id": "pg1",
-            },
-        )
         long_result = "x" * 1000
         await handler(
             "tool:post",
@@ -356,54 +366,50 @@ class TestToolPost:
                 "result": long_result,
             },
         )
-        node = await services.graph.get_node(EXPECTED_TE1_ID)
+        node = await services.graph.get_node(te_id)
         assert node is not None
         assert len(node["properties"]["result_preview"]) == RESULT_PREVIEW_MAX_LEN
 
-    async def test_result_preview_short_not_truncated(self, services: HookStateService) -> None:
-        await _seed_through_step(services)
+    async def test_missing_tool_call_id_mapping_returns_continue(
+        self, services: HookStateService
+    ) -> None:
+        """tool:post with an unmapped tool_call_id should return continue gracefully."""
+        await _seed_one_tool(services)
         handler = ToolExecutionHandler(services)
-        await handler(
-            "tool:pre",
-            {
-                "session_id": "s1",
-                "timestamp": TOOL1_TIMESTAMP,
-                "tool_call_id": "call_001",
-                "tool_name": "read_file",
-                "parallel_group_id": "pg1",
-            },
-        )
-        await handler(
+        result = await handler(
             "tool:post",
             {
                 "session_id": "s1",
                 "timestamp": TOOL_POST_TIMESTAMP,
-                "tool_call_id": "call_001",
-                "result": "short",
+                "tool_call_id": "unknown_call_999",
+                "result": "some result",
             },
         )
-        node = await services.graph.get_node(EXPECTED_TE1_ID)
-        assert node is not None
-        assert node["properties"]["result_preview"] == "short"
+        assert result.action == "continue"
+
+    async def test_missing_session_id_returns_continue(self, services: HookStateService) -> None:
+        """tool:post without session_id should return continue gracefully."""
+        handler = ToolExecutionHandler(services)
+        result = await handler(
+            "tool:post",
+            {
+                "timestamp": TOOL_POST_TIMESTAMP,
+                "tool_call_id": "call_001",
+                "result": "some result",
+            },
+        )
+        assert result.action == "continue"
 
 
 # ── TestToolError ───────────────────────────────────────────────────────
 
 
 class TestToolError:
-    async def test_sets_status_error_and_error_message(self, services: HookStateService) -> None:
-        await _seed_through_step(services)
+    async def test_sets_status_error_with_message_and_ended_at(
+        self, services: HookStateService
+    ) -> None:
+        te_id = await _seed_one_tool(services)
         handler = ToolExecutionHandler(services)
-        await handler(
-            "tool:pre",
-            {
-                "session_id": "s1",
-                "timestamp": TOOL1_TIMESTAMP,
-                "tool_call_id": "call_001",
-                "tool_name": "read_file",
-                "parallel_group_id": "pg1",
-            },
-        )
         await handler(
             "tool:error",
             {
@@ -413,12 +419,29 @@ class TestToolError:
                 "error": "File not found",
             },
         )
-        node = await services.graph.get_node(EXPECTED_TE1_ID)
+        node = await services.graph.get_node(te_id)
         assert node is not None
         props = node["properties"]
         assert props["status"] == "error"
         assert props["ended_at"] == TOOL_ERROR_TIMESTAMP
         assert props["error"] == "File not found"
+
+    async def test_missing_tool_call_id_mapping_returns_continue(
+        self, services: HookStateService
+    ) -> None:
+        """tool:error with an unmapped tool_call_id should return continue gracefully."""
+        await _seed_one_tool(services)
+        handler = ToolExecutionHandler(services)
+        result = await handler(
+            "tool:error",
+            {
+                "session_id": "s1",
+                "timestamp": TOOL_ERROR_TIMESTAMP,
+                "tool_call_id": "unknown_call_999",
+                "error": "Something broke",
+            },
+        )
+        assert result.action == "continue"
 
 
 # ── TestDelegateEvents ──────────────────────────────────────────────────
