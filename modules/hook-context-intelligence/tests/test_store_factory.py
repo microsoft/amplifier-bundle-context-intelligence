@@ -182,3 +182,55 @@ class TestHookStateServiceIntegration:
 
         with pytest.raises(ValueError, match="Unknown graph_store type"):
             HookStateService(raw_config={"graph_store": {"type": "bogus"}})
+
+
+class TestCreateCompositeStore:
+    """Verify create_composite_store builds CompositeGraphStore from configs."""
+
+    def test_creates_composite_from_multiple_configs(self):
+        from amplifier_module_hook_context_intelligence.composite_store import CompositeGraphStore
+        from amplifier_module_hook_context_intelligence.store_factory import create_composite_store
+
+        configs = [
+            {"type": "duckdb", "config": {"connection": ":memory:"}},
+            {"type": "duckdb", "config": {"connection": ":memory:"}},
+        ]
+        composite = create_composite_store(configs)
+        assert isinstance(composite, CompositeGraphStore)
+        assert len(composite._stores) == 2
+
+    def test_creates_composite_from_single_config(self):
+        from amplifier_module_hook_context_intelligence.composite_store import CompositeGraphStore
+        from amplifier_module_hook_context_intelligence.store_factory import create_composite_store
+
+        configs = [{"type": "duckdb", "config": {"connection": ":memory:"}}]
+        composite = create_composite_store(configs)
+        assert isinstance(composite, CompositeGraphStore)
+        assert len(composite._stores) == 1
+
+    def test_empty_config_list_raises_value_error(self):
+        from amplifier_module_hook_context_intelligence.store_factory import create_composite_store
+
+        with pytest.raises(ValueError, match="at least one"):
+            create_composite_store([])
+
+    def test_graph_forest_name_forwarded_to_stores(self):
+        from amplifier_module_hook_context_intelligence.store_factory import create_composite_store
+
+        configs = [
+            {
+                "type": "duckdb",
+                "graph_forest_name": "my-forest",
+                "config": {"connection": ":memory:"},
+            },
+        ]
+        composite = create_composite_store(configs)
+        assert composite.graph_forest_name == "my-forest"
+
+    def test_conforms_to_graph_store_protocol(self):
+        from amplifier_module_hook_context_intelligence.graph_store import GraphStore
+        from amplifier_module_hook_context_intelligence.store_factory import create_composite_store
+
+        configs = [{"type": "duckdb", "config": {"connection": ":memory:"}}]
+        composite = create_composite_store(configs)
+        assert isinstance(composite, GraphStore)

@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from .composite_store import CompositeGraphStore
 from .graph_store import GraphStore
 
 _DEFAULT_FILE_ROOT = str(Path("~/.amplifier/graphs"))
@@ -54,3 +55,25 @@ def create_graph_store(store_config: dict[str, Any]) -> GraphStore:
         return Neo4jGraphStore(uri=uri, auth=auth, database=database, graph_forest_name=forest_name)
 
     raise ValueError(f"Unknown graph_store type: {store_type}")
+
+
+def create_composite_store(configs: list[dict[str, Any]]) -> CompositeGraphStore:
+    """Create a CompositeGraphStore from a list of backend configurations.
+
+    Parameters
+    ----------
+    configs:
+        List of store configuration dicts, each as accepted by
+        ``create_graph_store``.
+
+    Returns
+    -------
+    CompositeGraphStore wrapping one store per config entry.
+
+    Raises
+    ------
+    ValueError
+        If *configs* is empty (delegated to CompositeGraphStore constructor).
+    """
+    stores = [create_graph_store(cfg) for cfg in configs]
+    return CompositeGraphStore(stores=stores)
