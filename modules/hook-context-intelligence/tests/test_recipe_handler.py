@@ -11,7 +11,6 @@ from amplifier_module_hook_context_intelligence.utils import make_node_id
 
 SESSION_ID = "s1"
 TIMESTAMP = "2026-03-10T10:00:00+00:00"
-APPROVAL_PROMPT_MAX_LEN = 500
 
 
 async def _seed_session(services: HookStateService, session_id: str = SESSION_ID) -> None:

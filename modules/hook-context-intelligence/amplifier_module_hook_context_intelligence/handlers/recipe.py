@@ -92,19 +92,7 @@ class RecipeHandler:
             prompt = data.get("approval_prompt", "")
             properties["approval_prompt"] = prompt[:_APPROVAL_PROMPT_MAX_LEN]
 
-        # Create Event node with {Event, derived} labels
-        await self.services.graph.upsert_node(
-            node_id,
-            {"Event", derived},
-            properties,
-        )
-
-        # Create HAS_EVENT edge from session to event node
-        await self.services.graph.upsert_edge(
-            session_id, node_id, "HAS_EVENT", {"occurred_at": timestamp}
-        )
-
-        log.info("Created %s node %s", derived, node_id)
+        await self._persist_event(node_id, derived, properties, session_id, timestamp, log)
 
     async def _handle_loop_event(
         self,
@@ -133,16 +121,24 @@ class RecipeHandler:
             properties["iterations_completed"] = data.get("iterations_completed", 0)
             properties["results_count"] = data.get("results_count", 0)
 
-        # Create Event node with {Event, derived} labels
+        await self._persist_event(node_id, derived, properties, session_id, timestamp, log)
+
+    async def _persist_event(
+        self,
+        node_id: str,
+        derived: str,
+        properties: dict[str, Any],
+        session_id: str,
+        timestamp: str,
+        log: EventLogContext,
+    ) -> None:
+        """Create Event node and HAS_EVENT edge from session."""
         await self.services.graph.upsert_node(
             node_id,
             {"Event", derived},
             properties,
         )
-
-        # Create HAS_EVENT edge from session to event node
         await self.services.graph.upsert_edge(
             session_id, node_id, "HAS_EVENT", {"occurred_at": timestamp}
         )
-
         log.info("Created %s node %s", derived, node_id)
