@@ -45,4 +45,12 @@ def create_graph_store(store_config: dict[str, Any]) -> GraphStore:
         connection = impl_config.get("connection", ":memory:")
         return DuckDBGraphStore(connection=connection, graph_forest_name=forest_name)
 
+    if store_type == "neo4j":
+        from .neo4j_store import Neo4jGraphStore
+
+        uri = impl_config["uri"]
+        auth = impl_config["auth"]
+        database = impl_config.get("database", "neo4j")
+        return Neo4jGraphStore(uri=uri, auth=auth, database=database, graph_forest_name=forest_name)
+
     raise ValueError(f"Unknown graph_store type: {store_type}")

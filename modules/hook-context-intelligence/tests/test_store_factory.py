@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 
 from amplifier_module_hook_context_intelligence.store_factory import create_graph_store
+from tests.conftest import NEO4J_AUTH, NEO4J_DATABASE, NEO4J_URI
 
 
 class TestCreateGraphStore:
@@ -33,8 +34,8 @@ class TestCreateGraphStore:
         assert store._connection_str == db_path  # type: ignore[attr-defined]
 
     def test_raises_for_unknown_type(self):
-        with pytest.raises(ValueError, match="Unknown graph_store type: neo4j"):
-            create_graph_store({"type": "neo4j"})
+        with pytest.raises(ValueError, match="Unknown graph_store type: bogus"):
+            create_graph_store({"type": "bogus"})
 
     def test_duckdb_conforms_to_graph_store_protocol(self):
         from amplifier_module_hook_context_intelligence.graph_store import GraphStore
@@ -76,6 +77,83 @@ class TestCreateGraphStore:
             }
         )
         assert store.graph_forest_name == "my-project"
+
+    # -- Neo4j factory tests -------------------------------------------------
+
+    async def test_returns_neo4j_store_for_explicit_type(self):
+        """create_graph_store with type='neo4j' returns a Neo4jGraphStore instance."""
+        from amplifier_module_hook_context_intelligence.neo4j_store import Neo4jGraphStore
+
+        store = create_graph_store(
+            {
+                "type": "neo4j",
+                "config": {
+                    "uri": NEO4J_URI,
+                    "auth": NEO4J_AUTH,
+                    "database": NEO4J_DATABASE,
+                },
+            }
+        )
+        try:
+            assert isinstance(store, Neo4jGraphStore)
+        finally:
+            await store.close()
+
+    async def test_graph_forest_name_passed_to_neo4j(self):
+        """Explicit graph_forest_name is forwarded to the Neo4j backend."""
+        store = create_graph_store(
+            {
+                "type": "neo4j",
+                "graph_forest_name": "my-project",
+                "config": {
+                    "uri": NEO4J_URI,
+                    "auth": NEO4J_AUTH,
+                    "database": NEO4J_DATABASE,
+                },
+            }
+        )
+        try:
+            assert store.graph_forest_name == "my-project"
+        finally:
+            await store.close()
+
+    async def test_neo4j_store_is_queryable(self):
+        """Neo4j store returned by factory conforms to the QueryableStore protocol."""
+        from amplifier_module_hook_context_intelligence.graph_store import QueryableStore
+
+        store = create_graph_store(
+            {
+                "type": "neo4j",
+                "config": {
+                    "uri": NEO4J_URI,
+                    "auth": NEO4J_AUTH,
+                    "database": NEO4J_DATABASE,
+                },
+            }
+        )
+        try:
+            assert isinstance(store, QueryableStore)
+        finally:
+            await store.close()
+
+    async def test_neo4j_database_defaults_to_neo4j(self):
+        """Omitting 'database' from config still creates the store (defaults to 'neo4j')."""
+        from amplifier_module_hook_context_intelligence.neo4j_store import Neo4jGraphStore
+
+        store = create_graph_store(
+            {
+                "type": "neo4j",
+                "config": {
+                    "uri": NEO4J_URI,
+                    "auth": NEO4J_AUTH,
+                },
+            }
+        )
+        try:
+            assert isinstance(store, Neo4jGraphStore)
+            assert store._database == "neo4j"  # type: ignore[attr-defined]
+        finally:
+            await store.close()
 
 
 class TestHookStateServiceIntegration:

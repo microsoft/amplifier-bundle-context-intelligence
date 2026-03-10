@@ -9,6 +9,13 @@ import pytest
 from amplifier_module_hook_context_intelligence.services import HookStateService
 
 # ---------------------------------------------------------------------------
+# Neo4j test connection constants (shared across test modules)
+# ---------------------------------------------------------------------------
+NEO4J_URI = "neo4j://localhost:7690"
+NEO4J_AUTH = None
+NEO4J_DATABASE = "neo4j"
+
+# ---------------------------------------------------------------------------
 # Reference IDs – mirror the make_node_id format used by handlers
 # ---------------------------------------------------------------------------
 SESSION_ID = "55c8841a-test"
