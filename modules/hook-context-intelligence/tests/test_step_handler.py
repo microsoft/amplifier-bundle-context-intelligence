@@ -365,7 +365,7 @@ class TestLlmRequest:
 
 
 class TestLlmResponse:
-    """llm:response enrichment — 5 tests."""
+    """llm:response enrichment — 8 tests."""
 
     async def test_enriches_step_with_tokens(self, services: HookStateService) -> None:
         """Full enrichment: input_tokens, output_tokens, cached_tokens, finish_reason, response_at."""
@@ -427,6 +427,66 @@ class TestLlmResponse:
         assert node["properties"]["response_at"] == LLM_RESP_TS
         assert "input_tokens" not in node["properties"]
         assert "output_tokens" not in node["properties"]
+
+    async def test_missing_usage_key_is_safe(self, services: HookStateService) -> None:
+        """No usage key at all (not just empty dict) still writes response_at."""
+        step_id = await _seed_through_provider_request(services)
+        handler = StepHandler(services)
+        result = await handler(
+            "llm:response",
+            {
+                "session_id": "s1",
+                "timestamp": LLM_RESP_TS,
+            },
+        )
+        assert result.action == "continue"
+        node = await services.graph.get_node(step_id)
+        assert node is not None
+        assert node["properties"]["response_at"] == LLM_RESP_TS
+        assert "input_tokens" not in node["properties"]
+        assert "output_tokens" not in node["properties"]
+        assert "cached_tokens" not in node["properties"]
+        assert "reasoning_tokens" not in node["properties"]
+
+    async def test_enriches_step_with_reasoning_tokens(self, services: HookStateService) -> None:
+        """reasoning_tokens from usage is written to the step node."""
+        step_id = await _seed_through_provider_request(services)
+        handler = StepHandler(services)
+        await handler(
+            "llm:response",
+            {
+                "session_id": "s1",
+                "timestamp": LLM_RESP_TS,
+                "usage": {
+                    "input_tokens": 100,
+                    "output_tokens": 50,
+                    "reasoning_tokens": 25,
+                },
+            },
+        )
+        node = await services.graph.get_node(step_id)
+        assert node is not None
+        assert node["properties"]["reasoning_tokens"] == 25
+
+    async def test_cached_tokens_fallback(self, services: HookStateService) -> None:
+        """cached_tokens from usage.cached_tokens when cache_read_input_tokens is absent."""
+        step_id = await _seed_through_provider_request(services)
+        handler = StepHandler(services)
+        await handler(
+            "llm:response",
+            {
+                "session_id": "s1",
+                "timestamp": LLM_RESP_TS,
+                "usage": {
+                    "input_tokens": 80,
+                    "output_tokens": 40,
+                    "cached_tokens": 20,
+                },
+            },
+        )
+        node = await services.graph.get_node(step_id)
+        assert node is not None
+        assert node["properties"]["cached_tokens"] == 20
 
     async def test_graceful_when_no_current_step(self, services: HookStateService) -> None:
         """llm:response with a session but no provider:request yet should not crash."""
