@@ -78,9 +78,8 @@ class TestEventClaims:
         handler = StepHandler(services)
         expected = {
             "provider:request",
+            "llm:request",
             "llm:response",
-            "llm:request:*",
-            "llm:response:*",
             "content_block:*",
         }
         assert handler.handled_events == expected

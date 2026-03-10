@@ -175,7 +175,7 @@ class TestEventsDiscoveredToSpecificRegistered:
 
     async def test_wildcard_event_matching(self):
         coordinator = _make_coordinator(
-            contributed_events=[["llm:request:anthropic", "llm:request:openai"]]
+            contributed_events=[["content_block:start", "content_block:delta"]]
         )
         flow = MountFlow(config={})
         flow.create_services(None)
@@ -183,8 +183,8 @@ class TestEventsDiscoveredToSpecificRegistered:
         await flow.discover_events(coordinator)
         flow.register_specific_handlers(coordinator)
         registered_events = [c.args[0] for c in coordinator.hooks.register.call_args_list]
-        assert "llm:request:anthropic" in registered_events
-        assert "llm:request:openai" in registered_events
+        assert "content_block:start" in registered_events
+        assert "content_block:delta" in registered_events
 
 
 class TestSpecificRegisteredToReady:
