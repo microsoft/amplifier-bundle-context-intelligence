@@ -147,14 +147,22 @@ class StepHandler:
             output_tokens = usage.get("output_tokens")
             if output_tokens is not None:
                 properties["output_tokens"] = output_tokens
+            # cached_tokens: prefer cache_read_input_tokens, fall back to cached_tokens
+            cached = usage.get("cache_read_input_tokens")
+            if cached is None:
+                cached = usage.get("cached_tokens")
+            if cached is not None:
+                properties["cached_tokens"] = cached
+            reasoning_tokens = usage.get("reasoning_tokens")
+            if reasoning_tokens is not None:
+                properties["reasoning_tokens"] = reasoning_tokens
 
-        # Extract finish_reason / stop_reason
+        # Extract finish_reason (fall back to stop_reason)
         finish_reason = data.get("finish_reason")
+        if finish_reason is None:
+            finish_reason = data.get("stop_reason")
         if finish_reason is not None:
             properties["finish_reason"] = finish_reason
-        stop_reason = data.get("stop_reason")
-        if stop_reason is not None:
-            properties["stop_reason"] = stop_reason
 
         await self.services.graph.upsert_node(step_id, set(), properties)
         log.info("Enriched AssistantStep %s with response data", step_id)

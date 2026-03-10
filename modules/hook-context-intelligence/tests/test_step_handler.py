@@ -20,6 +20,10 @@ STEP2_TIMESTAMP = "2026-03-06T04:00:00Z"
 LLM_REQ_TIMESTAMP = "2026-03-06T03:30:00Z"
 LLM_RESP_TIMESTAMP = "2026-03-06T03:45:00Z"
 
+# Short aliases used by LLM enrichment tests
+LLM_REQ_TS = LLM_REQ_TIMESTAMP
+LLM_RESP_TS = LLM_RESP_TIMESTAMP
+
 EXPECTED_STEP1_ID = make_node_id("s1", "provider:request", STEP1_TIMESTAMP)
 EXPECTED_STEP2_ID = make_node_id("s1", "provider:request", STEP2_TIMESTAMP)
 
@@ -44,6 +48,22 @@ async def _seed_session_and_run(services: HookStateService, session_id: str = "s
         {"session_id": session_id, "timestamp": EXEC_TIMESTAMP},
     )
     return services.get_cursors(session_id).current_run_id  # type: ignore[return-value]
+
+
+async def _seed_through_provider_request(services: HookStateService, session_id: str = "s1") -> str:
+    """Seed session + run + provider:request so there is a current step to enrich."""
+    await _seed_session_and_run(services, session_id)
+    handler = StepHandler(services)
+    await handler(
+        "provider:request",
+        {
+            "session_id": session_id,
+            "timestamp": STEP1_TIMESTAMP,
+            "iteration": 1,
+            "provider": "anthropic",
+        },
+    )
+    return services.get_cursors(session_id).current_step_id  # type: ignore[return-value]
 
 
 # ── TestProviderRequestHappyPath (8 tests) ───────────────────────────────
@@ -287,67 +307,156 @@ class TestProviderRequestErrorPaths:
 # ── LLM enrichment tests ────────────────────────────────────────────────
 
 
-class TestLlmRequestEnrichment:
+class TestLlmRequest:
+    """llm:request enrichment — 4 tests."""
+
     async def test_enriches_step_with_model(self, services: HookStateService) -> None:
-        await _seed_session_and_run(services)
+        step_id = await _seed_through_provider_request(services)
         handler = StepHandler(services)
-        # Create step first
-        await handler(
-            "provider:request",
-            {
-                "session_id": "s1",
-                "timestamp": STEP1_TIMESTAMP,
-                "iteration": 1,
-                "provider": "anthropic",
-            },
-        )
-        # Now enrich with llm:request
         await handler(
             "llm:request",
             {
                 "session_id": "s1",
-                "timestamp": LLM_REQ_TIMESTAMP,
+                "timestamp": LLM_REQ_TS,
                 "model": "claude-sonnet-4-20250514",
             },
         )
-        node = await services.graph.get_node(EXPECTED_STEP1_ID)
+        node = await services.graph.get_node(step_id)
         assert node is not None
         assert node["properties"]["model"] == "claude-sonnet-4-20250514"
 
-
-class TestLlmResponseEnrichment:
-    async def test_enriches_step_with_response_data(self, services: HookStateService) -> None:
-        await _seed_session_and_run(services)
+    async def test_no_model_field_is_safe(self, services: HookStateService) -> None:
+        step_id = await _seed_through_provider_request(services)
         handler = StepHandler(services)
-        # Create step first
-        await handler(
-            "provider:request",
+        result = await handler(
+            "llm:request",
+            {"session_id": "s1", "timestamp": LLM_REQ_TS},
+        )
+        assert result.action == "continue"
+        node = await services.graph.get_node(step_id)
+        assert node is not None
+        assert "model" not in node["properties"]
+
+    async def test_graceful_when_no_current_step(self, services: HookStateService) -> None:
+        """llm:request with a session but no provider:request yet should not crash."""
+        session_handler = SessionHandler(services)
+        await session_handler(
+            "session:start",
+            {"session_id": "s1", "timestamp": SESSION_TIMESTAMP},
+        )
+        handler = StepHandler(services)
+        result = await handler(
+            "llm:request",
             {
                 "session_id": "s1",
-                "timestamp": STEP1_TIMESTAMP,
-                "iteration": 1,
-                "provider": "anthropic",
+                "timestamp": LLM_REQ_TS,
+                "model": "claude-sonnet-4-20250514",
             },
         )
-        # Now enrich with llm:response
+        assert result.action == "continue"
+
+    async def test_missing_session_id(self, services: HookStateService) -> None:
+        handler = StepHandler(services)
+        result = await handler(
+            "llm:request",
+            {"timestamp": LLM_REQ_TS, "model": "claude-sonnet-4-20250514"},
+        )
+        assert result.action == "continue"
+
+
+class TestLlmResponse:
+    """llm:response enrichment — 5 tests."""
+
+    async def test_enriches_step_with_tokens(self, services: HookStateService) -> None:
+        """Full enrichment: input_tokens, output_tokens, cached_tokens, finish_reason, response_at."""
+        step_id = await _seed_through_provider_request(services)
+        handler = StepHandler(services)
         await handler(
             "llm:response",
             {
                 "session_id": "s1",
-                "timestamp": LLM_RESP_TIMESTAMP,
-                "usage": {"input_tokens": 100, "output_tokens": 50},
+                "timestamp": LLM_RESP_TS,
+                "usage": {
+                    "input_tokens": 100,
+                    "output_tokens": 50,
+                    "cache_read_input_tokens": 30,
+                },
                 "finish_reason": "end_turn",
+            },
+        )
+        node = await services.graph.get_node(step_id)
+        assert node is not None
+        props = node["properties"]
+        assert props["response_at"] == LLM_RESP_TS
+        assert props["input_tokens"] == 100
+        assert props["output_tokens"] == 50
+        assert props["cached_tokens"] == 30
+        assert props["finish_reason"] == "end_turn"
+
+    async def test_handles_stop_reason_as_finish_reason(self, services: HookStateService) -> None:
+        """stop_reason should be mapped to finish_reason when finish_reason absent."""
+        step_id = await _seed_through_provider_request(services)
+        handler = StepHandler(services)
+        await handler(
+            "llm:response",
+            {
+                "session_id": "s1",
+                "timestamp": LLM_RESP_TS,
+                "usage": {"input_tokens": 10, "output_tokens": 5},
                 "stop_reason": "end_turn",
             },
         )
-        node = await services.graph.get_node(EXPECTED_STEP1_ID)
+        node = await services.graph.get_node(step_id)
         assert node is not None
-        props = node["properties"]
-        assert props["response_at"] == LLM_RESP_TIMESTAMP
-        assert props["input_tokens"] == 100
-        assert props["output_tokens"] == 50
-        assert props["finish_reason"] == "end_turn"
-        assert props["stop_reason"] == "end_turn"
+        assert node["properties"]["finish_reason"] == "end_turn"
+
+    async def test_empty_usage_is_safe(self, services: HookStateService) -> None:
+        step_id = await _seed_through_provider_request(services)
+        handler = StepHandler(services)
+        result = await handler(
+            "llm:response",
+            {
+                "session_id": "s1",
+                "timestamp": LLM_RESP_TS,
+                "usage": {},
+            },
+        )
+        assert result.action == "continue"
+        node = await services.graph.get_node(step_id)
+        assert node is not None
+        assert node["properties"]["response_at"] == LLM_RESP_TS
+        assert "input_tokens" not in node["properties"]
+        assert "output_tokens" not in node["properties"]
+
+    async def test_graceful_when_no_current_step(self, services: HookStateService) -> None:
+        """llm:response with a session but no provider:request yet should not crash."""
+        session_handler = SessionHandler(services)
+        await session_handler(
+            "session:start",
+            {"session_id": "s1", "timestamp": SESSION_TIMESTAMP},
+        )
+        handler = StepHandler(services)
+        result = await handler(
+            "llm:response",
+            {
+                "session_id": "s1",
+                "timestamp": LLM_RESP_TS,
+                "usage": {"input_tokens": 10, "output_tokens": 5},
+                "finish_reason": "end_turn",
+            },
+        )
+        assert result.action == "continue"
+
+    async def test_missing_session_id(self, services: HookStateService) -> None:
+        handler = StepHandler(services)
+        result = await handler(
+            "llm:response",
+            {
+                "timestamp": LLM_RESP_TS,
+                "usage": {"input_tokens": 10, "output_tokens": 5},
+            },
+        )
+        assert result.action == "continue"
 
 
 class TestContentBlockNoOp:
