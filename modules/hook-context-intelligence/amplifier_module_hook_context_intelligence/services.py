@@ -93,11 +93,19 @@ class GraphState:
 class HookStateService:
     """Top-level service container shared across all handlers."""
 
-    def __init__(self, raw_config: dict[str, Any], coordinator: Any = None) -> None:
+    def __init__(
+        self,
+        raw_config: dict[str, Any],
+        coordinator: Any = None,
+        graph_store: Any = None,
+    ) -> None:
         self.config = HookConfig(raw_config)
         self.coordinator = coordinator
-        store_config = raw_config.get("graph_store", {})
-        self.graph = create_graph_store(store_config)
+        if graph_store is not None:
+            self.graph = graph_store
+        else:
+            store_config = raw_config.get("graph_store", {})
+            self.graph = create_graph_store(store_config)
         self._cursors: dict[str, SessionCursors] = {}
 
     def get_cursors(self, session_id: str) -> SessionCursors:

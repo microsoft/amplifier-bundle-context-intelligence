@@ -309,3 +309,34 @@ class TestFullMount:
         _cleanup = await flow.run(coordinator)
         assert flow.state == MountState.READY
         assert coordinator.hooks.register.call_count == 0
+
+
+class TestMountFlowPrebuiltStore:
+    """MountFlow accepts an optional pre-built GraphStore and passes it through."""
+
+    def test_accepts_graph_store_parameter(self):
+        store = object()
+        flow = MountFlow(config={}, graph_store=store)
+        assert flow._graph_store is store
+
+    def test_prebuilt_store_used_by_services(self):
+        store = object()
+        flow = MountFlow(config={}, graph_store=store)
+        flow.create_services(None)
+        assert flow.services is not None
+        assert flow.services.graph is store
+
+    def test_no_store_uses_factory(self):
+        flow = MountFlow(config={})
+        flow.create_services(None)
+        assert flow.services is not None
+        assert flow.services.graph is not None
+
+    async def test_full_mount_with_prebuilt_store(self):
+        store = object()
+        coordinator = _make_coordinator(contributed_events=[["session:start"]])
+        flow = MountFlow(config={}, graph_store=store)
+        _cleanup = await flow.run(coordinator)
+        assert flow.state == MountState.READY
+        assert flow.services is not None
+        assert flow.services.graph is store

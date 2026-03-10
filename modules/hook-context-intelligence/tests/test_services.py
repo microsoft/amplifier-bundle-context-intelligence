@@ -175,3 +175,34 @@ class TestHookStateService:
             }
         )
         assert service.config.is_excluded("foo:bar") is True
+
+
+class TestHookStateServicePrebuiltStore:
+    def test_uses_prebuilt_store_when_provided(self):
+        from amplifier_module_hook_context_intelligence.services import (
+            GraphState,
+            HookStateService,
+        )
+
+        prebuilt = GraphState(graph_forest_name="prebuilt")
+        service = HookStateService(raw_config={}, graph_store=prebuilt)
+        assert service.graph is prebuilt
+
+    def test_falls_back_to_factory_when_not_provided(self):
+        from amplifier_module_hook_context_intelligence.graph_store import GraphStore
+        from amplifier_module_hook_context_intelligence.services import HookStateService
+
+        service = HookStateService(
+            raw_config={"graph_store": {"type": "duckdb", "config": {"connection": ":memory:"}}}
+        )
+        assert isinstance(service.graph, GraphStore)
+
+    def test_prebuilt_composite_store_accepted(self):
+        from amplifier_module_hook_context_intelligence.composite_store import CompositeGraphStore
+        from amplifier_module_hook_context_intelligence.duckdb_store import DuckDBGraphStore
+        from amplifier_module_hook_context_intelligence.services import HookStateService
+
+        backing = DuckDBGraphStore(connection=":memory:", graph_forest_name="composite-test")
+        composite = CompositeGraphStore(stores=[backing])
+        service = HookStateService(raw_config={}, graph_store=composite)
+        assert service.graph is composite
