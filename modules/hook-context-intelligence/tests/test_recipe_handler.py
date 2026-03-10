@@ -197,6 +197,76 @@ class TestRecipeComplete:
         assert edge is not None
 
 
+# ── recipe:approval ──────────────────────────────────────────
+
+
+class TestRecipeApproval:
+    async def test_creates_event_node_with_correct_labels(self, services: HookStateService) -> None:
+        await _seed_session(services)
+        handler = RecipeHandler(services)
+        data = _lifecycle_data(
+            status="waiting_approval",
+            stage_name="final-review",
+            approval_prompt="Please approve the changes.",
+        )
+        await handler("recipe:approval", data)
+        node_id = make_node_id(SESSION_ID, "recipe:approval", TIMESTAMP)
+        node = await services.graph.get_node(node_id)
+        assert node is not None
+        assert node["labels"] == {"Event", "RecipeApproval"}
+        props = node["properties"]
+        assert props["status"] == "waiting_approval"
+        assert props["stage_name"] == "final-review"
+        assert props["approval_prompt"] == "Please approve the changes."
+
+    async def test_stores_approval_properties(self, services: HookStateService) -> None:
+        await _seed_session(services)
+        handler = RecipeHandler(services)
+        data = _lifecycle_data(
+            status="waiting_approval",
+            stage_name="final-review",
+            approval_prompt="Approve these changes.",
+            current_step=5,
+            total_steps=7,
+            recipe_name="code-review",
+        )
+        await handler("recipe:approval", data)
+        node_id = make_node_id(SESSION_ID, "recipe:approval", TIMESTAMP)
+        node = await services.graph.get_node(node_id)
+        assert node is not None
+        props = node["properties"]
+        assert props["stage_name"] == "final-review"
+        assert props["approval_prompt"] == "Approve these changes."
+        assert props["current_step"] == 5
+        assert props["total_steps"] == 7
+        assert props["status"] == "waiting_approval"
+        assert props["recipe_name"] == "code-review"
+
+    async def test_truncates_long_prompt(self, services: HookStateService) -> None:
+        await _seed_session(services)
+        handler = RecipeHandler(services)
+        long_prompt = "x" * 1000
+        data = _lifecycle_data(
+            status="waiting_approval",
+            stage_name="final-review",
+            approval_prompt=long_prompt,
+        )
+        await handler("recipe:approval", data)
+        node_id = make_node_id(SESSION_ID, "recipe:approval", TIMESTAMP)
+        node = await services.graph.get_node(node_id)
+        assert node is not None
+        assert len(node["properties"]["approval_prompt"]) == 500
+
+    async def test_creates_has_event_edge(self, services: HookStateService) -> None:
+        await _seed_session(services)
+        handler = RecipeHandler(services)
+        data = _lifecycle_data(status="waiting_approval", stage_name="final-review")
+        await handler("recipe:approval", data)
+        node_id = make_node_id(SESSION_ID, "recipe:approval", TIMESTAMP)
+        edge = await services.graph.get_edge(SESSION_ID, node_id, "HAS_EVENT")
+        assert edge is not None
+
+
 # ── Error paths ──────────────────────────────────────────────────────
 
 
