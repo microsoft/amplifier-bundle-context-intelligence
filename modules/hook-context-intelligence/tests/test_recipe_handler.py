@@ -267,6 +267,133 @@ class TestRecipeApproval:
         assert edge is not None
 
 
+# ══════════════════════════════════════════════════════════════════════════════
+# recipe:loop_iteration tests
+# ══════════════════════════════════════════════════════════════════════════════
+
+
+def _loop_iteration_data(
+    *,
+    step_id: str = "spec-review-loop",
+    iteration: int = 1,
+    max_iterations: int = 3,
+    timestamp: str = TIMESTAMP,
+) -> dict[str, Any]:
+    """Build a recipe:loop_iteration event payload."""
+    return {
+        "session_id": SESSION_ID,
+        "step_id": step_id,
+        "iteration": iteration,
+        "max_iterations": max_iterations,
+        "context_snapshot": {"plan_path": "/tmp/plan.md", "quality_approved": True},
+        "parent_id": None,
+        "timestamp": timestamp,
+    }
+
+
+def _loop_complete_data(
+    *,
+    step_id: str = "spec-review-loop",
+    iterations_completed: int = 2,
+    max_iterations: int = 3,
+    results_count: int = 1,
+    timestamp: str = TIMESTAMP,
+) -> dict[str, Any]:
+    """Build a recipe:loop_complete event payload."""
+    return {
+        "session_id": SESSION_ID,
+        "step_id": step_id,
+        "iterations_completed": iterations_completed,
+        "max_iterations": max_iterations,
+        "results_count": results_count,
+        "parent_id": None,
+        "timestamp": timestamp,
+    }
+
+
+class TestRecipeLoopIteration:
+    async def test_creates_event_node_with_correct_labels(self, services: HookStateService) -> None:
+        await _seed_session(services)
+        handler = RecipeHandler(services)
+        await handler("recipe:loop_iteration", _loop_iteration_data())
+        node_id = make_node_id(SESSION_ID, "recipe:loop_iteration", TIMESTAMP)
+        node = await services.graph.get_node(node_id)
+        assert node is not None
+        assert node["labels"] == {"Event", "RecipeLoopIteration"}
+
+    async def test_stores_iteration_properties(self, services: HookStateService) -> None:
+        await _seed_session(services)
+        handler = RecipeHandler(services)
+        await handler("recipe:loop_iteration", _loop_iteration_data(iteration=2, max_iterations=5))
+        node_id = make_node_id(SESSION_ID, "recipe:loop_iteration", TIMESTAMP)
+        node = await services.graph.get_node(node_id)
+        assert node is not None
+        props = node["properties"]
+        assert props["step_id"] == "spec-review-loop"
+        assert props["iteration"] == 2
+        assert props["max_iterations"] == 5
+        assert props["event_name"] == "recipe:loop_iteration"
+
+    async def test_does_not_store_context_snapshot(self, services: HookStateService) -> None:
+        await _seed_session(services)
+        handler = RecipeHandler(services)
+        await handler("recipe:loop_iteration", _loop_iteration_data())
+        node_id = make_node_id(SESSION_ID, "recipe:loop_iteration", TIMESTAMP)
+        node = await services.graph.get_node(node_id)
+        assert node is not None
+        assert "context_snapshot" not in node["properties"]
+
+    async def test_creates_has_event_edge(self, services: HookStateService) -> None:
+        await _seed_session(services)
+        handler = RecipeHandler(services)
+        await handler("recipe:loop_iteration", _loop_iteration_data())
+        node_id = make_node_id(SESSION_ID, "recipe:loop_iteration", TIMESTAMP)
+        edge = await services.graph.get_edge(SESSION_ID, node_id, "HAS_EVENT")
+        assert edge is not None
+        assert edge["properties"]["occurred_at"] == TIMESTAMP
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# recipe:loop_complete tests
+# ══════════════════════════════════════════════════════════════════════════════
+
+
+class TestRecipeLoopComplete:
+    async def test_creates_event_node_with_correct_labels(self, services: HookStateService) -> None:
+        await _seed_session(services)
+        handler = RecipeHandler(services)
+        await handler("recipe:loop_complete", _loop_complete_data())
+        node_id = make_node_id(SESSION_ID, "recipe:loop_complete", TIMESTAMP)
+        node = await services.graph.get_node(node_id)
+        assert node is not None
+        assert node["labels"] == {"Event", "RecipeLoopComplete"}
+
+    async def test_stores_completion_properties(self, services: HookStateService) -> None:
+        await _seed_session(services)
+        handler = RecipeHandler(services)
+        await handler(
+            "recipe:loop_complete",
+            _loop_complete_data(iterations_completed=3, max_iterations=5, results_count=2),
+        )
+        node_id = make_node_id(SESSION_ID, "recipe:loop_complete", TIMESTAMP)
+        node = await services.graph.get_node(node_id)
+        assert node is not None
+        props = node["properties"]
+        assert props["step_id"] == "spec-review-loop"
+        assert props["iterations_completed"] == 3
+        assert props["max_iterations"] == 5
+        assert props["results_count"] == 2
+        assert props["event_name"] == "recipe:loop_complete"
+
+    async def test_creates_has_event_edge(self, services: HookStateService) -> None:
+        await _seed_session(services)
+        handler = RecipeHandler(services)
+        await handler("recipe:loop_complete", _loop_complete_data())
+        node_id = make_node_id(SESSION_ID, "recipe:loop_complete", TIMESTAMP)
+        edge = await services.graph.get_edge(SESSION_ID, node_id, "HAS_EVENT")
+        assert edge is not None
+
+
 # ── Error paths ──────────────────────────────────────────────────────
 
 
