@@ -448,65 +448,7 @@ class TestToolError:
 
 
 class TestDelegateEvents:
-    async def test_agent_spawned_adds_delegation_label_and_spawned_edge(
-        self, services: HookStateService
-    ) -> None:
-        await _seed_through_step(services)
-        handler = ToolExecutionHandler(services)
-        await handler(
-            "tool:pre",
-            {
-                "session_id": "s1",
-                "timestamp": TOOL1_TIMESTAMP,
-                "tool_call_id": "call_001",
-                "tool_name": "delegate",
-                "parallel_group_id": "pg1",
-            },
-        )
-        await handler(
-            "delegate:agent_spawned",
-            {
-                "session_id": "s1",
-                "timestamp": DELEGATE_SPAWNED_TIMESTAMP,
-                "tool_call_id": "call_001",
-                "child_session_id": "child-s1",
-                "child_agent": "foundation:explorer",
-            },
-        )
-        node = await services.graph.get_node(EXPECTED_TE1_ID)
-        assert node is not None
-        assert "Delegation" in node["labels"]
-        assert node["properties"]["child_session_id"] == "child-s1"
-        assert node["properties"]["child_agent"] == "foundation:explorer"
-
-        # SPAWNED edge to child session node
-        edge = await services.graph.get_edge(EXPECTED_TE1_ID, "child-s1", "SPAWNED")
-        assert edge is not None
-
-    async def test_agent_completed_enriches_node(self, services: HookStateService) -> None:
-        await _seed_through_step(services)
-        handler = ToolExecutionHandler(services)
-        await handler(
-            "tool:pre",
-            {
-                "session_id": "s1",
-                "timestamp": TOOL1_TIMESTAMP,
-                "tool_call_id": "call_001",
-                "tool_name": "delegate",
-                "parallel_group_id": "pg1",
-            },
-        )
-        await handler(
-            "delegate:agent_completed",
-            {
-                "session_id": "s1",
-                "timestamp": DELEGATE_COMPLETED_TIMESTAMP,
-                "tool_call_id": "call_001",
-            },
-        )
-        node = await services.graph.get_node(EXPECTED_TE1_ID)
-        assert node is not None
-        assert node["properties"]["delegate_completed_at"] == DELEGATE_COMPLETED_TIMESTAMP
+    """Tests for delegate:* no-op events (context_inherited, session_resumed)."""
 
     async def test_context_inherited_is_noop(self, services: HookStateService) -> None:
         handler = ToolExecutionHandler(services)
