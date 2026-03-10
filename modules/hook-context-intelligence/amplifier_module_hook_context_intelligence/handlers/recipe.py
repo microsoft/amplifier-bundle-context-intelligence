@@ -12,9 +12,12 @@ from ..services import HookStateService
 class RecipeHandler:
     handled_events: frozenset[str] = frozenset(
         {
-            "recipe:step_started",
-            "recipe:step_completed",
-            "recipe:approval:*",
+            "recipe:start",
+            "recipe:step",
+            "recipe:complete",
+            "recipe:approval",
+            "recipe:loop_iteration",
+            "recipe:loop_complete",
         }
     )
 

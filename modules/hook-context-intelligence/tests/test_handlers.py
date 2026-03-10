@@ -87,9 +87,12 @@ class TestEventClaims:
     def test_recipe_handler_events(self, services: HookStateService):
         handler = RecipeHandler(services)
         assert handler.handled_events == {
-            "recipe:step_started",
-            "recipe:step_completed",
-            "recipe:approval:*",
+            "recipe:start",
+            "recipe:step",
+            "recipe:complete",
+            "recipe:approval",
+            "recipe:loop_iteration",
+            "recipe:loop_complete",
         }
 
     def test_tool_execution_handler_events(self, services: HookStateService):
