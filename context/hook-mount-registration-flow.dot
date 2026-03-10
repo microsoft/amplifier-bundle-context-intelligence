@@ -1,5 +1,9 @@
-// Hook Mount and Registration Flow — State Machine Diagram
+// GraphDataHook Mount Flow — State Machine Diagram (Conditional Graph Path)
 // Context-Intelligence Bundle
+//
+// This diagram covers the CONDITIONAL graph path only.
+// The top-level dispatcher (see hook-mount-dispatcher.dot) decides whether
+// this flow runs at all, based on enable_graph and graph_stores configuration.
 //
 // Render: dot -Tsvg hook-mount-registration-flow.dot -o hook-mount-registration-flow.svg
 //         dot -Tpng hook-mount-registration-flow.dot -o hook-mount-registration-flow.png
@@ -22,7 +26,7 @@ digraph HookMountFlow {
     node [shape=box, style="rounded,filled", penwidth=2];
 
     INIT [
-        label="INIT\n─────────────────\nHook instantiated.\nNo state exists yet.",
+        label="INIT\n─────────────────\nGraphDataHook instantiated.\nCompositeGraphStore provided.\nNo state exists yet.",
         fillcolor="#E3F2FD",
         color="#1565C0"
     ];

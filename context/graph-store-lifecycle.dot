@@ -42,4 +42,8 @@ digraph lifecycle {
     note_flush [label="Future: flush triggers at\norchestrator:complete and\nsession:end are planned\nbut not yet implemented."
                 fillcolor="#FFFDE7" color="#F57F17"];
     flushing -> note_flush [style=dotted color=gray arrowhead=none constraint=false];
+
+    note_composite [label="CompositeGraphStore wraps\nN independent backends.\nEach runs this lifecycle\nindependently. Failure in\none store does not affect\nothers."
+                    fillcolor="#E8EAF6" color="#283593"];
+    opening -> note_composite [style=dotted color=gray arrowhead=none constraint=false];
 }

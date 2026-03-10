@@ -1,0 +1,160 @@
+// Hook Composition Overview — Bird's Eye View
+// Context-Intelligence Bundle
+//
+// Left-to-right overview showing the Kernel → mount() Dispatcher → two paths:
+//   ALWAYS ON:   LoggingHandler (priority=100, all events, flat JSONL)
+//   CONDITIONAL:  GraphDataHook (MountFlow, 7 handlers, priority=90)
+//
+// Render: dot -Tsvg hook-composition-overview.dot -o hook-composition-overview.svg
+
+digraph HookCompositionOverview {
+    rankdir=LR;
+    fontname="Helvetica";
+    fontsize=12;
+    compound=true;
+    nodesep=0.6;
+    ranksep=1.2;
+    pad=0.5;
+
+    // ─── Global defaults ─────────────────────────────────────────────
+    node [fontname="Helvetica", fontsize=11];
+    edge [fontname="Helvetica", fontsize=10];
+
+    // ─── Kernel ──────────────────────────────────────────────────────
+    node [shape=box, style="rounded,filled", penwidth=2];
+
+    Kernel [
+        label="Kernel\n─────────\nAmplifier Core",
+        fillcolor="#E3F2FD",
+        color="#1565C0"
+    ];
+
+    // ─── Dispatcher ──────────────────────────────────────────────────
+    Dispatcher [
+        label="mount()\nDispatcher\n─────────────\nTop-level entry\npoint for hooks",
+        fillcolor="#BBDEFB",
+        color="#1565C0"
+    ];
+
+    // ─── ALWAYS ON cluster: LoggingHandler ───────────────────────────
+    subgraph cluster_always_on {
+        label="ALWAYS ON";
+        labelloc=t;
+        style="rounded,filled";
+        fillcolor="#E8F5E9";
+        color="#2E7D32";
+        fontname="Helvetica";
+        fontsize=12;
+        penwidth=2;
+
+        LoggingHandler [
+            label="LoggingHandler\n───────────────────\npriority = 100\nall events\nflat JSONL to disk",
+            shape=box,
+            style="rounded,filled",
+            fillcolor="#C8E6C9",
+            color="#2E7D32",
+            penwidth=2
+        ];
+    }
+
+    // ─── Logging output ──────────────────────────────────────────────
+    node [shape=folder, style=filled, penwidth=1.5];
+
+    events_jsonl [
+        label="events.jsonl",
+        fillcolor="#ECEFF1",
+        color="#546E7A"
+    ];
+
+    metadata_json [
+        label="metadata.json",
+        fillcolor="#ECEFF1",
+        color="#546E7A"
+    ];
+
+    // ─── CONDITIONAL cluster: GraphDataHook ──────────────────────────
+    subgraph cluster_conditional {
+        label="CONDITIONAL\n(enable_graph AND graph_stores configured)";
+        labelloc=t;
+        style="rounded,filled";
+        fillcolor="#E8EAF6";
+        color="#283593";
+        fontname="Helvetica";
+        fontsize=12;
+        penwidth=2;
+
+        GraphDataHook [
+            label="GraphDataHook\n───────────────────\npriority = 90\nMountFlow registration\n7 entity handlers",
+            shape=box,
+            style="rounded,filled",
+            fillcolor="#C5CAE9",
+            color="#283593",
+            penwidth=2
+        ];
+    }
+
+    // ─── CompositeGraphStore ─────────────────────────────────────────
+    node [shape=box, style="rounded,filled", penwidth=2];
+
+    CompositeGraphStore [
+        label="CompositeGraphStore\n───────────────────\nFan-out writes\nFirst-responder reads",
+        fillcolor="#F3E5F5",
+        color="#6A1B9A"
+    ];
+
+    // ─── N Graph Stores ──────────────────────────────────────────────
+    node [shape=cylinder, style=filled, penwidth=2];
+
+    graph_stores [
+        label="N Graph Stores\n(File / DuckDB / Neo4j)",
+        fillcolor="#FFF8E1",
+        color="#F57F17"
+    ];
+
+    // ═══════════════════════════════════════════════════════════════════
+    // ─── Edges ────────────────────────────────────────────────────────
+    // ═══════════════════════════════════════════════════════════════════
+
+    Kernel -> Dispatcher [
+        label="  mount()  ",
+        color="#1565C0",
+        penwidth=2
+    ];
+
+    Dispatcher -> LoggingHandler [
+        label="  ALWAYS  ",
+        color="#2E7D32",
+        fontcolor="#2E7D32",
+        penwidth=2,
+        lhead=cluster_always_on
+    ];
+
+    Dispatcher -> GraphDataHook [
+        label="  CONDITIONAL  ",
+        color="#283593",
+        fontcolor="#283593",
+        penwidth=2,
+        style=dashed,
+        lhead=cluster_conditional
+    ];
+
+    LoggingHandler -> events_jsonl [
+        color="#546E7A",
+        penwidth=1.5
+    ];
+
+    LoggingHandler -> metadata_json [
+        color="#546E7A",
+        penwidth=1.5
+    ];
+
+    GraphDataHook -> CompositeGraphStore [
+        color="#6A1B9A",
+        penwidth=2
+    ];
+
+    CompositeGraphStore -> graph_stores [
+        color="#F57F17",
+        penwidth=2
+    ];
+}

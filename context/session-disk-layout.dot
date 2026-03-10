@@ -1,0 +1,128 @@
+// Session Disk Layout — File Structure Tree
+// Context-Intelligence Bundle
+//
+// Shows the on-disk directory structure for session logging:
+// ~/.amplifier/projects/{project-slug}/sessions/{session-id}/
+//
+// Render: dot -Tsvg session-disk-layout.dot -o session-disk-layout.svg
+
+digraph SessionDiskLayout {
+    rankdir=TB;
+    fontname="Helvetica";
+    fontsize=12;
+    nodesep=0.6;
+    ranksep=0.8;
+    pad=0.5;
+
+    // ─── Global defaults ─────────────────────────────────────────────
+    node [fontname="Helvetica", fontsize=11];
+    edge [fontname="Helvetica", fontsize=10];
+
+    // ─── Directory nodes (folder shapes) ─────────────────────────────
+    node [shape=folder, style=filled, penwidth=1.5];
+
+    root [
+        label="~/.amplifier/projects/",
+        fillcolor="#E3F2FD",
+        color="#1565C0"
+    ];
+
+    project_slug [
+        label="{project-slug}/",
+        fillcolor="#BBDEFB",
+        color="#1565C0"
+    ];
+
+    sessions [
+        label="sessions/",
+        fillcolor="#90CAF9",
+        color="#1565C0"
+    ];
+
+    session_id_a [
+        label="{session-id-a}/",
+        fillcolor="#E8F5E9",
+        color="#2E7D32"
+    ];
+
+    session_id_b [
+        label="{session-id-b}/",
+        fillcolor="#E8F5E9",
+        color="#2E7D32"
+    ];
+
+    // ─── File nodes (note shapes) ────────────────────────────────────
+    node [shape=note, style=filled, penwidth=1];
+
+    metadata_a [
+        label="metadata.json\n─────────────────\nstart_time, end_time\nstatus, session_id\nproject_slug",
+        fillcolor="#FFF8E1",
+        color="#F57F17"
+    ];
+
+    events_a [
+        label="events.jsonl\n─────────────────\nOne JSON line per event.\nAppend-only log.\nFull event payload.",
+        fillcolor="#FFF8E1",
+        color="#F57F17"
+    ];
+
+    metadata_b [
+        label="metadata.json",
+        fillcolor="#FFF8E1",
+        color="#F57F17"
+    ];
+
+    events_b [
+        label="events.jsonl",
+        fillcolor="#FFF8E1",
+        color="#F57F17"
+    ];
+
+    // ═══════════════════════════════════════════════════════════════════
+    // ─── Tree edges ───────────────────────────────────────────────────
+    // ═══════════════════════════════════════════════════════════════════
+
+    root -> project_slug [
+        color="#1565C0",
+        penwidth=1.5
+    ];
+
+    project_slug -> sessions [
+        color="#1565C0",
+        penwidth=1.5
+    ];
+
+    sessions -> session_id_a [
+        color="#2E7D32",
+        penwidth=1.5
+    ];
+
+    sessions -> session_id_b [
+        color="#2E7D32",
+        penwidth=1.5
+    ];
+
+    session_id_a -> metadata_a [
+        color="#F57F17",
+        penwidth=1
+    ];
+
+    session_id_a -> events_a [
+        color="#F57F17",
+        penwidth=1
+    ];
+
+    session_id_b -> metadata_b [
+        color="#F57F17",
+        penwidth=1
+    ];
+
+    session_id_b -> events_b [
+        color="#F57F17",
+        penwidth=1
+    ];
+
+    // ─── Layout hints ────────────────────────────────────────────────
+    {rank=same; session_id_a; session_id_b}
+    {rank=same; metadata_a; events_a; metadata_b; events_b}
+}
