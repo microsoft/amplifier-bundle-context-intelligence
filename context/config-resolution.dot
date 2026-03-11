@@ -1,0 +1,85 @@
+digraph config_resolution {
+    rankdir=TB
+    compound=true
+    fontname="Helvetica"
+    node [fontname="Helvetica" fontsize=10]
+    edge [fontname="Helvetica" fontsize=9]
+
+    labelloc=t
+    label="Context-Intelligence Hook: Config Resolution Protocol"
+    fontsize=14
+
+    resolver [label="ConfigResolver\n(created once in mount)" shape=component style=filled fillcolor=lightyellow]
+
+    subgraph cluster_inputs {
+        label="Inputs (mount-time)"
+        style=rounded
+        config [label="config dict\n(from bundle YAML)" shape=note]
+        coordinator [label="coordinator\n(from runtime)" shape=note]
+    }
+
+    config -> resolver
+    coordinator -> resolver
+
+    subgraph cluster_base_path {
+        label="base_path resolution"
+        style=dashed
+        color=blue
+        bp1 [label="config.get(\"base_path\")"]
+        bp2 [label="coordinator.config\n.get(\"base_path\")"]
+        bp3 [label="~/.amplifier/projects" shape=ellipse style=filled fillcolor=lightgray]
+        bp1 -> bp2 [label="None"]
+        bp2 -> bp3 [label="None"]
+    }
+
+    subgraph cluster_project_slug {
+        label="project_slug resolution"
+        style=dashed
+        color=green
+        ps1 [label="config.get(\"project_slug\")"]
+        ps2 [label="coordinator.config\n.get(\"project_slug\")"]
+        ps3 [label="\"default\"" shape=ellipse style=filled fillcolor=lightgray]
+        ps1 -> ps2 [label="None"]
+        ps2 -> ps3 [label="None"]
+    }
+
+    subgraph cluster_forest {
+        label="forest_name resolution"
+        style=dashed
+        color=purple
+        fn1 [label="graph_store\n.get(\"graph_forest_name\")"]
+        fn2 [label="config.get(\"project\")"]
+        fn3 [label="coordinator.config\n.get(\"project_slug\")"]
+        fn4 [label="\"default\"" shape=ellipse style=filled fillcolor=lightgray]
+        fn1 -> fn2 [label="None"]
+        fn2 -> fn3 [label="None"]
+        fn3 -> fn4 [label="None"]
+    }
+
+    subgraph cluster_outputs {
+        label="Resolved Values"
+        style=rounded
+        r_bp [label="base_path" shape=parallelogram style=filled fillcolor=lightblue]
+        r_ps [label="project_slug" shape=parallelogram style=filled fillcolor=lightblue]
+        r_fn [label="forest_name" shape=parallelogram style=filled fillcolor=lightblue]
+        r_sd [label="session_dir(id)\n{base_path}/{project_slug}/sessions/{id}/context-intelligence/" shape=folder style=filled fillcolor=lightyellow]
+    }
+
+    bp3 -> r_bp [style=dotted lhead=cluster_outputs]
+    ps3 -> r_ps [style=dotted lhead=cluster_outputs]
+    fn4 -> r_fn [style=dotted lhead=cluster_outputs]
+    r_bp -> r_sd
+    r_ps -> r_sd
+
+    subgraph cluster_consumers {
+        label="Consumers (no raw config access)"
+        style=solid
+        logging [label="LoggingHandler"]
+        graph [label="GraphDataHook\nNeo4jGraphStore"]
+        services [label="HookStateService"]
+    }
+
+    resolver -> logging [label="session_dir()"]
+    resolver -> graph [label="forest_name\nneo4j_config"]
+    resolver -> services [label="exclude_events\nenable_graph"]
+}
