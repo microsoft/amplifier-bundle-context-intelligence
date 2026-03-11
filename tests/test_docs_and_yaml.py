@@ -160,8 +160,10 @@ class TestBehaviorYamlGraphForestName:
     def test_graph_forest_name_comment_present(self, behavior_raw):
         """Raw YAML must include a comment explaining graph_forest_name resolution."""
         assert "graph_forest_name" in behavior_raw
-        # The comment should document the resolution chain including config.project
-        assert "config.project" in behavior_raw or "project" in behavior_raw
+        # The comment must document the resolution chain including config.project
+        assert "config.project" in behavior_raw, (
+            "YAML must document 'config.project' in the graph_forest_name resolution comment"
+        )
 
 
 # ---------------------------------------------------------------------------

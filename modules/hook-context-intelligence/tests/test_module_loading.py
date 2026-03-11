@@ -117,10 +117,12 @@ class TestBehaviorYamlConfigShape:
         assert data["hooks"][0]["module"] == "hook-context-intelligence"
 
     def test_config_has_required_keys(self):
-        """Config must have: base_path, exclude_events, log_level, enable_graph, graph_store."""
+        """Config must have: exclude_events, log_level, enable_graph, graph_store.
+        Note: base_path is now a lazy-resolved optional (commented out in YAML).
+        """
         data = self._load_behavior_yaml()
         config = data["hooks"][0]["config"]
-        expected_keys = {"base_path", "exclude_events", "log_level", "enable_graph", "graph_store"}
+        expected_keys = {"exclude_events", "log_level", "enable_graph", "graph_store"}
         assert expected_keys == set(config.keys())
 
     def test_graph_store_is_dict(self):
@@ -134,13 +136,6 @@ class TestBehaviorYamlConfigShape:
         data = self._load_behavior_yaml()
         config = data["hooks"][0]["config"]
         assert config["enable_graph"] is False
-
-    def test_base_path_present(self):
-        """base_path must be present in config."""
-        data = self._load_behavior_yaml()
-        config = data["hooks"][0]["config"]
-        assert "base_path" in config
-        assert isinstance(config["base_path"], str)
 
     def test_graph_store_entry_has_type_and_config(self):
         """graph_store entry must have type and config keys."""

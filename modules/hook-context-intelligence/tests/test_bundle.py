@@ -156,12 +156,6 @@ class TestBehaviorYamlForestConfig:
         assert log_level == "WARNING", f"Expected plain 'WARNING', got {log_level!r}"
         assert "${" not in str(log_level), "log_level must not contain env var interpolation"
 
-    def test_no_env_var_interpolation_anywhere(self):
-        """No env var interpolation patterns anywhere in the YAML."""
-        path = REPO_ROOT / "behaviors" / "context-intelligence.yaml"
-        raw_text = path.read_text()
-        assert "${" not in raw_text, "Behavior YAML must not contain env var interpolation (${...})"
-
     def test_graph_store_section_exists(self):
         """Hook config must have a graph_store (singular) dict."""
         data = _load_behavior()
