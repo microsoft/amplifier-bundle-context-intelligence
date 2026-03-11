@@ -254,6 +254,13 @@ class TestGraphStoreConfig:
 
         assert resolver.graph_store_config == store
 
+    def test_returns_none_when_graph_store_is_not_a_dict(self) -> None:
+        """graph_store_config returns None when graph_store value is a non-dict."""
+        coordinator = _make_coordinator(config={})
+        resolver = ConfigResolver(config={"graph_store": "not-a-dict"}, coordinator=coordinator)
+
+        assert resolver.graph_store_config is None
+
 
 class TestNeo4jConfig:
     def test_returns_none_when_no_graph_store(self) -> None:
