@@ -33,7 +33,7 @@ hooks:
       enable_graph: false                   # set true to activate graph generation
       graph_store:                          # configure when enable_graph: true
         type: "neo4j"
-        graph_forest_name: "default"        # fallback chain: graph_forest_name -> project -> coordinator.config.project_slug -> "default"
+        graph_forest_name: "default"        # fallback chain: graph_forest_name -> config.project -> coordinator.config.project_slug -> "default"
         config:
           uri: "${NEO4J_URI:-bolt://localhost:7687}"
           username: "${NEO4J_USERNAME:-neo4j}"
