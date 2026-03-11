@@ -213,3 +213,205 @@ class TestForestNameResolution:
         )
 
         assert isinstance(resolver.forest_name, str)
+
+
+class TestEnableGraph:
+    def test_defaults_to_false(self) -> None:
+        """enable_graph returns False when not set in config."""
+        coordinator = _make_coordinator(config={})
+        resolver = ConfigResolver(config={}, coordinator=coordinator)
+
+        assert resolver.enable_graph is False
+
+    def test_explicit_true_works(self) -> None:
+        """enable_graph returns True when explicitly set to True."""
+        coordinator = _make_coordinator(config={})
+        resolver = ConfigResolver(config={"enable_graph": True}, coordinator=coordinator)
+
+        assert resolver.enable_graph is True
+
+    def test_returns_bool_type(self) -> None:
+        """enable_graph always returns a bool instance."""
+        coordinator = _make_coordinator(config={})
+        resolver = ConfigResolver(config={"enable_graph": 1}, coordinator=coordinator)
+
+        assert isinstance(resolver.enable_graph, bool)
+
+
+class TestGraphStoreConfig:
+    def test_returns_none_when_absent(self) -> None:
+        """graph_store_config returns None when graph_store not in config."""
+        coordinator = _make_coordinator(config={})
+        resolver = ConfigResolver(config={}, coordinator=coordinator)
+
+        assert resolver.graph_store_config is None
+
+    def test_returns_dict_when_present(self) -> None:
+        """graph_store_config returns the full dict when graph_store is set."""
+        store = {"type": "neo4j", "uri": "bolt://localhost:7687"}
+        coordinator = _make_coordinator(config={})
+        resolver = ConfigResolver(config={"graph_store": store}, coordinator=coordinator)
+
+        assert resolver.graph_store_config == store
+
+
+class TestNeo4jConfig:
+    def test_returns_none_when_no_graph_store(self) -> None:
+        """neo4j_config returns None when graph_store is absent."""
+        coordinator = _make_coordinator(config={})
+        resolver = ConfigResolver(config={}, coordinator=coordinator)
+
+        assert resolver.neo4j_config is None
+
+    def test_extracts_full_config(self) -> None:
+        """neo4j_config extracts uri, auth tuple, and database from graph_store.config."""
+        store = {
+            "config": {
+                "uri": "bolt://localhost:7687",
+                "username": "neo4j",
+                "password": "secret",
+                "database": "mydb",
+            }
+        }
+        coordinator = _make_coordinator(config={})
+        resolver = ConfigResolver(config={"graph_store": store}, coordinator=coordinator)
+
+        result = resolver.neo4j_config
+        assert result is not None
+        assert result["uri"] == "bolt://localhost:7687"
+        assert result["auth"] == ("neo4j", "secret")
+        assert result["database"] == "mydb"
+
+    def test_auth_none_when_credentials_absent(self) -> None:
+        """neo4j_config returns auth=None when username/password are not present."""
+        store = {
+            "config": {
+                "uri": "bolt://localhost:7687",
+            }
+        }
+        coordinator = _make_coordinator(config={})
+        resolver = ConfigResolver(config={"graph_store": store}, coordinator=coordinator)
+
+        result = resolver.neo4j_config
+        assert result is not None
+        assert result["auth"] is None
+
+    def test_database_defaults_to_neo4j(self) -> None:
+        """neo4j_config database defaults to 'neo4j' when not explicitly set."""
+        store = {
+            "config": {
+                "uri": "bolt://localhost:7687",
+                "username": "neo4j",
+                "password": "secret",
+            }
+        }
+        coordinator = _make_coordinator(config={})
+        resolver = ConfigResolver(config={"graph_store": store}, coordinator=coordinator)
+
+        result = resolver.neo4j_config
+        assert result is not None
+        assert result["database"] == "neo4j"
+
+    def test_returns_none_when_no_config_key(self) -> None:
+        """neo4j_config returns None when graph_store has no 'config' key."""
+        store = {"type": "neo4j"}
+        coordinator = _make_coordinator(config={})
+        resolver = ConfigResolver(config={"graph_store": store}, coordinator=coordinator)
+
+        assert resolver.neo4j_config is None
+
+
+class TestExcludeEvents:
+    def test_defaults_to_empty_set(self) -> None:
+        """exclude_events returns an empty set when not set in config."""
+        coordinator = _make_coordinator(config={})
+        resolver = ConfigResolver(config={}, coordinator=coordinator)
+
+        assert resolver.exclude_events == set()
+
+    def test_returns_set_from_list(self) -> None:
+        """exclude_events converts a list from config to a set."""
+        coordinator = _make_coordinator(config={})
+        resolver = ConfigResolver(
+            config={"exclude_events": ["event_a", "event_b"]},
+            coordinator=coordinator,
+        )
+
+        assert resolver.exclude_events == {"event_a", "event_b"}
+
+    def test_returns_set_type(self) -> None:
+        """exclude_events always returns a set instance."""
+        coordinator = _make_coordinator(config={})
+        resolver = ConfigResolver(
+            config={"exclude_events": ["event_a"]},
+            coordinator=coordinator,
+        )
+
+        assert isinstance(resolver.exclude_events, set)
+
+
+class TestLogLevel:
+    def test_defaults_to_warning(self) -> None:
+        """log_level returns 'WARNING' when not set in config."""
+        coordinator = _make_coordinator(config={})
+        resolver = ConfigResolver(config={}, coordinator=coordinator)
+
+        assert resolver.log_level == "WARNING"
+
+    def test_explicit_value_works(self) -> None:
+        """log_level returns the explicitly configured value."""
+        coordinator = _make_coordinator(config={})
+        resolver = ConfigResolver(config={"log_level": "DEBUG"}, coordinator=coordinator)
+
+        assert resolver.log_level == "DEBUG"
+
+
+class TestSessionDir:
+    def test_composes_correct_path_from_explicit_values(self) -> None:
+        """session_dir composes base_path / project_slug / sessions / session_id / context-intelligence."""
+        coordinator = _make_coordinator(config={})
+        resolver = ConfigResolver(
+            config={"base_path": "/my/base", "project_slug": "my-project"},
+            coordinator=coordinator,
+        )
+
+        result = resolver.session_dir("abc123")
+
+        assert result == Path("/my/base/my-project/sessions/abc123/context-intelligence")
+
+    def test_uses_resolved_defaults(self) -> None:
+        """session_dir uses default base_path and project_slug when not configured."""
+        coordinator = _make_coordinator(config={})
+        resolver = ConfigResolver(config={}, coordinator=coordinator)
+
+        result = resolver.session_dir("xyz")
+        expected = (
+            Path("~/.amplifier/projects").expanduser()
+            / "default"
+            / "sessions"
+            / "xyz"
+            / "context-intelligence"
+        )
+
+        assert result == expected
+
+    def test_returns_path_type(self) -> None:
+        """session_dir returns a Path instance."""
+        coordinator = _make_coordinator(config={})
+        resolver = ConfigResolver(
+            config={"base_path": "/base", "project_slug": "proj"},
+            coordinator=coordinator,
+        )
+
+        assert isinstance(resolver.session_dir("sess-1"), Path)
+
+    def test_uses_coordinator_values_in_path_composition(self) -> None:
+        """session_dir uses coordinator-resolved base_path and project_slug."""
+        coordinator = _make_coordinator(
+            config={"base_path": "/coord/base", "project_slug": "coord-project"}
+        )
+        resolver = ConfigResolver(config={}, coordinator=coordinator)
+
+        result = resolver.session_dir("sess-42")
+
+        assert result == Path("/coord/base/coord-project/sessions/sess-42/context-intelligence")

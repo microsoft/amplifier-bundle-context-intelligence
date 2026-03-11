@@ -111,3 +111,75 @@ class ConfigResolver:
             self._forest_name = str(value) if value else _DEFAULT_PROJECT_SLUG
 
         return self._forest_name
+
+    @property
+    def enable_graph(self) -> bool:
+        """Whether graph storage is enabled.
+
+        Reads directly from config['enable_graph'], defaults to False.
+        No coordinator fallback. Not cached.
+        """
+        return bool(self._config.get("enable_graph", False))
+
+    @property
+    def graph_store_config(self) -> dict[str, Any] | None:
+        """Full graph_store configuration dict, or None if absent.
+
+        Reads directly from config['graph_store']. No coordinator fallback.
+        """
+        value = self._config.get("graph_store")
+        return value if isinstance(value, dict) else None
+
+    @property
+    def neo4j_config(self) -> dict[str, Any] | None:
+        """Extracted Neo4j connection parameters, or None if unavailable.
+
+        Extracts uri, auth (as a (username, password) tuple or None),
+        and database (defaulting to 'neo4j') from graph_store['config'].
+
+        Returns None if graph_store is absent or has no 'config' key.
+        """
+        store = self.graph_store_config
+        if store is None:
+            return None
+
+        inner = store.get("config")
+        if not isinstance(inner, dict):
+            return None
+
+        uri = inner.get("uri")
+        username = inner.get("username")
+        password = inner.get("password")
+        auth = (username, password) if username is not None and password is not None else None
+        database = inner.get("database", "neo4j")
+
+        return {"uri": uri, "auth": auth, "database": database}
+
+    @property
+    def exclude_events(self) -> set[str]:
+        """Set of event names to exclude from processing.
+
+        Reads directly from config['exclude_events'], defaults to empty set.
+        No coordinator fallback.
+        """
+        return set(self._config.get("exclude_events", []))
+
+    @property
+    def log_level(self) -> str:
+        """Log level string for this module.
+
+        Reads directly from config['log_level'], defaults to 'WARNING'.
+        No coordinator fallback.
+        """
+        return str(self._config.get("log_level", "WARNING"))
+
+    # ------------------------------------------------------------------
+    # Methods
+    # ------------------------------------------------------------------
+
+    def session_dir(self, session_id: str) -> Path:
+        """Compose the session-scoped context-intelligence directory path.
+
+        Returns: base_path / project_slug / 'sessions' / session_id / 'context-intelligence'
+        """
+        return self.base_path / self.project_slug / "sessions" / session_id / "context-intelligence"
