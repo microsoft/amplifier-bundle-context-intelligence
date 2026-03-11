@@ -340,3 +340,73 @@ class TestMountFlowPrebuiltStore:
         assert flow.state == MountState.READY
         assert flow.services is not None
         assert flow.services.graph is store
+
+
+class TestMountFlowResolverPath:
+    """MountFlow accepts optional resolver and passes it to HookStateService."""
+
+    def test_accepts_resolver_parameter(self):
+        """MountFlow(config={}, resolver=...) must store _resolver."""
+        from unittest.mock import MagicMock
+
+        resolver = MagicMock()
+        resolver._config = {}
+        flow = MountFlow(config={}, resolver=resolver)
+        assert flow._resolver is resolver
+
+    def test_no_resolver_defaults_to_none(self):
+        """When resolver is not provided, _resolver is None."""
+        flow = MountFlow(config={})
+        assert flow._resolver is None
+
+    def test_create_services_with_resolver_uses_resolver_path(self):
+        """When resolver is set, create_services passes resolver to HookStateService."""
+        from unittest.mock import MagicMock
+
+        from amplifier_module_hook_context_intelligence.services import HookStateService
+
+        resolver = MagicMock()
+        resolver._config = {"exclude_events": ["resolver:event"]}
+        flow = MountFlow(config={}, resolver=resolver)
+        flow.create_services(coordinator=None)
+        assert flow.services is not None
+        assert isinstance(flow.services, HookStateService)
+        # Config must come from resolver._config
+        assert flow.services.config.is_excluded("resolver:event")
+
+    def test_create_services_with_resolver_skips_coordinator(self):
+        """When resolver is provided, coordinator is not stored on services."""
+        from unittest.mock import MagicMock
+
+        resolver = MagicMock()
+        resolver._config = {}
+        flow = MountFlow(config={}, resolver=resolver)
+        flow.create_services(coordinator=None)
+        assert flow.services is not None
+        assert flow.services.coordinator is None
+
+    def test_create_services_with_resolver_and_graph_store(self):
+        """When resolver is provided along with a prebuilt graph_store, it is used."""
+        from unittest.mock import MagicMock
+
+        from amplifier_module_hook_context_intelligence.services import GraphState
+
+        resolver = MagicMock()
+        resolver._config = {}
+        store = GraphState(graph_forest_name="via-resolver")
+        flow = MountFlow(config={}, graph_store=store, resolver=resolver)
+        flow.create_services(coordinator=None)
+        assert flow.services is not None
+        assert flow.services.graph is store
+
+    async def test_full_mount_with_resolver(self):
+        """Full mount run works end-to-end when resolver is provided."""
+        from unittest.mock import MagicMock
+
+        resolver = MagicMock()
+        resolver._config = {}
+        coordinator = _make_coordinator(contributed_events=[["session:start"]])
+        flow = MountFlow(config={}, resolver=resolver)
+        _cleanup = await flow.run(coordinator)
+        assert flow.state == MountState.READY
+        assert flow.services is not None

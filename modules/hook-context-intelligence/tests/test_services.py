@@ -207,3 +207,68 @@ class TestHookStateServicePrebuiltStore:
 
         service = HookStateService(raw_config={})
         assert isinstance(service.graph, GraphStore)
+
+
+class TestHookStateServiceResolverPath:
+    """HookStateService accepts a resolver kwarg and builds config from resolver._config."""
+
+    def test_accepts_resolver_kwarg(self):
+        """HookStateService(resolver=...) must not raise."""
+        from unittest.mock import MagicMock
+
+        from amplifier_module_hook_context_intelligence.services import HookStateService
+
+        resolver = MagicMock()
+        resolver._config = {"exclude_events": ["foo:bar"]}
+        # Should not raise
+        service = HookStateService(resolver=resolver)
+        assert service is not None
+
+    def test_resolver_builds_config_from_resolver_config(self):
+        """When resolver provided, HookConfig is built from resolver._config."""
+        from unittest.mock import MagicMock
+
+        from amplifier_module_hook_context_intelligence.services import HookStateService
+
+        resolver = MagicMock()
+        resolver._config = {"exclude_events": ["excluded:event"]}
+        service = HookStateService(resolver=resolver)
+        assert service.config.is_excluded("excluded:event") is True
+
+    def test_resolver_path_uses_injected_graph_store(self):
+        """When resolver provided, graph_store kwarg is still honoured."""
+        from unittest.mock import MagicMock
+
+        from amplifier_module_hook_context_intelligence.services import (
+            GraphState,
+            HookStateService,
+        )
+
+        resolver = MagicMock()
+        resolver._config = {}
+        prebuilt = GraphState(graph_forest_name="injected")
+        service = HookStateService(resolver=resolver, graph_store=prebuilt)
+        assert service.graph is prebuilt
+
+    def test_resolver_path_skips_coordinator_storage(self):
+        """When resolver provided, coordinator attribute should be None."""
+        from unittest.mock import MagicMock
+
+        from amplifier_module_hook_context_intelligence.services import HookStateService
+
+        resolver = MagicMock()
+        resolver._config = {}
+        service = HookStateService(resolver=resolver)
+        assert service.coordinator is None
+
+    def test_raw_config_defaults_to_none(self):
+        """raw_config can be omitted entirely when resolver is provided."""
+        from unittest.mock import MagicMock
+
+        from amplifier_module_hook_context_intelligence.services import HookStateService
+
+        resolver = MagicMock()
+        resolver._config = {}
+        # Must not raise even though raw_config was not provided
+        service = HookStateService(resolver=resolver)
+        assert service is not None

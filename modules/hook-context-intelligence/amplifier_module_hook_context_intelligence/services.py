@@ -93,12 +93,18 @@ class HookStateService:
 
     def __init__(
         self,
-        raw_config: dict[str, Any],
+        raw_config: dict[str, Any] | None = None,
         coordinator: Any = None,
         graph_store: Any = None,
+        *,
+        resolver: Any = None,
     ) -> None:
-        self.config = HookConfig(raw_config)
-        self.coordinator = coordinator
+        if resolver is not None:
+            self.config = HookConfig(resolver._config)
+            self.coordinator = None
+        else:
+            self.config = HookConfig(raw_config if raw_config is not None else {})
+            self.coordinator = coordinator
         if graph_store is not None:
             self.graph = graph_store
         else:

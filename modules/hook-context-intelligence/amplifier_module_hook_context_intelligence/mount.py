@@ -38,9 +38,12 @@ class MountFlow:
         → SPECIFIC_REGISTERED → READY
     """
 
-    def __init__(self, config: dict[str, Any], graph_store: Any = None) -> None:
+    def __init__(
+        self, config: dict[str, Any], graph_store: Any = None, resolver: Any = None
+    ) -> None:
         self._config = config
         self._graph_store = graph_store
+        self._resolver = resolver
         self.state = MountState.INIT
         self.services: HookStateService | None = None
         self.entity_handlers: list[Any] = []
@@ -51,9 +54,12 @@ class MountFlow:
 
     def create_services(self, coordinator: Any) -> None:
         """INIT → STATE_CREATED: Instantiate HookStateService from config."""
-        self.services = HookStateService(
-            self._config, coordinator=coordinator, graph_store=self._graph_store
-        )
+        if self._resolver is not None:
+            self.services = HookStateService(resolver=self._resolver, graph_store=self._graph_store)
+        else:
+            self.services = HookStateService(
+                self._config, coordinator=coordinator, graph_store=self._graph_store
+            )
         self.state = MountState.STATE_CREATED
 
     def instantiate_handlers(self) -> None:

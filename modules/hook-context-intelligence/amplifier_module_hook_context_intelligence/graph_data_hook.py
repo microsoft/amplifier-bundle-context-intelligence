@@ -42,8 +42,7 @@ class GraphDataHook:
     def __init__(self, resolver: Any) -> None:
         self._resolver = resolver
         self._store = _create_neo4j_store(resolver)
-        # MountFlow still needs raw config dict as bridge until Task 7
-        self._flow = MountFlow(config=resolver._config, graph_store=self._store)
+        self._flow = MountFlow(config=resolver._config, graph_store=self._store, resolver=resolver)
 
     async def mount(self, coordinator: Any) -> Callable:
         """Run the mount flow and return a cleanup callable.
