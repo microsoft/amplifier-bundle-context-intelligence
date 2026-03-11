@@ -123,7 +123,7 @@ Indexes are created on first `flush()` via `_ensure_schema()`:
 |------------|--------|----------|---------|
 | `idx_node_id` | `(n:Node)` | `n.node_id` | Fast point lookups by node ID |
 | `idx_forest` | `(n:Node)` | `n.graph_forest_name` | Fast forest-scoped scans |
-| `idx_node_id_any` | `(n:Session)` | `n.node_id` | Session-label point lookups |
+| `idx_session_node_id` | `(n:Session)` | `n.node_id` | Session-label point lookups |
 
 ---
 

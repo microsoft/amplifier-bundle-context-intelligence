@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pytest
+from typing import Any
 
 from tests.conftest import (  # noqa: F401 — re-exported for downstream tests
     NEO4J_AUTH,
@@ -37,6 +38,214 @@ class TestProtocolConformance:
 
         store = Neo4jGraphStore(uri=NEO4J_URI, auth=NEO4J_AUTH, database=NEO4J_DATABASE)
         assert isinstance(store, QueryableStore)
+
+
+# ---------------------------------------------------------------------------
+# TestProtocolDefinition — generic protocol shape tests (migrated from
+# test_graph_store.py which is deleted as part of the Neo4j simplification)
+# ---------------------------------------------------------------------------
+class TestProtocolDefinition:
+    """GraphStore and QueryableStore protocol definitions are correct."""
+
+    def test_graph_store_is_runtime_checkable(self):
+        from amplifier_module_hook_context_intelligence.graph_store import GraphStore
+
+        assert hasattr(GraphStore, "__protocol_attrs__") or hasattr(
+            GraphStore, "_is_runtime_protocol"
+        )
+
+    def test_conforming_fake_class_passes_isinstance(self):
+        from amplifier_module_hook_context_intelligence.graph_store import GraphStore
+
+        class FakeStore:
+            @property
+            def graph_forest_name(self) -> str:
+                return "test"
+
+            async def upsert_node(
+                self, node_id: str, labels: set[str], properties: dict[str, Any]
+            ) -> None: ...
+
+            async def upsert_edge(
+                self, source: str, target: str, edge_type: str, properties: dict[str, Any]
+            ) -> None: ...
+
+            async def get_node(self, node_id: str) -> dict[str, Any] | None: ...
+
+            async def get_edge(
+                self, source: str, target: str, edge_type: str
+            ) -> dict[str, Any] | None: ...
+
+            async def flush(self) -> None: ...
+
+            async def close(self) -> None: ...
+
+        store = FakeStore()
+        assert isinstance(store, GraphStore)
+
+    def test_missing_upsert_node_fails_isinstance(self):
+        from amplifier_module_hook_context_intelligence.graph_store import GraphStore
+
+        class BadStore:
+            async def upsert_edge(
+                self, source: str, target: str, edge_type: str, properties: dict[str, Any]
+            ) -> None: ...
+
+            async def get_node(self, node_id: str) -> dict[str, Any] | None: ...
+
+            async def get_edge(
+                self, source: str, target: str, edge_type: str
+            ) -> dict[str, Any] | None: ...
+
+            async def flush(self) -> None: ...
+
+            async def close(self) -> None: ...
+
+        store = BadStore()
+        assert not isinstance(store, GraphStore)
+
+    def test_missing_flush_fails_isinstance(self):
+        from amplifier_module_hook_context_intelligence.graph_store import GraphStore
+
+        class BadStore:
+            async def upsert_node(
+                self, node_id: str, labels: set[str], properties: dict[str, Any]
+            ) -> None: ...
+
+            async def upsert_edge(
+                self, source: str, target: str, edge_type: str, properties: dict[str, Any]
+            ) -> None: ...
+
+            async def get_node(self, node_id: str) -> dict[str, Any] | None: ...
+
+            async def get_edge(
+                self, source: str, target: str, edge_type: str
+            ) -> dict[str, Any] | None: ...
+
+            async def close(self) -> None: ...
+
+        store = BadStore()
+        assert not isinstance(store, GraphStore)
+
+    def test_missing_graph_forest_name_fails_isinstance(self):
+        from amplifier_module_hook_context_intelligence.graph_store import GraphStore
+
+        class MissingForestName:
+            async def upsert_node(
+                self, node_id: str, labels: set[str], properties: dict[str, Any]
+            ) -> None: ...
+
+            async def upsert_edge(
+                self, source: str, target: str, edge_type: str, properties: dict[str, Any]
+            ) -> None: ...
+
+            async def get_node(self, node_id: str) -> dict[str, Any] | None: ...
+
+            async def get_edge(
+                self, source: str, target: str, edge_type: str
+            ) -> dict[str, Any] | None: ...
+
+            async def flush(self) -> None: ...
+
+            async def close(self) -> None: ...
+
+        store = MissingForestName()
+        assert not isinstance(store, GraphStore)
+
+    def test_graph_state_conforms_to_graph_store(self):
+        from amplifier_module_hook_context_intelligence.graph_store import GraphStore
+        from amplifier_module_hook_context_intelligence.services import GraphState
+
+        graph = GraphState()
+        assert isinstance(graph, GraphStore)
+
+    def test_queryable_store_is_runtime_checkable(self):
+        from amplifier_module_hook_context_intelligence.graph_store import QueryableStore
+
+        assert hasattr(QueryableStore, "__protocol_attrs__") or hasattr(
+            QueryableStore, "_is_runtime_protocol"
+        )
+
+    def test_queryable_missing_supported_dialects_fails(self):
+        from amplifier_module_hook_context_intelligence.graph_store import QueryableStore
+
+        class MissingDialects:
+            @property
+            def graph_forest_name(self) -> str:
+                return "test"
+
+            async def upsert_node(
+                self, node_id: str, labels: set[str], properties: dict[str, Any]
+            ) -> None: ...
+
+            async def upsert_edge(
+                self, source: str, target: str, edge_type: str, properties: dict[str, Any]
+            ) -> None: ...
+
+            async def get_node(self, node_id: str) -> dict[str, Any] | None: ...
+
+            async def get_edge(
+                self, source: str, target: str, edge_type: str
+            ) -> dict[str, Any] | None: ...
+
+            async def flush(self) -> None: ...
+
+            async def close(self) -> None: ...
+
+            async def execute_query(
+                self,
+                query: str,
+                params: dict[str, Any] | None = None,
+                dialect: str | None = None,
+            ) -> list[dict[str, Any]]: ...
+
+        store = MissingDialects()
+        assert not isinstance(store, QueryableStore)
+
+    def test_base_graph_store_is_not_queryable(self):
+        from amplifier_module_hook_context_intelligence.graph_store import (
+            GraphStore,
+            QueryableStore,
+        )
+
+        class BaseOnly:
+            @property
+            def graph_forest_name(self) -> str:
+                return "test"
+
+            async def upsert_node(
+                self, node_id: str, labels: set[str], properties: dict[str, Any]
+            ) -> None: ...
+
+            async def upsert_edge(
+                self, source: str, target: str, edge_type: str, properties: dict[str, Any]
+            ) -> None: ...
+
+            async def get_node(self, node_id: str) -> dict[str, Any] | None: ...
+
+            async def get_edge(
+                self, source: str, target: str, edge_type: str
+            ) -> dict[str, Any] | None: ...
+
+            async def flush(self) -> None: ...
+
+            async def close(self) -> None: ...
+
+        store = BaseOnly()
+        assert isinstance(store, GraphStore)
+        assert not isinstance(store, QueryableStore)
+
+    def test_execute_query_signature_has_graph_forest_name(self):
+        import inspect
+
+        from amplifier_module_hook_context_intelligence.graph_store import QueryableStore
+
+        sig = inspect.signature(QueryableStore.execute_query)
+        assert "graph_forest_name" in sig.parameters, (
+            "QueryableStore.execute_query must declare a graph_forest_name parameter"
+        )
+        param = sig.parameters["graph_forest_name"]
+        assert param.default is None, "graph_forest_name must default to None"
 
 
 # ---------------------------------------------------------------------------
@@ -386,6 +595,20 @@ class TestSchemaInitialization:
             for record in records
         )
         assert found, f"No index with node_id in properties. Found: {records}"
+
+    def test_session_index_uses_descriptive_name(self):
+        """_ensure_schema must use 'idx_session_node_id', not the generic 'idx_node_id_any'."""
+        import inspect
+
+        from amplifier_module_hook_context_intelligence.neo4j_store import Neo4jGraphStore
+
+        source = inspect.getsource(Neo4jGraphStore._ensure_schema)
+        assert "idx_session_node_id" in source, (
+            "_ensure_schema must use idx_session_node_id for Session-label index"
+        )
+        assert "idx_node_id_any" not in source, (
+            "_ensure_schema must not use the old misleading name idx_node_id_any"
+        )
 
     @pytest.mark.asyncio
     async def test_forest_index_exists_after_flush(self, neo4j_store):

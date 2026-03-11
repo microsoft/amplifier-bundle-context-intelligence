@@ -26,7 +26,7 @@ digraph HookMountFlow {
     node [shape=box, style="rounded,filled", penwidth=2];
 
     INIT [
-        label="INIT\n─────────────────\nGraphDataHook instantiated.\nCompositeGraphStore provided.\nNo state exists yet.",
+        label="INIT\n─────────────────\nGraphDataHook instantiated.\nNeo4jGraphStore provided.\nNo state exists yet.",
         fillcolor="#E3F2FD",
         color="#1565C0"
     ];

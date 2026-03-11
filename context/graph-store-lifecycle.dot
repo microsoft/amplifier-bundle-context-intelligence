@@ -15,9 +15,9 @@ digraph lifecycle {
            shape=box style=filled fillcolor="#D5F5E3"];
     receiving [label="Receiving Events\nbuffer accumulating\nupserts"
                shape=box style=filled fillcolor="#D5F5E3"];
-    flushing [label="Flushing\npersist to backing store\n(DuckDB: batch SQL transaction;\nFileGraphStore: atomic JSON\nfile writes)\nbuffer draining"
+    flushing [label="Flushing\npersist to backing store\n(Neo4j: UNWIND-based\nbatch Cypher transaction)\nbuffer draining"
               shape=box style=filled fillcolor="#FCF3CF"];
-    closing [label="Closing\nfinal flush\nDuckDB close()"
+    closing [label="Closing\nfinal flush\ndriver close()"
              shape=box style=filled fillcolor="#FADBD8"];
     closed [label="Closed" shape=oval];
 
@@ -43,7 +43,4 @@ digraph lifecycle {
                 fillcolor="#FFFDE7" color="#F57F17"];
     flushing -> note_flush [style=dotted color=gray arrowhead=none constraint=false];
 
-    note_composite [label="CompositeGraphStore wraps\nN independent backends.\nEach runs this lifecycle\nindependently. Failure in\none store does not affect\nothers."
-                    fillcolor="#E8EAF6" color="#283593"];
-    opening -> note_composite [style=dotted color=gray arrowhead=none constraint=false];
 }

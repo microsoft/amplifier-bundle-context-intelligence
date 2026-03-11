@@ -8,7 +8,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from amplifier_module_hook_context_intelligence import mount
 
@@ -114,8 +114,8 @@ class TestLoggingOnlyIntegration:
             },
         )
 
-        # Verify session directory exists at tmp_path/test-project/sessions/int-sess-001/
-        session_dir = tmp_path / "test-project" / "sessions" / session_id
+        # Verify session directory exists at tmp_path/test-project/sessions/int-sess-001/context-intelligence/
+        session_dir = tmp_path / "test-project" / "sessions" / session_id / "context-intelligence"
         assert session_dir.exists(), f"Session dir not found: {session_dir}"
 
         # Verify events.jsonl has 3 lines with correct event names in order
@@ -151,9 +151,18 @@ class TestLoggingPlusGraphIntegration:
         coordinator = _make_coordinator(contributed_events=[events])
         config = {
             "enable_graph": True,
-            "graph_stores": [{"type": "duckdb", "config": {"connection": ":memory:"}}],
+            "graph_store": {
+                "type": "neo4j",
+                "config": {"uri": "bolt://localhost:7687", "username": "neo4j", "password": "test"},
+            },
         }
-        result = await mount(coordinator, config=config)
+        mock_store = MagicMock()
+        mock_store.close = AsyncMock()
+        with patch(
+            "amplifier_module_hook_context_intelligence.graph_data_hook.Neo4jGraphStore",
+            return_value=mock_store,
+        ):
+            result = await mount(coordinator, config=config)
         assert callable(result)
 
         # Count registrations by priority
@@ -175,15 +184,15 @@ class TestLoggingPlusGraphIntegration:
 
 
 # ---------------------------------------------------------------------------
-# TestGraphNotCreatedWithoutStores
+# TestGraphNotCreatedWithoutStore
 # ---------------------------------------------------------------------------
-class TestGraphNotCreatedWithoutStores:
-    """enable_graph=True without graph_stores does NOT create graph handlers."""
+class TestGraphNotCreatedWithoutStore:
+    """enable_graph=True without graph_store does NOT create graph handlers."""
 
     async def test_enable_graph_without_stores_is_logging_only(self) -> None:
         events = ["session:start", "session:end", "tool:pre"]
         coordinator = _make_coordinator(contributed_events=[events])
-        config = {"enable_graph": True}  # No graph_stores key
+        config = {"enable_graph": True}  # No graph_store key
         await mount(coordinator, config=config)
 
         # Graph regs at GRAPH_PRIORITY == 0

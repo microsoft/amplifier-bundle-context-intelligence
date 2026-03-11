@@ -68,7 +68,7 @@ digraph HookMountDispatcher {
     node [shape=box, style="rounded,filled", penwidth=2];
 
     create_graph [
-        label="create_graph\n───────────────────\nCreate GraphDataHook\npriority=90, MountFlow,\n7 handlers, CompositeGraphStore",
+        label="create_graph\n───────────────────\nCreate GraphDataHook\npriority=90, MountFlow,\n7 handlers, Neo4jGraphStore",
         fillcolor="#E8EAF6",
         color="#283593"
     ];

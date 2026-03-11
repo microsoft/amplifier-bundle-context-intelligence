@@ -5,7 +5,7 @@ Ready-to-use `jq` and `grep` recipes for navigating flat JSONL session files. Al
 **Convention:** All examples assume you are in a session directory:
 
 ```bash
-cd ~/.amplifier/projects/{slug}/sessions/{session_id}
+cd ~/.amplifier/projects/{slug}/sessions/{session_id}/context-intelligence
 ```
 
 ---
@@ -55,7 +55,7 @@ jq '.' metadata.json
 ### Find all running sessions in a project
 
 ```bash
-for f in ~/.amplifier/projects/my-project/sessions/*/metadata.json; do
+for f in ~/.amplifier/projects/my-project/sessions/*/context-intelligence/metadata.json; do
   jq -r 'select(.status == "running") | .session_id' "$f" 2>/dev/null
 done
 ```
@@ -63,7 +63,7 @@ done
 ### Find sessions by agent name
 
 ```bash
-for f in ~/.amplifier/projects/my-project/sessions/*/metadata.json; do
+for f in ~/.amplifier/projects/my-project/sessions/*/context-intelligence/metadata.json; do
   jq -r 'select(.agent_name == "foundation:explorer") | .session_id' "$f" 2>/dev/null
 done
 ```
@@ -71,7 +71,7 @@ done
 ### List all sessions with status
 
 ```bash
-for f in ~/.amplifier/projects/my-project/sessions/*/metadata.json; do
+for f in ~/.amplifier/projects/my-project/sessions/*/context-intelligence/metadata.json; do
   jq -r '[.session_id, .status, .started_at] | join("\t")' "$f" 2>/dev/null
 done | sort -t$'\t' -k3
 ```
@@ -107,13 +107,13 @@ sed -n '42p' events.jsonl | jq -c '.'
 ### Find all error events
 
 ```bash
-grep -n '"event":"orchestrator:error"\|"event":"tool:error"' events.jsonl | cut -d: -f1
+grep -n '"event":"provider:error"\|"event":"tool:error"' events.jsonl | cut -d: -f1
 ```
 
 ### Extract error details
 
 ```bash
-jq -c 'select(.event == "orchestrator:error" or .event == "tool:error") | {event: .event, ts: .timestamp, error: .data.error}' events.jsonl
+jq -c 'select(.event == "provider:error" or .event == "tool:error") | {event: .event, ts: .timestamp, error: .data.error}' events.jsonl
 ```
 
 ---
@@ -160,7 +160,7 @@ jq -c "select(.data.tool_call_id == \"$CALL_ID\") | {event: .event, tool: .data.
 
 ```bash
 PARENT_ID="55c8841a-1234-5678-9abc-def012345678"
-for f in ~/.amplifier/projects/my-project/sessions/*/metadata.json; do
+for f in ~/.amplifier/projects/my-project/sessions/*/context-intelligence/metadata.json; do
   jq -r "select(.parent_id == \"$PARENT_ID\") | [.session_id, .agent_name // \"(root)\", .status] | join(\"\t\")" "$f" 2>/dev/null
 done
 ```
@@ -168,7 +168,7 @@ done
 ### Build parent-child tree
 
 ```bash
-for f in ~/.amplifier/projects/my-project/sessions/*/metadata.json; do
+for f in ~/.amplifier/projects/my-project/sessions/*/context-intelligence/metadata.json; do
   jq -r '[.parent_id // "(none)", .session_id, .agent_name // "(root)"] | join("\t")' "$f" 2>/dev/null
 done | sort
 ```
@@ -226,4 +226,24 @@ grep -c '"event":"tool:pre"' events.jsonl
 
 # Count unique tool names
 jq -c 'select(.event == "tool:pre") | .data.tool_name' events.jsonl | sort -u | wc -l
+```
+
+---
+
+## Payload Size Awareness
+
+Some events carry payloads that are **megabytes** in size. Before extracting any event, check the payload size table in `@context-intelligence:context/event-schema.md` Part 7.
+
+**Events with potentially huge payloads:**
+- `llm:request` / `llm:response` — full conversation history, 100k+ tokens per line
+- `provider:request` — full message array sent to the LLM provider
+- Any event with a `raw` field — untruncated API request/response data
+
+**Always extract only the fields you need**, never the full event:
+```bash
+# SAFE: extract only small metadata fields from an llm:response
+sed -n '42p' events.jsonl | jq -c '{event, ts: .timestamp, model: .data.model, usage: .data.usage}'
+
+# DANGEROUS: extracting the full event (could be megabytes)
+sed -n '42p' events.jsonl | jq '.'
 ```

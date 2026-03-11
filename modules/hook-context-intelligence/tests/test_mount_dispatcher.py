@@ -103,14 +103,14 @@ class TestLoggingOnlyPath:
         # Only logging registrations (one per event)
         assert coordinator.hooks.register.call_count == len(events)
 
-    async def test_no_graph_handlers_when_graph_stores_missing(self) -> None:
+    async def test_no_graph_handlers_when_graph_store_missing(self) -> None:
         from amplifier_module_hook_context_intelligence import mount
 
         events = ["session:start", "session:end"]
         coordinator = _make_coordinator(contributed_events=[events])
         await mount(coordinator, config={"enable_graph": True})
 
-        # Only logging registrations (no graph_stores key)
+        # Only logging registrations (no graph_store key)
         assert coordinator.hooks.register.call_count == len(events)
 
 
@@ -118,18 +118,35 @@ class TestLoggingOnlyPath:
 # TestLoggingPlusGraphPath
 # ---------------------------------------------------------------------------
 class TestLoggingPlusGraphPath:
-    """When graph is enabled with stores, both paths are active."""
+    """When graph is enabled with store, both paths are active."""
 
     async def test_both_paths_active(self) -> None:
+        from unittest.mock import AsyncMock, MagicMock, patch
+
         from amplifier_module_hook_context_intelligence import mount
 
         events = ["session:start", "session:end", "tool:pre"]
         coordinator = _make_coordinator(contributed_events=[events])
         config = {
             "enable_graph": True,
-            "graph_stores": [{"type": "duckdb", "config": {"connection": ":memory:"}}],
+            "graph_store": {
+                "type": "neo4j",
+                "graph_forest_name": "default",
+                "config": {
+                    "uri": "neo4j://localhost:7687",
+                    "username": "neo4j",
+                    "password": "test",
+                    "database": "neo4j",
+                },
+            },
         }
-        result = await mount(coordinator, config=config)
+        mock_store = MagicMock()
+        mock_store.close = AsyncMock()
+        with patch(
+            "amplifier_module_hook_context_intelligence.graph_data_hook.Neo4jGraphStore",
+            return_value=mock_store,
+        ):
+            result = await mount(coordinator, config=config)
         assert callable(result)
 
         # Total registrations should be more than just logging (events + graph)

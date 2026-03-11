@@ -1,6 +1,6 @@
 digraph read_path {
     rankdir=LR;
-    label="GraphStore Read Path (Dual Source)\nHandlers see latest state (buffer-first). Analysis sees flushed state (DuckDB-only).";
+    label="GraphStore Read Path (Dual Source)\nHandlers see latest state (buffer-first). Analysis sees flushed state (backing store only).";
     labelloc=t;
     fontsize=14;
     fontname="Helvetica";
@@ -10,26 +10,26 @@ digraph read_path {
     // Callers
     handler_read [label="Handler\nget_node()\nget_edge()"
                   shape=box];
-    analysis [label="Analysis Tool\nexecute_query()\nSQL/PGQ\nforest-scoped"
+    analysis [label="Analysis Tool\nexecute_query()\nCypher\nforest-scoped"
               shape=box style=filled fillcolor="#E8DAEF"];
 
     // Stores
     buffer [label="In-Memory Buffer\n(latest state)"
             shape=cylinder style=filled fillcolor="#D4E6F1"];
-    duckdb [label="Backing Store\n(DuckDB or JSON files)"
-            shape=cylinder style=filled fillcolor="#D5F5E3"];
+    neo4j [label="Backing Store\n(Neo4j)"
+           shape=cylinder style=filled fillcolor="#D5F5E3"];
 
     // Read paths
     handler_read -> buffer [label="check first"];
-    buffer -> duckdb [label="fallback if\nnot in buffer"
-                      style=dashed];
+    buffer -> neo4j [label="fallback if\nnot in buffer"
+                     style=dashed];
 
-    analysis -> duckdb [label="direct\nSQL/PGQ queries"];
+    analysis -> neo4j [label="direct\nCypher queries"];
 
     // Notes
-    note_handler [label="Handlers see latest state\n(buffer + DuckDB merged)"
+    note_handler [label="Handlers see latest state\n(buffer + Neo4j merged)"
                   shape=note style=filled fillcolor="#FDEBD0"];
-    note_analysis [label="Analysis sees flushed state\n(DuckDB only, post-flush)\nNote: SQL/PGQ analysis is\nDuckDB-only via QueryableStore"
+    note_analysis [label="Analysis sees flushed state\n(Neo4j only, post-flush)\nNote: Cypher analysis is\nNeo4j only"
                    shape=note style=filled fillcolor="#FDEBD0"];
 
     note_forest [label="Forest filtering rules:\nNone \u2192 own forest\nexplicit \u2192 that forest\n'*' \u2192 cross-forest"

@@ -126,27 +126,27 @@ class TestSkillRegistration:
         )
 
     def test_skill_directory_exists(self):
-        skill_dir = REPO_ROOT / "skills" / "context-intelligence-graph-search"
+        skill_dir = REPO_ROOT / "skills" / "context-intelligence-neo4j-search"
         assert skill_dir.is_dir(), "Skill directory must exist"
 
     def test_skill_md_file_exists(self):
-        skill_md = REPO_ROOT / "skills" / "context-intelligence-graph-search" / "SKILL.md"
+        skill_md = REPO_ROOT / "skills" / "context-intelligence-neo4j-search" / "SKILL.md"
         assert skill_md.is_file(), "SKILL.md must exist in skill directory"
 
     def test_skill_md_has_valid_frontmatter(self):
-        skill_md = REPO_ROOT / "skills" / "context-intelligence-graph-search" / "SKILL.md"
+        skill_md = REPO_ROOT / "skills" / "context-intelligence-neo4j-search" / "SKILL.md"
         content = skill_md.read_text()
         assert content.startswith("---"), "SKILL.md must start with frontmatter delimiter"
         parts = content.split("---", 2)
         assert len(parts) >= 3, "SKILL.md must have YAML frontmatter between --- delimiters"
         fm = yaml.safe_load(parts[1])
-        assert fm["name"] == "context-intelligence-graph-search"
+        assert fm["name"] == "context-intelligence-neo4j-search"
         assert "description" in fm and len(fm["description"]) > 0
         assert fm.get("license") == "MIT"
 
 
 class TestBehaviorYamlForestConfig:
-    """Validate forest-aware graph_stores config in behavior YAML (task-10)."""
+    """Validate forest-aware graph_store config in behavior YAML."""
 
     def test_log_level_is_plain_warning_no_env_var(self):
         """log_level must be plain 'WARNING', not an env-var interpolation string."""
@@ -162,52 +162,45 @@ class TestBehaviorYamlForestConfig:
         raw_text = path.read_text()
         assert "${" not in raw_text, "Behavior YAML must not contain env var interpolation (${...})"
 
-    def test_graph_stores_section_exists(self):
-        """Hook config must have a graph_stores (plural) list."""
+    def test_graph_store_section_exists(self):
+        """Hook config must have a graph_store (singular) dict."""
         data = _load_behavior()
         config = data["hooks"][0]["config"]
-        assert "graph_stores" in config, "Hook config must have a graph_stores section"
-        assert isinstance(config["graph_stores"], list)
+        assert "graph_store" in config, "Hook config must have a graph_store section"
+        assert isinstance(config["graph_store"], dict)
 
     def test_graph_forest_name_at_store_entry_level(self):
-        """graph_forest_name must be at each graph_stores[] entry level, NOT inside backend config."""
+        """graph_forest_name must be at store entry level, NOT inside backend config."""
         data = _load_behavior()
-        store_entry = data["hooks"][0]["config"]["graph_stores"][0]
+        store_entry = data["hooks"][0]["config"]["graph_store"]
         assert "graph_forest_name" in store_entry, "graph_forest_name must be at store entry level"
         assert store_entry["graph_forest_name"] == "default"
 
     def test_graph_forest_name_not_inside_backend_config(self):
-        """graph_forest_name must NOT be inside graph_stores[].config."""
+        """graph_forest_name must NOT be inside graph_store.config."""
         data = _load_behavior()
-        store_entry = data["hooks"][0]["config"]["graph_stores"][0]
+        store_entry = data["hooks"][0]["config"]["graph_store"]
         backend_config = store_entry.get("config", {})
         assert "graph_forest_name" not in backend_config, (
             "graph_forest_name must be at store entry level, not inside config"
         )
 
-    def test_graph_store_root_in_file_backend(self):
-        """graph_stores[].config must use graph_store_root, not location."""
+    def test_graph_store_type_is_neo4j(self):
+        """graph_store.type must be 'neo4j'."""
         data = _load_behavior()
-        store_entry = data["hooks"][0]["config"]["graph_stores"][0]
-        backend_config = store_entry.get("config", {})
-        assert "graph_store_root" in backend_config, "store config must have graph_store_root"
-        assert backend_config["graph_store_root"] == "~/.amplifier/graphs"
-        assert "location" not in backend_config, (
-            "store config must use graph_store_root, not location"
-        )
+        store_entry = data["hooks"][0]["config"]["graph_store"]
+        assert store_entry["type"] == "neo4j"
 
-    def test_graph_store_root_uses_graphs_plural(self):
-        """Path must end with 'graphs' (plural), not 'graph'."""
+    def test_graph_store_config_has_uri(self):
+        """graph_store.config must have a uri key."""
         data = _load_behavior()
-        root = data["hooks"][0]["config"]["graph_stores"][0]["config"]["graph_store_root"]
-        assert root.endswith("/graphs"), (
-            f"graph_store_root must end with '/graphs' (plural), got {root!r}"
-        )
+        backend_config = data["hooks"][0]["config"]["graph_store"]["config"]
+        assert "uri" in backend_config, "store config must have uri"
 
-    def test_old_graph_store_singular_removed(self):
-        """The old graph_store (singular) key must not exist in config."""
+    def test_old_graph_stores_plural_removed(self):
+        """The old graph_stores (plural) key must not exist in config."""
         data = _load_behavior()
         config = data["hooks"][0]["config"]
-        assert "graph_store" not in config, (
-            "Old graph_store (singular) key must be removed; use graph_stores (plural)"
+        assert "graph_stores" not in config, (
+            "Old graph_stores (plural) key must be removed; use graph_store (singular)"
         )

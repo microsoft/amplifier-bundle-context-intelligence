@@ -66,7 +66,7 @@ async def mount(coordinator: Any, config: dict[str, Any] | None = None) -> Calla
     """Mount the context-intelligence hook module.
 
     1. [ALWAYS]       Create LoggingHandler for flat JSONL logging
-    2. [CONDITIONAL]  Create GraphDataHook when enable_graph + graph_stores
+    2. [CONDITIONAL]  Create GraphDataHook when enable_graph + graph_store
     """
     config = config or {}
     cleanup_fns: list[Callable] = []
@@ -102,7 +102,7 @@ async def mount(coordinator: Any, config: dict[str, Any] | None = None) -> Calla
     cleanup_fns.append(_logging_cleanup)
 
     # -- [CONDITIONAL] GraphDataHook ---------------------------------------
-    if config.get("enable_graph", False) and config.get("graph_stores"):
+    if config.get("enable_graph", False) and config.get("graph_store"):
         try:
             from .graph_data_hook import GraphDataHook
 

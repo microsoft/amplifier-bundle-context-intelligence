@@ -92,6 +92,9 @@ class Neo4jGraphStore:
                 "properties": dict(properties),
             }
 
+    # Internal base label applied at MERGE time for index routing — not a domain label.
+    _BASE_LABEL = "Node"
+
     async def get_node(self, node_id: str) -> dict[str, Any] | None:
         # Buffer-first: check in-memory buffer
         buffered = self._node_buffer.get(node_id)
@@ -112,9 +115,12 @@ class Neo4jGraphStore:
             props = dict(neo4j_node)
             props.pop("node_id", None)
             props.pop("graph_forest_name", None)
+            # Strip the internal base label — it is a Neo4j index-routing label added
+            # by the MERGE pattern (`MERGE (n:Node {...})`), not a domain label.
+            domain_labels = set(neo4j_node.labels) - {self._BASE_LABEL}
             return {
                 "id": node_id,
-                "labels": set(neo4j_node.labels),
+                "labels": domain_labels,
                 "properties": props,
             }
 
@@ -194,7 +200,7 @@ class Neo4jGraphStore:
 
                         await tx.run(
                             "UNWIND $rows AS row "
-                            "MERGE (n {node_id: row.node_id}) "
+                            "MERGE (n:Node {node_id: row.node_id}) "
                             "SET n += row.props",
                             rows=node_rows,
                         )
@@ -208,6 +214,8 @@ class Neo4jGraphStore:
 
                         for label_set, node_ids in label_groups.items():
                             label_clause = ":".join(f"`{lbl}`" for lbl in sorted(label_set))
+                            # label_clause is safe: values come from internal frozenset keys
+                            # populated by upsert_node() callers, never from raw user input.
                             await tx.run(
                                 f"UNWIND $ids AS nid "  # noqa: S608 — label_clause built from internal frozenset keys, not user input
                                 f"MATCH (n {{node_id: nid}}) "
@@ -231,6 +239,8 @@ class Neo4jGraphStore:
                             )
 
                         for rel_type, edge_rows in edge_type_groups.items():
+                            # rel_type is safe: values come from internal edge_buffer keys
+                            # set by upsert_edge() callers, never from raw user input.
                             await tx.run(
                                 f"UNWIND $rows AS row "  # noqa: S608 — rel_type from internal edge_buffer keys, not user input
                                 f"MATCH (s {{node_id: row.source}}) "
@@ -265,7 +275,7 @@ class Neo4jGraphStore:
                     "CREATE INDEX idx_forest IF NOT EXISTS FOR (n:Node) ON (n.graph_forest_name)"
                 )
                 await session.run(
-                    "CREATE INDEX idx_node_id_any IF NOT EXISTS FOR (n:Session) ON (n.node_id)"
+                    "CREATE INDEX idx_session_node_id IF NOT EXISTS FOR (n:Session) ON (n.node_id)"
                 )
         except Exception:
             logger.warning("schema initialization failed", exc_info=True)
@@ -275,9 +285,9 @@ class Neo4jGraphStore:
 
     async def close(self) -> None:
         if not self._closed:
-            self._closed = True
             await self.flush()
             await self._driver.close()
+            self._closed = True
 
     # -- QueryableStore methods (stubbed) ------------------------------------
 

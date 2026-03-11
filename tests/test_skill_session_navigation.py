@@ -12,6 +12,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+import pytest
 import yaml
 
 BUNDLE_ROOT = Path(__file__).resolve().parent.parent
@@ -461,9 +462,9 @@ def test_event_schema_has_delegate_events() -> None:
         )
 
 
-def test_event_schema_has_field_tables() -> None:
-    """Each event section should have its own Field/Type/Description table."""
-    canonical_events = [
+@pytest.mark.parametrize(
+    "event",
+    [
         "session:start",
         "session:fork",
         "session:end",
@@ -482,12 +483,14 @@ def test_event_schema_has_field_tables() -> None:
         "recipe:complete",
         "delegate:start",
         "delegate:complete",
-    ]
-    for event in canonical_events:
-        section = _extract_section(_EVENT_SCHEMA_CONTENT, f"`{event}`", level="###")
-        assert "| Field" in section and "| Type" in section, (
-            f"event-schema.md: '{event}' section should have a Field/Type table"
-        )
+    ],
+)
+def test_event_schema_has_field_table(event: str) -> None:
+    """Each event section should have its own Field/Type/Description table."""
+    section = _extract_section(_EVENT_SCHEMA_CONTENT, f"`{event}`", level="###")
+    assert "| Field" in section and "| Type" in section, (
+        f"event-schema.md: '{event}' section should have a Field/Type table"
+    )
 
 
 # ——————————————————————————————————————————————————————

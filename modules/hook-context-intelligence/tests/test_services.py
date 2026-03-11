@@ -143,38 +143,51 @@ class TestGraphState:
 
 
 class TestHookStateService:
-    def test_construction_with_explicit_duckdb(self):
+    def test_construction_without_injected_store_uses_graphstate(self):
         from amplifier_module_hook_context_intelligence.graph_store import GraphStore
         from amplifier_module_hook_context_intelligence.services import (
             HookConfig,
             HookStateService,
         )
 
-        service = HookStateService(
-            raw_config={"graph_store": {"type": "duckdb", "config": {"connection": ":memory:"}}}
-        )
+        service = HookStateService(raw_config={})
         assert isinstance(service.graph, GraphStore)
         assert isinstance(service.config, HookConfig)
 
-    async def test_graph_accessible_with_explicit_duckdb(self):
+    async def test_graph_accessible_without_injected_store(self):
         from amplifier_module_hook_context_intelligence.services import HookStateService
 
-        service = HookStateService(
-            raw_config={"graph_store": {"type": "duckdb", "config": {"connection": ":memory:"}}}
-        )
+        service = HookStateService(raw_config={})
         await service.graph.upsert_node("test", labels={"Test"}, properties={})
         assert await service.graph.get_node("test") is not None
 
     def test_config_accessible(self):
         from amplifier_module_hook_context_intelligence.services import HookStateService
 
-        service = HookStateService(
-            raw_config={
-                "exclude_events": ["foo:bar"],
-                "graph_store": {"type": "duckdb", "config": {"connection": ":memory:"}},
-            }
-        )
+        service = HookStateService(raw_config={"exclude_events": ["foo:bar"]})
         assert service.config.is_excluded("foo:bar") is True
+
+
+class TestHookStateServiceFallback:
+    def test_fallback_without_explicit_store_creates_graphstate(self):
+        """When no graph_store is injected, the else branch must create GraphState()."""
+        from amplifier_module_hook_context_intelligence.services import (
+            GraphState,
+            HookStateService,
+        )
+
+        service = HookStateService(raw_config={})
+        assert isinstance(service.graph, GraphState)
+
+    def test_no_store_factory_import_in_services_module(self):
+        """services.py must not import from store_factory."""
+        import inspect
+
+        import amplifier_module_hook_context_intelligence.services as svc_module
+
+        source = inspect.getsource(svc_module)
+        assert "store_factory" not in source
+        assert "create_graph_store" not in source
 
 
 class TestHookStateServicePrebuiltStore:
@@ -188,21 +201,9 @@ class TestHookStateServicePrebuiltStore:
         service = HookStateService(raw_config={}, graph_store=prebuilt)
         assert service.graph is prebuilt
 
-    def test_falls_back_to_factory_when_not_provided(self):
+    def test_falls_back_to_graphstate_when_not_provided(self):
         from amplifier_module_hook_context_intelligence.graph_store import GraphStore
         from amplifier_module_hook_context_intelligence.services import HookStateService
 
-        service = HookStateService(
-            raw_config={"graph_store": {"type": "duckdb", "config": {"connection": ":memory:"}}}
-        )
+        service = HookStateService(raw_config={})
         assert isinstance(service.graph, GraphStore)
-
-    def test_prebuilt_composite_store_accepted(self):
-        from amplifier_module_hook_context_intelligence.composite_store import CompositeGraphStore
-        from amplifier_module_hook_context_intelligence.duckdb_store import DuckDBGraphStore
-        from amplifier_module_hook_context_intelligence.services import HookStateService
-
-        backing = DuckDBGraphStore(connection=":memory:", graph_forest_name="composite-test")
-        composite = CompositeGraphStore(stores=[backing])
-        service = HookStateService(raw_config={}, graph_store=composite)
-        assert service.graph is composite

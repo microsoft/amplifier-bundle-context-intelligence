@@ -19,8 +19,8 @@ digraph write_path {
                    shape=diamond style=filled fillcolor="#FCF3CF"];
     flush_task [label="Executor thread\nvia loop.run_in_executor()\nCaller awaits completion" shape=box
                 style=filled fillcolor="#FADBD8"];
-    duckdb [label="Backing Store\n(DuckDB: BEGIN/INSERT/COMMIT\nor FileGraphStore: atomic\ntemp+rename per file)\ngraph_forest_name\nstamped on all rows"
-            shape=cylinder style=filled fillcolor="#D5F5E3"];
+    neo4j [label="Backing Store\n(Neo4j: UNWIND-based\nbatch Cypher transaction)\ngraph_forest_name\nstamped on all nodes/edges"
+           shape=cylinder style=filled fillcolor="#D5F5E3"];
 
     // Hot path (fast)
     event -> handler [label="async"];
@@ -30,8 +30,8 @@ digraph write_path {
     // Background flush (decoupled)
     flush_trigger -> flush_task [label="triggers"];
     buffer -> flush_task [label="drain pending\noperations" style=dashed];
-    flush_task -> duckdb [label="BEGIN;\nINSERT batch;\nCOMMIT;"
-                          style=dashed];
+    flush_task -> neo4j [label="UNWIND batch;\nMERGE;\nCOMMIT;"
+                         style=dashed];
 
     // Subgraph for visual grouping
     subgraph cluster_hot {
@@ -42,6 +42,6 @@ digraph write_path {
     subgraph cluster_background {
         label="Background (milliseconds)";
         style=dashed; color=orange;
-        flush_trigger; flush_task; duckdb;
+        flush_trigger; flush_task; neo4j;
     }
 }

@@ -93,20 +93,20 @@ digraph HookCompositionOverview {
         ];
     }
 
-    // ─── CompositeGraphStore ─────────────────────────────────────────
+    // ─── Neo4jGraphStore ────────────────────────────────────────────
     node [shape=box, style="rounded,filled", penwidth=2];
 
-    CompositeGraphStore [
-        label="CompositeGraphStore\n───────────────────\nFan-out writes\nFirst-responder reads",
+    Neo4jGraphStore [
+        label="Neo4jGraphStore\n───────────────────\nNeo4j-only backend\nUNWIND-based batch flush",
         fillcolor="#F3E5F5",
         color="#6A1B9A"
     ];
 
-    // ─── N Graph Stores ──────────────────────────────────────────────
+    // ─── Graph Store ─────────────────────────────────────────────────
     node [shape=cylinder, style=filled, penwidth=2];
 
     graph_stores [
-        label="N Graph Stores\n(File / DuckDB / Neo4j)",
+        label="Neo4j Graph Store",
         fillcolor="#FFF8E1",
         color="#F57F17"
     ];
@@ -148,12 +148,12 @@ digraph HookCompositionOverview {
         penwidth=1.5
     ];
 
-    GraphDataHook -> CompositeGraphStore [
+    GraphDataHook -> Neo4jGraphStore [
         color="#6A1B9A",
         penwidth=2
     ];
 
-    CompositeGraphStore -> graph_stores [
+    Neo4jGraphStore -> graph_stores [
         color="#F57F17",
         penwidth=2
     ];

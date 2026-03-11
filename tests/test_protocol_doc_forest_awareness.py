@@ -43,7 +43,10 @@ def test_forest_definition(doc_content):
     forest_start = doc_content.index("## Forest Awareness")
     write_path_start = doc_content.index("## Write Path")
     section = doc_content[forest_start:write_path_start]
-    assert "named collection of sessions" in section.lower() or "named collection" in section.lower()
+    assert (
+        "named collection of sessions" in section.lower()
+        or "named collection" in section.lower()
+    )
 
 
 # --- Property Contract subsection ---
@@ -74,23 +77,13 @@ def test_write_scoping_subsection(doc_content):
     assert "Write Scoping" in section
 
 
-def test_write_scoping_file_store_paths(doc_content):
-    """Write Scoping must describe FileGraphStore directory layout."""
+def test_write_scoping_neo4j_store(doc_content):
+    """Write Scoping must describe Neo4jGraphStore property stamping."""
     forest_start = doc_content.index("## Forest Awareness")
     write_path_start = doc_content.index("## Write Path")
     section = doc_content[forest_start:write_path_start]
-    assert "FileGraphStore" in section
-    assert "{graph_forest_name}/nodes/" in section or "graph_forest_name}/nodes/" in section
-    assert "{graph_forest_name}/edges/" in section or "graph_forest_name}/edges/" in section
-
-
-def test_write_scoping_duckdb_store(doc_content):
-    """Write Scoping must describe DuckDBGraphStore column stamping."""
-    forest_start = doc_content.index("## Forest Awareness")
-    write_path_start = doc_content.index("## Write Path")
-    section = doc_content[forest_start:write_path_start]
-    assert "DuckDBGraphStore" in section
-    assert "column" in section.lower()
+    assert "Neo4jGraphStore" in section
+    assert "graph_forest_name" in section
 
 
 # --- Query Scoping subsection ---
@@ -113,7 +106,11 @@ def test_query_scoping_table_entries(doc_content):
     assert "None" in section
     assert "own forest" in section.lower() or "caller" in section.lower()
     assert '"*"' in section or "`*`" in section or "'*'" in section
-    assert "cross-forest" in section.lower() or "cross forest" in section.lower() or "all forest" in section.lower()
+    assert (
+        "cross-forest" in section.lower()
+        or "cross forest" in section.lower()
+        or "all forest" in section.lower()
+    )
 
 
 # --- Point Lookups subsection ---

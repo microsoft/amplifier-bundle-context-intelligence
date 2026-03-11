@@ -66,15 +66,15 @@ def test_hook_config_include_has_graph_forest_name(hook_dispatch_dot):
     assert "graph_forest_name: 'default'" in hook_dispatch_dot
 
 
-def test_hook_config_include_has_type_file(hook_dispatch_dot):
-    """config_include node must show type: 'file'."""
-    assert "type: 'file'" in hook_dispatch_dot
+def test_hook_config_include_has_type_neo4j(hook_dispatch_dot):
+    """config_include node must show type: 'neo4j'."""
+    assert "type: 'neo4j'" in hook_dispatch_dot
 
 
-def test_hook_config_include_has_graph_store_root(hook_dispatch_dot):
-    """config_include node must reference graph_store_root: ~/.amplifier/graphs."""
-    assert "graph_store_root" in hook_dispatch_dot
-    assert "~/.amplifier/graphs" in hook_dispatch_dot
+def test_hook_config_include_has_uri(hook_dispatch_dot):
+    """config_include node must reference uri: bolt://localhost:7687."""
+    assert "uri:" in hook_dispatch_dot
+    assert "bolt://localhost:7687" in hook_dispatch_dot
 
 
 def test_hook_config_include_has_no_env_var_note(hook_dispatch_dot):
@@ -97,9 +97,9 @@ def test_read_path_analysis_node_forest_scoped(read_path_dot):
 
 
 def test_read_path_analysis_node_retains_execute_query(read_path_dot):
-    """Analysis node must retain execute_query() and SQL/PGQ."""
+    """Analysis node must retain execute_query() and Cypher."""
     assert "execute_query()" in read_path_dot
-    assert "SQL/PGQ" in read_path_dot
+    assert "Cypher" in read_path_dot
 
 
 def test_read_path_note_forest_node_exists(read_path_dot):
@@ -141,11 +141,11 @@ def write_path_dot():
     return (CONTEXT_DIR / "write-path.dot").read_text()
 
 
-def test_write_path_duckdb_shows_forest_name(write_path_dot):
-    """DuckDB node must mention graph_forest_name."""
+def test_write_path_neo4j_shows_forest_name(write_path_dot):
+    """Neo4j node must mention graph_forest_name."""
     assert "graph_forest_name" in write_path_dot
 
 
-def test_write_path_duckdb_shows_stamped_on_rows(write_path_dot):
-    """DuckDB node must show 'stamped on all rows'."""
-    assert "stamped on all rows" in write_path_dot
+def test_write_path_neo4j_shows_stamped_on_nodes_edges(write_path_dot):
+    """Neo4j node must show 'stamped on all nodes/edges'."""
+    assert "stamped on all nodes/edges" in write_path_dot

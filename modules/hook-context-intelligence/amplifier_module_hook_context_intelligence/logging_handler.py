@@ -54,7 +54,7 @@ class LoggingHandler:
     """Always-on flat JSONL session file writer.
 
     Writes per-session ``events.jsonl`` and ``metadata.json`` files under
-    ``base_path / project_slug / sessions / session_id /``.
+    ``base_path / project_slug / sessions / session_id / context-intelligence /``.
     """
 
     handled_events: set[str]
@@ -65,7 +65,7 @@ class LoggingHandler:
         self.handled_events = set()
 
     def _session_dir(self, session_id: str) -> Path:
-        return self.base_path / self.project_slug / "sessions" / session_id
+        return self.base_path / self.project_slug / "sessions" / session_id / "context-intelligence"
 
     async def __call__(self, event: str, data: dict[str, Any]) -> HookResult:
         try:

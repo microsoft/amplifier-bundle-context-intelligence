@@ -6,8 +6,6 @@ import dataclasses
 import fnmatch
 from typing import Any
 
-from .store_factory import create_graph_store
-
 
 @dataclasses.dataclass
 class SessionCursors:
@@ -104,8 +102,7 @@ class HookStateService:
         if graph_store is not None:
             self.graph = graph_store
         else:
-            store_config = raw_config.get("graph_store", {})
-            self.graph = create_graph_store(store_config)
+            self.graph = GraphState()
         self._cursors: dict[str, SessionCursors] = {}
 
     def get_cursors(self, session_id: str) -> SessionCursors:

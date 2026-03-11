@@ -13,16 +13,14 @@ hooks:
       exclude_events: []
       log_level: 'WARNING'
       enable_graph: false
-      graph_stores:
-        - type: 'file'
-          graph_forest_name: 'default'
-          config:
-            graph_store_root: '~/.amplifier/graphs'
-        # To use DuckDB instead, replace the entry above:
-        # - type: 'duckdb'
-        #   graph_forest_name: 'default'
-        #   config:
-        #     connection: '~/.amplifier/graphs/context.db'
+      graph_store:
+        type: 'neo4j'
+        graph_forest_name: 'default'
+        config:
+          uri: 'bolt://localhost:7687'
+          username: 'neo4j'     # example — replace before enabling graph
+          password: 'password'  # example — replace before enabling graph
+          database: 'neo4j'
 
 tools:
   - module: tool-skills
@@ -31,3 +29,7 @@ tools:
       skills:
         - git+https://github.com/microsoft/amplifier-bundle-skills@main#subdirectory=skills
         - git+https://github.com/microsoft/amplifier-bundle-context-intelligence@main#subdirectory=skills
+
+agents:
+  include:
+    - context-intelligence:context-intelligence-analyst

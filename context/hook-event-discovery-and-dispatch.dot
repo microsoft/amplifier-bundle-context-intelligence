@@ -42,7 +42,7 @@ digraph HookArchitecture {
 
         handler_groups [label="13 Handler Groups\n(EventHandler protocol)\n\neach implements event_map()\n→ dict[event_name, handler_fn]\n\n46 dedicated events total"];
 
-        config_include [label="Config (graph_store section)\n\ngraph_forest_name: 'default'\ntype: 'file'\nconfig:\n  graph_store_root: ~/.amplifier/graphs\n\nNo env var interpolation"];
+        config_include [label="Config (graph_store section)\n\ngraph_forest_name: 'default'\ntype: 'neo4j'\nconfig:\n  uri: bolt://localhost:7687\n  database: neo4j\n\nNo env var interpolation"];
 
         node [shape=cylinder, fillcolor="#B3E5FC", style=filled];
 

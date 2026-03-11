@@ -103,9 +103,7 @@ class GraphStore(Protocol):
         by design: analysis queries operate on flushed, consistent state.
 
         The query language is backend-specific:
-        - DuckDB backend: SQL or SQL/PGQ
-        - Future GraphForge backend: Cypher
-        - Future PostgreSQL backend: SQL or AGE Cypher
+        - Neo4j backend: Cypher
 
         Args:
             query: Backend-specific query string.
@@ -189,8 +187,7 @@ The value is fixed for the lifetime of the store instance. It is set during cons
 
 All writes are automatically scoped to the store's forest. Callers do not pass the forest name on every upsert — the store stamps it internally.
 
-- **FileGraphStore** uses the forest name as a directory tier: `{graph_store_root}/{graph_forest_name}/nodes/` and `{graph_store_root}/{graph_forest_name}/edges/`. Each forest gets its own subdirectory tree, providing natural filesystem isolation.
-- **DuckDBGraphStore** stamps a `graph_forest_name` column on all rows in the nodes and edges tables. Queries that need scoping filter on this column.
+- **Neo4jGraphStore** stamps `graph_forest_name` as a property on all nodes and relationships. Cypher queries scope to a forest by filtering on this property.
 
 ### Query Scoping
 
@@ -268,7 +265,7 @@ Properties are `dict[str, Any]` -- open-ended key-value pairs.
 
 **Merge semantics on upsert:** When upserting a node or edge that already exists, new properties merge with existing ones. New keys are added, existing keys are overwritten by the new value, keys not mentioned in the new properties dict are preserved. This allows incremental enrichment of nodes across multiple events (e.g., `tool:pre` creates the node, `tool:post` adds `status` and `ended_at`).
 
-**Lifted properties:** Implementations may lift frequently-queried properties to real columns in the backing store schema. For example, the DuckDB backend lifts `session_id` and `occurred_at` to real columns. The protocol interface does not expose this -- callers always pass properties as a dict, and the implementation decides what to lift.
+**Lifted properties:** Implementations may promote frequently-queried properties into indexed fields in the backing store. The protocol interface does not expose this -- callers always pass properties as a dict, and the implementation decides what to promote.
 
 ## Implementing a New Backend
 
@@ -283,4 +280,4 @@ To implement a new GraphStore backend:
 7. Handle `execute_query` with your backend's native query language.
 8. Test against the protocol guarantees, not just the method signatures.
 
-The DuckDB implementation (`DuckDBGraphStore`) is the reference implementation. See the design document in `docs/plans/` for DuckDB-specific decisions (schema, DuckPGQ overlay, Parquet export).
+The Neo4j implementation (`Neo4jGraphStore`) is the reference implementation. See `neo4j_store.py` for the buffer-first read strategy, UNWIND-based batch flush, and schema initialization.

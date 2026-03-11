@@ -57,7 +57,7 @@ class TestSessionStart:
                 "working_dir": "/home/user/project",
             },
         )
-        session_dir = tmp_path / "proj" / "sessions" / "s1"
+        session_dir = tmp_path / "proj" / "sessions" / "s1" / "context-intelligence"
         assert session_dir.is_dir()
 
     async def test_writes_metadata_json_with_correct_fields(self, tmp_path: Path) -> None:
@@ -73,7 +73,7 @@ class TestSessionStart:
                 "working_dir": "/home/user/project",
             },
         )
-        meta_path = tmp_path / "proj" / "sessions" / "s1" / "metadata.json"
+        meta_path = tmp_path / "proj" / "sessions" / "s1" / "context-intelligence" / "metadata.json"
         assert meta_path.exists()
         meta = json.loads(meta_path.read_text())
         assert meta["session_id"] == "s1"
@@ -96,7 +96,11 @@ class TestSessionStart:
                 "recipe_name": "my-recipe",
             },
         )
-        meta = json.loads((tmp_path / "proj" / "sessions" / "s1" / "metadata.json").read_text())
+        meta = json.loads(
+            (
+                tmp_path / "proj" / "sessions" / "s1" / "context-intelligence" / "metadata.json"
+            ).read_text()
+        )
         assert meta["agent_name"] == "test-agent"
         assert meta["recipe_name"] == "my-recipe"
 
@@ -112,7 +116,11 @@ class TestSessionStart:
                 "working_dir": "/w",
             },
         )
-        meta = json.loads((tmp_path / "proj" / "sessions" / "s1" / "metadata.json").read_text())
+        meta = json.loads(
+            (
+                tmp_path / "proj" / "sessions" / "s1" / "context-intelligence" / "metadata.json"
+            ).read_text()
+        )
         assert "agent_name" not in meta
         assert "parallel_group_id" not in meta
         assert "recipe_name" not in meta
@@ -130,7 +138,7 @@ class TestSessionStart:
                 "working_dir": "/w",
             },
         )
-        jsonl_path = tmp_path / "proj" / "sessions" / "s1" / "events.jsonl"
+        jsonl_path = tmp_path / "proj" / "sessions" / "s1" / "context-intelligence" / "events.jsonl"
         assert jsonl_path.exists()
         lines = jsonl_path.read_text().strip().splitlines()
         assert len(lines) == 1
@@ -172,7 +180,7 @@ class TestSessionFork:
                 "working_dir": "/w",
             },
         )
-        session_dir = tmp_path / "proj" / "sessions" / "child1"
+        session_dir = tmp_path / "proj" / "sessions" / "child1" / "context-intelligence"
         assert session_dir.is_dir()
 
     async def test_writes_metadata_on_fork_with_parent_key(self, tmp_path: Path) -> None:
@@ -188,7 +196,11 @@ class TestSessionFork:
                 "working_dir": "/w",
             },
         )
-        meta = json.loads((tmp_path / "proj" / "sessions" / "child1" / "metadata.json").read_text())
+        meta = json.loads(
+            (
+                tmp_path / "proj" / "sessions" / "child1" / "context-intelligence" / "metadata.json"
+            ).read_text()
+        )
         assert meta["session_id"] == "child1"
         assert meta["parent_id"] == "parent1"
         assert meta["status"] == "running"
@@ -222,7 +234,11 @@ class TestSessionEnd:
                 "status": "completed",
             },
         )
-        meta = json.loads((tmp_path / "proj" / "sessions" / "s1" / "metadata.json").read_text())
+        meta = json.loads(
+            (
+                tmp_path / "proj" / "sessions" / "s1" / "context-intelligence" / "metadata.json"
+            ).read_text()
+        )
         assert meta["status"] == "completed"
         assert meta["ended_at"] == "2026-01-15T10:05:00Z"
 
@@ -246,7 +262,7 @@ class TestSessionEnd:
                 "status": "completed",
             },
         )
-        jsonl_path = tmp_path / "proj" / "sessions" / "s1" / "events.jsonl"
+        jsonl_path = tmp_path / "proj" / "sessions" / "s1" / "context-intelligence" / "events.jsonl"
         lines = jsonl_path.read_text().strip().splitlines()
         assert len(lines) == 2
         end_record = json.loads(lines[1])
@@ -279,7 +295,7 @@ class TestRegularEvents:
                 "tool_name": "read_file",
             },
         )
-        jsonl_path = tmp_path / "proj" / "sessions" / "s1" / "events.jsonl"
+        jsonl_path = tmp_path / "proj" / "sessions" / "s1" / "context-intelligence" / "events.jsonl"
         lines = jsonl_path.read_text().strip().splitlines()
         assert len(lines) == 2
         record = json.loads(lines[1])
@@ -298,7 +314,7 @@ class TestRegularEvents:
                 "tool_name": "read_file",
             },
         )
-        session_dir = tmp_path / "proj" / "sessions" / "s1"
+        session_dir = tmp_path / "proj" / "sessions" / "s1" / "context-intelligence"
         assert session_dir.is_dir()
         jsonl_path = session_dir / "events.jsonl"
         assert jsonl_path.exists()
@@ -315,7 +331,7 @@ class TestRegularEvents:
         await handler("tool:result", {"session_id": "s1", "timestamp": "t2"})
         await handler("llm:response", {"session_id": "s1", "timestamp": "t3"})
 
-        jsonl_path = tmp_path / "proj" / "sessions" / "s1" / "events.jsonl"
+        jsonl_path = tmp_path / "proj" / "sessions" / "s1" / "context-intelligence" / "events.jsonl"
         lines = jsonl_path.read_text().strip().splitlines()
         assert len(lines) == 4
         events = [json.loads(line)["event"] for line in lines]
@@ -441,7 +457,7 @@ class TestRecordFormat:
                 "tool_name": "read_file",
             },
         )
-        jsonl_path = tmp_path / "proj" / "sessions" / "s1" / "events.jsonl"
+        jsonl_path = tmp_path / "proj" / "sessions" / "s1" / "context-intelligence" / "events.jsonl"
         line = jsonl_path.read_text().strip()
         record = json.loads(line)
         assert set(record.keys()) == {"event", "timestamp", "data"}

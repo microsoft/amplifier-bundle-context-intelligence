@@ -83,8 +83,11 @@ class TestPyprojectStructure:
     def test_runtime_dependencies(self):
         data = self._load_pyproject()
         deps = data["project"].get("dependencies", [])
-        assert any(d.startswith("duckdb") for d in deps), (
-            f"Expected duckdb in runtime dependencies, got: {deps}"
+        assert any(d.startswith("neo4j") for d in deps), (
+            f"Expected neo4j in runtime dependencies, got: {deps}"
+        )
+        assert not any(d.startswith("duckdb") for d in deps), (
+            f"duckdb must not be in runtime dependencies, got: {deps}"
         )
 
     def test_hatchling_build_backend(self):
@@ -114,20 +117,17 @@ class TestBehaviorYamlConfigShape:
         assert data["hooks"][0]["module"] == "hook-context-intelligence"
 
     def test_config_has_required_keys(self):
-        """Config must have: base_path, exclude_events, log_level, enable_graph, graph_stores."""
+        """Config must have: base_path, exclude_events, log_level, enable_graph, graph_store."""
         data = self._load_behavior_yaml()
         config = data["hooks"][0]["config"]
-        expected_keys = {"base_path", "exclude_events", "log_level", "enable_graph", "graph_stores"}
+        expected_keys = {"base_path", "exclude_events", "log_level", "enable_graph", "graph_store"}
         assert expected_keys == set(config.keys())
 
-    def test_graph_stores_is_list(self):
-        """graph_stores must be a list of store config dicts."""
+    def test_graph_store_is_dict(self):
+        """graph_store must be a dict (singular store config)."""
         data = self._load_behavior_yaml()
         config = data["hooks"][0]["config"]
-        assert isinstance(config["graph_stores"], list)
-        assert len(config["graph_stores"]) >= 1
-        for store in config["graph_stores"]:
-            assert isinstance(store, dict)
+        assert isinstance(config["graph_store"], dict)
 
     def test_enable_graph_defaults_to_false(self):
         """enable_graph must default to false (logging-only by default)."""
@@ -142,16 +142,15 @@ class TestBehaviorYamlConfigShape:
         assert "base_path" in config
         assert isinstance(config["base_path"], str)
 
-    def test_graph_stores_entry_has_type_and_config(self):
-        """Each graph_stores entry must have type and config keys."""
+    def test_graph_store_entry_has_type_and_config(self):
+        """graph_store entry must have type and config keys."""
         data = self._load_behavior_yaml()
-        stores = data["hooks"][0]["config"]["graph_stores"]
-        for store in stores:
-            assert "type" in store
-            assert "config" in store
+        store = data["hooks"][0]["config"]["graph_store"]
+        assert "type" in store
+        assert "config" in store
 
-    def test_old_graph_store_singular_removed(self):
-        """The old 'graph_store' (singular) key must not be in config."""
+    def test_old_graph_stores_plural_removed(self):
+        """The old 'graph_stores' (plural) key must not be in config."""
         data = self._load_behavior_yaml()
         config = data["hooks"][0]["config"]
-        assert "graph_store" not in config
+        assert "graph_stores" not in config

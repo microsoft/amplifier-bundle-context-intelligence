@@ -14,7 +14,7 @@ The bundle ships a single hook module (`hook-context-intelligence`) with two ind
 
 A `metadata.json` file is written alongside it. This is the universal baseline — no configuration required beyond adding the hook.
 
-**Graph Generation** is opt-in. When `enable_graph: true` is set and `graph_stores` are configured, a `GraphDataHook` activates and builds a property graph from the event stream. The graph represents session structure as five node types connected by eight edge types: `Session → OrchestratorRun → Step → ToolExecution → Event`. Writes fan out simultaneously to all configured backends via `CompositeGraphStore`.
+**Graph Generation** is opt-in. When `enable_graph: true` is set and a `graph_store` is configured, a `GraphDataHook` activates and builds a property graph from the event stream. The graph represents session structure as five node types connected by eight edge types: `Session → OrchestratorRun → Step → ToolExecution → Event`. Writes go directly to a Neo4j instance.
 
 ## Quick Start
 
@@ -29,70 +29,31 @@ hooks:
       exclude_events: []
       log_level: "WARNING"
       enable_graph: false                  # set true to activate graph generation
-      graph_stores: []                     # configure backends when enable_graph: true
+      graph_store:                         # configure when enable_graph: true
+        type: "neo4j"
+        graph_forest_name: "default"
+        config:
+          uri: "bolt://localhost:7687"
+          username: "neo4j"
+          password: "password"
+          database: "neo4j"
 ```
 
-With `enable_graph: false` (the default), only session logging is active. No graph backends need to be configured.
+With `enable_graph: false` (the default), only session logging is active. No graph backend needs to be configured.
 
-To activate the graph with a file-based backend:
+## Neo4j Setup
 
-```yaml
-hooks:
-  - module: hook-context-intelligence
-    source: context-intelligence:modules/hook-context-intelligence
-    config:
-      enable_graph: true
-      graph_stores:
-        - type: "file"
-          graph_forest_name: "default"
-          config:
-            graph_store_root: "~/.amplifier/graphs"
+The graph backend requires a running Neo4j instance. Install and start Neo4j:
+
+```bash
+# Docker (recommended for development)
+docker run -d --name neo4j-dev \
+  -p 7474:7474 -p 7687:7687 \
+  -e NEO4J_AUTH=neo4j/password \
+  neo4j:5
 ```
 
-Multiple backends can be configured simultaneously — writes fan out to all of them with failure isolation between stores.
-
-## Storage Backends
-
-### FileGraphStore
-
-Writes nodes and edges as JSON files on disk. No dependencies beyond Python. Queryable with standard shell tools (`jq`, `grep`, `find`).
-
-```yaml
-- type: "file"
-  graph_forest_name: "default"
-  config:
-    graph_store_root: "~/.amplifier/graphs"
-```
-
-Use the `context-intelligence-file-search` skill for shell-based queries against this store.
-
-### DuckDBGraphStore
-
-Writes to a DuckDB database file. Supports SQL queries and DuckPGQ graph pattern matching, plus BM25 full-text search over node and edge properties.
-
-```yaml
-- type: "duckdb"
-  graph_forest_name: "default"
-  config:
-    connection: "~/.amplifier/graphs/ci.db"
-```
-
-Use the `context-intelligence-graph-search` skill for SQL and DuckPGQ queries against this store.
-
-### Neo4jGraphStore
-
-Writes to a running Neo4j instance. Supports Cypher queries and native graph algorithms.
-
-```yaml
-- type: "neo4j"
-  graph_forest_name: "default"
-  config:
-    uri: "bolt://localhost:7687"
-    username: "neo4j"
-    password: "password"
-```
-
-Use the `context-intelligence-neo4j-search` skill for Cypher queries against this store.
+The store creates necessary indexes on first flush (idempotent).
 
 ## Graph Data Model
 
@@ -109,7 +70,7 @@ Five node types:
 Eight edge types:
 
 | Edge | From → To | Meaning |
-|------|-----------|---------|
+|------|-----------|---------| 
 | `HAS_RUN` | Session → OrchestratorRun | Session contains this run |
 | `HAS_STEP` | OrchestratorRun → Step | Run contains this step |
 | `NEXT` | Step → Step | Sequential ordering |
@@ -123,7 +84,7 @@ The full data model is specified in the sibling `amplifier-event-and-data-model-
 
 ## Architecture
 
-The hook module uses a lightweight dispatcher at `mount()`. On mount, `LoggingHandler` always registers and subscribes to all events. `GraphDataHook` registers conditionally, controlled by a six-state deterministic state machine that manages backend lifecycle (init, active, error, degraded, shutdown).
+The hook module uses a lightweight dispatcher at `mount()`. On mount, `LoggingHandler` always registers and subscribes to all events. `GraphDataHook` registers conditionally, controlled by a six-state deterministic state machine that manages backend lifecycle.
 
 Seven graph handlers cover the full event space:
 
@@ -135,22 +96,14 @@ Seven graph handlers cover the full event space:
 - `SystemEventHandler` — system-level signals
 - `DefaultHandler` — catch-all safety net; no event is ever silently dropped
 
-`CompositeGraphStore` wraps all configured backends. A write failure in one store does not affect the others.
-
 DOT architecture diagrams covering each subsystem are available in `context/` for reference and introspection.
 
 ## Skills
 
-Four companion skills ship with the bundle. Load them via the Amplifier skill system.
+Two companion skills ship with the bundle. Load them via the Amplifier skill system.
 
 **`context-intelligence-session-navigation`**
 Navigate flat JSONL session files safely. Handles sessions with 100k+ token lines — provides patterns for chunked reading, event filtering, and extracting specific event types without loading the full file.
-
-**`context-intelligence-file-search`**
-Shell-based queries for FileGraphStore. Covers node lookup by ID, edge traversal, property filtering with `jq`, and bulk session analysis with standard Unix tools.
-
-**`context-intelligence-graph-search`**
-SQL and DuckPGQ queries for DuckDBGraphStore. Covers node and edge queries, graph pattern matching with `MATCH`, BM25 full-text search, and aggregation over session data.
 
 **`context-intelligence-neo4j-search`**
 Cypher queries for Neo4jGraphStore. Covers path queries, graph algorithm invocations, and pattern-based node/edge retrieval.
@@ -164,7 +117,7 @@ cd modules/hook-context-intelligence
 uv run pytest tests/ -v
 ```
 
-Dependencies: `duckdb==1.4.3`, `neo4j>=5.0,<7.0`. Requires Python 3.11+.
+Dependencies: `neo4j>=5.0,<7.0`. Requires Python 3.11+.
 
 Type checking and linting:
 

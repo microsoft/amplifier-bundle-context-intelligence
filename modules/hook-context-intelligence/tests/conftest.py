@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from typing import Any
 
 import pytest
@@ -11,9 +12,11 @@ from amplifier_module_hook_context_intelligence.services import HookStateService
 # ---------------------------------------------------------------------------
 # Neo4j test connection constants (shared across test modules)
 # ---------------------------------------------------------------------------
-NEO4J_URI = "neo4j://localhost:7690"
-NEO4J_AUTH = None
-NEO4J_DATABASE = "neo4j"
+NEO4J_URI = os.environ.get("NEO4J_URI", "neo4j://localhost:7690")
+_neo4j_user = os.environ.get("NEO4J_USER")
+_neo4j_pass = os.environ.get("NEO4J_PASSWORD")
+NEO4J_AUTH = (_neo4j_user, _neo4j_pass) if _neo4j_user and _neo4j_pass else None
+NEO4J_DATABASE = os.environ.get("NEO4J_DATABASE", "neo4j")
 
 # ---------------------------------------------------------------------------
 # Reference IDs – mirror the make_node_id format used by handlers
@@ -83,25 +86,13 @@ def reference_edges() -> list[tuple[str, str, str, dict[str, Any]]]:
     ]
 
 
-# Private aliases preserved for backward compatibility with existing tests
-# that import _reference_nodes / _reference_edges directly.
-_reference_nodes = reference_nodes
-_reference_edges = reference_edges
-
-
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
 @pytest.fixture
 def services() -> HookStateService:
-    """A fresh HookStateService wired to an in-memory DuckDB store.
-
-    Uses explicit config so the factory never tries to import file_store
-    during DuckDB-focused tests.
-    """
-    return HookStateService(
-        raw_config={"graph_store": {"type": "duckdb", "config": {"connection": ":memory:"}}}
-    )
+    """A fresh HookStateService using default GraphState (no external store)."""
+    return HookStateService(raw_config={})
 
 
 @pytest.fixture
