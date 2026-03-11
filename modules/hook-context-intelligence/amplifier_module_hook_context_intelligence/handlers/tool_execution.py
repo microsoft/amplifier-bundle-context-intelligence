@@ -93,7 +93,7 @@ class ToolExecutionHandler:
                     te_id,
                     existing_te_id,
                     "PARALLEL_WITH",
-                    {},
+                    {"occurred_at": timestamp},
                 )
 
             # Add this TE to the parallel group
@@ -197,7 +197,7 @@ class ToolExecutionHandler:
                 te_id,
                 child_session_id,
                 "SPAWNED",
-                {},
+                {"occurred_at": data.get("timestamp", "")},
             )
 
         log.info("Delegation spawned from %s to %s", te_id, child_session_id)

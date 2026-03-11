@@ -83,7 +83,7 @@ async def mount(coordinator: Any, config: dict[str, Any] | None = None) -> Calla
         return None
 
     # -- [ALWAYS] LoggingHandler -------------------------------------------
-    from .logging_handler import LoggingHandler
+    from .handlers.logging_handler import LoggingHandler
 
     logging_handler = LoggingHandler(base_path, project_slug)
     logging_handler.handled_events = set(events)

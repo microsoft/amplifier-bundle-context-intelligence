@@ -287,6 +287,37 @@ class TestToolPreParallelWith:
         assert edge_fwd is None
         assert edge_rev is None
 
+    async def test_parallel_with_edge_has_occurred_at(self, services: HookStateService) -> None:
+        """PARALLEL_WITH edge should carry occurred_at matching the newer tool's timestamp."""
+        await _seed_through_step(services)
+        handler = ToolExecutionHandler(services)
+        # First tool
+        await handler(
+            "tool:pre",
+            {
+                "session_id": "s1",
+                "timestamp": TOOL1_TIMESTAMP,
+                "tool_call_id": "call_001",
+                "tool_name": "read_file",
+                "parallel_group_id": "pg1",
+            },
+        )
+        # Second tool in same group — this creates the PARALLEL_WITH edge
+        await handler(
+            "tool:pre",
+            {
+                "session_id": "s1",
+                "timestamp": TOOL2_TIMESTAMP,
+                "tool_call_id": "call_002",
+                "tool_name": "grep",
+                "parallel_group_id": "pg1",
+            },
+        )
+        # PARALLEL_WITH edge should include occurred_at = TOOL2_TIMESTAMP
+        edge = await services.graph.get_edge(EXPECTED_TE2_ID, EXPECTED_TE1_ID, "PARALLEL_WITH")
+        assert edge is not None
+        assert edge["properties"]["occurred_at"] == TOOL2_TIMESTAMP
+
 
 # ── TestToolPreErrorPaths (2 tests) ─────────────────────────────────────
 
@@ -590,6 +621,24 @@ class TestDelegateAgentSpawned:
             },
         )
         assert result.action == "continue"
+
+    async def test_spawned_edge_has_occurred_at(self, services: HookStateService) -> None:
+        """SPAWNED edge should carry occurred_at from the delegate:agent_spawned timestamp."""
+        te_id = await _seed_one_tool(services, tool_call_id="call_d9", tool_name="delegate")
+        handler = ToolExecutionHandler(services)
+        await handler(
+            "delegate:agent_spawned",
+            {
+                "session_id": "s1",
+                "timestamp": DELEGATE_SPAWNED_TIMESTAMP,
+                "tool_call_id": "call_d9",
+                "child_session_id": "child-oat-99",
+                "child_agent": "foundation:explorer",
+            },
+        )
+        edge = await services.graph.get_edge(te_id, "child-oat-99", "SPAWNED")
+        assert edge is not None
+        assert edge["properties"]["occurred_at"] == DELEGATE_SPAWNED_TIMESTAMP
 
 
 # ── TestDelegateAgentCompleted (2 tests) ─────────────────────────────────

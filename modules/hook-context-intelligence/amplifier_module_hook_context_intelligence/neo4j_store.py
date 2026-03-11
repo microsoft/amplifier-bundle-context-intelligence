@@ -18,6 +18,7 @@ queries.  Stale skill = broken agent query generation.
 from __future__ import annotations
 
 import logging
+from datetime import datetime
 from typing import Any
 
 from neo4j import AsyncGraphDatabase
@@ -63,7 +64,7 @@ class Neo4jGraphStore:
         """Query dialects this backend can execute."""
         return frozenset({"cypher"})
 
-    # -- GraphStore methods (stubbed) ----------------------------------------
+    # -- GraphStore methods --------------------------------------------------
 
     async def upsert_node(self, node_id: str, labels: set[str], properties: dict[str, Any]) -> None:
         existing = self._node_buffer.get(node_id)
@@ -94,6 +95,30 @@ class Neo4jGraphStore:
 
     # Internal base label applied at MERGE time for index routing — not a domain label.
     _BASE_LABEL = "Node"
+
+    @staticmethod
+    def _convert_timestamps(props: dict[str, Any]) -> dict[str, Any]:
+        """Convert *_at ISO-8601 string properties to Python datetime objects.
+
+        The Neo4j Python driver maps Python datetime → native Neo4j DateTime,
+        enabling temporal queries (<, >, ORDER BY, duration.between()).
+        Malformed or empty *_at values are kept as-is (logged as warnings).
+        """
+        result = {}
+        for key, value in props.items():
+            if key.endswith("_at") and isinstance(value, str) and value:
+                try:
+                    result[key] = datetime.fromisoformat(value)
+                except ValueError:
+                    logger.warning(
+                        "Could not parse timestamp for property %r: %r — keeping as string",
+                        key,
+                        value,
+                    )
+                    result[key] = value
+            else:
+                result[key] = value
+        return result
 
     async def get_node(self, node_id: str) -> dict[str, Any] | None:
         # Buffer-first: check in-memory buffer
@@ -137,7 +162,7 @@ class Neo4jGraphStore:
                 "MATCH (s {node_id: $source, graph_forest_name: $gfn})"
                 "-[r]->"
                 "(t {node_id: $target, graph_forest_name: $gfn}) "
-                "WHERE type(r) = $edge_type RETURN r",
+                "WHERE type(r) = $edge_type AND r.graph_forest_name = $gfn RETURN r",
                 source=source,
                 target=target,
                 edge_type=edge_type,
@@ -190,7 +215,7 @@ class Neo4jGraphStore:
                             row: dict[str, Any] = {
                                 "node_id": node_id,
                                 "props": {
-                                    **entry["properties"],
+                                    **self._convert_timestamps(entry["properties"]),
                                     "node_id": node_id,
                                     "graph_forest_name": self._graph_forest_name,
                                 },
@@ -232,7 +257,7 @@ class Neo4jGraphStore:
                                     "source": entry["source"],
                                     "target": entry["target"],
                                     "props": {
-                                        **entry["properties"],
+                                        **self._convert_timestamps(entry["properties"]),
                                         "graph_forest_name": self._graph_forest_name,
                                     },
                                 }
@@ -277,6 +302,18 @@ class Neo4jGraphStore:
                 await session.run(
                     "CREATE INDEX idx_session_node_id IF NOT EXISTS FOR (n:Session) ON (n.node_id)"
                 )
+                await session.run(
+                    "CREATE INDEX idx_orchestrator_run_node_id IF NOT EXISTS FOR (n:OrchestratorRun) ON (n.node_id)"
+                )
+                await session.run(
+                    "CREATE INDEX idx_step_node_id IF NOT EXISTS FOR (n:Step) ON (n.node_id)"
+                )
+                await session.run(
+                    "CREATE INDEX idx_tool_execution_node_id IF NOT EXISTS FOR (n:ToolExecution) ON (n.node_id)"
+                )
+                await session.run(
+                    "CREATE INDEX idx_event_node_id IF NOT EXISTS FOR (n:Event) ON (n.node_id)"
+                )
         except Exception:
             logger.warning("schema initialization failed", exc_info=True)
             raise
@@ -289,7 +326,7 @@ class Neo4jGraphStore:
             await self._driver.close()
             self._closed = True
 
-    # -- QueryableStore methods (stubbed) ------------------------------------
+    # -- QueryableStore methods ----------------------------------------------
 
     async def execute_query(
         self,

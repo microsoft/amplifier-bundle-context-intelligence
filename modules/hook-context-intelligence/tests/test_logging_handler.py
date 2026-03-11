@@ -19,19 +19,25 @@ class TestConstruction:
     """LoggingHandler can be constructed with minimal args."""
 
     def test_creates_handler(self, tmp_path: Path) -> None:
-        from amplifier_module_hook_context_intelligence.logging_handler import LoggingHandler
+        from amplifier_module_hook_context_intelligence.handlers.logging_handler import (
+            LoggingHandler,
+        )
 
         handler = LoggingHandler(base_path=tmp_path, project_slug="proj")
         assert handler is not None
 
     def test_handled_events_starts_empty(self, tmp_path: Path) -> None:
-        from amplifier_module_hook_context_intelligence.logging_handler import LoggingHandler
+        from amplifier_module_hook_context_intelligence.handlers.logging_handler import (
+            LoggingHandler,
+        )
 
         handler = LoggingHandler(base_path=tmp_path, project_slug="proj")
         assert handler.handled_events == set()
 
     def test_handled_events_is_mutable_set(self, tmp_path: Path) -> None:
-        from amplifier_module_hook_context_intelligence.logging_handler import LoggingHandler
+        from amplifier_module_hook_context_intelligence.handlers.logging_handler import (
+            LoggingHandler,
+        )
 
         handler = LoggingHandler(base_path=tmp_path, project_slug="proj")
         assert isinstance(handler.handled_events, set)
@@ -46,7 +52,9 @@ class TestSessionStart:
     """session:start creates session dir and writes metadata + JSONL."""
 
     async def test_creates_session_dir(self, tmp_path: Path) -> None:
-        from amplifier_module_hook_context_intelligence.logging_handler import LoggingHandler
+        from amplifier_module_hook_context_intelligence.handlers.logging_handler import (
+            LoggingHandler,
+        )
 
         handler = LoggingHandler(base_path=tmp_path, project_slug="proj")
         await handler(
@@ -61,7 +69,9 @@ class TestSessionStart:
         assert session_dir.is_dir()
 
     async def test_writes_metadata_json_with_correct_fields(self, tmp_path: Path) -> None:
-        from amplifier_module_hook_context_intelligence.logging_handler import LoggingHandler
+        from amplifier_module_hook_context_intelligence.handlers.logging_handler import (
+            LoggingHandler,
+        )
 
         handler = LoggingHandler(base_path=tmp_path, project_slug="proj")
         await handler(
@@ -83,7 +93,9 @@ class TestSessionStart:
         assert meta["working_dir"] == "/home/user/project"
 
     async def test_includes_optional_fields_when_present(self, tmp_path: Path) -> None:
-        from amplifier_module_hook_context_intelligence.logging_handler import LoggingHandler
+        from amplifier_module_hook_context_intelligence.handlers.logging_handler import (
+            LoggingHandler,
+        )
 
         handler = LoggingHandler(base_path=tmp_path, project_slug="proj")
         await handler(
@@ -105,7 +117,9 @@ class TestSessionStart:
         assert meta["recipe_name"] == "my-recipe"
 
     async def test_omits_optional_fields_when_absent(self, tmp_path: Path) -> None:
-        from amplifier_module_hook_context_intelligence.logging_handler import LoggingHandler
+        from amplifier_module_hook_context_intelligence.handlers.logging_handler import (
+            LoggingHandler,
+        )
 
         handler = LoggingHandler(base_path=tmp_path, project_slug="proj")
         await handler(
@@ -127,7 +141,9 @@ class TestSessionStart:
         assert "recipe_step" not in meta
 
     async def test_appends_event_to_jsonl(self, tmp_path: Path) -> None:
-        from amplifier_module_hook_context_intelligence.logging_handler import LoggingHandler
+        from amplifier_module_hook_context_intelligence.handlers.logging_handler import (
+            LoggingHandler,
+        )
 
         handler = LoggingHandler(base_path=tmp_path, project_slug="proj")
         await handler(
@@ -146,7 +162,9 @@ class TestSessionStart:
         assert record["event"] == "session:start"
 
     async def test_returns_hook_result_continue(self, tmp_path: Path) -> None:
-        from amplifier_module_hook_context_intelligence.logging_handler import LoggingHandler
+        from amplifier_module_hook_context_intelligence.handlers.logging_handler import (
+            LoggingHandler,
+        )
 
         handler = LoggingHandler(base_path=tmp_path, project_slug="proj")
         result = await handler(
@@ -168,7 +186,9 @@ class TestSessionFork:
     """session:fork creates session dir using 'parent' key (not 'parent_id')."""
 
     async def test_creates_session_dir_on_fork(self, tmp_path: Path) -> None:
-        from amplifier_module_hook_context_intelligence.logging_handler import LoggingHandler
+        from amplifier_module_hook_context_intelligence.handlers.logging_handler import (
+            LoggingHandler,
+        )
 
         handler = LoggingHandler(base_path=tmp_path, project_slug="proj")
         await handler(
@@ -184,7 +204,9 @@ class TestSessionFork:
         assert session_dir.is_dir()
 
     async def test_writes_metadata_on_fork_with_parent_key(self, tmp_path: Path) -> None:
-        from amplifier_module_hook_context_intelligence.logging_handler import LoggingHandler
+        from amplifier_module_hook_context_intelligence.handlers.logging_handler import (
+            LoggingHandler,
+        )
 
         handler = LoggingHandler(base_path=tmp_path, project_slug="proj")
         await handler(
@@ -213,7 +235,9 @@ class TestSessionEnd:
     """session:end updates metadata with status + ended_at."""
 
     async def test_updates_metadata_status_and_ended_at(self, tmp_path: Path) -> None:
-        from amplifier_module_hook_context_intelligence.logging_handler import LoggingHandler
+        from amplifier_module_hook_context_intelligence.handlers.logging_handler import (
+            LoggingHandler,
+        )
 
         handler = LoggingHandler(base_path=tmp_path, project_slug="proj")
         # First start a session
@@ -243,7 +267,9 @@ class TestSessionEnd:
         assert meta["ended_at"] == "2026-01-15T10:05:00Z"
 
     async def test_appends_end_event_to_jsonl(self, tmp_path: Path) -> None:
-        from amplifier_module_hook_context_intelligence.logging_handler import LoggingHandler
+        from amplifier_module_hook_context_intelligence.handlers.logging_handler import (
+            LoggingHandler,
+        )
 
         handler = LoggingHandler(base_path=tmp_path, project_slug="proj")
         await handler(
@@ -276,7 +302,9 @@ class TestRegularEvents:
     """Regular events append to events.jsonl."""
 
     async def test_appends_to_existing_session(self, tmp_path: Path) -> None:
-        from amplifier_module_hook_context_intelligence.logging_handler import LoggingHandler
+        from amplifier_module_hook_context_intelligence.handlers.logging_handler import (
+            LoggingHandler,
+        )
 
         handler = LoggingHandler(base_path=tmp_path, project_slug="proj")
         await handler(
@@ -302,7 +330,9 @@ class TestRegularEvents:
         assert record["event"] == "tool:call"
 
     async def test_creates_session_dir_on_first_event_if_missing(self, tmp_path: Path) -> None:
-        from amplifier_module_hook_context_intelligence.logging_handler import LoggingHandler
+        from amplifier_module_hook_context_intelligence.handlers.logging_handler import (
+            LoggingHandler,
+        )
 
         handler = LoggingHandler(base_path=tmp_path, project_slug="proj")
         # No session:start — regular event arrives first
@@ -320,7 +350,9 @@ class TestRegularEvents:
         assert jsonl_path.exists()
 
     async def test_multiple_events_append_in_order(self, tmp_path: Path) -> None:
-        from amplifier_module_hook_context_intelligence.logging_handler import LoggingHandler
+        from amplifier_module_hook_context_intelligence.handlers.logging_handler import (
+            LoggingHandler,
+        )
 
         handler = LoggingHandler(base_path=tmp_path, project_slug="proj")
         await handler(
@@ -345,7 +377,9 @@ class TestErrorHandling:
     """Missing/empty session_id skips silently."""
 
     async def test_missing_session_id_skips_silently(self, tmp_path: Path) -> None:
-        from amplifier_module_hook_context_intelligence.logging_handler import LoggingHandler
+        from amplifier_module_hook_context_intelligence.handlers.logging_handler import (
+            LoggingHandler,
+        )
 
         handler = LoggingHandler(base_path=tmp_path, project_slug="proj")
         result = await handler("session:start", {"timestamp": "2026-01-15T10:00:00Z"})
@@ -356,7 +390,9 @@ class TestErrorHandling:
         assert not sessions_dir.exists()
 
     async def test_empty_session_id_skips_silently(self, tmp_path: Path) -> None:
-        from amplifier_module_hook_context_intelligence.logging_handler import LoggingHandler
+        from amplifier_module_hook_context_intelligence.handlers.logging_handler import (
+            LoggingHandler,
+        )
 
         handler = LoggingHandler(base_path=tmp_path, project_slug="proj")
         result = await handler(
@@ -375,7 +411,7 @@ class TestSanitizeForJson:
     """_sanitize_for_json handles various types gracefully."""
 
     def test_dict_passthrough(self) -> None:
-        from amplifier_module_hook_context_intelligence.logging_handler import (
+        from amplifier_module_hook_context_intelligence.handlers.logging_handler import (
             _sanitize_for_json,
         )
 
@@ -384,7 +420,7 @@ class TestSanitizeForJson:
         assert result == {"a": 1, "b": "hello", "c": True, "d": None}
 
     def test_non_serializable_falls_back_to_str(self) -> None:
-        from amplifier_module_hook_context_intelligence.logging_handler import (
+        from amplifier_module_hook_context_intelligence.handlers.logging_handler import (
             _sanitize_for_json,
         )
 
@@ -399,7 +435,7 @@ class TestSanitizeForJson:
     def test_pydantic_model_uses_model_dump(self) -> None:
         from pydantic import BaseModel
 
-        from amplifier_module_hook_context_intelligence.logging_handler import (
+        from amplifier_module_hook_context_intelligence.handlers.logging_handler import (
             _sanitize_for_json,
         )
 
@@ -412,7 +448,7 @@ class TestSanitizeForJson:
         assert result["model"] == {"name": "test", "value": 42}
 
     def test_set_becomes_sorted_list(self) -> None:
-        from amplifier_module_hook_context_intelligence.logging_handler import (
+        from amplifier_module_hook_context_intelligence.handlers.logging_handler import (
             _sanitize_for_json,
         )
 
@@ -421,7 +457,7 @@ class TestSanitizeForJson:
         assert result["tags"] == ["a", "b", "c"]
 
     def test_nested_dict_recursion(self) -> None:
-        from amplifier_module_hook_context_intelligence.logging_handler import (
+        from amplifier_module_hook_context_intelligence.handlers.logging_handler import (
             _sanitize_for_json,
         )
 
@@ -430,7 +466,7 @@ class TestSanitizeForJson:
         assert result == {"outer": {"inner": {"deep": 1}}}
 
     def test_list_recursion(self) -> None:
-        from amplifier_module_hook_context_intelligence.logging_handler import (
+        from amplifier_module_hook_context_intelligence.handlers.logging_handler import (
             _sanitize_for_json,
         )
 
@@ -446,7 +482,9 @@ class TestRecordFormat:
     """Each JSONL line has exactly {event, timestamp, data}."""
 
     async def test_record_has_exactly_three_keys(self, tmp_path: Path) -> None:
-        from amplifier_module_hook_context_intelligence.logging_handler import LoggingHandler
+        from amplifier_module_hook_context_intelligence.handlers.logging_handler import (
+            LoggingHandler,
+        )
 
         handler = LoggingHandler(base_path=tmp_path, project_slug="proj")
         await handler(

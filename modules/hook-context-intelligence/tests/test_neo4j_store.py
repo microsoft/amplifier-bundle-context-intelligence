@@ -626,6 +626,82 @@ class TestSchemaInitialization:
         )
         assert found, f"No index with graph_forest_name in properties. Found: {records}"
 
+    @pytest.mark.asyncio
+    async def test_orchestrator_run_index_exists_after_flush(self, neo4j_store):
+        """After flush, an index on OrchestratorRun.node_id must exist."""
+        await neo4j_store.upsert_node("n1", {"OrchestratorRun"}, {"k": "v"})
+        await neo4j_store.flush()
+
+        async with neo4j_store._driver.session(database=neo4j_store._database) as session:
+            result = await session.run("SHOW INDEXES YIELD name, labelsOrTypes, properties")
+            records = [record async for record in result]
+
+        found = any(
+            record["labelsOrTypes"] is not None
+            and "OrchestratorRun" in record["labelsOrTypes"]
+            and record["properties"] is not None
+            and "node_id" in record["properties"]
+            for record in records
+        )
+        assert found, f"No index for OrchestratorRun.node_id. Found: {records}"
+
+    @pytest.mark.asyncio
+    async def test_step_index_exists_after_flush(self, neo4j_store):
+        """After flush, an index on Step.node_id must exist."""
+        await neo4j_store.upsert_node("n1", {"Step"}, {"k": "v"})
+        await neo4j_store.flush()
+
+        async with neo4j_store._driver.session(database=neo4j_store._database) as session:
+            result = await session.run("SHOW INDEXES YIELD name, labelsOrTypes, properties")
+            records = [record async for record in result]
+
+        found = any(
+            record["labelsOrTypes"] is not None
+            and "Step" in record["labelsOrTypes"]
+            and record["properties"] is not None
+            and "node_id" in record["properties"]
+            for record in records
+        )
+        assert found, f"No index for Step.node_id. Found: {records}"
+
+    @pytest.mark.asyncio
+    async def test_tool_execution_index_exists_after_flush(self, neo4j_store):
+        """After flush, an index on ToolExecution.node_id must exist."""
+        await neo4j_store.upsert_node("n1", {"ToolExecution"}, {"k": "v"})
+        await neo4j_store.flush()
+
+        async with neo4j_store._driver.session(database=neo4j_store._database) as session:
+            result = await session.run("SHOW INDEXES YIELD name, labelsOrTypes, properties")
+            records = [record async for record in result]
+
+        found = any(
+            record["labelsOrTypes"] is not None
+            and "ToolExecution" in record["labelsOrTypes"]
+            and record["properties"] is not None
+            and "node_id" in record["properties"]
+            for record in records
+        )
+        assert found, f"No index for ToolExecution.node_id. Found: {records}"
+
+    @pytest.mark.asyncio
+    async def test_event_index_exists_after_flush(self, neo4j_store):
+        """After flush, an index on Event.node_id must exist."""
+        await neo4j_store.upsert_node("n1", {"Event"}, {"k": "v"})
+        await neo4j_store.flush()
+
+        async with neo4j_store._driver.session(database=neo4j_store._database) as session:
+            result = await session.run("SHOW INDEXES YIELD name, labelsOrTypes, properties")
+            records = [record async for record in result]
+
+        found = any(
+            record["labelsOrTypes"] is not None
+            and "Event" in record["labelsOrTypes"]
+            and record["properties"] is not None
+            and "node_id" in record["properties"]
+            for record in records
+        )
+        assert found, f"No index for Event.node_id. Found: {records}"
+
 
 # ---------------------------------------------------------------------------
 # TestClose
@@ -962,6 +1038,80 @@ class TestForestScoping:
 
 
 # ---------------------------------------------------------------------------
+# TestGetEdgeForestFilter
+# ---------------------------------------------------------------------------
+class TestGetEdgeForestFilter:
+    """get_edge Neo4j fallback must filter edges by graph_forest_name on the relationship."""
+
+    @pytest.mark.asyncio
+    async def test_get_edge_does_not_leak_across_forests(self, neo4j_store):
+        """Edge written in forest-a must NOT be visible via get_edge in forest-b.
+
+        Scenario that exposes the real bug: both forests write to the SAME node_ids
+        (MERGE means the nodes end up with the LAST writer's forest name).  When
+        store_b flushes AFTER store_a, the shared nodes carry graph_forest_name="forest-b".
+        Without a relationship-level forest filter, store_b.get_edge would find the
+        relationship written by store_a because the node filter now matches.
+
+        Verification order matters: store_a must confirm its edge is visible BEFORE
+        store_b overwrites the shared nodes — after that overwrite the nodes carry
+        forest-b, so the node-level forest filter naturally excludes store_a too.
+        The critical isolation assertion is that store_b sees None even though it
+        "owns" the nodes at query time.
+        """
+        from amplifier_module_hook_context_intelligence.neo4j_store import Neo4jGraphStore
+
+        store_a = Neo4jGraphStore(
+            uri=NEO4J_URI,
+            auth=NEO4J_AUTH,
+            database=NEO4J_DATABASE,
+            graph_forest_name="forest-a",
+        )
+        store_b = Neo4jGraphStore(
+            uri=NEO4J_URI,
+            auth=NEO4J_AUTH,
+            database=NEO4J_DATABASE,
+            graph_forest_name="forest-b",
+        )
+        try:
+            # store_a writes both shared nodes AND an edge, then flushes
+            await store_a.upsert_node("ef-filter-src", {"Node"}, {})
+            await store_a.upsert_node("ef-filter-tgt", {"Node"}, {})
+            await store_a.upsert_edge("ef-filter-src", "ef-filter-tgt", "LINKED", {"w": 1})
+            await store_a.flush()
+
+            # Verify store_a can read its own edge (buffer cleared, reads from Neo4j)
+            assert store_a._edge_buffer == {}
+            result_a_before = await store_a.get_edge("ef-filter-src", "ef-filter-tgt", "LINKED")
+            assert result_a_before is not None, (
+                "Edge must be visible in forest-a before node overwrite"
+            )
+            assert result_a_before["properties"]["w"] == 1
+
+            # store_b writes to the SAME node_ids (no edge), then flushes AFTER store_a.
+            # This causes the Neo4j nodes to have graph_forest_name="forest-b" (last-write wins).
+            # Without a relationship-level filter, store_b.get_edge would now wrongly
+            # return the edge written by store_a (node filter now matches, but edge belongs to a).
+            await store_b.upsert_node("ef-filter-src", {"Node"}, {})
+            await store_b.upsert_node("ef-filter-tgt", {"Node"}, {})
+            await store_b.flush()
+
+            # store_b has empty edge buffer — must fall back to Neo4j.
+            # This is the critical assertion: the relationship's graph_forest_name="forest-a"
+            # must prevent the edge from being returned to forest-b even though the nodes
+            # now have graph_forest_name="forest-b" and would match the node filter.
+            assert store_b._edge_buffer == {}
+            result_b = await store_b.get_edge("ef-filter-src", "ef-filter-tgt", "LINKED")
+            assert result_b is None, (
+                f"Edge from forest-a must NOT be visible via get_edge in forest-b "
+                f"(relationship-level forest filter required), but got: {result_b}"
+            )
+        finally:
+            await store_a.close()
+            await store_b.close()
+
+
+# ---------------------------------------------------------------------------
 # TestStandingRuleDocstring
 # ---------------------------------------------------------------------------
 class TestStandingRuleDocstring:
@@ -1004,3 +1154,95 @@ class TestStandingRuleDocstring:
         assert doc is not None
         assert "Neo4jGraphStore" in doc
         assert "buffer-first reads with async Neo4j persistence" in doc
+
+
+# ---------------------------------------------------------------------------
+# TestTimestampConversion
+# ---------------------------------------------------------------------------
+class TestTimestampConversion:
+    """_convert_timestamps() converts *_at ISO-8601 strings to native Neo4j DateTime."""
+
+    @pytest.mark.asyncio
+    async def test_node_occurred_at_stored_as_datetime(self, neo4j_store):
+        """occurred_at on a node is stored as neo4j.time.DateTime after flush."""
+        import neo4j.time
+
+        await neo4j_store.upsert_node("ts-n1", {"Step"}, {"occurred_at": "2026-01-15T10:00:01Z"})
+        await neo4j_store.flush()
+
+        async with neo4j_store._driver.session(database=neo4j_store._database) as session:
+            result = await session.run(
+                "MATCH (n {node_id: $nid}) RETURN n.occurred_at AS ts", nid="ts-n1"
+            )
+            record = await result.single()
+        assert record is not None
+        assert isinstance(record["ts"], neo4j.time.DateTime), (
+            f"Expected neo4j.time.DateTime but got {type(record['ts'])}: {record['ts']}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_node_started_at_stored_as_datetime(self, neo4j_store):
+        """started_at on a node is stored as neo4j.time.DateTime after flush."""
+        import neo4j.time
+
+        await neo4j_store.upsert_node("ts-n2", {"Session"}, {"started_at": "2026-01-15T10:00:00Z"})
+        await neo4j_store.flush()
+
+        async with neo4j_store._driver.session(database=neo4j_store._database) as session:
+            result = await session.run(
+                "MATCH (n {node_id: $nid}) RETURN n.started_at AS ts", nid="ts-n2"
+            )
+            record = await result.single()
+        assert record is not None
+        assert isinstance(record["ts"], neo4j.time.DateTime), (
+            f"Expected neo4j.time.DateTime but got {type(record['ts'])}: {record['ts']}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_edge_occurred_at_stored_as_datetime(self, neo4j_store):
+        """occurred_at on an edge is stored as neo4j.time.DateTime after flush."""
+        import neo4j.time
+
+        await neo4j_store.upsert_node("ts-src", {"Node"}, {})
+        await neo4j_store.upsert_node("ts-tgt", {"Node"}, {})
+        await neo4j_store.upsert_edge(
+            "ts-src", "ts-tgt", "OCCURRED", {"occurred_at": "2026-01-15T10:00:02Z"}
+        )
+        await neo4j_store.flush()
+
+        async with neo4j_store._driver.session(database=neo4j_store._database) as session:
+            result = await session.run(
+                "MATCH (s {node_id: 'ts-src'})-[r:OCCURRED]->(t {node_id: 'ts-tgt'}) "
+                "RETURN r.occurred_at AS ts"
+            )
+            record = await result.single()
+        assert record is not None
+        assert isinstance(record["ts"], neo4j.time.DateTime), (
+            f"Expected neo4j.time.DateTime but got {type(record['ts'])}: {record['ts']}"
+        )
+
+    def test_non_at_properties_unchanged(self):
+        """Non-_at string properties are not converted by _convert_timestamps."""
+        from amplifier_module_hook_context_intelligence.neo4j_store import Neo4jGraphStore
+
+        props = {"name": "Alice", "status": "active", "count": 42}
+        result = Neo4jGraphStore._convert_timestamps(props)
+        assert result["name"] == "Alice"
+        assert result["status"] == "active"
+        assert result["count"] == 42
+
+    def test_malformed_timestamp_passes_through_as_string(self):
+        """Malformed _at string values pass through unchanged without raising."""
+        from amplifier_module_hook_context_intelligence.neo4j_store import Neo4jGraphStore
+
+        props = {"occurred_at": "not-a-valid-date"}
+        result = Neo4jGraphStore._convert_timestamps(props)
+        assert result["occurred_at"] == "not-a-valid-date"
+
+    def test_empty_string_timestamp_passes_through(self):
+        """Empty string _at values pass through unchanged without raising."""
+        from amplifier_module_hook_context_intelligence.neo4j_store import Neo4jGraphStore
+
+        props = {"occurred_at": ""}
+        result = Neo4jGraphStore._convert_timestamps(props)
+        assert result["occurred_at"] == ""
