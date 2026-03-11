@@ -9,12 +9,16 @@ hooks:
   - module: hook-context-intelligence
     source: context-intelligence:modules/hook-context-intelligence
     config:
-      base_path: '~/.amplifier/projects'
+      # Resolution order: explicit config -> coordinator.config -> sensible default
+      # base_path: '~/.amplifier/projects'  # optional; resolved lazily if omitted
+      # project_slug: 'my-project'          # optional; resolved lazily if omitted
+      # project: 'my-project'              # optional; used as graph_forest_name fallback
       exclude_events: []
       log_level: 'WARNING'
       enable_graph: false
       graph_store:
         type: 'neo4j'
+        # graph_forest_name resolved via: graph_store.graph_forest_name -> config.project -> coordinator.config.project_slug -> "default"
         graph_forest_name: 'default'
         config:
           uri: 'bolt://localhost:7687'

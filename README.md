@@ -25,18 +25,20 @@ hooks:
   - module: hook-context-intelligence
     source: context-intelligence:modules/hook-context-intelligence
     config:
-      base_path: "~/.amplifier/projects"  # optional, this is the default
+      # base_path: "~/.amplifier/projects"  # optional; resolved lazily if omitted
+      # project_slug: "my-project"          # optional; resolved lazily if omitted
+      # project: "my-project"              # optional; used as graph_forest_name fallback
       exclude_events: []
       log_level: "WARNING"
-      enable_graph: false                  # set true to activate graph generation
-      graph_store:                         # configure when enable_graph: true
+      enable_graph: false                   # set true to activate graph generation
+      graph_store:                          # configure when enable_graph: true
         type: "neo4j"
-        graph_forest_name: "default"
+        graph_forest_name: "default"        # fallback chain: graph_forest_name -> project -> coordinator.config.project_slug -> "default"
         config:
-          uri: "bolt://localhost:7687"
-          username: "neo4j"
-          password: "password"
-          database: "neo4j"
+          uri: "${NEO4J_URI:-bolt://localhost:7687}"
+          username: "${NEO4J_USERNAME:-neo4j}"
+          password: "${NEO4J_PASSWORD}"
+          database: "${NEO4J_DATABASE:-neo4j}"
 ```
 
 With `enable_graph: false` (the default), only session logging is active. No graph backend needs to be configured.
