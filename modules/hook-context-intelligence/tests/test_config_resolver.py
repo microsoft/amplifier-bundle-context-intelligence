@@ -127,3 +127,79 @@ class TestProjectSlugResolution:
         resolver = ConfigResolver(config={"project_slug": "my-project"}, coordinator=coordinator)
 
         assert isinstance(resolver.project_slug, str)
+
+
+class TestForestNameResolution:
+    def test_graph_store_config_wins(self) -> None:
+        """graph_store.graph_forest_name wins over all other options."""
+        coordinator = _make_coordinator(config={"project_slug": "from-coordinator"})
+        resolver = ConfigResolver(
+            config={
+                "graph_store": {"graph_forest_name": "from-graph-store"},
+                "project": "from-project",
+            },
+            coordinator=coordinator,
+        )
+
+        assert resolver.forest_name == "from-graph-store"
+
+    def test_config_project_fallback(self) -> None:
+        """config['project'] used when no graph_forest_name."""
+        coordinator = _make_coordinator(config={"project_slug": "from-coordinator"})
+        resolver = ConfigResolver(
+            config={"project": "from-config-project"},
+            coordinator=coordinator,
+        )
+
+        assert resolver.forest_name == "from-config-project"
+
+    def test_coordinator_project_slug_fallback(self) -> None:
+        """coordinator.config.project_slug used when no config.project."""
+        coordinator = _make_coordinator(config={"project_slug": "from-coordinator-slug"})
+        resolver = ConfigResolver(config={}, coordinator=coordinator)
+
+        assert resolver.forest_name == "from-coordinator-slug"
+
+    def test_default_when_all_absent(self) -> None:
+        """Resolves to 'default' when all sources absent."""
+        coordinator = _make_coordinator(config={})
+        resolver = ConfigResolver(config={}, coordinator=coordinator)
+
+        assert resolver.forest_name == "default"
+
+    def test_graph_store_not_a_dict_skips_gracefully(self) -> None:
+        """Non-dict graph_store is skipped gracefully, falls through to config.project."""
+        coordinator = _make_coordinator(config={})
+        resolver = ConfigResolver(
+            config={"graph_store": "not-a-dict", "project": "fallback-project"},
+            coordinator=coordinator,
+        )
+
+        assert resolver.forest_name == "fallback-project"
+
+    def test_graph_store_missing_forest_key_falls_through(self) -> None:
+        """Dict graph_store without graph_forest_name falls through to config.project."""
+        coordinator = _make_coordinator(config={})
+        resolver = ConfigResolver(
+            config={"graph_store": {"type": "neo4j"}, "project": "from-project-key"},
+            coordinator=coordinator,
+        )
+
+        assert resolver.forest_name == "from-project-key"
+
+    def test_cached_after_first_access(self) -> None:
+        """forest_name returns the same object on repeated access (cached)."""
+        coordinator = _make_coordinator(config={})
+        resolver = ConfigResolver(config={}, coordinator=coordinator)
+
+        first = resolver.forest_name
+        second = resolver.forest_name
+
+        assert first is second
+
+    def test_coordinator_without_config_attr_falls_back_to_default(self) -> None:
+        """Coordinator without .config attribute safely falls back to 'default'."""
+        bare = _make_bare_coordinator()
+        resolver = ConfigResolver(config={}, coordinator=bare)
+
+        assert resolver.forest_name == "default"

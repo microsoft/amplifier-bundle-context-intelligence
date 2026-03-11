@@ -25,6 +25,7 @@ class ConfigResolver:
         self._coordinator = coordinator
         self._base_path: Path | None = None
         self._project_slug: str | None = None
+        self._forest_name: str | None = None
 
     # ------------------------------------------------------------------
     # Private helpers
@@ -76,3 +77,36 @@ class ConfigResolver:
             )
             self._base_path = Path(raw).expanduser()
         return self._base_path
+
+    @property
+    def forest_name(self) -> str:
+        """Resolved forest name for graph storage.
+
+        Chain: config['graph_store']['graph_forest_name']
+               → config['project']
+               → coordinator.config['project_slug']
+               → 'default'.
+
+        Non-dict graph_store values are skipped gracefully.
+        Result is cached after first access.
+        """
+        if self._forest_name is None:
+            value: Any = None
+
+            # Step 1: graph_store.graph_forest_name
+            graph_store = self._config.get("graph_store")
+            if isinstance(graph_store, dict):
+                value = graph_store.get("graph_forest_name")
+
+            # Step 2: config['project']
+            if not value:
+                value = self._config.get("project")
+
+            # Step 3: coordinator.config['project_slug']
+            if not value:
+                value = self._coordinator_config_get("project_slug")
+
+            # Step 4: 'default'
+            self._forest_name = str(value) if value else _DEFAULT_PROJECT_SLUG
+
+        return self._forest_name
