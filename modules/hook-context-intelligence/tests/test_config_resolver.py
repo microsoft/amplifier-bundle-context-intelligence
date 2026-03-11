@@ -346,15 +346,28 @@ class TestExcludeEvents:
 
         assert resolver.exclude_events == {"event_a", "event_b"}
 
-    def test_returns_set_type(self) -> None:
-        """exclude_events always returns a set instance."""
+    def test_returns_frozenset_type(self) -> None:
+        """exclude_events always returns a frozenset instance (cached, immutable)."""
         coordinator = _make_coordinator(config={})
         resolver = ConfigResolver(
             config={"exclude_events": ["event_a"]},
             coordinator=coordinator,
         )
 
-        assert isinstance(resolver.exclude_events, set)
+        assert isinstance(resolver.exclude_events, frozenset)
+
+    def test_cached_after_first_access(self) -> None:
+        """exclude_events returns the same object on repeated access (cached)."""
+        coordinator = _make_coordinator(config={})
+        resolver = ConfigResolver(
+            config={"exclude_events": ["event_a", "event_b"]},
+            coordinator=coordinator,
+        )
+
+        first = resolver.exclude_events
+        second = resolver.exclude_events
+
+        assert first is second
 
 
 class TestLogLevel:

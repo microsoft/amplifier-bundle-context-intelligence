@@ -19,6 +19,9 @@ class ConfigResolver:
                     → coordinator.config[project_slug] → 'default'
 
     Resolved values are cached after first access.
+
+    Note: Empty strings in config are treated as absent and fall through to the
+    next source in the chain (standard ``or``-chain falsy semantics).
     """
 
     def __init__(self, config: dict[str, Any], coordinator: Any) -> None:
@@ -27,6 +30,7 @@ class ConfigResolver:
         self._base_path: Path | None = None
         self._project_slug: str | None = None
         self._forest_name: str | None = None
+        self._exclude_events: frozenset[str] | None = None
 
     # ------------------------------------------------------------------
     # Private helpers
@@ -107,7 +111,7 @@ class ConfigResolver:
             if not value:
                 value = self._coordinator_config_get("project_slug")
 
-            # Step 4: 'default'
+            # Step 4: 'default'  (same default value as project_slug)
             self._forest_name = str(value) if value else _DEFAULT_PROJECT_SLUG
 
         return self._forest_name
@@ -156,13 +160,15 @@ class ConfigResolver:
         return {"uri": uri, "auth": auth, "database": database}
 
     @property
-    def exclude_events(self) -> set[str]:
-        """Set of event names to exclude from processing.
+    def exclude_events(self) -> frozenset[str]:
+        """Frozen set of event names to exclude from processing.
 
-        Reads directly from config['exclude_events'], defaults to empty set.
-        No coordinator fallback.
+        Reads directly from config['exclude_events'], defaults to empty frozenset.
+        No coordinator fallback.  Result is cached after first access.
         """
-        return set(self._config.get("exclude_events", []))
+        if self._exclude_events is None:
+            self._exclude_events = frozenset(self._config.get("exclude_events", []))
+        return self._exclude_events
 
     @property
     def log_level(self) -> str:
