@@ -71,7 +71,7 @@ class TestLoggingOnlyIntegration:
             contributed_events=[events],
             working_dir="/home/user/test-project",
         )
-        config = {"base_path": str(tmp_path)}
+        config = {"base_path": str(tmp_path), "project_slug": "test-project"}
         cleanup = await mount(coordinator, config=config)
         assert callable(cleanup)
 

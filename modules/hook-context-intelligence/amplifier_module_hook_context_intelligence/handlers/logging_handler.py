@@ -59,13 +59,12 @@ class LoggingHandler:
 
     handled_events: set[str]
 
-    def __init__(self, base_path: str | Path, project_slug: str) -> None:
-        self.base_path = Path(base_path).expanduser()
-        self.project_slug = project_slug
+    def __init__(self, resolver: Any) -> None:
+        self._resolver = resolver
         self.handled_events = set()
 
     def _session_dir(self, session_id: str) -> Path:
-        return self.base_path / self.project_slug / "sessions" / session_id / "context-intelligence"
+        return self._resolver.session_dir(session_id)
 
     async def __call__(self, event: str, data: dict[str, Any]) -> HookResult:
         try:

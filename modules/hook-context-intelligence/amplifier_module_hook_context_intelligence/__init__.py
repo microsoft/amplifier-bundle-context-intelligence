@@ -16,6 +16,7 @@ from typing import Any, Callable
 # Import from the mount submodule at package-init time so that
 # sys.modules['...mount'] is populated *before* the ``mount`` function
 # name is bound below.
+from .config_resolver import ConfigResolver
 from .mount import MountFlow as _MountFlow  # noqa: F401
 
 __amplifier_module_type__ = "hook"
@@ -72,8 +73,7 @@ async def mount(coordinator: Any, config: dict[str, Any] | None = None) -> Calla
     cleanup_fns: list[Callable] = []
 
     # -- Resolve project slug and base path --------------------------------
-    project_slug = _resolve_project_slug(coordinator)
-    base_path = config.get("base_path", "~/.amplifier/projects")
+    resolver = ConfigResolver(config, coordinator)
 
     # -- Discover events ---------------------------------------------------
     exclude_patterns = set(config.get("exclude_events", []))
@@ -85,7 +85,7 @@ async def mount(coordinator: Any, config: dict[str, Any] | None = None) -> Calla
     # -- [ALWAYS] LoggingHandler -------------------------------------------
     from .handlers.logging_handler import LoggingHandler
 
-    logging_handler = LoggingHandler(base_path, project_slug)
+    logging_handler = LoggingHandler(resolver)
     logging_handler.handled_events = set(events)
 
     logging_unreg_fns: list[Callable] = []

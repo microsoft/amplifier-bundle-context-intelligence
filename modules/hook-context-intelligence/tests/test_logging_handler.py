@@ -13,6 +13,20 @@ from amplifier_core.models import HookResult
 
 
 # ---------------------------------------------------------------------------
+# _FakeResolver adapter
+# ---------------------------------------------------------------------------
+class _FakeResolver:
+    """Minimal resolver adapter for testing LoggingHandler in isolation."""
+
+    def __init__(self, base_path: Path, project_slug: str) -> None:
+        self.base_path = base_path
+        self.project_slug = project_slug
+
+    def session_dir(self, session_id: str) -> Path:
+        return self.base_path / self.project_slug / "sessions" / session_id / "context-intelligence"
+
+
+# ---------------------------------------------------------------------------
 # TestConstruction
 # ---------------------------------------------------------------------------
 class TestConstruction:
@@ -23,7 +37,7 @@ class TestConstruction:
             LoggingHandler,
         )
 
-        handler = LoggingHandler(base_path=tmp_path, project_slug="proj")
+        handler = LoggingHandler(_FakeResolver(tmp_path, "proj"))
         assert handler is not None
 
     def test_handled_events_starts_empty(self, tmp_path: Path) -> None:
@@ -31,7 +45,7 @@ class TestConstruction:
             LoggingHandler,
         )
 
-        handler = LoggingHandler(base_path=tmp_path, project_slug="proj")
+        handler = LoggingHandler(_FakeResolver(tmp_path, "proj"))
         assert handler.handled_events == set()
 
     def test_handled_events_is_mutable_set(self, tmp_path: Path) -> None:
@@ -39,7 +53,7 @@ class TestConstruction:
             LoggingHandler,
         )
 
-        handler = LoggingHandler(base_path=tmp_path, project_slug="proj")
+        handler = LoggingHandler(_FakeResolver(tmp_path, "proj"))
         assert isinstance(handler.handled_events, set)
         handler.handled_events.add("foo")
         assert "foo" in handler.handled_events
@@ -56,7 +70,7 @@ class TestSessionStart:
             LoggingHandler,
         )
 
-        handler = LoggingHandler(base_path=tmp_path, project_slug="proj")
+        handler = LoggingHandler(_FakeResolver(tmp_path, "proj"))
         await handler(
             "session:start",
             {
@@ -73,7 +87,7 @@ class TestSessionStart:
             LoggingHandler,
         )
 
-        handler = LoggingHandler(base_path=tmp_path, project_slug="proj")
+        handler = LoggingHandler(_FakeResolver(tmp_path, "proj"))
         await handler(
             "session:start",
             {
@@ -97,7 +111,7 @@ class TestSessionStart:
             LoggingHandler,
         )
 
-        handler = LoggingHandler(base_path=tmp_path, project_slug="proj")
+        handler = LoggingHandler(_FakeResolver(tmp_path, "proj"))
         await handler(
             "session:start",
             {
@@ -121,7 +135,7 @@ class TestSessionStart:
             LoggingHandler,
         )
 
-        handler = LoggingHandler(base_path=tmp_path, project_slug="proj")
+        handler = LoggingHandler(_FakeResolver(tmp_path, "proj"))
         await handler(
             "session:start",
             {
@@ -145,7 +159,7 @@ class TestSessionStart:
             LoggingHandler,
         )
 
-        handler = LoggingHandler(base_path=tmp_path, project_slug="proj")
+        handler = LoggingHandler(_FakeResolver(tmp_path, "proj"))
         await handler(
             "session:start",
             {
@@ -166,7 +180,7 @@ class TestSessionStart:
             LoggingHandler,
         )
 
-        handler = LoggingHandler(base_path=tmp_path, project_slug="proj")
+        handler = LoggingHandler(_FakeResolver(tmp_path, "proj"))
         result = await handler(
             "session:start",
             {
@@ -190,7 +204,7 @@ class TestSessionFork:
             LoggingHandler,
         )
 
-        handler = LoggingHandler(base_path=tmp_path, project_slug="proj")
+        handler = LoggingHandler(_FakeResolver(tmp_path, "proj"))
         await handler(
             "session:fork",
             {
@@ -208,7 +222,7 @@ class TestSessionFork:
             LoggingHandler,
         )
 
-        handler = LoggingHandler(base_path=tmp_path, project_slug="proj")
+        handler = LoggingHandler(_FakeResolver(tmp_path, "proj"))
         await handler(
             "session:fork",
             {
@@ -239,7 +253,7 @@ class TestSessionEnd:
             LoggingHandler,
         )
 
-        handler = LoggingHandler(base_path=tmp_path, project_slug="proj")
+        handler = LoggingHandler(_FakeResolver(tmp_path, "proj"))
         # First start a session
         await handler(
             "session:start",
@@ -271,7 +285,7 @@ class TestSessionEnd:
             LoggingHandler,
         )
 
-        handler = LoggingHandler(base_path=tmp_path, project_slug="proj")
+        handler = LoggingHandler(_FakeResolver(tmp_path, "proj"))
         await handler(
             "session:start",
             {
@@ -306,7 +320,7 @@ class TestRegularEvents:
             LoggingHandler,
         )
 
-        handler = LoggingHandler(base_path=tmp_path, project_slug="proj")
+        handler = LoggingHandler(_FakeResolver(tmp_path, "proj"))
         await handler(
             "session:start",
             {
@@ -334,7 +348,7 @@ class TestRegularEvents:
             LoggingHandler,
         )
 
-        handler = LoggingHandler(base_path=tmp_path, project_slug="proj")
+        handler = LoggingHandler(_FakeResolver(tmp_path, "proj"))
         # No session:start — regular event arrives first
         await handler(
             "tool:call",
@@ -354,7 +368,7 @@ class TestRegularEvents:
             LoggingHandler,
         )
 
-        handler = LoggingHandler(base_path=tmp_path, project_slug="proj")
+        handler = LoggingHandler(_FakeResolver(tmp_path, "proj"))
         await handler(
             "session:start",
             {"session_id": "s1", "timestamp": "t0", "working_dir": "/w"},
@@ -381,7 +395,7 @@ class TestErrorHandling:
             LoggingHandler,
         )
 
-        handler = LoggingHandler(base_path=tmp_path, project_slug="proj")
+        handler = LoggingHandler(_FakeResolver(tmp_path, "proj"))
         result = await handler("session:start", {"timestamp": "2026-01-15T10:00:00Z"})
         assert isinstance(result, HookResult)
         assert result.action == "continue"
@@ -394,7 +408,7 @@ class TestErrorHandling:
             LoggingHandler,
         )
 
-        handler = LoggingHandler(base_path=tmp_path, project_slug="proj")
+        handler = LoggingHandler(_FakeResolver(tmp_path, "proj"))
         result = await handler(
             "session:start", {"session_id": "", "timestamp": "2026-01-15T10:00:00Z"}
         )
@@ -486,7 +500,7 @@ class TestRecordFormat:
             LoggingHandler,
         )
 
-        handler = LoggingHandler(base_path=tmp_path, project_slug="proj")
+        handler = LoggingHandler(_FakeResolver(tmp_path, "proj"))
         await handler(
             "tool:call",
             {
