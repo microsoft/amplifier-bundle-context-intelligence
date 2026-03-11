@@ -80,3 +80,50 @@ class TestBasePathResolution:
         resolver = ConfigResolver(config={"base_path": "/some/path"}, coordinator=coordinator)
 
         assert isinstance(resolver.base_path, Path)
+
+
+class TestProjectSlugResolution:
+    def test_config_value_wins(self) -> None:
+        """Explicit hook config project_slug wins over coordinator config."""
+        coordinator = _make_coordinator(config={"project_slug": "from-coordinator"})
+        resolver = ConfigResolver(config={"project_slug": "from-config"}, coordinator=coordinator)
+
+        assert resolver.project_slug == "from-config"
+
+    def test_coordinator_fallback_when_config_absent(self) -> None:
+        """When config has no project_slug, falls back to coordinator.config."""
+        coordinator = _make_coordinator(config={"project_slug": "from-coordinator"})
+        resolver = ConfigResolver(config={}, coordinator=coordinator)
+
+        assert resolver.project_slug == "from-coordinator"
+
+    def test_default_when_both_absent(self) -> None:
+        """When both config and coordinator lack project_slug, uses 'default'."""
+        coordinator = _make_coordinator(config={})
+        resolver = ConfigResolver(config={}, coordinator=coordinator)
+
+        assert resolver.project_slug == "default"
+
+    def test_cached_after_first_access(self) -> None:
+        """project_slug returns the same object on repeated access (cached)."""
+        coordinator = _make_coordinator(config={})
+        resolver = ConfigResolver(config={}, coordinator=coordinator)
+
+        first = resolver.project_slug
+        second = resolver.project_slug
+
+        assert first is second
+
+    def test_coordinator_without_config_attr_falls_back_to_default(self) -> None:
+        """Coordinator without .config attribute safely falls back to 'default'."""
+        bare = _make_bare_coordinator()
+        resolver = ConfigResolver(config={}, coordinator=bare)
+
+        assert resolver.project_slug == "default"
+
+    def test_returns_str_type(self) -> None:
+        """project_slug always returns a str instance."""
+        coordinator = _make_coordinator(config={})
+        resolver = ConfigResolver(config={"project_slug": "my-project"}, coordinator=coordinator)
+
+        assert isinstance(resolver.project_slug, str)

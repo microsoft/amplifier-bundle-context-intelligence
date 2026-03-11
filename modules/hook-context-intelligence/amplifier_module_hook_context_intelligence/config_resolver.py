@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 _DEFAULT_BASE_PATH = "~/.amplifier/projects"
+_DEFAULT_PROJECT_SLUG = "default"
 
 
 class ConfigResolver:
@@ -23,6 +24,7 @@ class ConfigResolver:
         self._config = config
         self._coordinator = coordinator
         self._base_path: Path | None = None
+        self._project_slug: str | None = None
 
     # ------------------------------------------------------------------
     # Private helpers
@@ -42,6 +44,22 @@ class ConfigResolver:
     # ------------------------------------------------------------------
     # Properties
     # ------------------------------------------------------------------
+
+    @property
+    def project_slug(self) -> str:
+        """Resolved project slug identifier.
+
+        Chain: config['project_slug'] → coordinator.config['project_slug'] → 'default'.
+        Result is cached after first access.
+        """
+        if self._project_slug is None:
+            raw = (
+                self._config.get("project_slug")
+                or self._coordinator_config_get("project_slug")
+                or _DEFAULT_PROJECT_SLUG
+            )
+            self._project_slug = str(raw)
+        return self._project_slug
 
     @property
     def base_path(self) -> Path:
