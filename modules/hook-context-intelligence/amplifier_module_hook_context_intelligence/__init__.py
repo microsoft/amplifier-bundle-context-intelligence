@@ -102,11 +102,11 @@ async def mount(coordinator: Any, config: dict[str, Any] | None = None) -> Calla
     cleanup_fns.append(_logging_cleanup)
 
     # -- [CONDITIONAL] GraphDataHook ---------------------------------------
-    if config.get("enable_graph", False) and config.get("graph_store"):
+    if resolver.enable_graph and resolver.graph_store_config:
         try:
             from .graph_data_hook import GraphDataHook
 
-            graph_hook = GraphDataHook(config=config)
+            graph_hook = GraphDataHook(resolver)
             graph_cleanup = await graph_hook.mount(coordinator)
             cleanup_fns.append(graph_cleanup)
         except Exception:

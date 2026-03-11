@@ -12,33 +12,24 @@ from .neo4j_store import Neo4jGraphStore
 logger = logging.getLogger(__name__)
 
 
-def _create_neo4j_store(config: dict[str, Any]) -> Neo4jGraphStore:
-    """Create a Neo4jGraphStore from the ``graph_store`` config dict.
+def _create_neo4j_store(resolver: Any) -> Neo4jGraphStore:
+    """Create a Neo4jGraphStore from the resolver's neo4j_config and forest_name.
 
-    Expected config shape::
-
-        {
-            "type": "neo4j",
-            "graph_forest_name": "default",
-            "config": {
-                "uri": "bolt://localhost:7687",
-                "username": "neo4j",
-                "password": "password",
-                "database": "neo4j",
-            },
-        }
+    Raises ValueError if resolver.neo4j_config is None (no graph_store config present).
     """
-    store_config = config["graph_store"]
-    impl_config = store_config.get("config", {})
-    forest_name = store_config.get("graph_forest_name", "default")
+    neo4j_cfg = resolver.neo4j_config
+    if neo4j_cfg is None:
+        raise ValueError(
+            "neo4j_config is not available in the resolver; "
+            "ensure 'graph_store.config' is present in hook configuration"
+        )
 
-    uri = impl_config["uri"]
-    username = impl_config.get("username")
-    password = impl_config.get("password")
-    auth = (username, password) if username and password else None
-    database = impl_config.get("database", "neo4j")
-
-    return Neo4jGraphStore(uri=uri, auth=auth, database=database, graph_forest_name=forest_name)
+    return Neo4jGraphStore(
+        uri=neo4j_cfg["uri"],
+        auth=neo4j_cfg["auth"],
+        database=neo4j_cfg["database"],
+        graph_forest_name=resolver.forest_name,
+    )
 
 
 class GraphDataHook:
@@ -48,10 +39,11 @@ class GraphDataHook:
     in the hook configuration.
     """
 
-    def __init__(self, config: dict[str, Any]) -> None:
-        self._config = config
-        self._store = _create_neo4j_store(config)
-        self._flow = MountFlow(config=config, graph_store=self._store)
+    def __init__(self, resolver: Any) -> None:
+        self._resolver = resolver
+        self._store = _create_neo4j_store(resolver)
+        # MountFlow still needs raw config dict as bridge until Task 7
+        self._flow = MountFlow(config=resolver._config, graph_store=self._store)
 
     async def mount(self, coordinator: Any) -> Callable:
         """Run the mount flow and return a cleanup callable.

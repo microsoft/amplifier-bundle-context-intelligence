@@ -3,6 +3,8 @@
 Task-2: refactor plural → singular in two places inside __init__.py:
   1. Guard on (previously) line 105: config.get("graph_store")
   2. Docstring on line 69: "enable_graph + graph_store"
+
+Task-6: guard migrated to resolver: resolver.graph_store_config
 """
 
 from __future__ import annotations
@@ -41,8 +43,9 @@ def test_no_graph_stores_plural_in_init_source():
 
 
 def test_guard_uses_singular_graph_store_key():
-    """The conditional guard in __init__.py must use config.get('graph_store') (singular)."""
+    """The conditional guard in __init__.py must use resolver.graph_store_config (singular)."""
     source = _init_source()
-    assert 'config.get("graph_store")' in source, (
-        '__init__.py guard must use singular config.get("graph_store")'
+    assert "resolver.graph_store_config" in source, (
+        "__init__.py guard must use resolver.graph_store_config "
+        "(singular graph_store key accessed via resolver)"
     )

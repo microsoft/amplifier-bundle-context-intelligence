@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from amplifier_module_hook_context_intelligence.config_resolver import ConfigResolver
 from amplifier_module_hook_context_intelligence.graph_data_hook import (
     GraphDataHook,
     _create_neo4j_store,
@@ -53,6 +54,13 @@ def _make_coordinator(
     return coordinator
 
 
+def _make_resolver(config: dict[str, Any]) -> ConfigResolver:
+    """Create a ConfigResolver with a MagicMock coordinator (config={})."""
+    coordinator = MagicMock()
+    coordinator.config = {}
+    return ConfigResolver(config, coordinator)
+
+
 @pytest.fixture
 def mock_neo4j_store():
     """Mock Neo4jGraphStore to avoid real Neo4j connections in unit tests."""
@@ -66,50 +74,52 @@ def mock_neo4j_store():
 
 
 class TestCreateNeo4jStore:
-    """_create_neo4j_store reads config['graph_store'] (singular dict) and creates Neo4jGraphStore."""
+    """_create_neo4j_store reads from resolver.neo4j_config and resolver.forest_name."""
 
-    def test_creates_neo4j_store_from_config(self, mock_neo4j_store):
+    def test_creates_neo4j_store_from_resolver(self, mock_neo4j_store):
         mock_cls, mock_store = mock_neo4j_store
-        result = _create_neo4j_store(_NEO4J_STORE_CONFIG)
+        resolver = _make_resolver(_NEO4J_STORE_CONFIG)
+        result = _create_neo4j_store(resolver)
         assert result is mock_store
 
-    def test_passes_uri_from_config(self, mock_neo4j_store):
+    def test_passes_uri_from_resolver(self, mock_neo4j_store):
         mock_cls, mock_store = mock_neo4j_store
-        _create_neo4j_store(_NEO4J_STORE_CONFIG)
+        resolver = _make_resolver(_NEO4J_STORE_CONFIG)
+        _create_neo4j_store(resolver)
         call_kwargs = mock_cls.call_args.kwargs
         assert call_kwargs["uri"] == "neo4j://localhost:7687"
 
-    def test_passes_auth_tuple_from_username_password(self, mock_neo4j_store):
+    def test_passes_auth_tuple_from_resolver(self, mock_neo4j_store):
         mock_cls, mock_store = mock_neo4j_store
-        _create_neo4j_store(_NEO4J_STORE_CONFIG)
+        resolver = _make_resolver(_NEO4J_STORE_CONFIG)
+        _create_neo4j_store(resolver)
         call_kwargs = mock_cls.call_args.kwargs
         assert call_kwargs["auth"] == ("neo4j", "test")
 
-    def test_passes_database_from_config(self, mock_neo4j_store):
+    def test_passes_database_from_resolver(self, mock_neo4j_store):
         mock_cls, mock_store = mock_neo4j_store
-        _create_neo4j_store(_NEO4J_STORE_CONFIG)
+        resolver = _make_resolver(_NEO4J_STORE_CONFIG)
+        _create_neo4j_store(resolver)
         call_kwargs = mock_cls.call_args.kwargs
         assert call_kwargs["database"] == "neo4j"
 
-    def test_passes_forest_name_from_config(self, mock_neo4j_store):
+    def test_passes_forest_name_from_resolver(self, mock_neo4j_store):
+        """forest_name resolves to 'default' from graph_store.graph_forest_name."""
         mock_cls, mock_store = mock_neo4j_store
-        _create_neo4j_store(_NEO4J_STORE_CONFIG)
+        resolver = _make_resolver(_NEO4J_STORE_CONFIG)
+        _create_neo4j_store(resolver)
         call_kwargs = mock_cls.call_args.kwargs
         assert call_kwargs["graph_forest_name"] == "default"
 
-    def test_reads_singular_graph_store_key(self, mock_neo4j_store):
-        """Config must use 'graph_store' (singular), not 'graph_stores' (plural)."""
+    def test_raises_when_no_neo4j_config(self, mock_neo4j_store):
+        """ValueError when neo4j_config is None (no graph_store in config)."""
         mock_cls, mock_store = mock_neo4j_store
-        _create_neo4j_store(_NEO4J_STORE_CONFIG)
-        mock_cls.assert_called_once()
-
-    def test_missing_graph_store_key_raises(self):
-        """KeyError when 'graph_store' key is absent (confirms singular key is required)."""
-        with pytest.raises(KeyError):
-            _create_neo4j_store({})
+        resolver = _make_resolver({})
+        with pytest.raises(ValueError):
+            _create_neo4j_store(resolver)
 
     def test_auth_is_none_when_credentials_absent(self, mock_neo4j_store):
-        """When username/password are absent, auth should be None (credentials are optional)."""
+        """When username/password are absent, auth should be None."""
         config = {
             "graph_store": {
                 "config": {
@@ -119,7 +129,8 @@ class TestCreateNeo4jStore:
             }
         }
         mock_cls, mock_store = mock_neo4j_store
-        _create_neo4j_store(config)
+        resolver = _make_resolver(config)
+        _create_neo4j_store(resolver)
         call_kwargs = mock_cls.call_args.kwargs
         assert call_kwargs["auth"] is None
 
@@ -136,34 +147,39 @@ class TestCreateNeo4jStore:
             }
         }
         mock_cls, mock_store = mock_neo4j_store
-        _create_neo4j_store(config)
+        resolver = _make_resolver(config)
+        _create_neo4j_store(resolver)
         call_kwargs = mock_cls.call_args.kwargs
         assert call_kwargs["database"] == "neo4j"
 
 
 class TestGraphDataHookInit:
-    """GraphDataHook.__init__ creates Neo4jGraphStore directly from config['graph_store']."""
+    """GraphDataHook.__init__ accepts a resolver and creates Neo4jGraphStore."""
 
     def test_creates_neo4j_store_not_composite(self, mock_neo4j_store):
         mock_cls, mock_store = mock_neo4j_store
-        hook = GraphDataHook(_NEO4J_STORE_CONFIG)
+        resolver = _make_resolver(_NEO4J_STORE_CONFIG)
+        hook = GraphDataHook(resolver)
         assert hook._store is mock_store
 
     def test_no_composite_store_attribute(self, mock_neo4j_store):
         """_composite_store attribute must NOT exist in the new implementation."""
         mock_cls, mock_store = mock_neo4j_store
-        hook = GraphDataHook(_NEO4J_STORE_CONFIG)
+        resolver = _make_resolver(_NEO4J_STORE_CONFIG)
+        hook = GraphDataHook(resolver)
         assert not hasattr(hook, "_composite_store")
 
     def test_creates_mount_flow_with_store(self, mock_neo4j_store):
         mock_cls, mock_store = mock_neo4j_store
-        hook = GraphDataHook(_NEO4J_STORE_CONFIG)
+        resolver = _make_resolver(_NEO4J_STORE_CONFIG)
+        hook = GraphDataHook(resolver)
         assert hook._flow is not None
         assert hook._flow._graph_store is mock_store
 
     def test_neo4j_store_class_is_called(self, mock_neo4j_store):
         mock_cls, mock_store = mock_neo4j_store
-        GraphDataHook(_NEO4J_STORE_CONFIG)
+        resolver = _make_resolver(_NEO4J_STORE_CONFIG)
+        GraphDataHook(resolver)
         mock_cls.assert_called_once()
 
 
@@ -172,7 +188,8 @@ class TestGraphDataHookMount:
 
     async def test_mount_returns_cleanup_callable(self, mock_neo4j_store):
         mock_cls, mock_store = mock_neo4j_store
-        hook = GraphDataHook(_NEO4J_STORE_CONFIG)
+        resolver = _make_resolver(_NEO4J_STORE_CONFIG)
+        hook = GraphDataHook(resolver)
         coordinator = _make_coordinator(
             contributed_events=[["session:start", "session:end", "tool:pre"]],
         )
@@ -181,7 +198,8 @@ class TestGraphDataHookMount:
 
     async def test_mount_runs_mount_flow_to_ready(self, mock_neo4j_store):
         mock_cls, mock_store = mock_neo4j_store
-        hook = GraphDataHook(_NEO4J_STORE_CONFIG)
+        resolver = _make_resolver(_NEO4J_STORE_CONFIG)
+        hook = GraphDataHook(resolver)
         coordinator = _make_coordinator(
             contributed_events=[["session:start", "session:end", "tool:pre"]],
         )
@@ -190,7 +208,8 @@ class TestGraphDataHookMount:
 
     async def test_mount_registers_handlers(self, mock_neo4j_store):
         mock_cls, mock_store = mock_neo4j_store
-        hook = GraphDataHook(_NEO4J_STORE_CONFIG)
+        resolver = _make_resolver(_NEO4J_STORE_CONFIG)
+        hook = GraphDataHook(resolver)
         coordinator = _make_coordinator(
             contributed_events=[["session:start", "session:end", "tool:pre"]],
         )
@@ -199,7 +218,8 @@ class TestGraphDataHookMount:
 
     async def test_cleanup_calls_unregister(self, mock_neo4j_store):
         mock_cls, mock_store = mock_neo4j_store
-        hook = GraphDataHook(_NEO4J_STORE_CONFIG)
+        resolver = _make_resolver(_NEO4J_STORE_CONFIG)
+        hook = GraphDataHook(resolver)
         coordinator = _make_coordinator(
             contributed_events=[["session:start"]],
         )
@@ -211,7 +231,8 @@ class TestGraphDataHookMount:
     async def test_cleanup_schedules_store_close(self, mock_neo4j_store):
         """Cleanup must schedule store.close() (fire-and-forget)."""
         mock_cls, mock_store = mock_neo4j_store
-        hook = GraphDataHook(_NEO4J_STORE_CONFIG)
+        resolver = _make_resolver(_NEO4J_STORE_CONFIG)
+        hook = GraphDataHook(resolver)
         coordinator = _make_coordinator(
             contributed_events=[["session:start"]],
         )
