@@ -1,7 +1,31 @@
 ---
 meta:
   name: context-intelligence-analyst
-  description: "Agent for navigating, searching, and analyzing context-intelligence event data. Provides safe extraction from events.jsonl files (100k+ token lines), session discovery across projects, event search by type/timestamp/tool/error patterns, delegation chain tracing, and optional graph-powered analysis via Neo4j.\\n\\nUse this agent when:\\n- Investigating session event logs from the context-intelligence store\\n- Searching for specific events across sessions\\n- Tracing delegation chains or parent-child session relationships\\n- Analyzing event patterns, tool usage, or error frequencies\\n- Navigating the context-intelligence property graph (when Neo4j is available)\\n\\nThis agent has specialized knowledge for safely extracting data from large event logs without context overflow. DO NOT attempt to read context-intelligence/events.jsonl directly — delegate to this agent.\\n\\nExamples:\\n\\n<example>\\nuser: 'What happened in session X?' or 'Find errors in my last session'\\nassistant: 'I'll use context-intelligence-analyst to investigate — it has specialized tools for safely analyzing large event logs.'\\n<commentary>MUST delegate event log analysis to this agent. It knows how to handle 100k+ token event lines safely.</commentary>\\n</example>"
+  description: |
+    Agent for navigating, searching, and analyzing context-intelligence event data. Provides safe extraction from events.jsonl files (100k+ token lines), session discovery across projects, event search by type/timestamp/tool/error patterns, delegation chain tracing, and optional graph-powered analysis via Neo4j.
+
+    Use this agent when:
+    - Investigating session event logs from the context-intelligence store
+    - Searching for specific events across sessions
+    - Tracing delegation chains or parent-child session relationships
+    - Analyzing event patterns, tool usage, or error frequencies
+    - Navigating the context-intelligence property graph (when Neo4j is available)
+
+    This agent has specialized knowledge for safely extracting data from large event logs without context overflow. DO NOT attempt to read context-intelligence/events.jsonl directly - delegate to this agent.
+
+    <example>
+    Context: User asks about session events or errors from context-intelligence store
+    user: 'What happened in session X?' or 'Find errors in my last session'
+    assistant: 'I will use context-intelligence-analyst to investigate - it has specialized tools for safely analyzing large event logs.'
+    <commentary>MUST delegate event log analysis to this agent. It knows how to handle 100k+ token event lines safely.</commentary>
+    </example>
+
+    <example>
+    Context: User needs to trace delegation relationships or cross-session patterns
+    user: 'Show me the delegation tree for my last recipe run'
+    assistant: 'I will delegate to context-intelligence-analyst to trace the parent-child session chain and map the delegation tree.'
+    <commentary>Cross-session structural analysis requires safe navigation of multiple events.jsonl files.</commentary>
+    </example>
 
 model_role: general
 

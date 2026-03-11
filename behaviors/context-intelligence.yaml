@@ -18,9 +18,9 @@ hooks:
         graph_forest_name: 'default'
         config:
           uri: 'bolt://localhost:7687'
-          username: 'neo4j'     # example — replace before enabling graph
-          password: 'password'  # example — replace before enabling graph
           database: 'neo4j'
+          # Set NEO4J_USERNAME and NEO4J_PASSWORD environment variables
+          # or override username/password in your .amplifier/settings.yaml
 
 tools:
   - module: tool-skills
@@ -28,7 +28,7 @@ tools:
     config:
       skills:
         - git+https://github.com/microsoft/amplifier-bundle-skills@main#subdirectory=skills
-        - git+https://github.com/microsoft/amplifier-bundle-context-intelligence@main#subdirectory=skills
+        - context-intelligence:skills/
 
 agents:
   include:
