@@ -1,4 +1,4 @@
-"""Tests for ConfigResolver base_path resolution chain."""
+"""Tests for ConfigResolver resolution chains."""
 
 from pathlib import Path
 from unittest.mock import MagicMock
@@ -203,3 +203,13 @@ class TestForestNameResolution:
         resolver = ConfigResolver(config={}, coordinator=bare)
 
         assert resolver.forest_name == "default"
+
+    def test_returns_str_type(self) -> None:
+        """forest_name always returns a str instance."""
+        coordinator = _make_coordinator(config={})
+        resolver = ConfigResolver(
+            config={"graph_store": {"graph_forest_name": "my-forest"}},
+            coordinator=coordinator,
+        )
+
+        assert isinstance(resolver.forest_name, str)

@@ -10,12 +10,13 @@ _DEFAULT_PROJECT_SLUG = "default"
 
 
 class ConfigResolver:
-    """Resolve configuration values with a lazy 3-step fallback chain.
+    """Resolve configuration values with lazy fallback chains (2–4 steps depending on property).
 
-    Resolution order for each property:
-    1. Explicit hook config  (passed at construction time)
-    2. coordinator.config   (safely accessed; missing attr handled)
-    3. Sensible default
+    Resolution order per property:
+    - base_path:    config → coordinator.config → default
+    - project_slug: config → coordinator.config → 'default'
+    - forest_name:  config[graph_store][graph_forest_name] → config[project]
+                    → coordinator.config[project_slug] → 'default'
 
     Resolved values are cached after first access.
     """
