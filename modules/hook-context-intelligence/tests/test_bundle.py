@@ -163,12 +163,14 @@ class TestBehaviorYamlForestConfig:
         assert "graph_store" in config, "Hook config must have a graph_store section"
         assert isinstance(config["graph_store"], dict)
 
-    def test_graph_forest_name_at_store_entry_level(self):
-        """graph_forest_name must be at store entry level, NOT inside backend config."""
+    def test_graph_forest_name_auto_resolved(self):
+        """graph_forest_name must NOT be an active key — auto-resolved from coordinator.config.project_slug."""
         data = _load_behavior()
         store_entry = data["hooks"][0]["config"]["graph_store"]
-        assert "graph_forest_name" in store_entry, "graph_forest_name must be at store entry level"
-        assert store_entry["graph_forest_name"] == "default"
+        assert "graph_forest_name" not in store_entry, (
+            "graph_forest_name should not be set in behavior YAML; "
+            "it auto-resolves from coordinator.config.project_slug at runtime"
+        )
 
     def test_graph_forest_name_not_inside_backend_config(self):
         """graph_forest_name must NOT be inside graph_store.config."""

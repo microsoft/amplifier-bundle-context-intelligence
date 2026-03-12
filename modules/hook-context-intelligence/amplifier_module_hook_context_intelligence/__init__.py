@@ -9,8 +9,6 @@ from __future__ import annotations
 
 import fnmatch
 import logging
-import re
-from pathlib import Path
 from typing import Any, Callable
 
 # Import from the mount submodule at package-init time so that
@@ -22,24 +20,6 @@ from .mount import MountFlow as _MountFlow  # noqa: F401
 __amplifier_module_type__ = "hook"
 
 logger = logging.getLogger(__name__)
-
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-def _resolve_project_slug(coordinator: Any) -> str:
-    """Derive a filesystem-safe project slug from the coordinator's working dir."""
-    cap = coordinator.get_capability("session.working_dir")
-    if isinstance(cap, str):
-        working_dir = cap
-    else:
-        working_dir = str(Path.cwd())
-
-    raw_name = Path(working_dir).name
-    slug = raw_name.lower()
-    slug = re.sub(r"[^a-z0-9]+", "-", slug)
-    slug = slug.strip("-")
-    return slug or "default"
 
 
 async def _discover_events(coordinator: Any, exclude_patterns: set[str]) -> set[str]:

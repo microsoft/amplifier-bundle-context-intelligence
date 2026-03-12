@@ -18,8 +18,8 @@ hooks:
       enable_graph: false            # override to true in ~/.amplifier/settings.yaml to activate graph storage
       graph_store:
         type: 'neo4j'
-        # graph_forest_name resolved via: graph_store.graph_forest_name -> config.project -> coordinator.config.project_slug -> "default"
-        graph_forest_name: 'default'
+        # graph_forest_name: auto-resolved via coordinator.config.project_slug -> "default"
+        # Set explicitly here only if you need to override the auto-resolved value
         config:
           uri: '${NEO4J_URI:bolt://localhost:7687}'
           username: '${NEO4J_USERNAME:neo4j}'

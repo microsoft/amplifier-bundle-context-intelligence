@@ -232,48 +232,6 @@ class TestEventDiscovery:
 
 
 # ---------------------------------------------------------------------------
-# TestProjectSlugResolution
-# ---------------------------------------------------------------------------
-class TestProjectSlugResolution:
-    """Project slug derived from coordinator working_dir capability."""
-
-    async def test_uses_working_dir_capability(self) -> None:
-        from amplifier_module_hook_context_intelligence import _resolve_project_slug
-
-        coordinator = MagicMock()
-        coordinator.get_capability = MagicMock(return_value="/home/user/My-Project")
-        slug = _resolve_project_slug(coordinator)
-        assert slug == "my-project"
-
-    async def test_fallback_when_no_working_dir(self) -> None:
-        from amplifier_module_hook_context_intelligence import _resolve_project_slug
-
-        coordinator = MagicMock()
-        coordinator.get_capability = MagicMock(return_value=None)
-        slug = _resolve_project_slug(coordinator)
-        # Should produce a slug from cwd (non-empty, lowercased)
-        assert isinstance(slug, str)
-        assert len(slug) > 0
-
-    async def test_slugifies_special_characters(self) -> None:
-        from amplifier_module_hook_context_intelligence import _resolve_project_slug
-
-        coordinator = MagicMock()
-        coordinator.get_capability = MagicMock(return_value="/home/user/My Cool_Project!!!")
-        slug = _resolve_project_slug(coordinator)
-        # Only lowercase alphanumeric and hyphens
-        assert slug == "my-cool-project"
-
-    async def test_empty_name_defaults_to_default(self) -> None:
-        from amplifier_module_hook_context_intelligence import _resolve_project_slug
-
-        coordinator = MagicMock()
-        coordinator.get_capability = MagicMock(return_value="/")
-        slug = _resolve_project_slug(coordinator)
-        assert slug == "default"
-
-
-# ---------------------------------------------------------------------------
 # TestModuleContract
 # ---------------------------------------------------------------------------
 class TestModuleContract:
