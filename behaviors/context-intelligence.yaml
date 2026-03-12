@@ -21,10 +21,10 @@ hooks:
         # graph_forest_name resolved via: graph_store.graph_forest_name -> config.project -> coordinator.config.project_slug -> "default"
         graph_forest_name: 'default'
         config:
-          uri: 'bolt://localhost:7687'
-          database: 'neo4j'
-          # Set NEO4J_USERNAME and NEO4J_PASSWORD environment variables
-          # or override username/password in your .amplifier/settings.yaml
+          uri: '${NEO4J_URI:bolt://localhost:7687}'
+          username: '${NEO4J_USERNAME:neo4j}'
+          password: '${NEO4J_PASSWORD}'
+          database: '${NEO4J_DATABASE:neo4j}'
 
 tools:
   - module: tool-skills

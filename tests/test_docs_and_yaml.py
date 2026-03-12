@@ -130,27 +130,35 @@ class TestBehaviorYamlEnvVarSyntax:
     """Neo4j config values must use env-var syntax."""
 
     def test_neo4j_uri_uses_env_var_syntax(self, behavior_raw):
-        """uri must use ${NEO4J_URI:-bolt://localhost:7687} syntax."""
-        assert "${NEO4J_URI:-bolt://localhost:7687}" in behavior_raw, (
-            "Neo4j uri must use env var syntax: ${NEO4J_URI:-bolt://localhost:7687}"
+        """uri must use ${NEO4J_URI:bolt://localhost:7687} syntax."""
+        assert "${NEO4J_URI:bolt://localhost:7687}" in behavior_raw, (
+            "Neo4j uri must use env var syntax: ${NEO4J_URI:bolt://localhost:7687}"
         )
 
     def test_neo4j_username_uses_env_var_syntax(self, behavior_raw):
-        """username must use ${NEO4J_USERNAME:-neo4j} syntax."""
-        assert "${NEO4J_USERNAME:-neo4j}" in behavior_raw, (
-            "Neo4j username must use env var syntax: ${NEO4J_USERNAME:-neo4j}"
+        """username must use ${NEO4J_USERNAME:neo4j} syntax."""
+        assert "${NEO4J_USERNAME:neo4j}" in behavior_raw, (
+            "Neo4j username must use env var syntax: ${NEO4J_USERNAME:neo4j}"
         )
 
     def test_neo4j_password_uses_env_var_syntax(self, behavior_raw):
-        """password must use ${NEO4J_PASSWORD} syntax."""
+        """password must use ${NEO4J_PASSWORD} syntax (no default — must be set)."""
         assert "${NEO4J_PASSWORD}" in behavior_raw, (
             "Neo4j password must use env var syntax: ${NEO4J_PASSWORD}"
         )
 
     def test_neo4j_database_uses_env_var_syntax(self, behavior_raw):
-        """database must use ${NEO4J_DATABASE:-neo4j} syntax."""
-        assert "${NEO4J_DATABASE:-neo4j}" in behavior_raw, (
-            "Neo4j database must use env var syntax: ${NEO4J_DATABASE:-neo4j}"
+        """database must use ${NEO4J_DATABASE:neo4j} syntax."""
+        assert "${NEO4J_DATABASE:neo4j}" in behavior_raw, (
+            "Neo4j database must use env var syntax: ${NEO4J_DATABASE:neo4j}"
+        )
+
+    def test_no_bash_style_default_syntax(self, behavior_raw):
+        """Must NOT use bash-style ${VAR:-default} — Amplifier CLI uses ${VAR:default}."""
+        assert ":-" not in behavior_raw, (
+            "Found bash-style ':-' in env var syntax. "
+            "Amplifier CLI uses single colon ':' for defaults, not ':-'. "
+            "With ':-' the dash becomes part of the default value."
         )
 
 
