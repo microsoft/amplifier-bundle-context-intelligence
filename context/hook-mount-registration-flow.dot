@@ -1,4 +1,4 @@
-// GraphDataHook Mount Flow — State Machine Diagram (Conditional Graph Path)
+// GraphDataHook Mount Flow — 5-State Machine Diagram (Conditional Graph Path)
 // Context-Intelligence Bundle
 //
 // This diagram covers the CONDITIONAL graph path only.
@@ -18,7 +18,7 @@ digraph HookMountFlow {
     ranksep=1.0;
     pad=0.5;
 
-    // ─── Global defaults ───────────────────────────────────────────────
+    // ─── Global defaults ───────────────────────────────────────────────────────────────────────────────────────────
     node [fontname="Helvetica", fontsize=11];
     edge [fontname="Helvetica", fontsize=10];
 
@@ -43,13 +43,6 @@ digraph HookMountFlow {
         color="#1565C0"
     ];
 
-    EVENTS_DISCOVERED [
-        label="EVENTS_DISCOVERED\n────────────────────────────\nremaining_events known.\n(discovered − excluded)",
-        fillcolor="#64B5F6",
-        color="#0D47A1",
-        fontcolor="#0D47A1"
-    ];
-
     SPECIFIC_REGISTERED [
         label="SPECIFIC_REGISTERED\n──────────────────────────────\nAll 6 entity handlers registered\nfor their claimed events.",
         fillcolor="#42A5F5",
@@ -64,7 +57,7 @@ digraph HookMountFlow {
         fontcolor="white"
     ];
 
-    // ─── Component records (side annotations) ─────────────────────────
+    // ─── Component records (side annotations) ─────────────────────────────────────────────────
     node [shape=record, style=filled, penwidth=1];
 
     HookStateService [
@@ -91,39 +84,14 @@ digraph HookMountFlow {
         color="#2E7D32"
     ];
 
-    // ─── Handler set record ───────────────────────────────────────────
+    // ─── Handler set record ───────────────────────────────────────────────────────────────────
     Handlers [
         label="{Entity Handlers (6)|SessionHandler → :Session\l|OrchestratorRunHandler → :OrchestratorRun, :Step:PromptStep\l|StepHandler → :Step:AssistantStep\l|RecipeStepHandler → :Step:RecipeStep\l|ToolExecutionHandler → :ToolExecution\l|EventHandler → :Event:\\{FullScope\\}\l}|{DefaultHandler|handled_events: \\{\\} (empty at construction)\lReceives unclaimed events at Phase 5\lDerives :Event:\\{DerivedFullScope\\} labels\l}",
         fillcolor="#FFF3E0",
         color="#E65100"
     ];
 
-    // ─── Discovery channels ───────────────────────────────────────────
-    node [shape=parallelogram, style=filled, penwidth=1.5];
-
-    ChannelCanonical [
-        label="collect_contributions\n(\"observability.events\")\nCanonical Channel",
-        fillcolor="#FFF8E1",
-        color="#F57F17"
-    ];
-
-    ChannelLegacy [
-        label="get_capability\n(\"observability.events\")\nLegacy Channel",
-        fillcolor="#FFF8E1",
-        color="#F57F17"
-    ];
-
-    // ─── Exclusion filter (decision point) ────────────────────────────
-    node [shape=diamond, style=filled, penwidth=2];
-
-    ExclusionFilter [
-        label="Exclusion\nFilter",
-        fillcolor="#FFEBEE",
-        color="#C62828",
-        fontcolor="#C62828"
-    ];
-
-    // ─── Protocol note ────────────────────────────────────────────────
+    // ─── Protocol note ────────────────────────────────────────────────────────────────────────────────────────────
     node [shape=note, style=filled, penwidth=1];
 
     ProtocolNote [
@@ -138,9 +106,18 @@ digraph HookMountFlow {
         color="#AD1457"
     ];
 
-    // ═══════════════════════════════════════════════════════════════════
-    // ─── Transition edges (main flow) ─────────────────────────────────
-    // ═══════════════════════════════════════════════════════════════════
+    // ─── Design decision note ─────────────────────────────────────────────────────────────────────────────────────
+    node [shape=note, style=filled, penwidth=1];
+
+    DesignNote [
+        label="Conscious Design Decision\n──────────────────────────────\nEvents are discovered once in mount()\nand passed down. MountFlow does not\nquery the coordinator independently.\nEliminates dual-discovery divergence risk.",
+        fillcolor="#E8F5E9",
+        color="#2E7D32"
+    ];
+
+    // ═══════════════════════════════════════════════════════════════════════════════════════════════════════════════
+    // ─── Transition edges (main flow) ─────────────────────────────────────────────────────────────────────────────
+    // ═══════════════════════════════════════════════════════════════════════════════════════════════════════════════
 
     // Phase 1: INIT → STATE_CREATED
     INIT -> STATE_CREATED [
@@ -158,53 +135,15 @@ digraph HookMountFlow {
         penwidth=2
     ];
 
-    // Phase 3: HANDLERS_INSTANTIATED → discovery channels → filter → EVENTS_DISCOVERED
-    HANDLERS_INSTANTIATED -> ChannelCanonical [
-        label="  Query channel 1  ",
-        color="#F57F17",
-        fontcolor="#F57F17",
-        penwidth=1.5,
-        style=dashed
-    ];
-
-    HANDLERS_INSTANTIATED -> ChannelLegacy [
-        label="  Query channel 2  ",
-        color="#F57F17",
-        fontcolor="#F57F17",
-        penwidth=1.5,
-        style=dashed
-    ];
-
-    ChannelCanonical -> ExclusionFilter [
-        label="  events  ",
-        color="#F57F17",
-        fontcolor="#F57F17",
-        penwidth=1.5
-    ];
-
-    ChannelLegacy -> ExclusionFilter [
-        label="  events  ",
-        color="#F57F17",
-        fontcolor="#F57F17",
-        penwidth=1.5
-    ];
-
-    ExclusionFilter -> EVENTS_DISCOVERED [
-        label="  remaining = discovered − excluded\n  (filter applied ONCE)  ",
-        color="#C62828",
-        fontcolor="#C62828",
-        penwidth=2
-    ];
-
-    // Phase 4: EVENTS_DISCOVERED → SPECIFIC_REGISTERED
-    EVENTS_DISCOVERED -> SPECIFIC_REGISTERED [
-        label="  For each entity handler:\n    register(event, handler)\n  for events in handler.handled_events\n  ∩ remaining_events  ",
+    // Phase 3: HANDLERS_INSTANTIATED → SPECIFIC_REGISTERED
+    HANDLERS_INSTANTIATED -> SPECIFIC_REGISTERED [
+        label="  Events arrive as parameter\n  from mount() via run(coordinator, events)\n  remaining = events − excluded\n  (HookConfig.is_excluded() applied here)\n  Then register entity handlers  ",
         color="#2E7D32",
         fontcolor="#2E7D32",
         penwidth=2
     ];
 
-    // Phase 5: SPECIFIC_REGISTERED → READY
+    // Phase 4: SPECIFIC_REGISTERED → READY
     SPECIFIC_REGISTERED -> READY [
         label="  unclaimed = remaining − claimed\n  For each unclaimed event:\n    register(event, default_handler)  ",
         color="#2E7D32",
@@ -212,7 +151,7 @@ digraph HookMountFlow {
         penwidth=2
     ];
 
-    // ─── Component association edges ──────────────────────────────────
+    // ─── Component association edges ─────────────────────────────────────────────────────────────────────────────
 
     HookStateService -> GraphState [
         style=dashed,
@@ -266,23 +205,20 @@ digraph HookMountFlow {
         constraint=false
     ];
 
-    HookConfig -> ExclusionFilter [
-        style=dashed,
-        color="#C62828",
-        arrowhead=vee,
-        constraint=false,
-        label="  provides exclusion set  "
+    HANDLERS_INSTANTIATED -> DesignNote [
+        style=dotted,
+        color="#2E7D32",
+        arrowhead=none,
+        constraint=false
     ];
 
-    // ─── Layout hints ─────────────────────────────────────────────────
+    // ─── Layout hints ─────────────────────────────────────────────────────────────────────────────────────────────
 
     // Main flow is vertical
     {rank=same; INIT}
     {rank=same; STATE_CREATED; HookStateService}
-    {rank=same; HANDLERS_INSTANTIATED; Handlers}
-    {rank=same; ChannelCanonical; ChannelLegacy; ExclusionFilter}
-    {rank=same; EVENTS_DISCOVERED; ProtocolNote}
-    {rank=same; SPECIFIC_REGISTERED}
+    {rank=same; HANDLERS_INSTANTIATED; Handlers; DesignNote}
+    {rank=same; SPECIFIC_REGISTERED; ProtocolNote}
     {rank=same; READY; InvariantNote}
     {rank=same; GraphState; HookConfig; SessionCursors}
 }
