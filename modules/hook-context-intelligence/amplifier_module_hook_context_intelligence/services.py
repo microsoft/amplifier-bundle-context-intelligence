@@ -88,6 +88,9 @@ class GraphState:
         }
         self._edges[key] = edge
 
+    def schedule_flush(self) -> None:
+        """No-op for in-memory state — nothing to flush to external storage."""
+
     async def flush(self) -> None:
         pass
 

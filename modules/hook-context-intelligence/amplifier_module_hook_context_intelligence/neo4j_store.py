@@ -17,6 +17,7 @@ queries.  Stale skill = broken agent query generation.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import datetime
 from typing import Any
@@ -51,6 +52,9 @@ class Neo4jGraphStore:
         # Schema tracking
         self._schema_initialized: bool = False
         self._closed: bool = False
+
+        # Background flush tracking
+        self._flush_task: asyncio.Task[None] | None = None
 
     # -- Properties ----------------------------------------------------------
 
@@ -334,8 +338,37 @@ class Neo4jGraphStore:
 
         self._schema_initialized = True
 
+    def schedule_flush(self) -> None:
+        """Schedule a non-blocking background flush.
+
+        Never blocks the caller — the flush runs as an async task.
+        Multiple calls while a flush is in-flight are coalesced (no-op).
+        Use this from event handlers to keep writes off the hot path.
+        Use ``close()`` for guaranteed final flush before shutdown.
+        """
+        if self._flush_task is not None and not self._flush_task.done():
+            return  # flush already in-flight, will pick up buffered data
+        try:
+            loop = asyncio.get_running_loop()
+            self._flush_task = loop.create_task(self._background_flush())
+        except RuntimeError:
+            pass  # no event loop — flush will happen at close()
+
+    async def _background_flush(self) -> None:
+        """Wrapper for flush() that logs errors without propagating."""
+        try:
+            await self.flush()
+        except Exception:
+            logger.warning("background flush failed", exc_info=True)
+
     async def close(self) -> None:
         if not self._closed:
+            # Await any pending background flush before final flush
+            if self._flush_task is not None and not self._flush_task.done():
+                try:
+                    await self._flush_task
+                except Exception:
+                    pass  # errors already logged by _background_flush
             await self.flush()
             await self._driver.close()
             self._closed = True

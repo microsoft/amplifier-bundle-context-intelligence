@@ -228,6 +228,8 @@ class TestGraphDataHookMount:
         )
         cleanup = await hook.mount(coordinator)
         cleanup()
+        # cleanup() schedules an async task — yield control so it runs
+        await asyncio.sleep(0)
         for unreg in coordinator._unregister_fns:
             unreg.assert_called_once()
 

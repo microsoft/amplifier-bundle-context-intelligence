@@ -55,14 +55,17 @@ class GraphDataHook:
         flow_cleanup = await self._flow.run(coordinator)
         store = self._store
 
-        def cleanup() -> None:
+        async def _async_cleanup() -> None:
             flow_cleanup()
+            await store.close()  # awaits pending flush + final flush + driver close
+
+        def cleanup() -> None:
             try:
                 loop = asyncio.get_running_loop()
-                # fire-and-forget; loop prevents GC until completion
-                loop.create_task(store.close())
+                loop.create_task(_async_cleanup())
             except RuntimeError:
-                # no running loop — synchronous shutdown context (e.g. test teardown)
+                # no running loop — synchronous shutdown (e.g. test teardown)
+                flow_cleanup()
                 asyncio.run(store.close())
 
         return cleanup
