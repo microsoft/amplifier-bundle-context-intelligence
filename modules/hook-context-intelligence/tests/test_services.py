@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import pytest
-
 
 class TestHookConfig:
     def test_construction_with_empty_config(self):
