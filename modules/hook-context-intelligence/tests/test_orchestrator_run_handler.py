@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+
 from amplifier_module_hook_context_intelligence.handlers.orchestrator_run import (
     PREVIEW_MAX_LEN,
     OrchestratorRunHandler,
@@ -530,8 +532,6 @@ class TestOrchestratorComplete:
 class TestPromptSubmitDataProperty:
     async def test_stores_data_property(self, services: HookStateService) -> None:
         """prompt:submit stores full event dict as 'data' JSON property."""
-        import json
-
         await _seed_session(services)
         handler = OrchestratorRunHandler(services)
         event_data = {"session_id": "s1", "timestamp": TIMESTAMP, "prompt": "Hello world"}
@@ -544,8 +544,6 @@ class TestPromptSubmitDataProperty:
 
     async def test_data_is_complete_event_clone(self, services: HookStateService) -> None:
         """data property preserves extra fields not otherwise used by the handler."""
-        import json
-
         await _seed_session(services)
         handler = OrchestratorRunHandler(services)
         event_data = {
@@ -564,8 +562,6 @@ class TestPromptSubmitDataProperty:
 class TestExecutionStartDataProperty:
     async def test_stores_data_property(self, services: HookStateService) -> None:
         """execution:start stores full event dict as 'data' JSON property."""
-        import json
-
         await _seed_session_and_prompt(services)
         handler = OrchestratorRunHandler(services)
         event_data = {"session_id": "s1", "timestamp": EXEC_TIMESTAMP}
@@ -580,8 +576,6 @@ class TestExecutionStartDataProperty:
 class TestExecutionEndDataProperty:
     async def test_stores_data_execution_end_property(self, services: HookStateService) -> None:
         """execution:end enriches OrchestratorRun with 'data_execution_end' JSON property."""
-        import json
-
         run_id = await _seed_full_run(services)
         handler = OrchestratorRunHandler(services)
         event_data = {"session_id": "s1", "timestamp": END_TIMESTAMP, "response": "some response"}
@@ -597,8 +591,6 @@ class TestExecutionEndDataProperty:
 class TestOrchestratorCompleteDataProperty:
     async def test_stores_data_and_calls_flush(self, services: HookStateService) -> None:
         """orchestrator:complete enriches with 'data_orchestrator_complete' and calls flush()."""
-        import json
-
         run_id = await _seed_full_run(services)
         handler = OrchestratorRunHandler(services)
         event_data = {
