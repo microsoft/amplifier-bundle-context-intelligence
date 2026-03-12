@@ -162,8 +162,7 @@ class MountFlow:
         self.instantiate_handlers()
 
         # Apply exclusion filter from config (graph path only)
-        if self.services is None:
-            raise RuntimeError("create_services() must be called first")
+        assert self.services is not None  # type-narrowing: create_services() was just called
         config = self.services.config
         self.remaining_events = {e for e in events if not config.is_excluded(e)}
 

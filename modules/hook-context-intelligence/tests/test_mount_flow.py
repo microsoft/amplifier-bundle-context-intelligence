@@ -260,6 +260,44 @@ class TestFullMount:
         assert "content_block:delta" not in flow.remaining_events
 
 
+class TestDiscoverEventsRemoved:
+    """The discover_events() method must not exist on MountFlow."""
+
+    def test_no_discover_events_method(self):
+        flow = MountFlow(config={})
+        assert not hasattr(flow, "discover_events"), (
+            "discover_events() must be removed — events come via run(coordinator, events)"
+        )
+
+    def test_run_signature_requires_events(self):
+        """run() must require an 'events' parameter."""
+        import inspect
+
+        sig = inspect.signature(MountFlow.run)
+        params = list(sig.parameters.keys())
+        assert "events" in params, f"run() params are {params}, expected 'events'"
+
+
+class TestRunExclusionBehavior:
+    """run() applies HookConfig exclusion to the passed-in events."""
+
+    async def test_wildcard_exclusion_via_run(self):
+        events = {"session:start", "session-naming:foo", "session-naming:bar"}
+        coordinator = _make_coordinator()
+        flow = MountFlow(config={"exclude_events": ["session-naming:*"]})
+        await flow.run(coordinator, events)
+        assert "session-naming:foo" not in flow.remaining_events
+        assert "session-naming:bar" not in flow.remaining_events
+        assert "session:start" in flow.remaining_events
+
+    async def test_empty_events_reaches_ready(self):
+        coordinator = _make_coordinator()
+        flow = MountFlow(config={})
+        await flow.run(coordinator, set())
+        assert flow.state == MountState.READY
+        assert flow.remaining_events == set()
+
+
 class TestMountFlowPrebuiltStore:
     """MountFlow accepts an optional pre-built GraphStore and passes it through."""
 
@@ -296,8 +334,6 @@ class TestMountFlowResolverPath:
 
     def test_accepts_resolver_parameter(self):
         """MountFlow(config={}, resolver=...) must store _resolver."""
-        from unittest.mock import MagicMock
-
         resolver = MagicMock()
         resolver._config = {}
         flow = MountFlow(config={}, resolver=resolver)
@@ -310,8 +346,6 @@ class TestMountFlowResolverPath:
 
     def test_create_services_with_resolver_uses_resolver_path(self):
         """When resolver is set, create_services passes resolver to HookStateService."""
-        from unittest.mock import MagicMock
-
         from amplifier_module_hook_context_intelligence.services import HookStateService
 
         resolver = MagicMock()
@@ -325,8 +359,6 @@ class TestMountFlowResolverPath:
 
     def test_create_services_with_resolver_skips_coordinator(self):
         """When resolver is provided, coordinator is not stored on services."""
-        from unittest.mock import MagicMock
-
         resolver = MagicMock()
         resolver._config = {}
         flow = MountFlow(config={}, resolver=resolver)
@@ -336,8 +368,6 @@ class TestMountFlowResolverPath:
 
     def test_create_services_with_resolver_and_graph_store(self):
         """When resolver is provided along with a prebuilt graph_store, it is used."""
-        from unittest.mock import MagicMock
-
         from amplifier_module_hook_context_intelligence.services import GraphState
 
         resolver = MagicMock()
@@ -350,8 +380,6 @@ class TestMountFlowResolverPath:
 
     async def test_full_mount_with_resolver(self):
         """Full mount run works end-to-end when resolver is provided."""
-        from unittest.mock import MagicMock
-
         resolver = MagicMock()
         resolver._config = {}
         coordinator = _make_coordinator()
