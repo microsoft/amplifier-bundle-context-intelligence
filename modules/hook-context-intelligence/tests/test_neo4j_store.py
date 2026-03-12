@@ -1246,3 +1246,208 @@ class TestTimestampConversion:
         props = {"occurred_at": ""}
         result = Neo4jGraphStore._convert_timestamps(props)
         assert result["occurred_at"] == ""
+
+
+# ---------------------------------------------------------------------------
+# TestSanitizeProperties
+# ---------------------------------------------------------------------------
+class TestSanitizeProperties:
+    """_sanitize_properties() makes all values Neo4j-compatible."""
+
+    def _sanitize(self, props: dict[str, Any]) -> dict[str, Any]:
+        from amplifier_module_hook_context_intelligence.neo4j_store import Neo4jGraphStore
+
+        return Neo4jGraphStore._sanitize_properties(props)
+
+    # -- Primitives pass through unchanged --
+
+    def test_string_passes_through(self):
+        assert self._sanitize({"k": "hello"}) == {"k": "hello"}
+
+    def test_int_passes_through(self):
+        assert self._sanitize({"k": 42}) == {"k": 42}
+
+    def test_float_passes_through(self):
+        assert self._sanitize({"k": 3.14}) == {"k": 3.14}
+
+    def test_bool_passes_through(self):
+        assert self._sanitize({"k": True}) == {"k": True}
+
+    def test_empty_string_passes_through(self):
+        assert self._sanitize({"k": ""}) == {"k": ""}
+
+    # -- None values are dropped --
+
+    def test_none_dropped(self):
+        result = self._sanitize({"k": None, "keep": "yes"})
+        assert "k" not in result
+        assert result["keep"] == "yes"
+
+    def test_all_none_returns_empty(self):
+        assert self._sanitize({"a": None, "b": None}) == {}
+
+    # -- Homogeneous primitive lists pass through --
+
+    def test_list_of_strings_passes_through(self):
+        assert self._sanitize({"k": ["a", "b"]}) == {"k": ["a", "b"]}
+
+    def test_list_of_ints_passes_through(self):
+        assert self._sanitize({"k": [1, 2, 3]}) == {"k": [1, 2, 3]}
+
+    def test_list_of_bools_passes_through(self):
+        assert self._sanitize({"k": [True, False]}) == {"k": [True, False]}
+
+    # -- Dicts are JSON-serialized --
+
+    def test_dict_json_serialized(self):
+        import json
+
+        result = self._sanitize({"metadata": {"bundle": "test", "version": 1}})
+        parsed = json.loads(result["metadata"])
+        assert parsed == {"bundle": "test", "version": 1}
+
+    def test_nested_dict_json_serialized(self):
+        import json
+
+        result = self._sanitize({"config": {"a": {"b": {"c": 1}}}})
+        parsed = json.loads(result["config"])
+        assert parsed == {"a": {"b": {"c": 1}}}
+
+    def test_empty_dict_json_serialized(self):
+        result = self._sanitize({"metadata": {}})
+        assert result["metadata"] == "{}"
+
+    # -- Mixed/nested lists are JSON-serialized --
+
+    def test_list_with_dict_json_serialized(self):
+        import json
+
+        result = self._sanitize({"items": [{"id": 1}, {"id": 2}]})
+        parsed = json.loads(result["items"])
+        assert parsed == [{"id": 1}, {"id": 2}]
+
+    def test_empty_list_json_serialized(self):
+        """Empty list is JSON-serialized (cannot determine element type)."""
+        result = self._sanitize({"items": []})
+        assert result["items"] == "[]"
+
+    def test_list_with_none_json_serialized(self):
+        import json
+
+        result = self._sanitize({"items": [1, None, 3]})
+        parsed = json.loads(result["items"])
+        assert parsed == [1, None, 3]
+
+    # -- Non-standard types are stringified --
+
+    def test_datetime_stringified(self):
+        from datetime import datetime
+
+        dt = datetime(2026, 1, 15, 10, 0, 0)
+        result = self._sanitize({"ts": dt})
+        assert isinstance(result["ts"], str)
+        assert "2026" in result["ts"]
+
+    # -- Mixed properties --
+
+    def test_mixed_properties_all_handled(self):
+        import json
+
+        props = {
+            "name": "Alice",
+            "count": 42,
+            "active": True,
+            "metadata": {"bundle": "test"},
+            "tags": ["a", "b"],
+            "nested_list": [{"x": 1}],
+            "gone": None,
+        }
+        result = self._sanitize(props)
+        assert result["name"] == "Alice"
+        assert result["count"] == 42
+        assert result["active"] is True
+        assert json.loads(result["metadata"]) == {"bundle": "test"}
+        assert result["tags"] == ["a", "b"]
+        assert json.loads(result["nested_list"]) == [{"x": 1}]
+        assert "gone" not in result
+
+    # -- The real-world SessionHandler case --
+
+    def test_session_metadata_dict_serialized(self):
+        """The exact pattern that caused the Map{} error in SessionHandler."""
+        import json
+
+        props = {
+            "started_at": "2026-01-15T10:00:00Z",
+            "status": "running",
+            "metadata": {"bundle_name": "foundation", "session_type": "interactive"},
+        }
+        result = self._sanitize(props)
+        assert result["started_at"] == "2026-01-15T10:00:00Z"
+        assert result["status"] == "running"
+        assert isinstance(result["metadata"], str)
+        parsed = json.loads(result["metadata"])
+        assert parsed["bundle_name"] == "foundation"
+
+    # -- Integration: flush pipeline ordering --
+
+    @pytest.mark.asyncio
+    async def test_flush_handles_nested_dict_in_node_properties(self, neo4j_store):
+        """Node with a dict property flushes without Map{} error."""
+        await neo4j_store.upsert_node(
+            "san-n1",
+            {"Session"},
+            {"status": "running", "metadata": {"key": "value", "nested": {"deep": True}}},
+        )
+        # This would raise "Property values can only be of primitive types"
+        # without _sanitize_properties
+        await neo4j_store.flush()
+
+        async with neo4j_store._driver.session(database=neo4j_store._database) as session:
+            result = await session.run(
+                "MATCH (n {node_id: $nid}) RETURN n.metadata AS meta", nid="san-n1"
+            )
+            record = await result.single()
+        assert record is not None
+        import json
+
+        parsed = json.loads(record["meta"])
+        assert parsed == {"key": "value", "nested": {"deep": True}}
+
+    @pytest.mark.asyncio
+    async def test_flush_handles_nested_dict_in_edge_properties(self, neo4j_store):
+        """Edge with a dict property flushes without Map{} error."""
+        await neo4j_store.upsert_node("san-src", {"Node"}, {})
+        await neo4j_store.upsert_node("san-tgt", {"Node"}, {})
+        await neo4j_store.upsert_edge(
+            "san-src", "san-tgt", "HAS_CONTEXT", {"config": {"timeout": 30}}
+        )
+        await neo4j_store.flush()
+
+        async with neo4j_store._driver.session(database=neo4j_store._database) as session:
+            result = await session.run(
+                "MATCH (s {node_id: 'san-src'})-[r:HAS_CONTEXT]->(t {node_id: 'san-tgt'}) "
+                "RETURN r.config AS cfg"
+            )
+            record = await result.single()
+        assert record is not None
+        import json
+
+        parsed = json.loads(record["cfg"])
+        assert parsed == {"timeout": 30}
+
+    @pytest.mark.asyncio
+    async def test_flush_drops_none_property_values(self, neo4j_store):
+        """None values are dropped during flush, not written to Neo4j."""
+        await neo4j_store.upsert_node("san-none", {"Tag"}, {"keep": "yes", "drop": None})
+        await neo4j_store.flush()
+
+        async with neo4j_store._driver.session(database=neo4j_store._database) as session:
+            result = await session.run(
+                "MATCH (n {node_id: $nid}) RETURN n.keep AS keep, n.drop AS drop",
+                nid="san-none",
+            )
+            record = await result.single()
+        assert record is not None
+        assert record["keep"] == "yes"
+        assert record["drop"] is None  # Neo4j returns null for missing props

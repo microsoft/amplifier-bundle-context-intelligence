@@ -18,6 +18,7 @@ queries.  Stale skill = broken agent query generation.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from datetime import datetime
 from typing import Any
@@ -104,6 +105,45 @@ class Neo4jGraphStore:
                 "type": edge_type,
                 "properties": dict(properties),
             }
+
+    # -- Neo4j-compatible primitive types ------------------------------------
+    _NEO4J_PRIMITIVES = (str, int, float, bool)
+
+    @staticmethod
+    def _sanitize_properties(props: dict[str, Any]) -> dict[str, Any]:
+        """Sanitize property values for Neo4j compatibility.
+
+        Neo4j property values must be primitives (str, int, float, bool)
+        or homogeneous arrays thereof.  This method:
+
+        - Keeps primitives as-is.
+        - Keeps homogeneous lists of primitives as-is.
+        - JSON-serializes dicts and mixed/nested lists to strings.
+        - Drops ``None`` values (Neo4j does not support null properties).
+
+        Applied in ``flush()`` before ``_convert_timestamps()`` so that
+        nested structures are safely stringified before any further
+        property transforms run.
+        """
+        result: dict[str, Any] = {}
+        for key, value in props.items():
+            if value is None:
+                continue  # Neo4j does not support null property values
+            if isinstance(value, Neo4jGraphStore._NEO4J_PRIMITIVES):
+                result[key] = value
+            elif isinstance(value, list):
+                if value and all(
+                    isinstance(item, Neo4jGraphStore._NEO4J_PRIMITIVES) for item in value
+                ):
+                    result[key] = value  # homogeneous primitive array
+                else:
+                    result[key] = json.dumps(value, default=str)
+            elif isinstance(value, dict):
+                result[key] = json.dumps(value, default=str)
+            else:
+                # datetime, custom objects, etc. — stringify
+                result[key] = str(value)
+        return result
 
     @staticmethod
     def _convert_timestamps(props: dict[str, Any]) -> dict[str, Any]:
@@ -229,7 +269,9 @@ class Neo4jGraphStore:
                             row: dict[str, Any] = {
                                 "node_id": node_id,
                                 "props": {
-                                    **self._convert_timestamps(entry["properties"]),
+                                    **self._convert_timestamps(
+                                        self._sanitize_properties(entry["properties"])
+                                    ),
                                     "node_id": node_id,
                                     "graph_forest_name": forest,
                                 },
@@ -275,7 +317,9 @@ class Neo4jGraphStore:
                                     "source": entry["source"],
                                     "target": entry["target"],
                                     "props": {
-                                        **self._convert_timestamps(entry["properties"]),
+                                        **self._convert_timestamps(
+                                            self._sanitize_properties(entry["properties"])
+                                        ),
                                         "graph_forest_name": forest,
                                     },
                                 }
