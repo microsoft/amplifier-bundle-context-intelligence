@@ -14,6 +14,8 @@ import shutil
 from pathlib import Path
 from typing import Protocol, runtime_checkable
 
+_URI_SCHEME = "ci-blob://"
+
 
 @runtime_checkable
 class BlobStore(Protocol):
@@ -72,14 +74,13 @@ class DiskBlobStore:
 
     def _make_uri(self, session_id: str, key: str) -> str:
         """Construct a ci-blob://<session-id>/<key> URI."""
-        return f"ci-blob://{session_id}/{key}"
+        return f"{_URI_SCHEME}{session_id}/{key}"
 
     def _parse_uri(self, uri: str) -> tuple[str, str]:
         """Split ci-blob://<session-id>/<key> into (session_id, key)."""
-        prefix = "ci-blob://"
-        if not uri.startswith(prefix):
+        if not uri.startswith(_URI_SCHEME):
             raise ValueError(f"Invalid URI scheme: {uri!r}")
-        rest = uri[len(prefix) :]
+        rest = uri[len(_URI_SCHEME) :]
         session_id, key = rest.split("/", 1)
         return session_id, key
 
@@ -99,7 +100,11 @@ class DiskBlobStore:
         return self._make_uri(session_id, key)
 
     async def read(self, session_id: str, uri: str) -> dict | list:
-        """Read and deserialize blob content from a ci-blob:// URI."""
+        """Read and deserialize blob content from a ci-blob:// URI.
+
+        Note: session_id determines which session's blobs dir to read from;
+        the session_id embedded in the URI is not used for path resolution.
+        """
         _, key = self._parse_uri(uri)
         path = self._blob_path(session_id, key)
         return json.loads(path.read_text())
