@@ -108,6 +108,7 @@ class HookStateService:
         graph_store: Any = None,
         *,
         resolver: Any = None,
+        blob_store: Any = None,
     ) -> None:
         if resolver is not None:
             self.config = HookConfig(resolver._config)
@@ -120,6 +121,7 @@ class HookStateService:
             self.graph = GraphState()
         self._cursors: dict[str, SessionCursors] = {}
         self._seen_sessions: set[str] = set()
+        self.blob_store = blob_store
         self._forest_resolved: bool = False
 
     def get_cursors(self, session_id: str) -> SessionCursors:

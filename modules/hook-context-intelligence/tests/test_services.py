@@ -273,3 +273,20 @@ class TestHookStateServiceResolverPath:
         # Must not raise even though raw_config was not provided
         service = HookStateService(resolver=resolver)
         assert service is not None
+
+
+class TestHookStateServiceBlobStore:
+    def test_blob_store_default_is_none(self):
+        """HookStateService(raw_config={}) has blob_store defaulting to None."""
+        from amplifier_module_hook_context_intelligence.services import HookStateService
+
+        service = HookStateService(raw_config={})
+        assert service.blob_store is None
+
+    def test_blob_store_can_be_injected(self):
+        """HookStateService(raw_config={}, blob_store=fake_store) stores the injected value."""
+        from amplifier_module_hook_context_intelligence.services import HookStateService
+
+        fake_store = object()
+        service = HookStateService(raw_config={}, blob_store=fake_store)
+        assert service.blob_store is fake_store
