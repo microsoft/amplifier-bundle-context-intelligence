@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 from typing import Any
 
@@ -76,6 +77,7 @@ class OrchestratorRunHandler:
             "prompt_preview": prompt_preview,
             "occurred_at": timestamp,
             "session_id": session_id,
+            "data": json.dumps(data),
         }
 
         # Upsert PromptStep node only — edges deferred to execution:start
@@ -115,6 +117,7 @@ class OrchestratorRunHandler:
             "status": "in_progress",
             "prompt_preview": cursors.prompt_preview,
             "session_id": session_id,
+            "data": json.dumps(data),
         }
 
         # Create OrchestratorRun node
@@ -166,6 +169,8 @@ class OrchestratorRunHandler:
         if response is not None:
             properties["response_preview"] = str(response)[:PREVIEW_MAX_LEN]
 
+        properties["data_execution_end"] = json.dumps(data)
+
         await self.services.graph.upsert_node(run_id, set(), properties)
 
         # Terminal event — await flush directly. execution:end may be the last
@@ -201,6 +206,7 @@ class OrchestratorRunHandler:
         properties: dict[str, Any] = {
             "ended_at": timestamp,
             "status": mapped_status,
+            "data_orchestrator_complete": json.dumps(data),
         }
 
         # Optionally store turn_count
@@ -209,6 +215,11 @@ class OrchestratorRunHandler:
             properties["turn_count"] = turn_count
 
         await self.services.graph.upsert_node(run_id, set(), properties)
+
+        # Flush is critical: orchestrator:complete is the authoritative signal that a run
+        # finished; without it, the status update sits in the write buffer and may never
+        # reach Neo4j (particularly in --mode single where session:end may not fire).
+        await self.services.graph.flush()
 
         # Clear cursor state
         cursors.current_run_id = None

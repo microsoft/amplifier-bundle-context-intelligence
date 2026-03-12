@@ -522,3 +522,107 @@ class TestOrchestratorComplete:
         assert node is not None
         # No status in event data → defaults to 'success' → maps to 'complete'
         assert node["properties"]["status"] == "complete"
+
+
+# ── data property tests ─────────────────────────────────────────────────────
+
+
+class TestPromptSubmitDataProperty:
+    async def test_stores_data_property(self, services: HookStateService) -> None:
+        """prompt:submit stores full event dict as 'data' JSON property."""
+        import json
+
+        await _seed_session(services)
+        handler = OrchestratorRunHandler(services)
+        event_data = {"session_id": "s1", "timestamp": TIMESTAMP, "prompt": "Hello world"}
+        await handler("prompt:submit", event_data)
+        node = await services.graph.get_node(EXPECTED_NODE_ID)
+        assert node is not None
+        stored_data = json.loads(node["properties"]["data"])
+        assert stored_data["session_id"] == "s1"
+        assert stored_data["prompt"] == "Hello world"
+
+    async def test_data_is_complete_event_clone(self, services: HookStateService) -> None:
+        """data property preserves extra fields not otherwise used by the handler."""
+        import json
+
+        await _seed_session(services)
+        handler = OrchestratorRunHandler(services)
+        event_data = {
+            "session_id": "s1",
+            "timestamp": TIMESTAMP,
+            "prompt": "Hello",
+            "extra_field": "preserved",
+        }
+        await handler("prompt:submit", event_data)
+        node = await services.graph.get_node(EXPECTED_NODE_ID)
+        assert node is not None
+        stored_data = json.loads(node["properties"]["data"])
+        assert stored_data["extra_field"] == "preserved"
+
+
+class TestExecutionStartDataProperty:
+    async def test_stores_data_property(self, services: HookStateService) -> None:
+        """execution:start stores full event dict as 'data' JSON property."""
+        import json
+
+        await _seed_session_and_prompt(services)
+        handler = OrchestratorRunHandler(services)
+        event_data = {"session_id": "s1", "timestamp": EXEC_TIMESTAMP}
+        await handler("execution:start", event_data)
+        node = await services.graph.get_node(EXPECTED_RUN_NODE_ID)
+        assert node is not None
+        stored_data = json.loads(node["properties"]["data"])
+        assert stored_data["session_id"] == "s1"
+        assert stored_data["timestamp"] == EXEC_TIMESTAMP
+
+
+class TestExecutionEndDataProperty:
+    async def test_stores_data_execution_end_property(self, services: HookStateService) -> None:
+        """execution:end enriches OrchestratorRun with 'data_execution_end' JSON property."""
+        import json
+
+        run_id = await _seed_full_run(services)
+        handler = OrchestratorRunHandler(services)
+        event_data = {"session_id": "s1", "timestamp": END_TIMESTAMP, "response": "some response"}
+        await handler("execution:end", event_data)
+        node = await services.graph.get_node(run_id)
+        assert node is not None
+        stored_data = json.loads(node["properties"]["data_execution_end"])
+        assert stored_data["session_id"] == "s1"
+        assert stored_data["timestamp"] == END_TIMESTAMP
+        assert stored_data["response"] == "some response"
+
+
+class TestOrchestratorCompleteDataProperty:
+    async def test_stores_data_and_calls_flush(self, services: HookStateService) -> None:
+        """orchestrator:complete enriches with 'data_orchestrator_complete' and calls flush()."""
+        import json
+
+        run_id = await _seed_full_run(services)
+        handler = OrchestratorRunHandler(services)
+        event_data = {
+            "session_id": "s1",
+            "timestamp": COMPLETE_TIMESTAMP,
+            "status": "success",
+        }
+
+        # Track flush calls via a simple counter wrapper
+        flush_call_count = 0
+        original_flush = services.graph.flush
+
+        async def tracking_flush() -> None:
+            nonlocal flush_call_count
+            flush_call_count += 1
+            await original_flush()
+
+        services.graph.flush = tracking_flush  # type: ignore[method-assign]
+
+        await handler("orchestrator:complete", event_data)
+
+        node = await services.graph.get_node(run_id)
+        assert node is not None
+        stored_data = json.loads(node["properties"]["data_orchestrator_complete"])
+        assert stored_data["session_id"] == "s1"
+        assert stored_data["status"] == "success"
+        assert flush_call_count == 1, "flush() must be called exactly once on orchestrator:complete"
