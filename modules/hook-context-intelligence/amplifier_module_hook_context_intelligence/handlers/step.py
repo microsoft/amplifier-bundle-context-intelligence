@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 from typing import Any
 
@@ -65,6 +66,7 @@ class StepHandler:
             "request_at": timestamp,
             "occurred_at": timestamp,
             "session_id": session_id,
+            "data": json.dumps(data),
         }
 
         # Create AssistantStep node
@@ -115,9 +117,9 @@ class StepHandler:
         if model is not None:
             properties["model"] = model
 
-        if properties:
-            await self.services.graph.upsert_node(step_id, set(), properties)
-            log.info("Enriched AssistantStep %s with model", step_id)
+        properties["data_llm_request"] = json.dumps(data)
+        await self.services.graph.upsert_node(step_id, set(), properties)
+        log.info("Enriched AssistantStep %s with model", step_id)
 
         return HookResult(action="continue")
 
@@ -138,32 +140,45 @@ class StepHandler:
         # Enrich AssistantStep with response data
         properties: dict[str, Any] = {"response_at": timestamp}
 
-        # Extract usage tokens
+        # Extract usage tokens.
+        # The llm:response event uses normalised short keys ("input", "output",
+        # "cache_read") but some providers may emit Anthropic-style long keys
+        # ("input_tokens", "output_tokens", "cache_read_input_tokens").
+        # Try the short (canonical) key first, fall back to the long form.
         usage = data.get("usage")
         if usage and isinstance(usage, dict):
-            input_tokens = usage.get("input_tokens")
+            input_tokens = usage.get("input") or usage.get("input_tokens")
             if input_tokens is not None:
                 properties["input_tokens"] = input_tokens
-            output_tokens = usage.get("output_tokens")
+            output_tokens = usage.get("output") or usage.get("output_tokens")
             if output_tokens is not None:
                 properties["output_tokens"] = output_tokens
-            # cached_tokens: prefer cache_read_input_tokens, fall back to cached_tokens
-            cached = usage.get("cache_read_input_tokens")
-            if cached is None:
-                cached = usage.get("cached_tokens")
+            cached = (
+                usage.get("cache_read")
+                or usage.get("cache_read_input_tokens")
+                or usage.get("cached_tokens")
+            )
             if cached is not None:
                 properties["cached_tokens"] = cached
-            reasoning_tokens = usage.get("reasoning_tokens")
+            cache_write = usage.get("cache_write") or usage.get("cache_creation_input_tokens")
+            if cache_write is not None:
+                properties["cache_write_tokens"] = cache_write
+            reasoning_tokens = usage.get("reasoning") or usage.get("reasoning_tokens")
             if reasoning_tokens is not None:
                 properties["reasoning_tokens"] = reasoning_tokens
 
-        # Extract finish_reason (fall back to stop_reason)
-        finish_reason = data.get("finish_reason")
+        # Extract finish_reason / stop_reason.
+        # Try top-level data first, then fall back to raw response payload
+        # (the orchestrator puts the provider response under data["raw"]).
+        finish_reason = data.get("finish_reason") or data.get("stop_reason")
         if finish_reason is None:
-            finish_reason = data.get("stop_reason")
+            raw = data.get("raw")
+            if isinstance(raw, dict):
+                finish_reason = raw.get("stop_reason") or raw.get("finish_reason")
         if finish_reason is not None:
             properties["finish_reason"] = finish_reason
 
+        properties["data_llm_response"] = json.dumps(data)
         await self.services.graph.upsert_node(step_id, set(), properties)
         log.info("Enriched AssistantStep %s with response data", step_id)
 

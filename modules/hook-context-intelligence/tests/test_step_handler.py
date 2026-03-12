@@ -521,6 +521,138 @@ class TestLlmResponse:
         assert result.action == "continue"
 
 
+class TestLlmResponseCanonicalKeys:
+    """llm:response with canonical short keys emitted by the orchestrator."""
+
+    async def test_canonical_short_usage_keys(self, services: HookStateService) -> None:
+        """The orchestrator emits usage={input, output, cache_read, cache_write}."""
+        step_id = await _seed_through_provider_request(services)
+        handler = StepHandler(services)
+        await handler(
+            "llm:response",
+            {
+                "session_id": "s1",
+                "timestamp": LLM_RESP_TS,
+                "usage": {
+                    "input": 101132,
+                    "output": 145,
+                    "cache_read": 97000,
+                    "cache_write": 3533,
+                },
+                "raw": {"stop_reason": "tool_use"},
+            },
+        )
+        node = await services.graph.get_node(step_id)
+        assert node is not None
+        props = node["properties"]
+        assert props["input_tokens"] == 101132
+        assert props["output_tokens"] == 145
+        assert props["cached_tokens"] == 97000
+        assert props["cache_write_tokens"] == 3533
+        assert props["finish_reason"] == "tool_use"
+        assert props["response_at"] == LLM_RESP_TS
+
+    async def test_finish_reason_from_raw_stop_reason(self, services: HookStateService) -> None:
+        """stop_reason lives inside data['raw'], not at the top level."""
+        step_id = await _seed_through_provider_request(services)
+        handler = StepHandler(services)
+        await handler(
+            "llm:response",
+            {
+                "session_id": "s1",
+                "timestamp": LLM_RESP_TS,
+                "usage": {"input": 10, "output": 5},
+                "raw": {"stop_reason": "end_turn"},
+            },
+        )
+        node = await services.graph.get_node(step_id)
+        assert node is not None
+        assert node["properties"]["finish_reason"] == "end_turn"
+
+    async def test_finish_reason_from_raw_finish_reason(self, services: HookStateService) -> None:
+        """OpenAI-style raw response uses finish_reason instead of stop_reason."""
+        step_id = await _seed_through_provider_request(services)
+        handler = StepHandler(services)
+        await handler(
+            "llm:response",
+            {
+                "session_id": "s1",
+                "timestamp": LLM_RESP_TS,
+                "usage": {"input": 10, "output": 5},
+                "raw": {"finish_reason": "stop"},
+            },
+        )
+        node = await services.graph.get_node(step_id)
+        assert node is not None
+        assert node["properties"]["finish_reason"] == "stop"
+
+    async def test_top_level_finish_reason_wins_over_raw(self, services: HookStateService) -> None:
+        """If finish_reason exists at data top level, raw is not consulted."""
+        step_id = await _seed_through_provider_request(services)
+        handler = StepHandler(services)
+        await handler(
+            "llm:response",
+            {
+                "session_id": "s1",
+                "timestamp": LLM_RESP_TS,
+                "finish_reason": "length",
+                "raw": {"stop_reason": "end_turn"},
+            },
+        )
+        node = await services.graph.get_node(step_id)
+        assert node is not None
+        assert node["properties"]["finish_reason"] == "length"
+
+    async def test_cache_write_tokens(self, services: HookStateService) -> None:
+        """cache_write from usage is written as cache_write_tokens."""
+        step_id = await _seed_through_provider_request(services)
+        handler = StepHandler(services)
+        await handler(
+            "llm:response",
+            {
+                "session_id": "s1",
+                "timestamp": LLM_RESP_TS,
+                "usage": {"input": 10, "output": 5, "cache_write": 500},
+            },
+        )
+        node = await services.graph.get_node(step_id)
+        assert node is not None
+        assert node["properties"]["cache_write_tokens"] == 500
+
+    async def test_reasoning_short_key(self, services: HookStateService) -> None:
+        """reasoning from usage is written as reasoning_tokens."""
+        step_id = await _seed_through_provider_request(services)
+        handler = StepHandler(services)
+        await handler(
+            "llm:response",
+            {
+                "session_id": "s1",
+                "timestamp": LLM_RESP_TS,
+                "usage": {"input": 100, "output": 50, "reasoning": 25},
+            },
+        )
+        node = await services.graph.get_node(step_id)
+        assert node is not None
+        assert node["properties"]["reasoning_tokens"] == 25
+
+    async def test_no_raw_key_is_safe(self, services: HookStateService) -> None:
+        """Missing raw dict should not crash finish_reason extraction."""
+        step_id = await _seed_through_provider_request(services)
+        handler = StepHandler(services)
+        result = await handler(
+            "llm:response",
+            {
+                "session_id": "s1",
+                "timestamp": LLM_RESP_TS,
+                "usage": {"input": 10, "output": 5},
+            },
+        )
+        assert result.action == "continue"
+        node = await services.graph.get_node(step_id)
+        assert node is not None
+        assert "finish_reason" not in node["properties"]
+
+
 class TestContentBlockNoOp:
     async def test_content_block_returns_continue(self, services: HookStateService) -> None:
         handler = StepHandler(services)
@@ -529,3 +661,84 @@ class TestContentBlockNoOp:
             {"session_id": "s1", "timestamp": "2026-03-06T05:00:00Z"},
         )
         assert result.action == "continue"
+
+
+# ── TestProviderRequestDataProperty ───────────────────────────────────────────
+
+
+class TestProviderRequestDataProperty:
+    async def test_provider_request_node_has_data_property(
+        self, services: HookStateService
+    ) -> None:
+        """provider:request node should have 'data' property with json.dumps of full event payload."""
+        import json
+
+        await _seed_session_and_run(services)
+        handler = StepHandler(services)
+        event_data = {
+            "session_id": "s1",
+            "timestamp": STEP1_TIMESTAMP,
+            "iteration": 1,
+            "provider": "anthropic",
+        }
+        await handler("provider:request", event_data)
+        node = await services.graph.get_node(EXPECTED_STEP1_ID)
+        assert node is not None
+        props = node["properties"]
+        assert "data" in props
+        parsed = json.loads(props["data"])
+        assert parsed["provider"] == "anthropic"
+        assert parsed["session_id"] == "s1"
+
+
+# ── TestLlmRequestDataProperty ────────────────────────────────────────────────
+
+
+class TestLlmRequestDataProperty:
+    async def test_llm_request_enriches_with_data_llm_request(
+        self, services: HookStateService
+    ) -> None:
+        """llm:request should enrich step with data_llm_request containing model."""
+        import json
+
+        step_id = await _seed_through_provider_request(services)
+        handler = StepHandler(services)
+        event_data = {
+            "session_id": "s1",
+            "timestamp": LLM_REQ_TS,
+            "model": "claude-sonnet-4-20250514",
+        }
+        await handler("llm:request", event_data)
+        node = await services.graph.get_node(step_id)
+        assert node is not None
+        props = node["properties"]
+        assert "data_llm_request" in props
+        parsed = json.loads(props["data_llm_request"])
+        assert parsed["model"] == "claude-sonnet-4-20250514"
+
+
+# ── TestLlmResponseDataProperty ───────────────────────────────────────────────
+
+
+class TestLlmResponseDataProperty:
+    async def test_llm_response_enriches_with_data_llm_response(
+        self, services: HookStateService
+    ) -> None:
+        """llm:response should enrich step with data_llm_response containing usage dict."""
+        import json
+
+        step_id = await _seed_through_provider_request(services)
+        handler = StepHandler(services)
+        event_data = {
+            "session_id": "s1",
+            "timestamp": LLM_RESP_TS,
+            "usage": {"input": 100, "output": 50},
+            "finish_reason": "end_turn",
+        }
+        await handler("llm:response", event_data)
+        node = await services.graph.get_node(step_id)
+        assert node is not None
+        props = node["properties"]
+        assert "data_llm_response" in props
+        parsed = json.loads(props["data_llm_response"])
+        assert parsed["usage"] == {"input": 100, "output": 50}
