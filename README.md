@@ -29,7 +29,7 @@ Add the hook to your Amplifier configuration:
 ```yaml
 hooks:
   - module: hook-context-intelligence
-    source: context-intelligence:modules/hook-context-intelligence
+    source: git+https://github.com/colombod/amplifier-bundle-context-intelligence@main#subdirectory=modules/hook-context-intelligence
     config:
       # base_path: "~/.amplifier/projects"  # optional; resolved lazily if omitted
       # project_slug: "my-project"          # optional; resolved lazily if omitted

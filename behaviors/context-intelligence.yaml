@@ -7,7 +7,7 @@ bundle:
 
 hooks:
   - module: hook-context-intelligence
-    source: context-intelligence:modules/hook-context-intelligence
+    source: git+https://github.com/colombod/amplifier-bundle-context-intelligence@main#subdirectory=modules/hook-context-intelligence
     config:
       # Resolution order: explicit config -> coordinator.config -> sensible default
       # base_path: '~/.amplifier/projects'  # optional; resolved lazily if omitted
