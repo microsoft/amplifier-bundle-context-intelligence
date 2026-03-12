@@ -51,35 +51,19 @@ def test_lifecycle_mount_transition_reads_forest_name(lifecycle_dot):
     assert "from config" in lifecycle_dot
 
 
-# -- hook-event-discovery-and-dispatch.dot ----------------------------------
+def test_historical_cxdb_dot_file_is_deleted():
+    """hook-event-discovery-and-dispatch.dot is a HISTORICAL file and must not exist.
 
-
-@pytest.fixture
-def hook_dispatch_dot():
-    """Load hook-event-discovery-and-dispatch.dot content."""
-    return (CONTEXT_DIR / "hook-event-discovery-and-dispatch.dot").read_text()
-
-
-def test_hook_config_include_has_graph_forest_name(hook_dispatch_dot):
-    """config_include node must reference graph_forest_name: 'default'."""
-    assert "graph_forest_name" in hook_dispatch_dot
-    assert "graph_forest_name: 'default'" in hook_dispatch_dot
-
-
-def test_hook_config_include_has_type_neo4j(hook_dispatch_dot):
-    """config_include node must show type: 'neo4j'."""
-    assert "type: 'neo4j'" in hook_dispatch_dot
-
-
-def test_hook_config_include_has_uri(hook_dispatch_dot):
-    """config_include node must reference uri: bolt://localhost:7687."""
-    assert "uri:" in hook_dispatch_dot
-    assert "bolt://localhost:7687" in hook_dispatch_dot
-
-
-def test_hook_config_include_has_no_env_var_note(hook_dispatch_dot):
-    """config_include node must include 'No env var interpolation' note."""
-    assert "No env var interpolation" in hook_dispatch_dot
+    This file documented the old CXDB architecture and has been removed as part of
+    the event registration refactoring. Its absence is enforced here so it cannot
+    be accidentally re-introduced.
+    """
+    stale_file = CONTEXT_DIR / "hook-event-discovery-and-dispatch.dot"
+    assert not stale_file.exists(), (
+        f"Historical DOT file must be deleted: {stale_file}\n"
+        "This file is labelled 'HISTORICAL REFERENCE — CXDB Architecture' "
+        "and was removed in the event registration refactoring."
+    )
 
 
 # -- read-path.dot ---------------------------------------------------------
