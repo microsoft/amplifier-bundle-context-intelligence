@@ -42,7 +42,7 @@ digraph HookMountDispatcher {
 
     // ─── Discovery node (yellow) ─────────────────────────────────────
     discover_events [
-        label="discover_events\n───────────────────\nQuery coordinator for\nobservability.events\n(canonical + legacy channels)",
+        label="discover_events\n───────────────────\nLayer 1: ALL_EVENTS base (51 core)\nLayer 2: collect_contributions (canonical)\nLayer 3: get_capability (legacy)\n= full union (no exclusions)\n\nExclusion is a graph-path concern,\napplied by HookConfig inside MountFlow",
         fillcolor="#FFF8E1",
         color="#F57F17"
     ];
@@ -68,7 +68,7 @@ digraph HookMountDispatcher {
     node [shape=box, style="rounded,filled", penwidth=2];
 
     create_graph [
-        label="create_graph\n───────────────────\nCreate GraphDataHook\npriority=90, MountFlow,\n7 handlers, Neo4jGraphStore",
+        label="create_graph\n───────────────────\nCreate GraphDataHook\npriority=90, MountFlow,\n7 handlers, Neo4jGraphStore\n\nFull event set passed as parameter\nto MountFlow.run(coordinator, events)",
         fillcolor="#E8EAF6",
         color="#283593"
     ];
@@ -108,7 +108,7 @@ digraph HookMountDispatcher {
     ];
 
     discover_events -> create_logging [
-        label="  ALWAYS  ",
+        label="  ALWAYS — all events, no filter  ",
         color="#2E7D32",
         fontcolor="#2E7D32",
         penwidth=2
