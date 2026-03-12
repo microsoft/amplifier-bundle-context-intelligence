@@ -16,6 +16,13 @@ A `metadata.json` file is written alongside it. This is the universal baseline �
 
 **Graph Generation** is opt-in. When `enable_graph: true` is set and a `graph_store` is configured, a `GraphDataHook` activates and builds a property graph from the event stream. The graph represents session structure as five node types connected by eight edge types: `Session → OrchestratorRun → Step → ToolExecution → Event`. Writes go directly to a Neo4j instance.
 
+## Installation
+
+```bash
+amplifier bundle add git+https://github.com/microsoft/amplifier-bundle-context-intelligence@main
+amplifier bundle use context-intelligence
+```
+
 ## Quick Start
 
 Add the hook to your Amplifier configuration:
