@@ -301,6 +301,24 @@ class TestEventDiscovery:
         assert result is not None, "mount() must never return None when ALL_EVENTS base is used"
         assert callable(result), "mount() must return a cleanup callable"
 
+    async def test_union_of_all_three_layers(self) -> None:
+        """Discovery returns ALL_EVENTS ∪ contributions ∪ legacy capability."""
+        from amplifier_module_hook_context_intelligence import mount
+
+        coordinator = _make_coordinator(
+            contributed_events=[["custom:contrib_event"]],
+            capability_events=["custom:legacy_event"],
+        )
+        await mount(coordinator, config={})
+
+        registered_events = set()
+        for call in coordinator.hooks.register.call_args_list:
+            if call.kwargs.get("name") == "LoggingHandler":
+                registered_events.add(call.args[0])
+        assert set(ALL_EVENTS).issubset(registered_events)
+        assert "custom:contrib_event" in registered_events
+        assert "custom:legacy_event" in registered_events
+
 
 # ---------------------------------------------------------------------------
 # TestModuleContract
