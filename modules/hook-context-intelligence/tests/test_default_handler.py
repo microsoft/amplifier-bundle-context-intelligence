@@ -89,3 +89,27 @@ class TestDefaultHandlerCreatesEventNodes:
         assert node is not None
         assert node["labels"] == {"Event", "CustomMyEvent"}
         assert node["properties"]["event_name"] == "custom:my_event"
+
+
+class TestDefaultHandlerDataProperty:
+    """DefaultHandler stores full event payload in the 'data' property."""
+
+    async def test_stores_data_property(self, services: HookStateService) -> None:
+        """Event node has 'data' property containing the full JSON payload."""
+        import json
+
+        handler = DefaultHandler(services)
+        await handler(
+            "session:resume",
+            {
+                "session_id": "s1",
+                "timestamp": "2026-01-01T02:00:00Z",
+                "custom_info": "extra-value",
+            },
+        )
+        event_id = make_node_id("s1", "session:resume", "2026-01-01T02:00:00Z")
+        node = await services.graph.get_node(event_id)
+        assert node is not None
+        data = json.loads(node["properties"]["data"])
+        assert data["session_id"] == "s1"
+        assert data["custom_info"] == "extra-value"

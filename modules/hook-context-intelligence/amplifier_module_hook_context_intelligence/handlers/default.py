@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import re
 from typing import Any
@@ -47,7 +48,7 @@ class DefaultHandler:
         await self.services.graph.upsert_node(
             event_node_id,
             {"Event", derived},
-            {"event_name": event, "occurred_at": timestamp},
+            {"event_name": event, "occurred_at": timestamp, "data": json.dumps(data)},
         )
 
         # Attach to session via HAS_EVENT
