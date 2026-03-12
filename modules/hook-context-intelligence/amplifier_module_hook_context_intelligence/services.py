@@ -110,12 +110,36 @@ class HookStateService:
         else:
             self.graph = GraphState()
         self._cursors: dict[str, SessionCursors] = {}
+        self._seen_sessions: set[str] = set()
 
     def get_cursors(self, session_id: str) -> SessionCursors:
         """Return the SessionCursors for *session_id*, lazily creating one if needed."""
         if session_id not in self._cursors:
             self._cursors[session_id] = SessionCursors()
         return self._cursors[session_id]
+
+    async def ensure_session_node(self, session_id: str, data: dict[str, Any]) -> None:
+        """Ensure a Session node exists in the graph for this session_id.
+
+        Called on the very first event for a session — creates a minimal
+        Session node so child nodes (runs, steps, tools) are never orphaned.
+        If session:start arrives later, SessionHandler enriches the node
+        with full data (parent_id, metadata, etc.) via upsert.
+
+        This is idempotent — repeated calls for the same session_id are no-ops.
+        """
+        if session_id in self._seen_sessions:
+            return
+        self._seen_sessions.add(session_id)
+
+        timestamp = data.get("timestamp", "")
+        parent_id = (data.get("parent_id") or data.get("parent") or "").strip()
+        labels: set[str] = {"Session", "Subsession"} if parent_id else {"Session", "Root"}
+        properties: dict[str, Any] = {
+            "started_at": timestamp,
+            "status": "running",
+        }
+        await self.graph.upsert_node(session_id, labels, properties)
 
     def remove_cursors(self, session_id: str) -> None:
         """Remove cursor state for *session_id*. Safe to call for nonexistent sessions."""

@@ -100,10 +100,12 @@ class MountFlow:
         for event_list in contributions:
             discovered.update(event_list)
 
-        # Legacy capability channel — sync, returns callable or None
-        capability_fn = coordinator.get_capability("observability.events")
-        if capability_fn is not None:
-            discovered.update(capability_fn())
+        # Legacy capability channel — returns callable, iterable, or None
+        capability = coordinator.get_capability("observability.events")
+        if capability is not None:
+            raw = capability() if callable(capability) else capability
+            if isinstance(raw, (list, set, frozenset, tuple)):
+                discovered.update(raw)
 
         # Apply exclusion filter from config
         if self.services is None:
@@ -120,13 +122,30 @@ class MountFlow:
                 return handler
         return None
 
+    def _wrap_with_session_guarantee(self, handler: Any) -> Any:
+        """Wrap a handler so it ensures a Session node exists before dispatch.
+
+        This prevents orphaned child nodes in Neo4j when session:start
+        is not emitted (e.g. --mode single emits execution:start instead).
+        """
+        services = self.services
+
+        async def wrapper(event: str, data: dict[str, Any]) -> Any:
+            session_id = data.get("session_id")
+            if session_id and services is not None:
+                await services.ensure_session_node(session_id, data)
+            return await handler(event, data)
+
+        return wrapper
+
     def register_specific_handlers(self, coordinator: Any) -> None:
         """EVENTS_DISCOVERED → SPECIFIC_REGISTERED: Register entity handlers for known events."""
         for event in self.remaining_events:
             handler = self._find_handler_for_event(event)
             if handler is not None:
+                wrapped = self._wrap_with_session_guarantee(handler)
                 unreg = coordinator.hooks.register(
-                    event, handler, priority=90, name=type(handler).__name__
+                    event, wrapped, priority=90, name=type(handler).__name__
                 )
                 self._unregister_fns.append(unreg)
 
@@ -141,10 +160,11 @@ class MountFlow:
         }
 
         self.default_handler.handled_events = unclaimed
+        wrapped_default = self._wrap_with_session_guarantee(self.default_handler)
 
         for event in unclaimed:
             unreg = coordinator.hooks.register(
-                event, self.default_handler, priority=90, name="DefaultHandler"
+                event, wrapped_default, priority=90, name="DefaultHandler"
             )
             self._unregister_fns.append(unreg)
 
