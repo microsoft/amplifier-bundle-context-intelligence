@@ -113,9 +113,13 @@ class TestBehaviorYamlRequiredKeys:
         config = behavior_parsed["hooks"][0]["config"]
         assert "log_level" in config
 
-    def test_enable_graph_present(self, behavior_parsed):
+    def test_enable_graph_is_opt_in(self, behavior_parsed):
+        """enable_graph must NOT be an active key — it's opt-in via settings.yaml."""
         config = behavior_parsed["hooks"][0]["config"]
-        assert "enable_graph" in config
+        assert "enable_graph" not in config, (
+            "enable_graph should be commented out in behavior YAML; "
+            "users opt-in via settings.yaml so the behavior default doesn't override"
+        )
 
     def test_graph_store_present(self, behavior_parsed):
         config = behavior_parsed["hooks"][0]["config"]
