@@ -1,4 +1,4 @@
-"""Tests for the 6-state mount flow state machine."""
+"""Tests for the 5-state mount flow state machine."""
 
 from __future__ import annotations
 
@@ -38,6 +38,28 @@ def _make_coordinator(
         coordinator.get_capability = MagicMock(return_value=None)
 
     return coordinator
+
+
+class TestStateEnumReduced:
+    """MountState enum must have exactly 5 members — EVENTS_DISCOVERED removed."""
+
+    def test_mount_state_has_five_members(self):
+        assert len(MountState) == 5
+
+    def test_events_discovered_not_in_enum(self):
+        member_names = {m.name for m in MountState}
+        assert "EVENTS_DISCOVERED" not in member_names
+
+    def test_expected_members_present(self):
+        member_names = {m.name for m in MountState}
+        expected = {
+            "INIT",
+            "STATE_CREATED",
+            "HANDLERS_INSTANTIATED",
+            "SPECIFIC_REGISTERED",
+            "READY",
+        }
+        assert member_names == expected
 
 
 class TestInitToStateCreated:
@@ -84,104 +106,36 @@ class TestStateCreatedToHandlersInstantiated:
         assert flow.default_handler.handled_events == set()
 
 
-class TestHandlersInstantiatedToEventsDiscovered:
-    async def test_discover_events_from_contributions(self):
-        coordinator = _make_coordinator(
-            contributed_events=[["session:start", "session:end"], ["tool:pre", "tool:post"]]
-        )
-        flow = MountFlow(config={})
-        flow.create_services(None)
-        flow.instantiate_handlers()
-        await flow.discover_events(coordinator)
-        assert flow.state == MountState.EVENTS_DISCOVERED
-        assert "session:start" in flow.remaining_events
-        assert "tool:pre" in flow.remaining_events
+class TestHandlersInstantiatedToSpecificRegistered:
+    """Sets flow.remaining_events directly — no discover_events() call."""
 
-    async def test_discover_events_from_legacy_capability(self):
-        coordinator = _make_coordinator(capability_events=["custom:event1", "custom:event2"])
-        flow = MountFlow(config={})
-        flow.create_services(None)
-        flow.instantiate_handlers()
-        await flow.discover_events(coordinator)
-        assert "custom:event1" in flow.remaining_events
-
-    async def test_discover_events_union_of_both_channels(self):
-        coordinator = _make_coordinator(
-            contributed_events=[["session:start"]],
-            capability_events=["custom:event"],
-        )
-        flow = MountFlow(config={})
-        flow.create_services(None)
-        flow.instantiate_handlers()
-        await flow.discover_events(coordinator)
-        assert "session:start" in flow.remaining_events
-        assert "custom:event" in flow.remaining_events
-
-    async def test_exclusion_filter_applied(self):
-        coordinator = _make_coordinator(
-            contributed_events=[["session:start", "content_block:delta"]]
-        )
-        flow = MountFlow(config={"exclude_events": ["content_block:delta"]})
-        flow.create_services(None)
-        flow.instantiate_handlers()
-        await flow.discover_events(coordinator)
-        assert "session:start" in flow.remaining_events
-        assert "content_block:delta" not in flow.remaining_events
-
-    async def test_exclusion_wildcard_filter(self):
-        coordinator = _make_coordinator(
-            contributed_events=[["session-naming:foo", "session-naming:bar", "session:start"]]
-        )
-        flow = MountFlow(config={"exclude_events": ["session-naming:*"]})
-        flow.create_services(None)
-        flow.instantiate_handlers()
-        await flow.discover_events(coordinator)
-        assert "session-naming:foo" not in flow.remaining_events
-        assert "session-naming:bar" not in flow.remaining_events
-        assert "session:start" in flow.remaining_events
-
-    async def test_empty_discovery_is_valid(self):
+    def test_register_specific_handlers(self):
         coordinator = _make_coordinator()
         flow = MountFlow(config={})
         flow.create_services(None)
         flow.instantiate_handlers()
-        await flow.discover_events(coordinator)
-        assert flow.state == MountState.EVENTS_DISCOVERED
-        assert flow.remaining_events == set()
-
-
-class TestEventsDiscoveredToSpecificRegistered:
-    async def test_register_specific_handlers(self):
-        coordinator = _make_coordinator(
-            contributed_events=[["session:start", "session:end", "tool:pre"]]
-        )
-        flow = MountFlow(config={})
-        flow.create_services(None)
-        flow.instantiate_handlers()
-        await flow.discover_events(coordinator)
+        flow.remaining_events = {"session:start", "session:end", "tool:pre"}
         flow.register_specific_handlers(coordinator)
         assert flow.state == MountState.SPECIFIC_REGISTERED
         assert coordinator.hooks.register.call_count >= 3
 
-    async def test_only_remaining_events_registered(self):
-        coordinator = _make_coordinator(contributed_events=[["session:start"]])
+    def test_only_remaining_events_registered(self):
+        coordinator = _make_coordinator()
         flow = MountFlow(config={})
         flow.create_services(None)
         flow.instantiate_handlers()
-        await flow.discover_events(coordinator)
+        flow.remaining_events = {"session:start"}
         flow.register_specific_handlers(coordinator)
         registered_events = [c.args[0] for c in coordinator.hooks.register.call_args_list]
         assert "session:start" in registered_events
         assert "session:end" not in registered_events
 
-    async def test_wildcard_event_matching(self):
-        coordinator = _make_coordinator(
-            contributed_events=[["content_block:start", "content_block:delta"]]
-        )
+    def test_wildcard_event_matching(self):
+        coordinator = _make_coordinator()
         flow = MountFlow(config={})
         flow.create_services(None)
         flow.instantiate_handlers()
-        await flow.discover_events(coordinator)
+        flow.remaining_events = {"content_block:start", "content_block:delta"}
         flow.register_specific_handlers(coordinator)
         registered_events = [c.args[0] for c in coordinator.hooks.register.call_args_list]
         assert "content_block:start" in registered_events
@@ -189,28 +143,24 @@ class TestEventsDiscoveredToSpecificRegistered:
 
 
 class TestSpecificRegisteredToReady:
-    async def test_register_default_handler(self):
-        coordinator = _make_coordinator(
-            contributed_events=[["session:start", "custom:unknown_event"]]
-        )
+    def test_register_default_handler(self):
+        coordinator = _make_coordinator()
         flow = MountFlow(config={})
         flow.create_services(None)
         flow.instantiate_handlers()
-        await flow.discover_events(coordinator)
+        flow.remaining_events = {"session:start", "custom:unknown_event"}
         flow.register_specific_handlers(coordinator)
         flow.register_default_handler(coordinator)
         assert flow.state == MountState.READY
         registered_events = [c.args[0] for c in coordinator.hooks.register.call_args_list]
         assert "custom:unknown_event" in registered_events
 
-    async def test_default_handler_events_populated(self):
-        coordinator = _make_coordinator(
-            contributed_events=[["session:start", "custom:one", "custom:two"]]
-        )
+    def test_default_handler_events_populated(self):
+        coordinator = _make_coordinator()
         flow = MountFlow(config={})
         flow.create_services(None)
         flow.instantiate_handlers()
-        await flow.discover_events(coordinator)
+        flow.remaining_events = {"session:start", "custom:one", "custom:two"}
         flow.register_specific_handlers(coordinator)
         flow.register_default_handler(coordinator)
         assert flow.default_handler is not None
@@ -219,7 +169,7 @@ class TestSpecificRegisteredToReady:
 
 
 class TestKeyInvariant:
-    async def test_every_remaining_event_has_at_least_one_registration(self):
+    def test_every_remaining_event_has_at_least_one_registration(self):
         events = [
             "session:start",
             "session:end",
@@ -228,25 +178,25 @@ class TestKeyInvariant:
             "custom:event1",
             "custom:event2",
         ]
-        coordinator = _make_coordinator(contributed_events=[events])
+        coordinator = _make_coordinator()
         flow = MountFlow(config={})
         flow.create_services(None)
         flow.instantiate_handlers()
-        await flow.discover_events(coordinator)
+        flow.remaining_events = set(events)
         flow.register_specific_handlers(coordinator)
         flow.register_default_handler(coordinator)
         registered_events = {c.args[0] for c in coordinator.hooks.register.call_args_list}
         assert flow.remaining_events == registered_events
 
-    async def test_deterministic_registrations(self):
+    def test_deterministic_registrations(self):
         events = ["session:start", "tool:pre", "custom:event"]
         results = []
         for _ in range(2):
-            coordinator = _make_coordinator(contributed_events=[events])
+            coordinator = _make_coordinator()
             flow = MountFlow(config={})
             flow.create_services(None)
             flow.instantiate_handlers()
-            await flow.discover_events(coordinator)
+            flow.remaining_events = set(events)
             flow.register_specific_handlers(coordinator)
             flow.register_default_handler(coordinator)
             registered = sorted([c.args[0] for c in coordinator.hooks.register.call_args_list])
@@ -266,15 +216,6 @@ class TestPreconditionErrors:
         with pytest.raises(RuntimeError, match="create_services.*must be called first"):
             flow.instantiate_handlers()
 
-    async def test_discover_events_without_services_raises_runtime_error(self):
-        coordinator = _make_coordinator(contributed_events=[["session:start"]])
-        flow = MountFlow(config={})
-        # Skip create_services — services is None
-        flow.state = MountState.STATE_CREATED
-        flow.entity_handlers = []
-        with pytest.raises(RuntimeError, match="create_services.*must be called first"):
-            await flow.discover_events(coordinator)
-
     def test_register_default_handler_without_handlers_raises_runtime_error(self):
         flow = MountFlow(config={})
         flow.remaining_events = set()
@@ -285,19 +226,19 @@ class TestPreconditionErrors:
 
 class TestFullMount:
     async def test_mount_returns_cleanup(self):
-        events = ["session:start", "tool:pre"]
-        coordinator = _make_coordinator(contributed_events=[events])
+        events = {"session:start", "tool:pre"}
+        coordinator = _make_coordinator()
         flow = MountFlow(config={})
-        cleanup = await flow.run(coordinator)
+        cleanup = await flow.run(coordinator, events)
         assert flow.state == MountState.READY
         assert cleanup is not None
         assert callable(cleanup)
 
     async def test_cleanup_calls_unregister(self):
-        events = ["session:start"]
-        coordinator = _make_coordinator(contributed_events=[events])
+        events = {"session:start"}
+        coordinator = _make_coordinator()
         flow = MountFlow(config={})
-        cleanup = await flow.run(coordinator)
+        cleanup = await flow.run(coordinator, events)
         assert coordinator.hooks.register.call_count == 1
         cleanup()
         for unreg in coordinator._unregister_fns:
@@ -306,9 +247,17 @@ class TestFullMount:
     async def test_mount_with_no_events_reaches_ready(self):
         coordinator = _make_coordinator()
         flow = MountFlow(config={})
-        _cleanup = await flow.run(coordinator)
+        _cleanup = await flow.run(coordinator, set())
         assert flow.state == MountState.READY
         assert coordinator.hooks.register.call_count == 0
+
+    async def test_run_applies_exclusion_filter(self):
+        """run() applies HookConfig.is_excluded() to filter the passed events."""
+        coordinator = _make_coordinator()
+        flow = MountFlow(config={"exclude_events": ["content_block:delta"]})
+        _cleanup = await flow.run(coordinator, {"session:start", "content_block:delta"})
+        assert "session:start" in flow.remaining_events
+        assert "content_block:delta" not in flow.remaining_events
 
 
 class TestMountFlowPrebuiltStore:
@@ -334,9 +283,9 @@ class TestMountFlowPrebuiltStore:
 
     async def test_full_mount_with_prebuilt_store(self):
         store = object()
-        coordinator = _make_coordinator(contributed_events=[["session:start"]])
+        coordinator = _make_coordinator()
         flow = MountFlow(config={}, graph_store=store)
-        _cleanup = await flow.run(coordinator)
+        _cleanup = await flow.run(coordinator, {"session:start"})
         assert flow.state == MountState.READY
         assert flow.services is not None
         assert flow.services.graph is store
@@ -405,8 +354,8 @@ class TestMountFlowResolverPath:
 
         resolver = MagicMock()
         resolver._config = {}
-        coordinator = _make_coordinator(contributed_events=[["session:start"]])
+        coordinator = _make_coordinator()
         flow = MountFlow(config={}, resolver=resolver)
-        _cleanup = await flow.run(coordinator)
+        _cleanup = await flow.run(coordinator, {"session:start"})
         assert flow.state == MountState.READY
         assert flow.services is not None

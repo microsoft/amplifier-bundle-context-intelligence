@@ -46,13 +46,17 @@ class GraphDataHook:
         self._store = _create_neo4j_store(resolver)
         self._flow = MountFlow(config=resolver._config, graph_store=self._store, resolver=resolver)
 
-    async def mount(self, coordinator: Any) -> Callable:
+    async def mount(self, coordinator: Any, events: set[str] | None = None) -> Callable:
         """Run the mount flow and return a cleanup callable.
+
+        Args:
+            coordinator: The Amplifier coordinator instance.
+            events: Pre-resolved event set. If None, uses empty set.
 
         The cleanup callable tears down all registered hooks and schedules
         closing the graph store.
         """
-        flow_cleanup = await self._flow.run(coordinator)
+        flow_cleanup = await self._flow.run(coordinator, events or set())
         store = self._store
 
         async def _async_cleanup() -> None:

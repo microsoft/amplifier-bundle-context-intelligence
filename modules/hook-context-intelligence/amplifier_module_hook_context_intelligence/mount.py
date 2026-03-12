@@ -1,4 +1,4 @@
-"""6-state deterministic mount flow state machine for context-intelligence hook."""
+"""5-state deterministic mount flow state machine for context-intelligence hook."""
 
 from __future__ import annotations
 
@@ -25,17 +25,21 @@ class MountState(enum.Enum):
     INIT = "init"
     STATE_CREATED = "state_created"
     HANDLERS_INSTANTIATED = "handlers_instantiated"
-    EVENTS_DISCOVERED = "events_discovered"
     SPECIFIC_REGISTERED = "specific_registered"
     READY = "ready"
 
 
 class MountFlow:
-    """6-state deterministic mount flow state machine.
+    """5-state deterministic mount flow state machine.
 
     Transitions:
-        INIT → STATE_CREATED → HANDLERS_INSTANTIATED → EVENTS_DISCOVERED
+        INIT → STATE_CREATED → HANDLERS_INSTANTIATED
         → SPECIFIC_REGISTERED → READY
+
+    Conscious design decision: events are discovered once in mount()
+    and passed down via run(coordinator, events). MountFlow does not
+    query the coordinator independently. Eliminates dual-discovery
+    divergence risk.
     """
 
     def __init__(
@@ -88,37 +92,6 @@ class MountFlow:
 
         self.state = MountState.HANDLERS_INSTANTIATED
 
-    async def discover_events(self, coordinator: Any) -> None:
-        """HANDLERS_INSTANTIATED → EVENTS_DISCOVERED: Collect events from coordinator.
-
-        Two discovery channels:
-        - contributions: ``coordinator.collect_contributions("observability.events")``
-          returns a list of lists (async)
-        - legacy capability: ``coordinator.get_capability("observability.events")``
-          returns a callable or None (sync); call it to get the event list
-        """
-        discovered: set[str] = set()
-
-        # Contributions channel — async, returns list[list[str]]
-        contributions = await coordinator.collect_contributions("observability.events")
-        for event_list in contributions:
-            discovered.update(event_list)
-
-        # Legacy capability channel — returns callable, iterable, or None
-        capability = coordinator.get_capability("observability.events")
-        if capability is not None:
-            raw = capability() if callable(capability) else capability
-            if isinstance(raw, (list, set, frozenset, tuple)):
-                discovered.update(raw)
-
-        # Apply exclusion filter from config
-        if self.services is None:
-            raise RuntimeError("create_services() must be called first")
-        config = self.services.config
-        self.remaining_events = {e for e in discovered if not config.is_excluded(e)}
-
-        self.state = MountState.EVENTS_DISCOVERED
-
     def _find_handler_for_event(self, event: str) -> Any | None:
         """Return the first entity handler whose patterns match *event*, or None."""
         for handler in self.entity_handlers:
@@ -143,7 +116,7 @@ class MountFlow:
         return wrapper
 
     def register_specific_handlers(self, coordinator: Any) -> None:
-        """EVENTS_DISCOVERED → SPECIFIC_REGISTERED: Register entity handlers for known events."""
+        """HANDLERS_INSTANTIATED → SPECIFIC_REGISTERED: Register entity handlers for known events."""
         for event in self.remaining_events:
             handler = self._find_handler_for_event(event)
             if handler is not None:
@@ -174,15 +147,26 @@ class MountFlow:
 
         self.state = MountState.READY
 
-    async def run(self, coordinator: Any) -> Callable:
+    async def run(self, coordinator: Any, events: set[str]) -> Callable:
         """Execute all state transitions and return a cleanup callable.
+
+        Args:
+            coordinator: The Amplifier coordinator instance.
+            events: Pre-resolved event set from _discover_events().
+                    Exclusion filtering is applied here from HookConfig.
 
         The cleanup callable calls every unregister function returned by
         ``coordinator.hooks.register``, tearing down all registered hooks.
         """
         self.create_services(coordinator)
         self.instantiate_handlers()
-        await self.discover_events(coordinator)
+
+        # Apply exclusion filter from config (graph path only)
+        if self.services is None:
+            raise RuntimeError("create_services() must be called first")
+        config = self.services.config
+        self.remaining_events = {e for e in events if not config.is_excluded(e)}
+
         self.register_specific_handlers(coordinator)
         self.register_default_handler(coordinator)
 

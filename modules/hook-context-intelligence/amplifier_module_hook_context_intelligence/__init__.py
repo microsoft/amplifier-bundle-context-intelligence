@@ -94,7 +94,7 @@ async def mount(coordinator: Any, config: dict[str, Any] | None = None) -> Calla
             from .graph_data_hook import GraphDataHook
 
             graph_hook = GraphDataHook(resolver)
-            graph_cleanup = await graph_hook.mount(coordinator)
+            graph_cleanup = await graph_hook.mount(coordinator, events)
             cleanup_fns.append(graph_cleanup)
         except Exception:
             logger.exception("Failed to mount GraphDataHook; logging path continues")

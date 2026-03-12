@@ -193,40 +193,32 @@ class TestGraphDataHookMount:
         mock_cls, mock_store = mock_neo4j_store
         resolver = _make_resolver(_NEO4J_STORE_CONFIG)
         hook = GraphDataHook(resolver)
-        coordinator = _make_coordinator(
-            contributed_events=[["session:start", "session:end", "tool:pre"]],
-        )
-        cleanup = await hook.mount(coordinator)
+        coordinator = _make_coordinator()
+        cleanup = await hook.mount(coordinator, events={"session:start", "session:end", "tool:pre"})
         assert callable(cleanup)
 
     async def test_mount_runs_mount_flow_to_ready(self, mock_neo4j_store):
         mock_cls, mock_store = mock_neo4j_store
         resolver = _make_resolver(_NEO4J_STORE_CONFIG)
         hook = GraphDataHook(resolver)
-        coordinator = _make_coordinator(
-            contributed_events=[["session:start", "session:end", "tool:pre"]],
-        )
-        await hook.mount(coordinator)
+        coordinator = _make_coordinator()
+        await hook.mount(coordinator, events={"session:start", "session:end", "tool:pre"})
         assert hook._flow.state == MountState.READY
 
     async def test_mount_registers_handlers(self, mock_neo4j_store):
         mock_cls, mock_store = mock_neo4j_store
         resolver = _make_resolver(_NEO4J_STORE_CONFIG)
         hook = GraphDataHook(resolver)
-        coordinator = _make_coordinator(
-            contributed_events=[["session:start", "session:end", "tool:pre"]],
-        )
-        await hook.mount(coordinator)
+        coordinator = _make_coordinator()
+        await hook.mount(coordinator, events={"session:start", "session:end", "tool:pre"})
         assert coordinator.hooks.register.call_count >= 3
 
     async def test_cleanup_calls_unregister(self, mock_neo4j_store):
         mock_cls, mock_store = mock_neo4j_store
         resolver = _make_resolver(_NEO4J_STORE_CONFIG)
         hook = GraphDataHook(resolver)
-        coordinator = _make_coordinator(
-            contributed_events=[["session:start"]],
-        )
-        cleanup = await hook.mount(coordinator)
+        coordinator = _make_coordinator()
+        cleanup = await hook.mount(coordinator, events={"session:start"})
         cleanup()
         # cleanup() schedules an async task — yield control so it runs
         await asyncio.sleep(0)
@@ -238,10 +230,8 @@ class TestGraphDataHookMount:
         mock_cls, mock_store = mock_neo4j_store
         resolver = _make_resolver(_NEO4J_STORE_CONFIG)
         hook = GraphDataHook(resolver)
-        coordinator = _make_coordinator(
-            contributed_events=[["session:start"]],
-        )
-        cleanup = await hook.mount(coordinator)
+        coordinator = _make_coordinator()
+        cleanup = await hook.mount(coordinator, events={"session:start"})
         cleanup()
         # Yield to event loop so the create_task() coroutine can run
         await asyncio.sleep(0)

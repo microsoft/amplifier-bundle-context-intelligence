@@ -40,6 +40,6 @@ class TestMountFlowCoordinatorPassthrough:
         coordinator.get_capability = MagicMock(return_value=None)
 
         flow = MountFlow(config={})
-        await flow.run(coordinator)
+        await flow.run(coordinator, events=set())
         assert flow.services is not None
         assert flow.services.coordinator is coordinator
