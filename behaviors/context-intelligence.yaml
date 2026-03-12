@@ -15,7 +15,7 @@ hooks:
       # project: 'my-project'              # optional; used as graph_forest_name fallback
       exclude_events: []
       log_level: 'WARNING'
-      # enable_graph: false          # opt-in via settings.yaml; defaults to false when absent
+      enable_graph: false            # override to true in ~/.amplifier/settings.yaml to activate graph storage
       graph_store:
         type: 'neo4j'
         # graph_forest_name resolved via: graph_store.graph_forest_name -> config.project -> coordinator.config.project_slug -> "default"
