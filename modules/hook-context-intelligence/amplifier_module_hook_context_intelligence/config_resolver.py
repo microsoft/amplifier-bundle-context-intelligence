@@ -10,14 +10,31 @@ _DEFAULT_BASE_PATH = "~/.amplifier/projects"
 _DEFAULT_PROJECT_SLUG = "default"
 
 
+def _slugify_path(path_str: str) -> str:
+    """Convert an absolute path to the CLI's project slug format.
+
+    Matches ``amplifier_app_cli.project_utils.get_project_slug()``:
+    full path with separators replaced by hyphens, prefixed with ``-``.
+
+    Examples:
+        ``/workspace``            → ``-workspace``
+        ``/home/user/repos/app``  → ``-home-user-repos-app``
+    """
+    slug = path_str.replace("/", "-").replace("\\", "-").replace(":", "")
+    if slug and not slug.startswith("-"):
+        slug = "-" + slug
+    return slug or _DEFAULT_PROJECT_SLUG
+
+
 class ConfigResolver:
-    """Resolve configuration values with lazy fallback chains (2–4 steps depending on property).
+    """Resolve configuration values with lazy fallback chains.
 
     Resolution order per property:
+
+    - project_slug: config → coordinator.config → session.working_dir capability → 'default'
     - base_path:    config → coordinator.config → default
-    - project_slug: config → coordinator.config → 'default'
     - forest_name:  config[graph_store][graph_forest_name] → config[project]
-                    → coordinator.config[project_slug] → 'default'
+                    → project_slug (full chain above) → 'default'
 
     Resolved values are cached after first access.
 
@@ -48,6 +65,25 @@ class ConfigResolver:
             return None
         return coord_config.get(key)
 
+    def _slug_from_working_dir(self) -> str | None:
+        """Derive a project slug from the coordinator's session.working_dir capability.
+
+        The Amplifier CLI stamps ``project_slug`` into ``coordinator.config``
+        *after* session creation, but hooks mount *during* creation — so
+        ``coordinator.config["project_slug"]`` is not yet available.  The
+        ``session.working_dir`` capability IS registered by the foundation's
+        ``bundle.py`` before hooks mount, so we can derive the slug from it.
+
+        Returns ``None`` if the capability is not available.
+        """
+        get_cap = getattr(self._coordinator, "get_capability", None)
+        if get_cap is None:
+            return None
+        working_dir = get_cap("session.working_dir")
+        if not isinstance(working_dir, str) or not working_dir:
+            return None
+        return _slugify_path(str(Path(working_dir).resolve()))
+
     # ------------------------------------------------------------------
     # Properties
     # ------------------------------------------------------------------
@@ -56,13 +92,18 @@ class ConfigResolver:
     def project_slug(self) -> str:
         """Resolved project slug identifier.
 
-        Chain: config['project_slug'] → coordinator.config['project_slug'] → 'default'.
+        Chain: config['project_slug']
+               → coordinator.config['project_slug']
+               → session.working_dir capability (slugified)
+               → 'default'.
+
         Result is cached after first access.
         """
         if self._project_slug is None:
             raw = (
                 self._config.get("project_slug")
                 or self._coordinator_config_get("project_slug")
+                or self._slug_from_working_dir()
                 or _DEFAULT_PROJECT_SLUG
             )
             self._project_slug = str(raw)
@@ -90,8 +131,7 @@ class ConfigResolver:
 
         Chain: config['graph_store']['graph_forest_name']
                → config['project']
-               → coordinator.config['project_slug']
-               → 'default'.
+               → project_slug (includes working_dir capability fallback)
 
         Non-dict graph_store values are skipped gracefully.
         Result is cached after first access.
@@ -99,7 +139,7 @@ class ConfigResolver:
         if self._forest_name is None:
             value: Any = None
 
-            # Step 1: graph_store.graph_forest_name
+            # Step 1: graph_store.graph_forest_name (explicit override)
             graph_store = self._config.get("graph_store")
             if isinstance(graph_store, dict):
                 value = graph_store.get("graph_forest_name")
@@ -108,11 +148,11 @@ class ConfigResolver:
             if not value:
                 value = self._config.get("project")
 
-            # Step 3: coordinator.config['project_slug']
+            # Step 3: delegate to project_slug (has its own full chain
+            #         including working_dir capability fallback)
             if not value:
-                value = self._coordinator_config_get("project_slug")
+                value = self.project_slug
 
-            # Step 4: 'default'  (same default value as project_slug)
             self._forest_name = str(value) if value else _DEFAULT_PROJECT_SLUG
 
         return self._forest_name
