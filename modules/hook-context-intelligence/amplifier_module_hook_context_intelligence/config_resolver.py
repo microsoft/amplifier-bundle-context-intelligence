@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Any
 
@@ -120,9 +121,19 @@ class ConfigResolver:
     def enable_graph(self) -> bool:
         """Whether graph storage is enabled.
 
-        Reads directly from config['enable_graph'], defaults to False.
-        No coordinator fallback. Not cached.
+        Resolution chain (first truthy wins):
+          1. Environment variable ``CI_ENABLE_GRAPH`` (e.g. ``CI_ENABLE_GRAPH=true``)
+          2. config['enable_graph']
+
+        The env-var override exists because the Amplifier CLI merges behavior
+        YAML config ON TOP of settings.yaml hook config, so a behavior default
+        of ``enable_graph: false`` silently wins over the user's
+        ``enable_graph: true`` in settings.yaml.  The env var gives users a
+        reliable override path unaffected by YAML merge ordering.
         """
+        env = os.environ.get("CI_ENABLE_GRAPH", "").strip().lower()
+        if env in ("1", "true", "yes"):
+            return True
         return bool(self._config.get("enable_graph", False))
 
     @property
