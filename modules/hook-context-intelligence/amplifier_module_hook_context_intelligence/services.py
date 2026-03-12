@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import dataclasses
 import fnmatch
+import logging
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 
 @dataclasses.dataclass
@@ -49,6 +52,10 @@ class GraphState:
     @property
     def graph_forest_name(self) -> str:
         return self._graph_forest_name
+
+    @graph_forest_name.setter
+    def graph_forest_name(self, value: str) -> None:
+        self._graph_forest_name = value
 
     async def get_node(self, node_id: str) -> dict[str, Any] | None:
         return self._nodes.get(node_id)
@@ -101,22 +108,63 @@ class HookStateService:
     ) -> None:
         if resolver is not None:
             self.config = HookConfig(resolver._config)
-            self.coordinator = None
         else:
             self.config = HookConfig(raw_config if raw_config is not None else {})
-            self.coordinator = coordinator
+        self.coordinator = coordinator
         if graph_store is not None:
             self.graph = graph_store
         else:
             self.graph = GraphState()
         self._cursors: dict[str, SessionCursors] = {}
         self._seen_sessions: set[str] = set()
+        self._forest_resolved: bool = False
 
     def get_cursors(self, session_id: str) -> SessionCursors:
         """Return the SessionCursors for *session_id*, lazily creating one if needed."""
         if session_id not in self._cursors:
             self._cursors[session_id] = SessionCursors()
         return self._cursors[session_id]
+
+    def _resolve_forest_name_from_coordinator(self) -> None:
+        """Resolve graph_forest_name from coordinator runtime data.
+
+        Called lazily on the first event — by this point the CLI has stamped
+        ``project_slug`` into ``coordinator.config`` (which happens after
+        session creation but before events fire).
+
+        Resolution chain:
+          1. coordinator.config["project_slug"] (CLI stamps this post-creation)
+          2. session.working_dir capability (slugified to CLI format)
+          3. leave as-is (store defaults to "default")
+        """
+        if self._forest_resolved:
+            return
+        self._forest_resolved = True
+
+        if self.coordinator is None:
+            return
+
+        # Step 1: coordinator.config["project_slug"]
+        coord_config = getattr(self.coordinator, "config", None)
+        slug: str | None = None
+        if isinstance(coord_config, dict):
+            slug = coord_config.get("project_slug")
+
+        # Step 2: session.working_dir capability → slugify
+        if not slug:
+            get_cap = getattr(self.coordinator, "get_capability", None)
+            if get_cap is not None:
+                wd = get_cap("session.working_dir")
+                if isinstance(wd, str) and wd:
+                    slug = wd.replace("/", "-").replace("\\", "-").replace(":", "")
+                    if slug and not slug.startswith("-"):
+                        slug = "-" + slug
+
+        if slug:
+            # Set on the graph store — it will use this for all subsequent flushes
+            if hasattr(self.graph, "graph_forest_name"):
+                self.graph.graph_forest_name = slug
+            logger.debug("Resolved graph_forest_name from runtime: %s", slug)
 
     async def ensure_session_node(self, session_id: str, data: dict[str, Any]) -> None:
         """Ensure a Session node exists in the graph for this session_id.
@@ -126,8 +174,13 @@ class HookStateService:
         If session:start arrives later, SessionHandler enriches the node
         with full data (parent_id, metadata, etc.) via upsert.
 
+        Also resolves graph_forest_name from runtime data on first call.
+
         This is idempotent — repeated calls for the same session_id are no-ops.
         """
+        # Resolve forest name lazily from coordinator runtime data
+        self._resolve_forest_name_from_coordinator()
+
         if session_id in self._seen_sessions:
             return
         self._seen_sessions.add(session_id)

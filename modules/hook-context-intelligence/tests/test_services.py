@@ -134,12 +134,13 @@ class TestGraphState:
         graph = GraphState(graph_forest_name="my-project")
         assert graph.graph_forest_name == "my-project"
 
-    def test_graph_forest_name_is_readonly(self):
+    def test_graph_forest_name_is_settable(self):
         from amplifier_module_hook_context_intelligence.services import GraphState
 
         graph = GraphState()
-        with pytest.raises(AttributeError):
-            graph.graph_forest_name = "other"
+        assert graph.graph_forest_name == "default"
+        graph.graph_forest_name = "-workspace"
+        assert graph.graph_forest_name == "-workspace"
 
 
 class TestHookStateService:

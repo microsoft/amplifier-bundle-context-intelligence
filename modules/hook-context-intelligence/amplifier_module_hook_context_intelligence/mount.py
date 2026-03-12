@@ -55,7 +55,11 @@ class MountFlow:
     def create_services(self, coordinator: Any) -> None:
         """INIT → STATE_CREATED: Instantiate HookStateService from config."""
         if self._resolver is not None:
-            self.services = HookStateService(resolver=self._resolver, graph_store=self._graph_store)
+            self.services = HookStateService(
+                resolver=self._resolver,
+                coordinator=coordinator,
+                graph_store=self._graph_store,
+            )
         else:
             self.services = HookStateService(
                 self._config, coordinator=coordinator, graph_store=self._graph_store

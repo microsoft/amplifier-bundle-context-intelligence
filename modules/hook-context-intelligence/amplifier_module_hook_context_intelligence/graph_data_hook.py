@@ -13,7 +13,10 @@ logger = logging.getLogger(__name__)
 
 
 def _create_neo4j_store(resolver: Any) -> Neo4jGraphStore:
-    """Create a Neo4jGraphStore from the resolver's neo4j_config and forest_name.
+    """Create a Neo4jGraphStore from the resolver's neo4j_config.
+
+    The ``graph_forest_name`` is NOT set here — it is resolved lazily from
+    coordinator runtime data at event time by ``HookStateService``.
 
     Raises ValueError if resolver.neo4j_config is None (no graph_store config present).
     """
@@ -28,7 +31,6 @@ def _create_neo4j_store(resolver: Any) -> Neo4jGraphStore:
         uri=neo4j_cfg["uri"],
         auth=neo4j_cfg["auth"],
         database=neo4j_cfg["database"],
-        graph_forest_name=resolver.forest_name,
     )
 
 

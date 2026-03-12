@@ -103,13 +103,16 @@ class TestCreateNeo4jStore:
         call_kwargs = mock_cls.call_args.kwargs
         assert call_kwargs["database"] == "neo4j"
 
-    def test_passes_forest_name_from_resolver(self, mock_neo4j_store):
-        """forest_name resolves to 'default' from graph_store.graph_forest_name."""
+    def test_does_not_pass_forest_name_at_construction(self, mock_neo4j_store):
+        """forest_name is NOT passed at construction — resolved lazily at event time."""
         mock_cls, mock_store = mock_neo4j_store
         resolver = _make_resolver(_NEO4J_STORE_CONFIG)
         _create_neo4j_store(resolver)
         call_kwargs = mock_cls.call_args.kwargs
-        assert call_kwargs["graph_forest_name"] == "default"
+        assert "graph_forest_name" not in call_kwargs, (
+            "graph_forest_name should not be passed at construction; "
+            "it is resolved lazily from coordinator runtime data at event time"
+        )
 
     def test_raises_when_no_neo4j_config(self, mock_neo4j_store):
         """ValueError when neo4j_config is None (no graph_store in config)."""

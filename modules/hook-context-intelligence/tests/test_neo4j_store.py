@@ -271,12 +271,13 @@ class TestConstructor:
         store = Neo4jGraphStore(uri=NEO4J_URI, auth=NEO4J_AUTH, database=NEO4J_DATABASE)
         assert store.graph_forest_name == "default"
 
-    def test_graph_forest_name_is_readonly(self):
+    def test_graph_forest_name_is_settable(self):
         from amplifier_module_hook_context_intelligence.neo4j_store import Neo4jGraphStore
 
         store = Neo4jGraphStore(uri=NEO4J_URI, auth=NEO4J_AUTH, database=NEO4J_DATABASE)
-        with pytest.raises(AttributeError):
-            store.graph_forest_name = "new-value"  # type: ignore[assignment]
+        assert store.graph_forest_name == "default"  # None init → property returns "default"
+        store.graph_forest_name = "-workspace"
+        assert store.graph_forest_name == "-workspace"
 
     def test_driver_created_on_init(self):
         from amplifier_module_hook_context_intelligence.neo4j_store import Neo4jGraphStore
@@ -866,15 +867,14 @@ class TestExecuteQuery:
 
     @pytest.mark.asyncio
     async def test_execute_query_injects_graph_forest_name_param(self, seeded_neo4j_store):
-        # Query uses $graph_forest_name — results prove injection worked
-        # (no rows would return if the param wasn't injected by execute_query)
+        # Verify execute_query injects $graph_forest_name param automatically.
+        # Use a pure RETURN query to test injection without depending on seeded data.
         result = await seeded_neo4j_store.execute_query(
-            "MATCH (n) WHERE n.graph_forest_name = $graph_forest_name RETURN n.node_id AS node_id",
+            "RETURN $graph_forest_name AS forest",
         )
         assert isinstance(result, list)
-        assert len(result) > 0
-        for row in result:
-            assert row["node_id"] is not None
+        assert len(result) == 1
+        assert result[0]["forest"] == seeded_neo4j_store.graph_forest_name
 
     @pytest.mark.asyncio
     async def test_execute_query_wildcard_forest_skips_injection(self, seeded_neo4j_store):

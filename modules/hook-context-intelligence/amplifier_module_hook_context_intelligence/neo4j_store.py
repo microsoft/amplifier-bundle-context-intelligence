@@ -38,11 +38,11 @@ class Neo4jGraphStore:
         uri: str = "neo4j://localhost:7687",
         auth: tuple[str, str] | None = ("neo4j", "neo4j"),
         database: str = "neo4j",
-        graph_forest_name: str = "default",
+        graph_forest_name: str | None = None,
     ) -> None:
         self._driver = AsyncGraphDatabase.driver(uri, auth=auth)
         self._database = database
-        self._graph_forest_name = graph_forest_name
+        self._graph_forest_name: str | None = graph_forest_name
 
         # Write buffers
         self._node_buffer: dict[str, dict[str, Any]] = {}
@@ -56,8 +56,16 @@ class Neo4jGraphStore:
 
     @property
     def graph_forest_name(self) -> str:
-        """The forest this store writes to (read-only)."""
-        return self._graph_forest_name
+        """The forest this store writes to.
+
+        Returns the resolved name, or ``'default'`` if not yet set.
+        """
+        return self._graph_forest_name or "default"
+
+    @graph_forest_name.setter
+    def graph_forest_name(self, value: str) -> None:
+        """Set the forest name from runtime data (e.g. coordinator project slug)."""
+        self._graph_forest_name = value
 
     @property
     def supported_dialects(self) -> frozenset[str]:
@@ -92,9 +100,6 @@ class Neo4jGraphStore:
                 "type": edge_type,
                 "properties": dict(properties),
             }
-
-    # Internal base label applied at MERGE time for index routing — not a domain label.
-    _BASE_LABEL = "Node"
 
     @staticmethod
     def _convert_timestamps(props: dict[str, Any]) -> dict[str, Any]:
@@ -131,7 +136,7 @@ class Neo4jGraphStore:
             result = await session.run(
                 "MATCH (n {node_id: $node_id, graph_forest_name: $gfn}) RETURN n",
                 node_id=node_id,
-                gfn=self._graph_forest_name,
+                gfn=self.graph_forest_name,
             )
             record = await result.single()
             if record is None:
@@ -140,12 +145,9 @@ class Neo4jGraphStore:
             props = dict(neo4j_node)
             props.pop("node_id", None)
             props.pop("graph_forest_name", None)
-            # Strip the internal base label — it is a Neo4j index-routing label added
-            # by the MERGE pattern (`MERGE (n:Node {...})`), not a domain label.
-            domain_labels = set(neo4j_node.labels) - {self._BASE_LABEL}
             return {
                 "id": node_id,
-                "labels": domain_labels,
+                "labels": set(neo4j_node.labels),
                 "properties": props,
             }
 
@@ -166,7 +168,7 @@ class Neo4jGraphStore:
                 source=source,
                 target=target,
                 edge_type=edge_type,
-                gfn=self._graph_forest_name,
+                gfn=self.graph_forest_name,
             )
             record = await result.single()
             if record is None:
@@ -208,33 +210,45 @@ class Neo4jGraphStore:
             async with self._driver.session(database=self._database) as session:
                 tx = await session.begin_transaction()
                 try:
-                    # -- UNWIND nodes: MERGE on node_id, SET properties --
+                    forest = self.graph_forest_name
+
+                    # -- UNWIND nodes grouped by primary label --
+                    # Each node MERGEs on its primary (first sorted) label
+                    # so domain-label indexes are used. Additional labels
+                    # are applied in a second pass.
                     if node_snapshot:
-                        node_rows = []
+                        # Group by primary label for MERGE efficiency
+                        primary_groups: dict[str, list[dict[str, Any]]] = {}
                         for node_id, entry in node_snapshot.items():
+                            labels = entry["labels"]
+                            primary = sorted(labels)[0] if labels else "Session"
                             row: dict[str, Any] = {
                                 "node_id": node_id,
                                 "props": {
                                     **self._convert_timestamps(entry["properties"]),
                                     "node_id": node_id,
-                                    "graph_forest_name": self._graph_forest_name,
+                                    "graph_forest_name": forest,
                                 },
-                                "labels": list(entry["labels"]),
+                                "labels": list(labels),
                             }
-                            node_rows.append(row)
+                            primary_groups.setdefault(primary, []).append(row)
 
-                        await tx.run(
-                            "UNWIND $rows AS row "
-                            "MERGE (n:Node {node_id: row.node_id}) "
-                            "SET n += row.props",
-                            rows=node_rows,
-                        )
+                        for primary_label, rows in primary_groups.items():
+                            # primary_label is safe: comes from handler code
+                            # (e.g. "Session", "OrchestratorRun"), not user input.
+                            await tx.run(
+                                f"UNWIND $rows AS row "  # noqa: S608
+                                f"MERGE (n:`{primary_label}` {{node_id: row.node_id}}) "
+                                f"SET n += row.props",
+                                rows=rows,
+                            )
 
-                        # -- Apply labels in second pass grouped by distinct label set --
+                        # -- Apply additional labels in second pass --
+                        all_rows = [r for group in primary_groups.values() for r in group]
                         label_groups: dict[frozenset[str], list[str]] = {}
-                        for row in node_rows:
+                        for row in all_rows:
                             key = frozenset(row["labels"])
-                            if key:
+                            if len(key) > 1:  # only needed when >1 label
                                 label_groups.setdefault(key, []).append(row["node_id"])
 
                         for label_set, node_ids in label_groups.items():
@@ -242,7 +256,7 @@ class Neo4jGraphStore:
                             # label_clause is safe: values come from internal frozenset keys
                             # populated by upsert_node() callers, never from raw user input.
                             await tx.run(
-                                f"UNWIND $ids AS nid "  # noqa: S608 — label_clause built from internal frozenset keys, not user input
+                                f"UNWIND $ids AS nid "  # noqa: S608
                                 f"MATCH (n {{node_id: nid}}) "
                                 f"SET n:{label_clause}",
                                 ids=node_ids,
@@ -258,7 +272,7 @@ class Neo4jGraphStore:
                                     "target": entry["target"],
                                     "props": {
                                         **self._convert_timestamps(entry["properties"]),
-                                        "graph_forest_name": self._graph_forest_name,
+                                        "graph_forest_name": forest,
                                     },
                                 }
                             )
@@ -293,12 +307,7 @@ class Neo4jGraphStore:
 
         try:
             async with self._driver.session(database=self._database) as session:
-                await session.run(
-                    "CREATE INDEX idx_node_id IF NOT EXISTS FOR (n:Node) ON (n.node_id)"
-                )
-                await session.run(
-                    "CREATE INDEX idx_forest IF NOT EXISTS FOR (n:Node) ON (n.graph_forest_name)"
-                )
+                # Per-label node_id indexes (used by MERGE)
                 await session.run(
                     "CREATE INDEX idx_session_node_id IF NOT EXISTS FOR (n:Session) ON (n.node_id)"
                 )
@@ -313,6 +322,11 @@ class Neo4jGraphStore:
                 )
                 await session.run(
                     "CREATE INDEX idx_event_node_id IF NOT EXISTS FOR (n:Event) ON (n.node_id)"
+                )
+                # Forest filtering index on Session (most common query entry point)
+                await session.run(
+                    "CREATE INDEX idx_session_forest IF NOT EXISTS "
+                    "FOR (n:Session) ON (n.graph_forest_name)"
                 )
         except Exception:
             logger.warning("schema initialization failed", exc_info=True)
@@ -341,8 +355,8 @@ class Neo4jGraphStore:
             msg = f"Unsupported dialect {dialect!r}. Supported: {self.supported_dialects}"
             raise ValueError(msg)
 
-        # Resolve forest name: explicit param > instance default
-        forest = graph_forest_name if graph_forest_name is not None else self._graph_forest_name
+        # Resolve forest name: explicit param > instance default (property)
+        forest = graph_forest_name if graph_forest_name is not None else self.graph_forest_name
 
         # Build params dict with forest injection
         resolved_params: dict[str, Any] = dict(params) if params else {}
