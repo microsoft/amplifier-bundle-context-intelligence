@@ -19,8 +19,7 @@ A `metadata.json` file is written alongside it. This is the universal baseline â
 ## Installation
 
 ```bash
-amplifier bundle add git+https://github.com/microsoft/amplifier-bundle-context-intelligence@main
-amplifier bundle use context-intelligence
+amplifier bundle add --app git+https://github.com/colombod/amplifier-bundle-context-intelligence@main
 ```
 
 ## Quick Start
