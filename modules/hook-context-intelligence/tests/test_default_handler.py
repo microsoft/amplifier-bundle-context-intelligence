@@ -6,6 +6,8 @@ through DefaultHandler rather than getting explicit SessionHandler treatment.
 
 from __future__ import annotations
 
+import json
+
 from amplifier_module_hook_context_intelligence.handlers.default import DefaultHandler
 from amplifier_module_hook_context_intelligence.services import HookStateService
 from amplifier_module_hook_context_intelligence.utils import make_node_id
@@ -96,8 +98,6 @@ class TestDefaultHandlerDataProperty:
 
     async def test_stores_data_property(self, services: HookStateService) -> None:
         """Event node has 'data' property containing the full JSON payload."""
-        import json
-
         handler = DefaultHandler(services)
         await handler(
             "session:resume",
