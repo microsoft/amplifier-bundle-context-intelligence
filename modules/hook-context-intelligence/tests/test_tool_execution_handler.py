@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+
 from amplifier_module_hook_context_intelligence.handlers.orchestrator_run import (
     OrchestratorRunHandler,
 )
@@ -676,3 +678,136 @@ class TestDelegateAgentCompleted:
             },
         )
         assert result.action == "continue"
+
+
+# ── TestToolPreDataProperty ────────────────────────────────────────────────
+
+
+class TestToolPreDataProperty:
+    """tool:pre node should store a 'data' property with the full event payload."""
+
+    async def test_tool_pre_node_has_data_property(self, services: HookStateService) -> None:
+        """tool:pre node must include 'data' as json.dumps of the full event payload."""
+        await _seed_through_step(services)
+        handler = ToolExecutionHandler(services)
+        event_data = {
+            "session_id": "s1",
+            "timestamp": TOOL1_TIMESTAMP,
+            "tool_call_id": "call_001",
+            "tool_name": "read_file",
+            "parallel_group_id": "pg1",
+        }
+        await handler("tool:pre", event_data)
+        node = await services.graph.get_node(EXPECTED_TE1_ID)
+        assert node is not None
+        props = node["properties"]
+        assert "data" in props
+        decoded = json.loads(props["data"])
+        assert decoded["tool_name"] == "read_file"
+        assert decoded["tool_call_id"] == "call_001"
+
+
+# ── TestToolPostDataProperty ───────────────────────────────────────────────
+
+
+class TestToolPostDataProperty:
+    """tool:post must enrich TE node with 'data_tool_post' containing the full event payload."""
+
+    async def test_tool_post_enriches_with_data_tool_post(self, services: HookStateService) -> None:
+        """tool:post sets data_tool_post = json.dumps(data) on the TE node."""
+        te_id = await _seed_one_tool(services)
+        handler = ToolExecutionHandler(services)
+        event_data = {
+            "session_id": "s1",
+            "timestamp": TOOL_POST_TIMESTAMP,
+            "tool_call_id": "call_001",
+            "result": "file content here",
+        }
+        await handler("tool:post", event_data)
+        node = await services.graph.get_node(te_id)
+        assert node is not None
+        props = node["properties"]
+        assert "data_tool_post" in props
+        decoded = json.loads(props["data_tool_post"])
+        assert decoded["result"] == "file content here"
+
+
+# ── TestToolErrorDataProperty ──────────────────────────────────────────────
+
+
+class TestToolErrorDataProperty:
+    """tool:error must enrich TE node with 'data_tool_error' containing the full event payload."""
+
+    async def test_tool_error_enriches_with_data_tool_error(
+        self, services: HookStateService
+    ) -> None:
+        """tool:error sets data_tool_error = json.dumps(data) on the TE node."""
+        te_id = await _seed_one_tool(services)
+        handler = ToolExecutionHandler(services)
+        event_data = {
+            "session_id": "s1",
+            "timestamp": TOOL_ERROR_TIMESTAMP,
+            "tool_call_id": "call_001",
+            "error": "File not found",
+        }
+        await handler("tool:error", event_data)
+        node = await services.graph.get_node(te_id)
+        assert node is not None
+        props = node["properties"]
+        assert "data_tool_error" in props
+        decoded = json.loads(props["data_tool_error"])
+        assert decoded["error"] == "File not found"
+
+
+# ── TestDelegateAgentSpawnedDataProperty ──────────────────────────────────
+
+
+class TestDelegateAgentSpawnedDataProperty:
+    """delegate:agent_spawned must enrich TE node with 'data_delegate_agent_spawned'."""
+
+    async def test_delegate_agent_spawned_enriches_with_data(
+        self, services: HookStateService
+    ) -> None:
+        """delegate:agent_spawned sets data_delegate_agent_spawned = json.dumps(data) on TE node."""
+        te_id = await _seed_one_tool(services, tool_call_id="call_d1", tool_name="delegate")
+        handler = ToolExecutionHandler(services)
+        event_data = {
+            "session_id": "s1",
+            "timestamp": DELEGATE_SPAWNED_TIMESTAMP,
+            "tool_call_id": "call_d1",
+            "child_session_id": "child-abc",
+            "child_agent": "foundation:explorer",
+        }
+        await handler("delegate:agent_spawned", event_data)
+        node = await services.graph.get_node(te_id)
+        assert node is not None
+        props = node["properties"]
+        assert "data_delegate_agent_spawned" in props
+        decoded = json.loads(props["data_delegate_agent_spawned"])
+        assert decoded["child_agent"] == "foundation:explorer"
+
+
+# ── TestDelegateAgentCompletedDataProperty ────────────────────────────────
+
+
+class TestDelegateAgentCompletedDataProperty:
+    """delegate:agent_completed must enrich TE node with 'data_delegate_agent_completed'."""
+
+    async def test_delegate_agent_completed_enriches_with_data(
+        self, services: HookStateService
+    ) -> None:
+        """delegate:agent_completed sets data_delegate_agent_completed = json.dumps(data)."""
+        te_id = await _seed_one_tool(services, tool_call_id="call_c1", tool_name="delegate")
+        handler = ToolExecutionHandler(services)
+        event_data = {
+            "session_id": "s1",
+            "timestamp": DELEGATE_COMPLETED_TIMESTAMP,
+            "tool_call_id": "call_c1",
+        }
+        await handler("delegate:agent_completed", event_data)
+        node = await services.graph.get_node(te_id)
+        assert node is not None
+        props = node["properties"]
+        assert "data_delegate_agent_completed" in props
+        decoded = json.loads(props["data_delegate_agent_completed"])
+        assert decoded["tool_call_id"] == "call_c1"

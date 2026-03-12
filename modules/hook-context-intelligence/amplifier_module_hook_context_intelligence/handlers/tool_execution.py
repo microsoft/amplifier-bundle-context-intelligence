@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 from typing import Any
 
@@ -69,6 +70,7 @@ class ToolExecutionHandler:
             "started_at": timestamp,
             "status": "executing",
             "session_id": session_id,
+            "data": json.dumps(data),
         }
 
         # Create ToolExecution node
@@ -133,6 +135,7 @@ class ToolExecutionHandler:
             "ended_at": timestamp,
             "result_preview": result_preview,
         }
+        properties["data_tool_post"] = json.dumps(data)
 
         await self.services.graph.upsert_node(te_id, set(), properties)
         log.info("Completed ToolExecution %s", te_id)
@@ -160,6 +163,7 @@ class ToolExecutionHandler:
             "ended_at": timestamp,
             "error": error_message,
         }
+        properties["data_tool_error"] = json.dumps(data)
 
         await self.services.graph.upsert_node(te_id, set(), properties)
         log.info("Errored ToolExecution %s", te_id)
@@ -189,6 +193,7 @@ class ToolExecutionHandler:
             "child_session_id": child_session_id,
             "child_agent": child_agent,
         }
+        properties["data_delegate_agent_spawned"] = json.dumps(data)
         await self.services.graph.upsert_node(te_id, {"Delegation"}, properties)
 
         # Create SPAWNED edge to child session
@@ -223,6 +228,7 @@ class ToolExecutionHandler:
         properties: dict[str, Any] = {
             "delegate_completed_at": timestamp,
         }
+        properties["data_delegate_agent_completed"] = json.dumps(data)
 
         await self.services.graph.upsert_node(te_id, set(), properties)
         log.info("Delegation completed for %s", te_id)
