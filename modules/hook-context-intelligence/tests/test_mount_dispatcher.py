@@ -11,6 +11,8 @@ import inspect
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
+from amplifier_core.events import ALL_EVENTS
+
 
 # ---------------------------------------------------------------------------
 # Mock coordinator helper
@@ -74,10 +76,10 @@ class TestLoggingOnlyPath:
         coordinator = _make_coordinator(contributed_events=[events])
         await mount(coordinator, config={})
 
-        # LoggingHandler should be registered for ALL discovered events
+        # LoggingHandler should be registered for ALL_EVENTS (base) plus any custom events
         register_calls = coordinator.hooks.register.call_args_list
         logging_calls = [c for c in register_calls if c.kwargs.get("name") == "LoggingHandler"]
-        assert len(logging_calls) == len(events)
+        assert len(logging_calls) >= len(ALL_EVENTS)
 
     async def test_logging_handler_registered_at_priority_100(self) -> None:
         from amplifier_module_hook_context_intelligence import mount
@@ -100,8 +102,13 @@ class TestLoggingOnlyPath:
         coordinator = _make_coordinator(contributed_events=[events])
         await mount(coordinator, config={"enable_graph": False})
 
-        # Only logging registrations (one per event)
-        assert coordinator.hooks.register.call_count == len(events)
+        # No graph registrations at priority 90
+        graph_calls = [
+            c
+            for c in coordinator.hooks.register.call_args_list
+            if c.kwargs.get("priority") == 90
+        ]
+        assert len(graph_calls) == 0
 
     async def test_no_graph_handlers_when_graph_store_missing(self) -> None:
         from amplifier_module_hook_context_intelligence import mount
@@ -110,8 +117,13 @@ class TestLoggingOnlyPath:
         coordinator = _make_coordinator(contributed_events=[events])
         await mount(coordinator, config={"enable_graph": True})
 
-        # Only logging registrations (no graph_store key)
-        assert coordinator.hooks.register.call_count == len(events)
+        # No graph registrations at priority 90 (no graph_store key)
+        graph_calls = [
+            c
+            for c in coordinator.hooks.register.call_args_list
+            if c.kwargs.get("priority") == 90
+        ]
+        assert len(graph_calls) == 0
 
 
 # ---------------------------------------------------------------------------
@@ -187,48 +199,109 @@ class TestCleanup:
 # TestEventDiscovery
 # ---------------------------------------------------------------------------
 class TestEventDiscovery:
-    """Event discovery uses both channels and applies exclusion filter."""
+    """Event discovery starts from ALL_EVENTS base and extends with two channels."""
 
-    async def test_uses_both_discovery_channels(self) -> None:
+    async def test_discovery_includes_all_events_base(self) -> None:
+        """ALL_EVENTS must be the base — even with empty discovery channels, all 51+ events register."""
         from amplifier_module_hook_context_intelligence import mount
 
-        coordinator = _make_coordinator(
-            contributed_events=[["session:start"]],
-            capability_events=["tool:pre"],
-        )
+        # No contributed events, no capability events — only ALL_EVENTS base
+        coordinator = _make_coordinator()
         await mount(coordinator, config={})
 
-        # Both events should have been discovered and registered
         registered_events = set()
         for call in coordinator.hooks.register.call_args_list:
             if call.kwargs.get("name") == "LoggingHandler":
                 registered_events.add(call.args[0])
-        assert "session:start" in registered_events
-        assert "tool:pre" in registered_events
 
-    async def test_exclusion_filter_applied(self) -> None:
+        # Every event in ALL_EVENTS must appear in registrations
+        for event in ALL_EVENTS:
+            assert event in registered_events, f"Expected {event!r} in registrations from ALL_EVENTS base"
+        assert len(registered_events) >= len(ALL_EVENTS)
+
+    async def test_discovery_extends_with_contributions_channel(self) -> None:
+        """Custom events from collect_contributions extend the ALL_EVENTS base."""
         from amplifier_module_hook_context_intelligence import mount
 
-        coordinator = _make_coordinator(
-            contributed_events=[["session:start", "debug:internal", "debug:trace"]],
-        )
-        config = {"exclude_events": ["debug:*"]}
+        custom_event = "custom:module:event"
+        coordinator = _make_coordinator(contributed_events=[[custom_event]])
+        await mount(coordinator, config={})
+
+        registered_events = set()
+        for call in coordinator.hooks.register.call_args_list:
+            if call.kwargs.get("name") == "LoggingHandler":
+                registered_events.add(call.args[0])
+
+        # ALL_EVENTS base must be present
+        assert len(registered_events) >= len(ALL_EVENTS)
+        # Custom event from contributions must also be present
+        assert custom_event in registered_events
+
+    async def test_discovery_extends_with_legacy_capability_channel(self) -> None:
+        """Custom events from get_capability extend the ALL_EVENTS base."""
+        from amplifier_module_hook_context_intelligence import mount
+
+        custom_event = "legacy:custom:event"
+        coordinator = _make_coordinator(capability_events=[custom_event])
+        await mount(coordinator, config={})
+
+        registered_events = set()
+        for call in coordinator.hooks.register.call_args_list:
+            if call.kwargs.get("name") == "LoggingHandler":
+                registered_events.add(call.args[0])
+
+        # ALL_EVENTS base must be present
+        assert len(registered_events) >= len(ALL_EVENTS)
+        # Custom event from legacy capability must also be present
+        assert custom_event in registered_events
+
+    async def test_discovery_deduplicates_overlapping_events(self) -> None:
+        """If a channel contributes an event already in ALL_EVENTS, it appears once."""
+        from amplifier_module_hook_context_intelligence import mount
+
+        # Contribute an event that's already in ALL_EVENTS
+        duplicate_event = ALL_EVENTS[0]  # e.g. 'session:start'
+        coordinator = _make_coordinator(contributed_events=[[duplicate_event]])
+        await mount(coordinator, config={})
+
+        registered_events = []
+        for call in coordinator.hooks.register.call_args_list:
+            if call.kwargs.get("name") == "LoggingHandler":
+                registered_events.append(call.args[0])
+
+        # The duplicate event should appear exactly once
+        assert registered_events.count(duplicate_event) == 1
+
+    async def test_discovery_does_not_apply_exclusion_filter(self) -> None:
+        """Exclusion patterns must NOT be applied at discovery level; LoggingHandler sees ALL events."""
+        from amplifier_module_hook_context_intelligence import mount
+
+        # Even with exclude_events config, ALL_EVENTS should still register
+        coordinator = _make_coordinator()
+        config = {"exclude_events": ["session:*", "tool:*"]}
         await mount(coordinator, config=config)
 
         registered_events = set()
         for call in coordinator.hooks.register.call_args_list:
             if call.kwargs.get("name") == "LoggingHandler":
                 registered_events.add(call.args[0])
-        assert "session:start" in registered_events
-        assert "debug:internal" not in registered_events
-        assert "debug:trace" not in registered_events
 
-    async def test_no_events_returns_none(self) -> None:
+        # ALL_EVENTS must still be fully registered — no exclusion filtering
+        for event in ALL_EVENTS:
+            assert event in registered_events, (
+                f"Event {event!r} was excluded but should not be — exclusion is a downstream concern"
+            )
+
+    async def test_no_events_returns_none_is_now_impossible(self) -> None:
+        """With ALL_EVENTS base, mount() should never return None — must return a cleanup callable."""
         from amplifier_module_hook_context_intelligence import mount
 
-        coordinator = _make_coordinator()  # No events
+        # No discovery channels at all — ALL_EVENTS guarantees non-empty
+        coordinator = _make_coordinator()
         result = await mount(coordinator, config={})
-        assert result is None
+
+        assert result is not None, "mount() must never return None when ALL_EVENTS base is used"
+        assert callable(result), "mount() must return a cleanup callable"
 
 
 # ---------------------------------------------------------------------------

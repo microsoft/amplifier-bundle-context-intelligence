@@ -7,9 +7,10 @@ Single entry point dispatching to two internal paths:
 
 from __future__ import annotations
 
-import fnmatch
 import logging
 from typing import Any, Callable
+
+from amplifier_core.events import ALL_EVENTS
 
 # Import from the mount submodule at package-init time so that
 # sys.modules['...mount'] is populated *before* the ``mount`` function
@@ -22,9 +23,18 @@ __amplifier_module_type__ = "hook"
 logger = logging.getLogger(__name__)
 
 
-async def _discover_events(coordinator: Any, exclude_patterns: set[str]) -> set[str]:
-    """Discover events from both contribution and legacy capability channels."""
-    discovered: set[str] = set()
+async def _discover_events(coordinator: Any) -> set[str]:
+    """Discover events from ALL_EVENTS base plus both contribution and legacy capability channels.
+
+    Three additive layers:
+      Layer 1: ALL_EVENTS from amplifier_core.events (51 canonical core events)
+      Layer 2: collect_contributions('observability.events') — custom module events
+      Layer 3: get_capability('observability.events') — legacy backward compat
+
+    Returns the full union as a set (inherently deduplicated).
+    No exclusion filtering — that is a downstream concern.
+    """
+    discovered: set[str] = set(ALL_EVENTS)
 
     # Contributions channel — async, returns list[list[str]]
     contributions = await coordinator.collect_contributions("observability.events")
@@ -38,8 +48,7 @@ async def _discover_events(coordinator: Any, exclude_patterns: set[str]) -> set[
         if isinstance(raw, (list, set, frozenset, tuple)):
             discovered.update(raw)
 
-    # Apply exclusion filter using fnmatch
-    return {e for e in discovered if not any(fnmatch.fnmatch(e, pat) for pat in exclude_patterns)}
+    return discovered
 
 
 # ---------------------------------------------------------------------------
@@ -58,11 +67,7 @@ async def mount(coordinator: Any, config: dict[str, Any] | None = None) -> Calla
     resolver = ConfigResolver(config, coordinator)
 
     # -- Discover events ---------------------------------------------------
-    exclude_patterns = set(config.get("exclude_events", []))
-    events = await _discover_events(coordinator, exclude_patterns)
-
-    if not events:
-        return None
+    events = await _discover_events(coordinator)
 
     # -- [ALWAYS] LoggingHandler -------------------------------------------
     from .handlers.logging_handler import LoggingHandler

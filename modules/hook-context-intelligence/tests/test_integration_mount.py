@@ -10,6 +10,8 @@ from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
+from amplifier_core.events import ALL_EVENTS
+
 from amplifier_module_hook_context_intelligence import mount
 
 # Registration priorities used by production code
@@ -177,8 +179,8 @@ class TestLoggingPlusGraphIntegration:
             if c.kwargs.get("priority") == GRAPH_PRIORITY
         ]
 
-        # Logging registrations at priority=100 == 3 (all events)
-        assert len(logging_regs) == 3
+        # Logging registrations at priority=100 >= len(ALL_EVENTS) (base + contributed)
+        assert len(logging_regs) >= len(ALL_EVENTS)
         # Graph registrations at priority=90 >= 3
         assert len(graph_regs) >= 3
 
