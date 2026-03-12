@@ -104,9 +104,7 @@ class TestLoggingOnlyPath:
 
         # No graph registrations at priority 90
         graph_calls = [
-            c
-            for c in coordinator.hooks.register.call_args_list
-            if c.kwargs.get("priority") == 90
+            c for c in coordinator.hooks.register.call_args_list if c.kwargs.get("priority") == 90
         ]
         assert len(graph_calls) == 0
 
@@ -119,9 +117,7 @@ class TestLoggingOnlyPath:
 
         # No graph registrations at priority 90 (no graph_store key)
         graph_calls = [
-            c
-            for c in coordinator.hooks.register.call_args_list
-            if c.kwargs.get("priority") == 90
+            c for c in coordinator.hooks.register.call_args_list if c.kwargs.get("priority") == 90
         ]
         assert len(graph_calls) == 0
 
@@ -216,7 +212,9 @@ class TestEventDiscovery:
 
         # Every event in ALL_EVENTS must appear in registrations
         for event in ALL_EVENTS:
-            assert event in registered_events, f"Expected {event!r} in registrations from ALL_EVENTS base"
+            assert event in registered_events, (
+                f"Expected {event!r} in registrations from ALL_EVENTS base"
+            )
         assert len(registered_events) >= len(ALL_EVENTS)
 
     async def test_discovery_extends_with_contributions_channel(self) -> None:
@@ -292,7 +290,7 @@ class TestEventDiscovery:
                 f"Event {event!r} was excluded but should not be — exclusion is a downstream concern"
             )
 
-    async def test_no_events_returns_none_is_now_impossible(self) -> None:
+    async def test_mount_always_returns_callable(self) -> None:
         """With ALL_EVENTS base, mount() should never return None — must return a cleanup callable."""
         from amplifier_module_hook_context_intelligence import mount
 
