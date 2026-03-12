@@ -41,10 +41,10 @@ hooks:
         type: "neo4j"
         # graph_forest_name: "default"        # fallback chain: graph_forest_name -> config.project -> coordinator.config.project_slug -> "default"
         config:
-          uri: "${NEO4J_URI:-bolt://localhost:7687}"
-          username: "${NEO4J_USERNAME:-neo4j}"
+          uri: "${NEO4J_URI:bolt://localhost:7687}"
+          username: "${NEO4J_USERNAME:neo4j}"
           password: "${NEO4J_PASSWORD}"
-          database: "${NEO4J_DATABASE:-neo4j}"
+          database: "${NEO4J_DATABASE:neo4j}"
 ```
 
 With `enable_graph: false` (the default), only session logging is active. No graph backend needs to be configured.
