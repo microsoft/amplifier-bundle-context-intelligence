@@ -168,10 +168,10 @@ class OrchestratorRunHandler:
 
         await self.services.graph.upsert_node(run_id, set(), properties)
 
-        # Schedule a non-blocking flush — execution:end may be the last event
-        # before the process exits (e.g. --mode single doesn't emit session:end).
-        # Never blocks the event handler; close() guarantees final persistence.
-        self.services.graph.schedule_flush()
+        # Terminal event — await flush directly. execution:end may be the last
+        # event before process exit (--mode single doesn't emit session:end).
+        # schedule_flush() is for intermediate events only.
+        await self.services.graph.flush()
 
         log.info("Enriched OrchestratorRun %s with execution_ended_at", run_id)
 

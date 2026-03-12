@@ -98,8 +98,9 @@ class SessionHandler:
 
         await self.services.graph.upsert_node(session_id, labels, properties)
 
-        # Schedule a non-blocking flush — session end is a natural boundary.
-        # Never blocks the event handler; close() guarantees final persistence.
-        self.services.graph.schedule_flush()
+        # Terminal event — await flush directly. There is no hot path after
+        # session:end; all buffered data must reach Neo4j before the process
+        # can exit. schedule_flush() is for intermediate events only.
+        await self.services.graph.flush()
 
         self.services.remove_cursors(session_id)
