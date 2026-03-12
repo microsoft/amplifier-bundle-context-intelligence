@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 from typing import Any
 
@@ -56,6 +57,7 @@ class SessionHandler:
             "started_at": timestamp,
             "status": "running",
             "metadata": data.get("metadata", {}),
+            "data": json.dumps(data),
         }
 
         await self.services.graph.upsert_node(session_id, labels, properties)
@@ -80,6 +82,7 @@ class SessionHandler:
             "started_at": timestamp,
             "status": "running",
             "metadata": data.get("metadata", {}),
+            "data": json.dumps(data),
         }
 
         await self.services.graph.upsert_node(session_id, labels, properties)
@@ -94,6 +97,7 @@ class SessionHandler:
         properties: dict[str, Any] = {
             "ended_at": timestamp,
             "status": data.get("status", "completed"),
+            "data_session_end": json.dumps(data),
         }
 
         await self.services.graph.upsert_node(session_id, labels, properties)

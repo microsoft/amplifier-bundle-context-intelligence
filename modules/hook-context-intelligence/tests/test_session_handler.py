@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import dataclasses
+import json
 
 import pytest
 
@@ -94,6 +95,20 @@ class TestSessionStart:
         assert node is not None
         assert node["properties"]["metadata"] == {}
 
+    async def test_session_start_stores_data(self, services: HookStateService) -> None:
+        handler = SessionHandler(services)
+        event_data = {
+            "session_id": "s1",
+            "timestamp": "2026-01-01T00:00:00Z",
+            "metadata": {"key": "val"},
+        }
+        await handler("session:start", event_data)
+        node = await services.graph.get_node("s1")
+        assert node is not None
+        assert "data" in node["properties"]
+        stored = json.loads(node["properties"]["data"])
+        assert stored["session_id"] == "s1"
+
 
 class TestSessionStartParentIdEdgeCases:
     @pytest.mark.parametrize("parent_id", [None, "", "   ", "\t", "\n"])
@@ -172,6 +187,20 @@ class TestSessionFork:
         assert node is not None
         assert node["labels"] == {"Session", "Root", "ForkedSession"}
 
+    async def test_session_fork_stores_data(self, services: HookStateService) -> None:
+        handler = SessionHandler(services)
+        event_data = {
+            "session_id": "f1",
+            "parent": "p1",
+            "timestamp": "2026-01-01T00:00:00Z",
+        }
+        await handler("session:fork", event_data)
+        node = await services.graph.get_node("f1")
+        assert node is not None
+        assert "data" in node["properties"]
+        stored = json.loads(node["properties"]["data"])
+        assert stored["parent"] == "p1"
+
 
 class TestSessionEnd:
     async def test_end_merges_properties(self, services: HookStateService) -> None:
@@ -228,6 +257,29 @@ class TestSessionEnd:
         )
         node = await services.graph.get_node("s1")
         assert node is not None
+
+    async def test_session_end_stores_data_enrichment(self, services: HookStateService) -> None:
+        handler = SessionHandler(services)
+        # First create the session node via session:start
+        await handler(
+            "session:start",
+            {
+                "session_id": "s1",
+                "timestamp": "2026-01-01T00:00:00Z",
+            },
+        )
+        # Then end it — enrichment event should store data_session_end
+        end_data = {
+            "session_id": "s1",
+            "timestamp": "2026-01-01T01:00:00Z",
+            "status": "completed",
+        }
+        await handler("session:end", end_data)
+        node = await services.graph.get_node("s1")
+        assert node is not None
+        assert "data_session_end" in node["properties"]
+        stored = json.loads(node["properties"]["data_session_end"])
+        assert stored["status"] == "completed"
 
 
 class TestSessionResumeNotClaimed:
