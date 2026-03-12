@@ -51,10 +51,12 @@ async def _discover_events(coordinator: Any, exclude_patterns: set[str]) -> set[
     for event_list in contributions:
         discovered.update(event_list)
 
-    # Legacy capability channel — sync, returns callable or None
-    capability_fn = coordinator.get_capability("observability.events")
-    if capability_fn is not None:
-        discovered.update(capability_fn())
+    # Legacy capability channel — returns callable, iterable, or None
+    capability = coordinator.get_capability("observability.events")
+    if capability is not None:
+        raw = capability() if callable(capability) else capability
+        if isinstance(raw, (list, set, frozenset, tuple)):
+            discovered.update(raw)
 
     # Apply exclusion filter using fnmatch
     return {e for e in discovered if not any(fnmatch.fnmatch(e, pat) for pat in exclude_patterns)}
