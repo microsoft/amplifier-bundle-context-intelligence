@@ -13,7 +13,7 @@ from amplifier_module_hook_context_intelligence.utils import (
 
 
 class TestMakeNodeId:
-    """7 tests for the make_node_id utility."""
+    """11 tests for the make_node_id utility."""
 
     def test_basic_iso_timestamp(self):
         """Basic ISO-8601 with trailing Z produces correct epoch ms with __ separators."""
