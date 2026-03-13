@@ -164,7 +164,7 @@ digraph OrchestratorRunAssembly {
 
         tp_event [label="tool:pre\narrives" shape=oval];
 
-        tp_create [label="CREATE node\n:ToolExecution\n{\n  tool_call_id,\n  tool_name,\n  parallel_group_id,\n  started_at: timestamp,\n  status: 'executing'\n}"
+        tp_create [label="CREATE node\n:ToolExecution\n{\n  tool_call_id,\n  tool_name,\n  parallel_group_id,\n  started_at: timestamp,\n  status: 'executing'\n}\nnode_id includes tool_call_id\nas disambiguator"
                     shape=box style=filled fillcolor="#BBDEFB" color="#1565C0"];
 
         tp_edge_trig [label="CREATE edge\nTRIGGERED\n(current_step → ToolExecution)\n{seq: tool_seq}"
@@ -319,7 +319,7 @@ digraph OrchestratorRunAssembly {
         r_tool2 [label=":ToolExecution" fillcolor="#FFE082"];
         r_child [label=":Session\n(if :Delegation)" fillcolor="#BBDEFB"];
         r_assist2 [label=":Step:AssistantStep\n{iteration:2}" fillcolor="#E1BEE7"];
-        r_event [label=":Event" fillcolor="#B2DFDB"];
+        r_event [label=":Event\n(run-scoped if\nactive run exists)" fillcolor="#B2DFDB"];
 
         r_session -> r_run [label="HAS_RUN\n{seq}" color="#2E7D32" penwidth=2];
         r_run -> r_prompt [label="HAS_STEP\n{seq:0}" color="#6A1B9A" penwidth=2];
@@ -328,7 +328,8 @@ digraph OrchestratorRunAssembly {
         r_tool1 -> r_tool2 [label="PARALLEL_WITH" color="#00838F" style=bold];
         r_tool1 -> r_child [label="SPAWNED" color="#6A1B9A" penwidth=2 style=bold];
         r_assist1 -> r_assist2 [label="NEXT" color="#4527A0" style=dashed penwidth=1.5];
-        r_session -> r_event [label="HAS_EVENT" color="#00695C" style=dotted];
+        r_run -> r_event [label="HAS_EVENT\n(run-scoped)" color="#00695C" style=dotted];
+        r_session -> r_event [label="HAS_EVENT\n(session-scoped)" color="#00695C" style=dotted];
     }
 
     // ═══════════════════════════════════════════════════════════════
