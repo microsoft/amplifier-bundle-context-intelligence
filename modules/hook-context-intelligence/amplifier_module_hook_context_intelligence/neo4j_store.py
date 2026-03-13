@@ -436,7 +436,20 @@ class Neo4jGraphStore:
                 except Exception:
                     pass  # errors already logged by _background_flush
             await self.flush()
-            await self._driver.close()
+            try:
+                await self._driver.close()
+            except RuntimeError as exc:
+                if "attached to a different loop" in str(exc):
+                    # Defense-in-depth: if any caller still reaches this point
+                    # with a loop-mismatch, swallow the error gracefully.
+                    # Data was already flushed; the driver connection will be
+                    # released by garbage collection.
+                    logger.debug(
+                        "Neo4j driver close deferred to GC: event loop mismatch "
+                        "at teardown. Data was flushed successfully before this point."
+                    )
+                else:
+                    raise
             self._closed = True
 
     # -- QueryableStore methods ----------------------------------------------

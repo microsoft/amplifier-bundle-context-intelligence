@@ -82,9 +82,20 @@ class GraphDataHook:
                 current_loop = None
 
             if current_loop is None:
-                # No running loop — synchronous shutdown (e.g. test teardown).
+                # No running loop at cleanup time (e.g. CLI shutdown after the
+                # session event loop has already been torn down).
+                # ``asyncio.run(store.close())`` would create a **new** event
+                # loop (Loop C) that is incompatible with the driver's internal
+                # asyncio Futures, which are bound to the session loop (Loop A).
+                # Awaiting those Loop-A Futures from Loop C raises:
+                #   RuntimeError: Task ... got Future attached to a different loop
+                # Data was already flushed during execution (orchestrator:complete
+                # event).  Release the driver connection via garbage collection.
                 flow_cleanup()
-                asyncio.run(store.close())
+                logger.debug(
+                    "Neo4j driver close skipped at teardown: no running event loop. "
+                    "Data was flushed. Connection will be released by garbage collection."
+                )
             elif current_loop is creation_loop:
                 # Same loop as mount() — schedule as a non-blocking task (normal path).
                 current_loop.create_task(_async_cleanup())

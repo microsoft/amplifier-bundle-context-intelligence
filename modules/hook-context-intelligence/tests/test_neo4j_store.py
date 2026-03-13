@@ -805,6 +805,64 @@ class TestClose:
 
 
 # ---------------------------------------------------------------------------
+# TestCloseEventLoopHandling
+# ---------------------------------------------------------------------------
+class TestCloseEventLoopHandling:
+    """close() must handle event-loop mismatch RuntimeError from driver.close() gracefully.
+
+    Defense-in-depth layer: even if the caller of cleanup() somehow reaches
+    ``await store.close()`` while a loop incompatibility exists, the error must
+    be swallowed (data was already flushed) rather than surfaced as an unhandled
+    exception.  Non-loop RuntimeErrors must still be re-raised.
+    """
+
+    @pytest.mark.asyncio
+    async def test_close_swallows_different_loop_runtime_error(self):
+        """close() must not propagate RuntimeError('attached to a different loop').
+
+        Fails with current code (no exception handling around driver.close()).
+        Passes after the fix (try/except around driver.close()).
+        """
+        from unittest.mock import AsyncMock, MagicMock
+
+        from amplifier_module_hook_context_intelligence.neo4j_store import Neo4jGraphStore
+
+        store = Neo4jGraphStore(uri="bolt://localhost:9999", auth=None)
+        # Empty buffers → flush() is an early-exit no-op (doesn't touch driver)
+        assert not store._node_buffer
+        assert not store._edge_buffer
+
+        # Simulate the real driver raising the loop-mismatch error
+        mock_driver = MagicMock()
+        mock_driver.close = AsyncMock(
+            side_effect=RuntimeError(
+                "Task <Task pending> got Future <Future pending> attached to a different loop"
+            )
+        )
+        store._driver = mock_driver
+
+        # Must NOT raise — after the fix this is caught and logged as debug
+        await store.close()
+
+    @pytest.mark.asyncio
+    async def test_close_reraises_unrelated_runtime_errors(self):
+        """close() must re-raise RuntimeError that is NOT about a different loop."""
+        from unittest.mock import AsyncMock, MagicMock
+
+        from amplifier_module_hook_context_intelligence.neo4j_store import Neo4jGraphStore
+
+        store = Neo4jGraphStore(uri="bolt://localhost:9999", auth=None)
+        mock_driver = MagicMock()
+        mock_driver.close = AsyncMock(
+            side_effect=RuntimeError("Some completely unrelated runtime error")
+        )
+        store._driver = mock_driver
+
+        with pytest.raises(RuntimeError, match="unrelated runtime error"):
+            await store.close()
+
+
+# ---------------------------------------------------------------------------
 # TestPersistence
 # ---------------------------------------------------------------------------
 class TestPersistence:
