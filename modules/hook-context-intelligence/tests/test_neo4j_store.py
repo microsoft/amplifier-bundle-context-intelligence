@@ -555,6 +555,73 @@ class TestFlush:
         # Restore driver so fixture teardown can close it
         neo4j_store._driver = real_driver
 
+    @pytest.mark.asyncio
+    async def test_flush_enrichment_uses_match_not_merge(self, neo4j_store):
+        """Empty-label upsert after labeled upsert must produce ONE node, not two.
+
+        Step 1: upsert with labels (OrchestratorRun) + flush -> creates the node.
+        Step 2: upsert same node_id with empty labels + flush -> enriches via MATCH.
+        Result: exactly one node, original label preserved, enriched props applied.
+        No 'Session' label should appear from a default fallback.
+        """
+        node_id = "enrich-test-node-1"
+
+        # Step 1: create node with a real label
+        await neo4j_store.upsert_node(node_id, {"OrchestratorRun"}, {"status": "running"})
+        await neo4j_store.flush()
+
+        # Step 2: enrich with empty labels (should MATCH, not MERGE with default label)
+        await neo4j_store.upsert_node(node_id, set(), {"status": "complete", "extra": "value"})
+        await neo4j_store.flush()
+
+        # Verify exactly one node exists
+        async with neo4j_store._driver.session(database=neo4j_store._database) as session:
+            result = await session.run(
+                "MATCH (n {node_id: $nid}) RETURN n, labels(n) AS lbls",
+                nid=node_id,
+            )
+            records = await result.fetch(10)
+
+        assert len(records) == 1, (
+            f"Expected exactly 1 node, got {len(records)}. "
+            "Empty-label upsert must enrich via MATCH, not create a new node."
+        )
+        node = records[0]["n"]
+        labels = records[0]["lbls"]
+
+        # Original label is preserved
+        assert "OrchestratorRun" in labels, "Original label OrchestratorRun must be preserved"
+        # No spurious 'Session' label from old fallback
+        assert "Session" not in labels, "No 'Session' label should appear from empty-label upsert"
+        # Enriched properties applied
+        assert node["status"] == "complete", "Enriched property status must overwrite"
+        assert node["extra"] == "value", "Enriched extra property must be present"
+
+    @pytest.mark.asyncio
+    async def test_flush_enrichment_skips_nonexistent_node(self, neo4j_store):
+        """Empty-label upsert on a node that doesn't exist must be a silent no-op.
+
+        MATCH finds nothing when the node doesn't exist, so nothing is created.
+        No crash, no node created.
+        """
+        node_id = "enrich-test-nonexistent-99"
+
+        # Upsert with empty labels when node doesn't exist in Neo4j
+        await neo4j_store.upsert_node(node_id, set(), {"some_prop": "some_value"})
+        await neo4j_store.flush()
+
+        # Verify no node was created
+        async with neo4j_store._driver.session(database=neo4j_store._database) as session:
+            result = await session.run(
+                "MATCH (n {node_id: $nid}) RETURN n",
+                nid=node_id,
+            )
+            record = await result.single()
+
+        assert record is None, (
+            "Empty-label upsert on nonexistent node must create nothing (silent no-op)."
+        )
+
 
 # ---------------------------------------------------------------------------
 # TestSchemaInitialization

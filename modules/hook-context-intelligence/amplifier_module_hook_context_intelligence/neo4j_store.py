@@ -257,15 +257,19 @@ class Neo4jGraphStore:
                     forest = self.graph_forest_name
 
                     # -- UNWIND nodes grouped by primary label --
-                    # Each node MERGEs on its primary (first sorted) label
-                    # so domain-label indexes are used. Additional labels
-                    # are applied in a second pass.
+                    # Nodes with labels: MERGE by primary (first sorted) label so
+                    # domain-label indexes are used. Additional labels applied in
+                    # a second pass.
+                    # Nodes with empty labels: MATCH an already-created node and
+                    # enrich its properties. Empty labels = enrichment intent, not
+                    # creation intent. If the node doesn't exist, MATCH is a silent
+                    # no-op (no node created, no error).
                     if node_snapshot:
-                        # Group by primary label for MERGE efficiency
+                        # Separate enrichment rows (empty labels) from creation rows
+                        enrichment_rows: list[dict[str, Any]] = []
                         primary_groups: dict[str, list[dict[str, Any]]] = {}
                         for node_id, entry in node_snapshot.items():
                             labels = entry["labels"]
-                            primary = sorted(labels)[0] if labels else "Session"
                             row: dict[str, Any] = {
                                 "node_id": node_id,
                                 "props": {
@@ -277,7 +281,25 @@ class Neo4jGraphStore:
                                 },
                                 "labels": list(labels),
                             }
-                            primary_groups.setdefault(primary, []).append(row)
+                            if not labels:
+                                # Empty labels → enrichment via MATCH (no MERGE/creation)
+                                enrichment_rows.append(row)
+                            else:
+                                primary = sorted(labels)[0]
+                                primary_groups.setdefault(primary, []).append(row)
+
+                        # Enrich existing nodes via MATCH (silent no-op if not found)
+                        if enrichment_rows:
+                            logger.debug(
+                                "flush: enriching %d node(s) via MATCH (empty labels)",
+                                len(enrichment_rows),
+                            )
+                            await tx.run(
+                                "UNWIND $rows AS row "  # noqa: S608
+                                "MATCH (n {node_id: row.node_id}) "
+                                "SET n += row.props",
+                                rows=enrichment_rows,
+                            )
 
                         for primary_label, rows in primary_groups.items():
                             # primary_label is safe: comes from handler code
@@ -289,10 +311,10 @@ class Neo4jGraphStore:
                                 rows=rows,
                             )
 
-                        # -- Apply additional labels in second pass --
-                        all_rows = [r for group in primary_groups.values() for r in group]
+                        # -- Apply additional labels in second pass (labeled nodes only) --
+                        all_labeled_rows = [r for group in primary_groups.values() for r in group]
                         label_groups: dict[frozenset[str], list[str]] = {}
-                        for row in all_rows:
+                        for row in all_labeled_rows:
                             key = frozenset(row["labels"])
                             if len(key) > 1:  # only needed when >1 label
                                 label_groups.setdefault(key, []).append(row["node_id"])
