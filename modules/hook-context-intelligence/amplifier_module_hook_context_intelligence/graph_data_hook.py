@@ -65,6 +65,11 @@ class GraphDataHook:
         """
         flow_cleanup = await self._flow.run(coordinator, events or set())
         store = self._store
+        # Capture the event loop used during mount().  The Neo4j async driver
+        # binds its internal asyncio.Futures to *this* loop; driver.close() must
+        # be awaited on the same loop or Python raises
+        # "Task got Future attached to a different loop".
+        creation_loop = asyncio.get_running_loop()
 
         async def _async_cleanup() -> None:
             flow_cleanup()
@@ -72,11 +77,27 @@ class GraphDataHook:
 
         def cleanup() -> None:
             try:
-                loop = asyncio.get_running_loop()
-                loop.create_task(_async_cleanup())
+                current_loop: asyncio.AbstractEventLoop | None = asyncio.get_running_loop()
             except RuntimeError:
-                # no running loop — synchronous shutdown (e.g. test teardown)
+                current_loop = None
+
+            if current_loop is None:
+                # No running loop — synchronous shutdown (e.g. test teardown).
                 flow_cleanup()
                 asyncio.run(store.close())
+            elif current_loop is creation_loop:
+                # Same loop as mount() — schedule as a non-blocking task (normal path).
+                current_loop.create_task(_async_cleanup())
+            else:
+                # A *different* loop is running (e.g. CLI shutdown context).
+                # The driver's internal Futures are bound to creation_loop; awaiting
+                # them from current_loop would raise RuntimeError.
+                # Data has already been flushed during the session
+                # (orchestrator:complete event).  Release the driver via GC.
+                flow_cleanup()
+                logger.debug(
+                    "Neo4j driver connection cleanup deferred to GC: "
+                    "event loop changed between mount() and session teardown."
+                )
 
         return cleanup

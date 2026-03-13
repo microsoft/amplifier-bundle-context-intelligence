@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import importlib.util
-from typing import Any
+from typing import Any, Callable
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -236,6 +236,154 @@ class TestGraphDataHookMount:
         # Yield to event loop so the create_task() coroutine can run
         await asyncio.sleep(0)
         mock_store.close.assert_called_once()
+
+
+class TestGraphDataHookCleanupEventLoopHandling:
+    """Tests for cleanup() when called from a different event loop than mount().
+
+    Production scenario: mount() runs on the session event loop (Loop A).
+    At teardown the CLI may call cleanup() from a different loop (Loop B).
+    The Neo4j driver's internal asyncio.Futures are bound to Loop A, so calling
+    ``await driver.close()`` from a task on Loop B raises::
+
+        RuntimeError: Task ... got Future ... attached to a different loop
+
+    The fix: capture the creation loop at mount() time and, in cleanup(), skip the
+    async close path entirely when a *different* loop is running (data has already
+    been flushed; the driver connection is released by GC).
+    """
+
+    # ------------------------------------------------------------------
+    # Helper: run mount in an isolated loop, return cleanup callable
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _mount_in_new_loop(hook: "GraphDataHook", coordinator: Any) -> "Callable":
+        loop_a = asyncio.new_event_loop()
+        try:
+            return loop_a.run_until_complete(hook.mount(coordinator, events={"session:start"}))
+        finally:
+            loop_a.close()
+
+    # ------------------------------------------------------------------
+    # Failing test #1 — store.close must NOT be called from a foreign loop
+    # ------------------------------------------------------------------
+
+    def test_cleanup_different_loop_does_not_call_store_close(self, mock_neo4j_store):
+        """When cleanup() runs on a different loop from mount(), store.close()
+        must be skipped to avoid 'attached to a different loop' RuntimeError.
+
+        Fails with current code because create_task(_async_cleanup()) schedules
+        store.close() on Loop B anyway.
+        """
+        mock_cls, mock_store = mock_neo4j_store
+        resolver = _make_resolver(_NEO4J_STORE_CONFIG)
+        coordinator = _make_coordinator()
+        hook = GraphDataHook(resolver)
+
+        cleanup = self._mount_in_new_loop(hook, coordinator)  # Loop A → closed
+
+        loop_b = asyncio.new_event_loop()
+        try:
+
+            async def run() -> None:
+                cleanup()
+                await asyncio.sleep(0.05)  # let any tasks run
+
+            loop_b.run_until_complete(run())
+        finally:
+            loop_b.close()
+
+        # After the fix: different-loop branch skips store.close entirely.
+        mock_store.close.assert_not_called()
+
+    # ------------------------------------------------------------------
+    # Failing test #2 — no RuntimeError must surface in the calling loop
+    # ------------------------------------------------------------------
+
+    def test_cleanup_different_loop_no_runtime_error(self, mock_neo4j_store):
+        """RuntimeError from a loop-bound Future must not surface when cleanup()
+        is called from a different loop.
+
+        Simulates the real Neo4j driver by making store.close() await a
+        Future that is explicitly bound to Loop A.  When Loop B's task tries
+        to step through that Future it raises
+        ``RuntimeError: Task ... got Future ... attached to a different loop``.
+
+        Fails with current code (create_task runs on Loop B and trips over the
+        Loop-A Future).  Passes after the fix (different-loop branch never calls
+        store.close at all).
+        """
+        mock_cls, mock_store = mock_neo4j_store
+        resolver = _make_resolver(_NEO4J_STORE_CONFIG)
+        coordinator = _make_coordinator()
+        hook = GraphDataHook(resolver)
+
+        loop_a = asyncio.new_event_loop()
+        try:
+            # Create a Future explicitly bound to loop_a — simulates the
+            # asyncio.Future objects inside the real AsyncGraphDatabase driver.
+            loop_a_future: asyncio.Future[None] = loop_a.create_future()
+
+            async def loop_sensitive_close() -> None:
+                # Awaiting a loop_a-bound Future from inside a loop_b task
+                # causes Task.__step to raise:
+                # "Task ... got Future ... attached to a different loop"
+                await loop_a_future
+
+            mock_store.close = loop_sensitive_close
+            cleanup = loop_a.run_until_complete(hook.mount(coordinator, events={"session:start"}))
+        finally:
+            loop_a.close()
+
+        unhandled_errors: list[Exception] = []
+        loop_b = asyncio.new_event_loop()
+        loop_b.set_exception_handler(
+            lambda _loop, ctx: unhandled_errors.append(
+                ctx.get("exception", RuntimeError(ctx["message"]))
+            )
+        )
+        try:
+
+            async def run() -> None:
+                cleanup()
+                await asyncio.sleep(0.05)  # let tasks run (and potentially fail)
+
+            loop_b.run_until_complete(run())
+        finally:
+            loop_b.close()
+
+        runtime_errors = [e for e in unhandled_errors if isinstance(e, RuntimeError)]
+        assert not runtime_errors, f"RuntimeError during cleanup: {runtime_errors}"
+
+    # ------------------------------------------------------------------
+    # Regression test — flow_cleanup (unregister) must always be called
+    # ------------------------------------------------------------------
+
+    def test_cleanup_different_loop_still_calls_flow_cleanup(self, mock_neo4j_store):
+        """Even when cleanup() runs on a different loop, hook unregistration
+        (flow_cleanup) must still happen — not be deferred or skipped.
+        """
+        mock_cls, mock_store = mock_neo4j_store
+        resolver = _make_resolver(_NEO4J_STORE_CONFIG)
+        coordinator = _make_coordinator()
+        hook = GraphDataHook(resolver)
+
+        cleanup = self._mount_in_new_loop(hook, coordinator)
+
+        loop_b = asyncio.new_event_loop()
+        try:
+
+            async def run() -> None:
+                cleanup()
+                await asyncio.sleep(0.05)
+
+            loop_b.run_until_complete(run())
+        finally:
+            loop_b.close()
+
+        for unreg in coordinator._unregister_fns:
+            unreg.assert_called_once()
 
 
 def _read_graph_data_hook_source() -> str:
