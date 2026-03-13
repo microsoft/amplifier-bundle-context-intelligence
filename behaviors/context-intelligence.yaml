@@ -13,8 +13,8 @@ hooks:
       exclude_events: []
       log_level: 'WARNING'
       # enable_graph is intentionally omitted here.
-      # The config_resolver defaults to false; users enable via:
-      enable_graph: '${CI_ENABLE_GRAPH:false}'
+      # The config_resolver defaults to false; users enable via settings.yaml
+      # or the CI_ENABLE_GRAPH environment variable.
       graph_store:
         type: 'neo4j'
         # graph_forest_name: auto-resolved via coordinator.config.project_slug -> "default"
