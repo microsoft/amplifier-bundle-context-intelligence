@@ -53,6 +53,28 @@ class TestMakeNodeId:
         result = make_node_id("sess-abc", "session:resume", "2026-01-01T02:00:00+00:00")
         assert result == "sess-abc__session_resume__1767232800000"
 
+    def test_disambiguator_appended_to_id(self):
+        """When disambiguator is provided, it is appended as a fourth segment."""
+        result = make_node_id("s1", "tool:pre", "2026-01-01T00:00:00Z", disambiguator="call_abc")
+        assert result == "s1__tool_pre__1767225600000__call_abc"
+
+    def test_disambiguator_none_preserves_old_format(self):
+        """When disambiguator is None (default), ID format is unchanged."""
+        result = make_node_id("s1", "tool:pre", "2026-01-01T00:00:00Z")
+        assert result == "s1__tool_pre__1767225600000"
+
+    def test_same_timestamp_different_disambiguator_produces_different_ids(self):
+        """Two calls with same session/event/timestamp but different disambiguators produce different IDs."""
+        a = make_node_id("s1", "tool:pre", "2026-01-01T00:00:00Z", disambiguator="call_001")
+        b = make_node_id("s1", "tool:pre", "2026-01-01T00:00:00Z", disambiguator="call_002")
+        assert a != b
+
+    def test_disambiguator_deterministic(self):
+        """Same inputs with same disambiguator always produce the same ID."""
+        a = make_node_id("s1", "tool:pre", "2026-01-01T00:00:00Z", disambiguator="call_001")
+        b = make_node_id("s1", "tool:pre", "2026-01-01T00:00:00Z", disambiguator="call_001")
+        assert a == b
+
 
 class TestMakeEdgeId:
     """5 tests for the make_edge_id utility."""

@@ -7,20 +7,33 @@ from datetime import datetime, timezone
 from typing import Any
 
 
-def make_node_id(session_id: str, event_name: str, timestamp: str) -> str:
+def make_node_id(
+    session_id: str,
+    event_name: str,
+    timestamp: str,
+    disambiguator: str | None = None,
+) -> str:
     """Generate a deterministic, filesystem-safe node ID from event data.
 
     Pattern: {session_id}__{safe_event}__{timestamp_ms}
+    With disambiguator: {session_id}__{safe_event}__{timestamp_ms}__{disambiguator}
 
     Colons in *event_name* are replaced with underscores so the ID is safe
     for use as a filename component.  Parses ISO-8601 timestamps (with
     fractional seconds and timezone offsets) and converts to epoch
     milliseconds.
+
+    The optional *disambiguator* (e.g. tool_call_id) is appended as a fourth
+    segment when provided.  When omitted, the format is unchanged — full
+    backward compatibility.
     """
     safe_event = event_name.replace(":", "_")
     dt = datetime.fromisoformat(timestamp)
     epoch_ms = int(dt.astimezone(timezone.utc).timestamp() * 1000)
-    return f"{session_id}__{safe_event}__{epoch_ms}"
+    node_id = f"{session_id}__{safe_event}__{epoch_ms}"
+    if disambiguator is not None:
+        node_id = f"{node_id}__{disambiguator}"
+    return node_id
 
 
 def make_edge_id(source_id: str, target_id: str, edge_type: str) -> str:
