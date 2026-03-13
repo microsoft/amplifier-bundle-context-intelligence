@@ -25,11 +25,16 @@ filesystem-safe on all platforms.
 
 **Pattern:** `{session_id}__{event_name}__{timestamp_ms}`
 
+**ToolExecution pattern:** `{session_id}__{event_name}__{timestamp_ms}__{tool_call_id}`
+
 - `__` (double underscore) is the segment separator
 - Colons in event names become underscores: `prompt:submit` → `prompt_submit`
 - Session nodes use the raw `session_id` (a UUID) as their `node_id` — no
   transformation
+- ToolExecution nodes include `tool_call_id` as a fourth segment to prevent
+  collisions when parallel tool calls share the same millisecond timestamp
 - Example: `6afb3613-7041-4735-9c0f-c2171452ed18__prompt_submit__1741270343000`
+- ToolExecution example: `6afb3613-...ed18__tool_pre__1741270343000__toolu_01G9FD9g`
 
 ### Relationship ID Format
 
@@ -83,7 +88,7 @@ PascalCase join. Examples: `ContextCompaction`, `SkillLoaded`, `OrchestrationSta
 | `PARALLEL_WITH` | `ToolExecution` | `ToolExecution` | Concurrent execution in the same parallel group |
 | `SPAWNED` | `ToolExecution` | `Session` | Delegation created a child session |
 | `SUBSESSION_OF` | `Session` | `Session` | Child session to parent lineage |
-| `HAS_EVENT` | `Session` / `OrchestratorRun` / `Step` | `Event` | Attaches lifecycle/custom events to their scope |
+| `HAS_EVENT` | `OrchestratorRun` (when active) / `Session` (fallback) | `Event` | Attaches lifecycle/custom events to their scope. DefaultHandler checks `cursors.current_run_id` — if an active run exists, the event attaches to the run; otherwise it falls back to the Session. |
 
 ---
 
@@ -484,6 +489,11 @@ RETURN e.node_id    AS event_id,
 ORDER BY e.occurred_at
 ```
 
+> **Note:** Since the DefaultHandler run-awareness fix, `HAS_EVENT` edges for
+> events that fire during an active run come from the `OrchestratorRun` node,
+> not the Session. Use the "Events across all scopes" query below to find
+> events attached to either.
+
 Events across all scopes (session, run, step) for a given session:
 
 ```cypher
@@ -648,6 +658,26 @@ parts = node_id.split("__")
 # parts[0] = session_id UUID
 # parts[1] = event_name (colons replaced with underscores)
 # parts[2] = epoch_ms as string
+```
+
+### ToolExecution nodes
+
+ToolExecution nodes include the `tool_call_id` as a disambiguator to prevent
+collisions when parallel tool calls share the same millisecond timestamp:
+
+```
+55c8841a-1234-4abc-8def-000000000001__tool_pre__1737972005000__toolu_01G9FD9g
+```
+
+Parsing the ID:
+
+```python
+# Split on double underscore
+parts = node_id.split("__")
+# parts[0] = session_id UUID
+# parts[1] = event_name (colons replaced with underscores)
+# parts[2] = epoch_ms as string
+# parts[3] = tool_call_id (only present on ToolExecution nodes)
 ```
 
 ### Relationship identity
