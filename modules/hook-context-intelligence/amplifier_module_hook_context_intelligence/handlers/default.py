@@ -21,7 +21,8 @@ class DefaultHandler:
     For every event that no entity handler claims, the DefaultHandler:
     1. Derives a PascalCase label from the event name.
     2. Creates an Event node with labels {Event, DerivedLabel}.
-    3. Attaches it to the session via a HAS_EVENT edge.
+    3. Attaches it to the active OrchestratorRun (if one is running) or to
+       the Session otherwise via a HAS_EVENT edge.
 
     This covers app-level events (e.g. session:resume) that don't need
     special entity-node mutations — they are simply recorded as Event
