@@ -117,15 +117,10 @@ class TestBehaviorYamlConfigShape:
         assert data["hooks"][0]["module"] == "hook-context-intelligence"
 
     def test_config_has_required_keys(self):
-        """Config must have: exclude_events, log_level, graph_store.
-
-        enable_graph is intentionally omitted from the behavior YAML to avoid
-        clobbering user overrides via deep_merge (behavior child wins over
-        settings.yaml parent).  The config_resolver defaults to False.
-        """
+        """Config must have: exclude_events, log_level, graph_store, enable_graph."""
         data = self._load_behavior_yaml()
         config = data["hooks"][0]["config"]
-        expected_keys = {"exclude_events", "log_level", "graph_store"}
+        expected_keys = {"exclude_events", "log_level", "graph_store", "enable_graph"}
         assert expected_keys == set(config.keys())
 
     def test_graph_store_is_dict(self):
@@ -134,16 +129,17 @@ class TestBehaviorYamlConfigShape:
         config = data["hooks"][0]["config"]
         assert isinstance(config["graph_store"], dict)
 
-    def test_enable_graph_not_in_behavior_yaml(self):
-        """enable_graph must NOT be present in the behavior YAML.
+    def test_enable_graph_in_behavior_yaml_uses_env_interpolation(self):
+        """enable_graph must be present and use env-var interpolation syntax.
 
-        It is intentionally omitted so that deep_merge does not clobber
-        user overrides from settings.yaml.  The config_resolver defaults
-        to False when the key is absent.
+        The value '${CI_ENABLE_GRAPH:false}' allows the config loader to
+        resolve the key from the environment at startup, defaulting to false.
+        config_resolver handles the resulting string value correctly.
         """
         data = self._load_behavior_yaml()
         config = data["hooks"][0]["config"]
-        assert "enable_graph" not in config
+        assert "enable_graph" in config
+        assert config["enable_graph"] == "${CI_ENABLE_GRAPH:false}"
 
     def test_graph_store_entry_has_type_and_config(self):
         """graph_store entry must have type and config keys."""

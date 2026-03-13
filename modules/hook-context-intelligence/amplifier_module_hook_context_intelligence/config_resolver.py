@@ -174,7 +174,14 @@ class ConfigResolver:
         env = os.environ.get("CI_ENABLE_GRAPH", "").strip().lower()
         if env in ("1", "true", "yes"):
             return True
-        return bool(self._config.get("enable_graph", False))
+        if env in ("0", "false", "no"):
+            return False
+        val = self._config.get("enable_graph", False)
+        if isinstance(val, str):
+            # Handles YAML env-interpolation like '${CI_ENABLE_GRAPH:false}' →
+            # only the literal strings "1", "true", "yes" are truthy.
+            return val.strip().lower() in ("1", "true", "yes")
+        return bool(val)
 
     @property
     def graph_store_config(self) -> dict[str, Any] | None:

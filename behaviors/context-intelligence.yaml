@@ -12,9 +12,9 @@ hooks:
       # project: 'my-project'              # optional; used as graph_forest_name fallback
       exclude_events: []
       log_level: 'WARNING'
-      # enable_graph is intentionally omitted here.
-      # The config_resolver defaults to false; users enable via settings.yaml
-      # or the CI_ENABLE_GRAPH environment variable.
+      # enable_graph: resolved from CI_ENABLE_GRAPH env var (true/false) or
+      # settings.yaml hook config.  Defaults to false when unset.
+      enable_graph: '${CI_ENABLE_GRAPH:false}'
       graph_store:
         type: 'neo4j'
         # graph_forest_name: auto-resolved via coordinator.config.project_slug -> "default"
