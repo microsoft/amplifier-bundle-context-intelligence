@@ -63,6 +63,163 @@ docker run -d --name neo4j-dev \
 
 The store creates necessary indexes on first flush (idempotent).
 
+## Direct Application Integration
+
+Use this when embedding the hook into a custom application built on `amplifier-core` or `amplifier-foundation`, rather than through the Amplifier CLI hook system.
+
+### Loading the hook
+
+```python
+from amplifier_module_hook_context_intelligence import mount
+
+# mount() is async — takes a coordinator and a config dict
+cleanup = await mount(coordinator, config)
+```
+
+`mount()` registers handlers on the coordinator's hook system and returns a cleanup callable (or `None` if the graph path is disabled). Call the returned callable to deregister handlers when the session ends.
+
+### Config dict — complete reference
+
+```python
+config = {
+    # --- Identity / Storage paths ---
+    "project_slug": "my-project",          # str; default: derived from coordinator or "default"
+    "base_path": "~/.amplifier/projects",  # str; default: "~/.amplifier/projects"
+
+    # --- Logging path (always active, zero config needed) ---
+    "log_level": "WARNING",                # str; default: "WARNING"
+
+    # --- Graph path (opt-in) ---
+    "enable_graph": True,                  # bool; default: False
+    "exclude_events": [],                  # list[str]; fnmatch patterns; graph path only
+
+    # --- Neo4j connection ---
+    "graph_store": {
+        "type": "neo4j",
+        "graph_forest_name": "my-project",  # explicit override; default: project_slug chain
+        "config": {
+            "uri": "bolt://localhost:7687",
+            "username": "neo4j",            # omit both username+password for unauthenticated
+            "password": "password",
+            "database": "neo4j",            # default: "neo4j"
+        },
+    },
+}
+```
+
+| Key | Type | Default | Purpose |
+|-----|------|---------|---------|
+| `project_slug` | `str` | derived | Scopes storage paths and graph namespace |
+| `base_path` | `str` | `~/.amplifier/projects` | Root directory for session logs |
+| `log_level` | `str` | `"WARNING"` | Log verbosity for the hook module |
+| `enable_graph` | `bool` | `False` | Activates the graph path (opt-in) |
+| `exclude_events` | `list[str]` | `[]` | fnmatch patterns for events to skip in the graph |
+| `graph_store.type` | `str` | — | Backend type; only `"neo4j"` is supported |
+| `graph_store.graph_forest_name` | `str` | project_slug chain | Explicit namespace override for graph data |
+| `graph_store.config.uri` | `str` | `bolt://localhost:7687` | Neo4j connection URI |
+| `graph_store.config.username` | `str` | — | Omit (with `password`) for unauthenticated access |
+| `graph_store.config.password` | `str` | — | Omit (with `username`) for unauthenticated access |
+| `graph_store.config.database` | `str` | `"neo4j"` | Neo4j database name |
+
+### Coordinator config — runtime reads
+
+The hook reads these keys from `coordinator.config` lazily — resolved on the **first event**, not at mount time:
+
+```python
+coordinator.config["project_slug"]   # Derives graph_forest_name and storage paths
+coordinator.config["base_path"]      # Fallback for storage root (default: ~/.amplifier/projects)
+```
+
+The app-cli sets these automatically. In a custom application you **must** set `project_slug` before the first event fires:
+
+```python
+coordinator.config["project_slug"] = "-my-project-slug"
+```
+
+The slug format uses `-` as separator (e.g. `/home/user/my-project` → `-home-user-my-project`).
+
+### Coordinator capabilities consumed
+
+```python
+coordinator.get_capability("session.working_dir")
+# Fallback for project_slug derivation. Returns the working directory path.
+# The foundation bundle registers this on child sessions automatically.
+# For root sessions in custom apps, register it manually:
+coordinator.register_capability("session.working_dir", str(Path.cwd()))
+```
+
+```python
+coordinator.collect_contributions("observability.events")
+# Event discovery channel. Modules contribute custom event names here.
+# The hook discovers events from: ALL_EVENTS (core) + this channel + legacy capability.
+```
+
+### graph_forest_name resolution chain
+
+This is the namespace that scopes all graph data. First non-empty value wins:
+
+| Priority | Source |
+|----------|--------|
+| 1 | `config["graph_store"]["graph_forest_name"]` — explicit override in hook config |
+| 2 | `config["project"]` — secondary alias |
+| 3 | `config["project_slug"]` — from hook config |
+| 4 | `coordinator.config["project_slug"]` — from app-cli (set at session creation time) |
+| 5 | `coordinator.get_capability("session.working_dir")` — slugified working directory |
+| 6 | `"default"` — final fallback |
+
+### Storage paths
+
+Paths are derived from `base_path` and `project_slug` — they are not configurable individually:
+
+```
+Session logs:  <base_path>/<project_slug>/sessions/<session_id>/context-intelligence/events.jsonl
+Metadata:      <base_path>/<project_slug>/sessions/<session_id>/context-intelligence/metadata.json
+Blob store:    <base_path>/<project_slug>/sessions/<session_id>/context-intelligence/blobs/<key>.json
+```
+
+### CI_ENABLE_GRAPH environment variable
+
+```bash
+CI_ENABLE_GRAPH=true  # Values: "1", "true", "yes" (case-insensitive)
+```
+
+This overrides `enable_graph: false` regardless of YAML config. It exists because the Amplifier CLI merges behavior YAML on top of `settings.yaml` — a behavior-level `enable_graph: false` silently wins over a user's `settings.yaml` `enable_graph: true`. The env var bypasses this precedence.
+
+### Minimal example
+
+```python
+from amplifier_core import AmplifierSession
+from amplifier_module_hook_context_intelligence import mount
+from pathlib import Path
+
+# 1. Set up coordinator config BEFORE session creation
+config = {"project_slug": "-my-app"}
+session = AmplifierSession(config=config)
+
+# 2. Mount the hook with graph enabled
+hook_config = {
+    "enable_graph": True,
+    "project_slug": "-my-app",
+    "base_path": str(Path.home() / ".my-app" / "projects"),
+    "graph_store": {
+        "type": "neo4j",
+        "config": {
+            "uri": "bolt://localhost:7687",
+            "database": "neo4j",
+        },
+    },
+}
+
+cleanup = await mount(session.coordinator, hook_config)
+
+# 3. Run your session — events are captured automatically
+result = await session.execute("Hello world")
+
+# 4. Cleanup when done
+if cleanup:
+    await cleanup()
+```
+
 ## Graph Data Model
 
 Five node types:
