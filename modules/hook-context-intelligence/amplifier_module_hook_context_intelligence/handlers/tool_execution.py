@@ -78,6 +78,9 @@ class ToolExecutionHandler:
             "session_id": session_id,
             "data": json.dumps(data),
         }
+        tool_input = data.get("tool_input")
+        if tool_input is not None:
+            properties["tool_input_preview"] = str(tool_input)[:RESULT_PREVIEW_MAX_LEN]
 
         # Create ToolExecution node
         await self.services.graph.upsert_node(te_id, {"ToolExecution"}, properties)

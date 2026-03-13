@@ -946,3 +946,72 @@ class TestParallelToolsSameTimestamp:
         old_format_id = make_node_id("s1", "tool:pre", self.SAME_TIMESTAMP)
         node = await services.graph.get_node(old_format_id)
         assert node is not None, "Fallback to old format should work when tool_call_id is empty"
+
+
+# ── TestToolPreInputPreview ─────────────────────────────────────────────────
+
+
+class TestToolPreInputPreview:
+    """tool:pre node should store a 'tool_input_preview' property when tool_input is present."""
+
+    async def test_tool_input_preview_stored_when_present(self, services: HookStateService) -> None:
+        """tool_input present in event data → tool_input_preview stored on ToolExecution node."""
+        await _seed_through_step(services)
+        handler = ToolExecutionHandler(services)
+        await handler(
+            "tool:pre",
+            {
+                "session_id": "s1",
+                "timestamp": TOOL1_TIMESTAMP,
+                "tool_call_id": "call_001",
+                "tool_name": "read_file",
+                "parallel_group_id": "pg1",
+                "tool_input": {"file_path": "/tmp/test.txt"},
+            },
+        )
+        node = await services.graph.get_node(EXPECTED_TE1_ID)
+        assert node is not None
+        props = node["properties"]
+        assert "tool_input_preview" in props
+        assert props["tool_input_preview"] == str({"file_path": "/tmp/test.txt"})
+
+    async def test_tool_input_preview_truncated_to_500(self, services: HookStateService) -> None:
+        """tool_input longer than 500 chars should be truncated to RESULT_PREVIEW_MAX_LEN."""
+        await _seed_through_step(services)
+        handler = ToolExecutionHandler(services)
+        long_input = "x" * 1000
+        await handler(
+            "tool:pre",
+            {
+                "session_id": "s1",
+                "timestamp": TOOL1_TIMESTAMP,
+                "tool_call_id": "call_001",
+                "tool_name": "read_file",
+                "parallel_group_id": "pg1",
+                "tool_input": long_input,
+            },
+        )
+        node = await services.graph.get_node(EXPECTED_TE1_ID)
+        assert node is not None
+        assert len(node["properties"]["tool_input_preview"]) == RESULT_PREVIEW_MAX_LEN
+
+    async def test_tool_input_preview_absent_when_tool_input_missing(
+        self, services: HookStateService
+    ) -> None:
+        """When tool_input is absent from event data, tool_input_preview must NOT be set."""
+        await _seed_through_step(services)
+        handler = ToolExecutionHandler(services)
+        await handler(
+            "tool:pre",
+            {
+                "session_id": "s1",
+                "timestamp": TOOL1_TIMESTAMP,
+                "tool_call_id": "call_001",
+                "tool_name": "read_file",
+                "parallel_group_id": "pg1",
+                # no tool_input key
+            },
+        )
+        node = await services.graph.get_node(EXPECTED_TE1_ID)
+        assert node is not None
+        assert "tool_input_preview" not in node["properties"]
