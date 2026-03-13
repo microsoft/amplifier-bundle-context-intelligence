@@ -864,9 +864,7 @@ class TestParallelToolsSameTimestamp:
         assert node_a["properties"]["tool_name"] == "bash"
         assert node_b["properties"]["tool_name"] == "read_file"
 
-    async def test_parallel_with_edge_not_self_loop(
-        self, services: HookStateService
-    ) -> None:
+    async def test_parallel_with_edge_not_self_loop(self, services: HookStateService) -> None:
         """PARALLEL_WITH edge connects two DIFFERENT nodes (not a self-loop)."""
         await _seed_through_step(services)
         handler = ToolExecutionHandler(services)
@@ -905,9 +903,7 @@ class TestParallelToolsSameTimestamp:
         assert self_loop_c is None, "Self-loop on node C"
         assert self_loop_d is None, "Self-loop on node D"
 
-    async def test_tool_call_map_uses_disambiguated_ids(
-        self, services: HookStateService
-    ) -> None:
+    async def test_tool_call_map_uses_disambiguated_ids(self, services: HookStateService) -> None:
         """tool_call_map entries use the disambiguated node IDs."""
         await _seed_through_step(services)
         handler = ToolExecutionHandler(services)
@@ -924,7 +920,9 @@ class TestParallelToolsSameTimestamp:
         )
 
         cursors = services.get_cursors("s1")
-        expected_id = make_node_id("s1", "tool:pre", self.SAME_TIMESTAMP, disambiguator="toolu_EEEE")
+        expected_id = make_node_id(
+            "s1", "tool:pre", self.SAME_TIMESTAMP, disambiguator="toolu_EEEE"
+        )
         assert cursors.tool_call_map["toolu_EEEE"] == expected_id
 
     async def test_missing_tool_call_id_falls_back_to_old_format(

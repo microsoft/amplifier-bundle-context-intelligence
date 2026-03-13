@@ -62,7 +62,9 @@ class ToolExecutionHandler:
         # Generate deterministic TE ID (tool_call_id disambiguates parallel calls)
         tool_call_id = data.get("tool_call_id", "")
         te_id = make_node_id(
-            session_id, "tool:pre", timestamp,
+            session_id,
+            "tool:pre",
+            timestamp,
             disambiguator=tool_call_id if tool_call_id else None,
         )
 
