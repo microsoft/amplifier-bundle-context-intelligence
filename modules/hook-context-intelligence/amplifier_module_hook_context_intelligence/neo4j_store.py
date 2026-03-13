@@ -38,7 +38,7 @@ class Neo4jGraphStore:
     def __init__(
         self,
         uri: str = "neo4j://localhost:7687",
-        auth: tuple[str, str] | None = ("neo4j", "neo4j"),
+        auth: tuple[str, str] | None = ("neo4j", "password"),
         database: str = "neo4j",
         graph_forest_name: str | None = None,
     ) -> None:
