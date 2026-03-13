@@ -56,9 +56,14 @@ The graph backend requires a running Neo4j instance. Install and start Neo4j:
 ```bash
 # Docker (recommended for development)
 docker run -d --name neo4j-dev \
+  --restart unless-stopped \
   -p 7474:7474 -p 7687:7687 \
-  -e NEO4J_AUTH=neo4j/password \
-  neo4j:5
+  -e NEO4J_AUTH=none \
+  -v $HOME/neo4j/data:/data \
+  -v $HOME/neo4j/logs:/logs \
+  -v $HOME/neo4j/plugins:/plugins \
+  -v $HOME/neo4j/import:/import \
+   neo4j:5-community
 ```
 
 The store creates necessary indexes on first flush (idempotent).
