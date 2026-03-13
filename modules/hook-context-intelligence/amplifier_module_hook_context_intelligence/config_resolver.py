@@ -240,3 +240,15 @@ class ConfigResolver:
         Returns: base_path / project_slug / 'sessions' / session_id / 'context-intelligence'
         """
         return self.base_path / self.project_slug / "sessions" / session_id / "context-intelligence"
+
+    @property
+    def blob_store_root(self) -> Path:
+        """Root directory for blob storage.
+
+        Returns: base_path / project_slug / 'sessions'
+
+        DiskBlobStore uses this as its root, storing blobs in:
+            <blob_store_root> / <session_id> / blobs / <key>.json
+        which places them alongside the session's context-intelligence directory.
+        """
+        return self.base_path / self.project_slug / "sessions"

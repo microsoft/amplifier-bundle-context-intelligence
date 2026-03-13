@@ -265,3 +265,32 @@ class TestNoForbiddenImports:
         assert "graph_stores" not in content, (
             "graph_data_hook.py must not reference 'graph_stores' (plural)"
         )
+
+
+class TestBlobStoreWiring:
+    """GraphDataHook wires DiskBlobStore from resolver into MountFlow."""
+
+    def test_graph_data_hook_passes_blob_store_to_mount_flow(self, mock_neo4j_store):
+        """GraphDataHook creates a DiskBlobStore and passes it to MountFlow."""
+        mock_cls, mock_store = mock_neo4j_store
+        config = dict(_NEO4J_STORE_CONFIG)
+        config["base_path"] = "/tmp/test-blob-wiring"
+        config["project_slug"] = "test-project"
+        resolver = _make_resolver(config)
+        hook = GraphDataHook(resolver)
+
+        # MountFlow should have a blob_store set
+        assert hook._flow._blob_store is not None
+
+    def test_blob_store_is_disk_blob_store(self, mock_neo4j_store):
+        """The blob_store wired into MountFlow is a DiskBlobStore instance."""
+        from amplifier_module_hook_context_intelligence.blob_store import DiskBlobStore
+
+        mock_cls, mock_store = mock_neo4j_store
+        config = dict(_NEO4J_STORE_CONFIG)
+        config["base_path"] = "/tmp/test-blob-wiring"
+        config["project_slug"] = "test-project"
+        resolver = _make_resolver(config)
+        hook = GraphDataHook(resolver)
+
+        assert isinstance(hook._flow._blob_store, DiskBlobStore)

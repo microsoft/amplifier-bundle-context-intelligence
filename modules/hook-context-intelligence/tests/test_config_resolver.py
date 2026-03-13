@@ -435,3 +435,25 @@ class TestSessionDir:
         result = resolver.session_dir("sess-42")
 
         assert result == Path("/coord/base/coord-project/sessions/sess-42/context-intelligence")
+
+
+class TestBlobStoreRoot:
+    """blob_store_root property resolves to the project-level context-intelligence directory."""
+
+    def test_blob_store_root_returns_path(self) -> None:
+        """blob_store_root is base_path / project_slug / 'sessions'."""
+        coordinator = _make_coordinator(config={})
+        resolver = ConfigResolver(
+            config={"base_path": "/tmp/test-projects", "project_slug": "my-project"},
+            coordinator=coordinator,
+        )
+        result = resolver.blob_store_root
+        assert result == Path("/tmp/test-projects") / "my-project" / "sessions"
+
+    def test_blob_store_root_uses_default_base_path(self) -> None:
+        """blob_store_root works with default base_path."""
+        coordinator = _make_coordinator(config={})
+        resolver = ConfigResolver(config={"project_slug": "default"}, coordinator=coordinator)
+        result = resolver.blob_store_root
+        expected = Path("~/.amplifier/projects").expanduser() / "default" / "sessions"
+        assert result == expected

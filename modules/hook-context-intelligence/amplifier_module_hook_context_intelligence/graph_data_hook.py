@@ -6,6 +6,7 @@ import asyncio
 import logging
 from typing import Any, Callable
 
+from .blob_store import DiskBlobStore
 from .mount import MountFlow
 from .neo4j_store import Neo4jGraphStore
 
@@ -44,7 +45,13 @@ class GraphDataHook:
     def __init__(self, resolver: Any) -> None:
         self._resolver = resolver
         self._store = _create_neo4j_store(resolver)
-        self._flow = MountFlow(config=resolver._config, graph_store=self._store, resolver=resolver)
+        self._blob_store = DiskBlobStore(root=resolver.blob_store_root)
+        self._flow = MountFlow(
+            config=resolver._config,
+            graph_store=self._store,
+            resolver=resolver,
+            blob_store=self._blob_store,
+        )
 
     async def mount(self, coordinator: Any, events: set[str] | None = None) -> Callable:
         """Run the mount flow and return a cleanup callable.
