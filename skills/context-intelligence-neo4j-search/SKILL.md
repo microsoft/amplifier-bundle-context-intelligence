@@ -105,6 +105,83 @@ following properties appear on all or most nodes:
 Additional properties are written by handlers as open-ended key-value pairs
 and stored directly on the node.
 
+### Event Data Preservation
+
+Every node carries a `data` property containing the full event payload as a
+JSON-encoded string. This ensures the complete raw event data is always
+accessible without additional lookups.
+
+Enriched nodes (those produced by handlers that write additional structured
+properties) also carry `data_<event_name>` properties containing the JSON
+payload of the enriching event. The property name is derived by replacing
+colons and hyphens in the event name with underscores and prepending `data_`.
+
+| Event Name | Property |
+|------------|----------|
+| `llm:request` | `data_llm_request` |
+| `llm:response` | `data_llm_response` |
+| `tool:post` | `data_tool_post` |
+| `tool:error` | `data_tool_error` |
+| `execution:end` | `data_execution_end` |
+| `orchestrator:complete` | `data_orchestrator_complete` |
+| `session:end` | `data_session_end` |
+| `delegate:agent_spawned` | `data_delegate_agent_spawned` |
+| `delegate:agent_completed` | `data_delegate_agent_completed` |
+
+### Blob References
+
+Large payloads — LLM messages, tool results, context snapshots — are stored
+as external blobs rather than inline on nodes. A property whose value matches
+the `$blob_ref` pattern is a pointer to an external blob, not the real value.
+
+Example blob reference value stored on a node property:
+
+```json
+{
+  "$blob_ref": "blob://abc123",
+  "field": "raw",
+  "node_id": "6afb3613-7041-4735-9c0f-c2171452ed18__tool_post__1741270343000",
+  "size_bytes": 42000
+}
+```
+
+Known blob fields:
+
+| Field | Description |
+|-------|-------------|
+| `raw` | Raw serialized event payload |
+| `result` | Tool execution result output |
+| `messages` | LLM conversation messages array |
+| `mount_plan` | File mount plan for delegate tool |
+| `context_snapshot` | Context snapshot at execution boundary |
+| `debug` | Debug diagnostic data |
+
+### Resolving blob refs
+
+Two tools are available to work with blob references:
+
+- **`blob_list(session_id)`** — returns a list of blob metadata records for a
+  session: `[{uri, field, node_id, size_bytes}]`
+- **`blob_dump(uri)`** — resolves a blob URI and returns the **file path** to
+  the blob content on disk
+
+### Agent workflow
+
+When working with event data or blob references in the graph, follow this
+5-step process:
+
+1. **Query Neo4j** to find the node(s) of interest and retrieve their `data`
+   or `data_<event_name>` property using a Cypher query.
+2. **Parse the `data` property** (a JSON string) to inspect the event payload
+   and identify any `$blob_ref` pointers within the property values.
+3. **Call `blob_dump(uri)`** for each `$blob_ref` URI encountered to resolve
+   the blob URI and obtain the local file path to the blob content.
+4. **Use `read_file` or `bash` + `jq`** to read and filter specific fields
+   from the blob file at the path returned by `blob_dump`.
+5. **Never** load blob content directly into the agent context — always use
+   file path tools (`read_file`, `bash`, `jq`) to access specific fields or
+   slices of the blob, as blobs can be extremely large.
+
 ## Relationship Properties
 
 | Property | Present On | Notes |

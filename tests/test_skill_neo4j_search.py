@@ -429,3 +429,224 @@ def test_notes_forest_property_on_relationships() -> None:
 
 def test_notes_buffer_visibility() -> None:
     assert "Buffer visibility" in _NOTES_SECTION or "buffer" in _NOTES_SECTION.lower()
+
+
+# -- AC-16: Event Data Preservation section ------------------------------------
+
+
+_NODE_PROPS_SECTION: str = (
+    _extract_section(_SKILL_CONTENT, "Node Properties") if _SKILL_CONTENT else ""
+)
+
+
+def test_event_data_preservation_section_exists() -> None:
+    """SKILL.md must contain an Event Data Preservation subsection."""
+    assert "Event Data Preservation" in _NODE_PROPS_SECTION, (
+        "Node Properties section must contain an 'Event Data Preservation' subsection"
+    )
+
+
+def test_event_data_preservation_documents_data_property() -> None:
+    """Every node carries a 'data' property (JSON string of full event payload)."""
+    assert "data" in _NODE_PROPS_SECTION, (
+        "Event Data Preservation must document the 'data' property"
+    )
+
+
+def test_event_data_preservation_documents_enriched_data_properties() -> None:
+    """Enriched nodes have 'data_<event_name>' properties."""
+    assert "data_" in _NODE_PROPS_SECTION, (
+        "Event Data Preservation must document 'data_<event_name>' properties"
+    )
+
+
+# -- AC-17: Enrichment property naming table -----------------------------------
+
+_REQUIRED_ENRICHMENT_MAPPINGS = [
+    ("llm:request", "data_llm_request"),
+    ("llm:response", "data_llm_response"),
+    ("tool:post", "data_tool_post"),
+    ("tool:error", "data_tool_error"),
+    ("execution:end", "data_execution_end"),
+    ("orchestrator:complete", "data_orchestrator_complete"),
+    ("session:end", "data_session_end"),
+    ("delegate:agent_spawned", "data_delegate_agent_spawned"),
+    ("delegate:agent_completed", "data_delegate_agent_completed"),
+]
+
+
+def test_enrichment_property_table_has_all_9_mappings() -> None:
+    """Must document all 9 event-to-property name mappings."""
+    for _event, prop in _REQUIRED_ENRICHMENT_MAPPINGS:
+        assert prop in _NODE_PROPS_SECTION, (
+            f"Enrichment property table missing mapping for property: {prop}"
+        )
+
+
+def test_enrichment_property_table_documents_event_names() -> None:
+    """All 9 event names must appear in the Node Properties section."""
+    for event, _prop in _REQUIRED_ENRICHMENT_MAPPINGS:
+        # Event names appear either directly or with colon replaced by underscore
+        event_slug = event.replace(":", "_")
+        assert event in _NODE_PROPS_SECTION or event_slug in _NODE_PROPS_SECTION, (
+            f"Enrichment table missing event name: {event}"
+        )
+
+
+# -- AC-18: Blob References section -------------------------------------------
+
+_BLOB_REFS_SECTION: str = ""
+# Blob References may be a ### subsection within Node Properties
+_blob_refs_match = re.search(
+    r"### Blob References\s*\n(.*?)(?=^###|^##|\Z)",
+    _SKILL_CONTENT,
+    re.MULTILINE | re.DOTALL,
+)
+if _blob_refs_match:
+    _BLOB_REFS_SECTION = _blob_refs_match.group(1)
+
+
+def test_blob_references_section_exists() -> None:
+    """SKILL.md must contain a Blob References section."""
+    assert _BLOB_REFS_SECTION, (
+        "SKILL.md must contain a '### Blob References' section"
+    )
+
+
+def test_blob_references_documents_blob_ref_pattern() -> None:
+    """Must explain the $blob_ref pattern."""
+    assert "$blob_ref" in _BLOB_REFS_SECTION or "blob_ref" in _BLOB_REFS_SECTION, (
+        "Blob References section must explain the $blob_ref pattern"
+    )
+
+
+def test_blob_references_includes_json_example() -> None:
+    """Must include a JSON example showing the $blob_ref structure."""
+    assert "```json" in _BLOB_REFS_SECTION or "```" in _BLOB_REFS_SECTION, (
+        "Blob References section must include a code/JSON example"
+    )
+
+
+_REQUIRED_BLOB_FIELDS = ["raw", "result", "messages", "mount_plan", "context_snapshot", "debug"]
+
+
+def test_blob_references_lists_known_blob_fields() -> None:
+    """Must list all known blob fields."""
+    for field in _REQUIRED_BLOB_FIELDS:
+        assert field in _BLOB_REFS_SECTION, (
+            f"Blob References section missing known blob field: {field}"
+        )
+
+
+# -- AC-19: Resolving blob refs (blob tool operations) -------------------------
+
+_RESOLVING_BLOBS_SECTION: str = ""
+_resolving_match = re.search(
+    r"### Resolving [Bb]lob [Rr]efs?\s*\n(.*?)(?=^###|^##|\Z)",
+    _SKILL_CONTENT,
+    re.MULTILINE | re.DOTALL,
+)
+if _resolving_match:
+    _RESOLVING_BLOBS_SECTION = _resolving_match.group(1)
+
+
+def test_resolving_blob_refs_section_exists() -> None:
+    """SKILL.md must contain a 'Resolving blob refs' section."""
+    assert _RESOLVING_BLOBS_SECTION, (
+        "SKILL.md must contain a '### Resolving blob refs' section"
+    )
+
+
+def test_resolving_blobs_documents_blob_list() -> None:
+    """Must document blob_list(session_id)."""
+    assert "blob_list" in _RESOLVING_BLOBS_SECTION, (
+        "Resolving blob refs must document blob_list tool"
+    )
+
+
+def test_resolving_blobs_blob_list_returns_uri_field_node_size() -> None:
+    """blob_list must be documented as returning [{uri, field, node_id, size_bytes}]."""
+    section = _RESOLVING_BLOBS_SECTION
+    assert "uri" in section and "field" in section and "size_bytes" in section, (
+        "blob_list return value must document {uri, field, node_id, size_bytes}"
+    )
+
+
+def test_resolving_blobs_documents_blob_dump() -> None:
+    """Must document blob_dump(uri) returning a file path."""
+    assert "blob_dump" in _RESOLVING_BLOBS_SECTION, (
+        "Resolving blob refs must document blob_dump tool"
+    )
+
+
+def test_resolving_blobs_blob_dump_returns_file_path() -> None:
+    """blob_dump must be documented as returning a file path."""
+    assert "file path" in _RESOLVING_BLOBS_SECTION or "path" in _RESOLVING_BLOBS_SECTION, (
+        "blob_dump documentation must mention that it returns a file path"
+    )
+
+
+# -- AC-20: Agent workflow (5-step process) ------------------------------------
+
+_AGENT_WORKFLOW_SECTION: str = ""
+_workflow_match = re.search(
+    r"### Agent [Ww]orkflow\s*\n(.*?)(?=^###|^##|\Z)",
+    _SKILL_CONTENT,
+    re.MULTILINE | re.DOTALL,
+)
+if _workflow_match:
+    _AGENT_WORKFLOW_SECTION = _workflow_match.group(1)
+
+
+def test_agent_workflow_section_exists() -> None:
+    """SKILL.md must contain an Agent workflow section."""
+    assert _AGENT_WORKFLOW_SECTION, (
+        "SKILL.md must contain a '### Agent workflow' section"
+    )
+
+
+def test_agent_workflow_has_5_steps() -> None:
+    """Agent workflow must document 5 steps."""
+    # Count numbered list items (1. 2. 3. 4. 5.)
+    steps = re.findall(r"^\s*\d+\.", _AGENT_WORKFLOW_SECTION, re.MULTILINE)
+    assert len(steps) >= 5, (
+        f"Agent workflow must have at least 5 numbered steps, found {len(steps)}"
+    )
+
+
+def test_agent_workflow_step_query_neo4j() -> None:
+    """Step 1: query Neo4j."""
+    assert "Neo4j" in _AGENT_WORKFLOW_SECTION or "query" in _AGENT_WORKFLOW_SECTION.lower(), (
+        "Agent workflow must include a step for querying Neo4j"
+    )
+
+
+def test_agent_workflow_step_parse_data_property() -> None:
+    """Step 2: parse data property."""
+    assert "data" in _AGENT_WORKFLOW_SECTION, (
+        "Agent workflow must include a step for parsing the data property"
+    )
+
+
+def test_agent_workflow_step_call_blob_dump() -> None:
+    """Step 3: call blob_dump."""
+    assert "blob_dump" in _AGENT_WORKFLOW_SECTION, (
+        "Agent workflow must include a step for calling blob_dump"
+    )
+
+
+def test_agent_workflow_step_read_file_or_jq() -> None:
+    """Step 4: use read_file or bash+jq."""
+    assert (
+        "read_file" in _AGENT_WORKFLOW_SECTION or "jq" in _AGENT_WORKFLOW_SECTION
+    ), (
+        "Agent workflow must include a step for using read_file or bash+jq"
+    )
+
+
+def test_agent_workflow_never_load_blob_directly() -> None:
+    """Step 5: never load blob content directly."""
+    section_lower = _AGENT_WORKFLOW_SECTION.lower()
+    assert "never" in section_lower or "do not" in section_lower or "don't" in section_lower, (
+        "Agent workflow must include a warning about not loading blob content directly"
+    )
