@@ -51,9 +51,12 @@ class DefaultHandler:
             {"event_name": event, "occurred_at": timestamp, "data": json.dumps(data)},
         )
 
-        # Attach to session via HAS_EVENT
+        # Attach to active run if one exists, otherwise to session
+        cursors = self.services.get_cursors(session_id)
+        parent_id = cursors.current_run_id if cursors.current_run_id else session_id
+
         await self.services.graph.upsert_edge(
-            session_id, event_node_id, "HAS_EVENT", {"occurred_at": timestamp}
+            parent_id, event_node_id, "HAS_EVENT", {"occurred_at": timestamp}
         )
 
         return HookResult(action="continue")
