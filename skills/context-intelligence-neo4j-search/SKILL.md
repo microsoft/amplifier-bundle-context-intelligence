@@ -156,7 +156,7 @@ Known blob fields:
 | `context_snapshot` | Context snapshot at execution boundary |
 | `debug` | Debug diagnostic data |
 
-### Resolving blob refs
+### Resolving Blob Refs
 
 Two tools are available to work with blob references:
 
@@ -171,7 +171,9 @@ When working with event data or blob references in the graph, follow this
 5-step process:
 
 1. **Query Neo4j** to find the node(s) of interest and retrieve their `data`
-   or `data_<event_name>` property using a Cypher query.
+   or `data_<event_name>` property using a Cypher query. Alternatively, call
+   `blob_list(session_id)` to enumerate all blobs for a session without a
+   prior graph query.
 2. **Parse the `data` property** (a JSON string) to inspect the event payload
    and identify any `$blob_ref` pointers within the property values.
 3. **Call `blob_dump(uri)`** for each `$blob_ref` URI encountered to resolve
