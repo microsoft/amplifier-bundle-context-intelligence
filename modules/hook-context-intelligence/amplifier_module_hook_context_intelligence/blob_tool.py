@@ -9,6 +9,8 @@ from __future__ import annotations
 
 from amplifier_module_hook_context_intelligence.blob_store import DiskBlobStore
 
+_SEP = "__"  # key separator: <node_id>__<field>
+
 
 class BlobTool:
     """Agent-facing tool for blob inspection and materialization.
@@ -35,15 +37,15 @@ class BlobTool:
         uris = await self._store.list(session_id)
         result = []
         for uri in uris:
-            _, key = self._store._parse_uri(uri)
-            sep_idx = key.rfind("__")
+            _, key = self._store.parse_uri(uri)
+            sep_idx = key.rfind(_SEP)
             if sep_idx == -1:
                 node_id = key
                 field = "unknown"
             else:
                 node_id = key[:sep_idx]
-                field = key[sep_idx + 2 :]
-            path = self._store._blob_path(session_id, key)
+                field = key[sep_idx + len(_SEP) :]
+            path = self._store.blob_path(session_id, key)
             size_bytes = path.stat().st_size
             result.append(
                 {

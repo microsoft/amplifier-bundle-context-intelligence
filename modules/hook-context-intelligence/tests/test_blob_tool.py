@@ -73,6 +73,18 @@ class TestBlobList:
         assert item["node_id"] == "session__tool_pre__1234"
         assert item["uri"] == "ci-blob://session-1/session__tool_pre__1234__messages"
 
+    async def test_list_key_without_separator(self, tmp_path: Path) -> None:
+        """blob_list() sets field='unknown' and node_id=key when key has no '__' separator."""
+        store = DiskBlobStore(root=tmp_path)
+        await store.write("session-1", "simple-key", {"data": "x"})
+        tool = BlobTool(store)
+        result = await tool.blob_list("session-1")
+        assert len(result) == 1
+        item = result[0]
+        assert item["field"] == "unknown"
+        assert item["node_id"] == "simple-key"
+        assert item["uri"] == "ci-blob://session-1/simple-key"
+
 
 # ---------------------------------------------------------------------------
 # TestBlobDump

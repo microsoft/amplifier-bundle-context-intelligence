@@ -89,6 +89,26 @@ class DiskBlobStore:
         return self._root / session_id / "blobs" / f"{key}.json"
 
     # ------------------------------------------------------------------
+    # Package-internal public helpers
+    # ------------------------------------------------------------------
+
+    def parse_uri(self, uri: str) -> tuple[str, str]:
+        """Split ci-blob://<session_id>/<key> into (session_id, key).
+
+        Public wrapper around _parse_uri so sibling classes in this package
+        can call it without relying on name-mangled private methods.
+        """
+        return self._parse_uri(uri)
+
+    def blob_path(self, session_id: str, key: str) -> Path:
+        """Return the canonical path for a blob file.
+
+        Public wrapper around _blob_path so sibling classes in this package
+        can resolve blob paths without relying on name-mangled private methods.
+        """
+        return self._blob_path(session_id, key)
+
+    # ------------------------------------------------------------------
     # BlobStore protocol methods
     # ------------------------------------------------------------------
 
