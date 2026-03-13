@@ -355,7 +355,11 @@ class TestRealParallelToolBatch:
                     "parallel_group_id": PARALLEL_GROUP_ID,
                 },
             )
-            te_ids.append(make_node_id(REAL_SESSION_ID, "tool:pre", tc["timestamp"], disambiguator=tc["tool_call_id"]))
+            te_ids.append(
+                make_node_id(
+                    REAL_SESSION_ID, "tool:pre", tc["timestamp"], disambiguator=tc["tool_call_id"]
+                )
+            )
 
         for te_id in te_ids:
             node = await services.graph.get_node(te_id)
@@ -382,7 +386,9 @@ class TestRealParallelToolBatch:
             )
 
         for tc in TOOL_CALLS:
-            te_id = make_node_id(REAL_SESSION_ID, "tool:pre", tc["timestamp"], disambiguator=tc["tool_call_id"])
+            te_id = make_node_id(
+                REAL_SESSION_ID, "tool:pre", tc["timestamp"], disambiguator=tc["tool_call_id"]
+            )
             edge = await services.graph.get_edge(step_id, te_id, "TRIGGERED")
             assert edge is not None, f"Missing TRIGGERED edge for {tc['tool_call_id']}"
 
@@ -403,7 +409,11 @@ class TestRealParallelToolBatch:
                     "parallel_group_id": PARALLEL_GROUP_ID,
                 },
             )
-            te_ids.append(make_node_id(REAL_SESSION_ID, "tool:pre", tc["timestamp"], disambiguator=tc["tool_call_id"]))
+            te_ids.append(
+                make_node_id(
+                    REAL_SESSION_ID, "tool:pre", tc["timestamp"], disambiguator=tc["tool_call_id"]
+                )
+            )
 
         # tc2 → tc1 (second tool links to first)
         assert await services.graph.get_edge(te_ids[1], te_ids[0], "PARALLEL_WITH") is not None
@@ -429,7 +439,11 @@ class TestRealParallelToolBatch:
                     "parallel_group_id": PARALLEL_GROUP_ID,
                 },
             )
-            te_ids.append(make_node_id(REAL_SESSION_ID, "tool:pre", tc["timestamp"], disambiguator=tc["tool_call_id"]))
+            te_ids.append(
+                make_node_id(
+                    REAL_SESSION_ID, "tool:pre", tc["timestamp"], disambiguator=tc["tool_call_id"]
+                )
+            )
 
         for i, tc in enumerate(TOOL_CALLS):
             await tool_handler(
@@ -473,7 +487,9 @@ class TestRealDelegationChain:
                 "parallel_group_id": DELEGATE_PARALLEL_GROUP,
             },
         )
-        te_id = make_node_id(REAL_SESSION_ID, "tool:pre", DELEGATE_TIMESTAMP, disambiguator=DELEGATE_TOOL_CALL_ID)
+        te_id = make_node_id(
+            REAL_SESSION_ID, "tool:pre", DELEGATE_TIMESTAMP, disambiguator=DELEGATE_TOOL_CALL_ID
+        )
 
         await tool_handler(
             "delegate:agent_spawned",
