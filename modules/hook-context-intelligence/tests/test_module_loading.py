@@ -117,12 +117,15 @@ class TestBehaviorYamlConfigShape:
         assert data["hooks"][0]["module"] == "hook-context-intelligence"
 
     def test_config_has_required_keys(self):
-        """Config must have: exclude_events, log_level, enable_graph, graph_store.
-        Note: base_path is now a lazy-resolved optional (commented out in YAML).
+        """Config must have: exclude_events, log_level, graph_store.
+
+        enable_graph is intentionally omitted from the behavior YAML to avoid
+        clobbering user overrides via deep_merge (behavior child wins over
+        settings.yaml parent).  The config_resolver defaults to False.
         """
         data = self._load_behavior_yaml()
         config = data["hooks"][0]["config"]
-        expected_keys = {"exclude_events", "log_level", "enable_graph", "graph_store"}
+        expected_keys = {"exclude_events", "log_level", "graph_store"}
         assert expected_keys == set(config.keys())
 
     def test_graph_store_is_dict(self):
@@ -131,11 +134,16 @@ class TestBehaviorYamlConfigShape:
         config = data["hooks"][0]["config"]
         assert isinstance(config["graph_store"], dict)
 
-    def test_enable_graph_defaults_to_false(self):
-        """enable_graph must default to false (logging-only by default)."""
+    def test_enable_graph_not_in_behavior_yaml(self):
+        """enable_graph must NOT be present in the behavior YAML.
+
+        It is intentionally omitted so that deep_merge does not clobber
+        user overrides from settings.yaml.  The config_resolver defaults
+        to False when the key is absent.
+        """
         data = self._load_behavior_yaml()
         config = data["hooks"][0]["config"]
-        assert config["enable_graph"] is False
+        assert "enable_graph" not in config
 
     def test_graph_store_entry_has_type_and_config(self):
         """graph_store entry must have type and config keys."""

@@ -15,15 +15,19 @@ hooks:
       # project: 'my-project'              # optional; used as graph_forest_name fallback
       exclude_events: []
       log_level: 'WARNING'
-      enable_graph: false            # override to true in ~/.amplifier/settings.yaml to activate graph storage
+      # enable_graph is intentionally omitted here.
+      # The config_resolver defaults to false; users enable via:
+      #   - CI_ENABLE_GRAPH=true  env var  (reliable, unaffected by YAML merge order)
+      #   - enable_graph: true    in settings.yaml hooks config
+      #     (requires app-cli fix for general hook overrides — see amplifier-support)
       graph_store:
         type: 'neo4j'
         # graph_forest_name: auto-resolved via coordinator.config.project_slug -> "default"
         # Set explicitly here only if you need to override the auto-resolved value
         config:
           uri: '${NEO4J_URI:bolt://localhost:7687}'
-          username: '${NEO4J_USERNAME:neo4j}'
-          password: '${NEO4J_PASSWORD}'
+          # username / password omitted — no-auth Neo4j
+          # To enable auth, set NEO4J_USERNAME and NEO4J_PASSWORD env vars
           database: '${NEO4J_DATABASE:neo4j}'
 
 tools:
