@@ -23,6 +23,34 @@ class _Writable(Protocol):
     async def write(self, session_id: str, key: str, value: object) -> str: ...
 
 
+def _lift_raw_fields(clone: dict) -> None:
+    """Lift stop_reason, finish_reason, and usage from raw before offloading.
+
+    Mutates *clone* in place.  Only called on the deep-cloned copy, never on
+    the original event data.
+    """
+    raw = clone.get("raw")
+    if not isinstance(raw, dict):
+        return
+
+    # Lift stop_reason (only if not already set at top level)
+    if raw.get("stop_reason") is not None and clone.get("stop_reason") is None:
+        clone["stop_reason"] = raw["stop_reason"]
+
+    # Lift finish_reason (only if not already set at top level)
+    if raw.get("finish_reason") is not None and clone.get("finish_reason") is None:
+        clone["finish_reason"] = raw["finish_reason"]
+
+    # Merge raw.usage into clone.usage (existing keys win on collision)
+    raw_usage = raw.get("usage")
+    if isinstance(raw_usage, dict):
+        existing_usage = clone.get("usage")
+        if isinstance(existing_usage, dict):
+            clone["usage"] = {**raw_usage, **existing_usage}
+        else:
+            clone["usage"] = dict(raw_usage)
+
+
 async def process_event_data(
     data: dict,
     blob_store: _Writable,
@@ -58,6 +86,7 @@ async def process_event_data(
         A new dict that is a deep clone of *data* with blob fields substituted.
     """
     clone: dict = copy.deepcopy(data)
+    _lift_raw_fields(clone)
 
     for field_name in BLOB_FIELDS:
         if field_name not in clone or clone[field_name] is None:

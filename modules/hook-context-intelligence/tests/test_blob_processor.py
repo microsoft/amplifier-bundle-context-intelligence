@@ -298,3 +298,156 @@ class TestReturnValue:
 
         assert result == data
         assert result is not data
+
+
+# ---------------------------------------------------------------------------
+# Raw field lifting
+# ---------------------------------------------------------------------------
+
+
+class TestRawFieldLifting:
+    """stop_reason, finish_reason, and usage are lifted from raw before offloading."""
+
+    async def test_lifts_stop_reason_and_merges_usage(self) -> None:
+        """Main scenario: raw.stop_reason promoted and raw.usage merged with existing usage."""
+        store = MockBlobStore()
+        data = {
+            "event_type": "llm_response",
+            "raw": {
+                "stop_reason": "tool_use",
+                "usage": {
+                    "input_tokens": 100,
+                    "output_tokens": 50,
+                    "cache_read_input_tokens": 10,
+                },
+            },
+            "usage": {
+                "input": 100,
+                "output": 50,
+                "cache_read": 10,
+            },
+        }
+
+        result = await process_event_data(data, store, session_id="s1", node_id="n1")
+
+        # stop_reason lifted to top level
+        assert result["stop_reason"] == "tool_use"
+        # raw replaced with blob ref
+        assert "$blob_ref" in result["raw"]
+        # raw.usage merged: provider keys supplement orchestrator keys
+        assert result["usage"]["input"] == 100
+        assert result["usage"]["output"] == 50
+        assert result["usage"]["cache_read"] == 10
+        assert result["usage"]["input_tokens"] == 100
+        assert result["usage"]["output_tokens"] == 50
+        assert result["usage"]["cache_read_input_tokens"] == 10
+
+    async def test_does_not_overwrite_existing_stop_reason(self) -> None:
+        """Top-level stop_reason='length' NOT overwritten by raw.stop_reason='tool_use'."""
+        store = MockBlobStore()
+        data = {
+            "stop_reason": "length",
+            "raw": {"stop_reason": "tool_use"},
+        }
+
+        result = await process_event_data(data, store, session_id="s1", node_id="n1")
+
+        assert result["stop_reason"] == "length"
+
+    async def test_does_not_overwrite_existing_finish_reason(self) -> None:
+        """Top-level finish_reason='stop' NOT overwritten by raw.finish_reason='tool_use'."""
+        store = MockBlobStore()
+        data = {
+            "finish_reason": "stop",
+            "raw": {"finish_reason": "tool_use"},
+        }
+
+        result = await process_event_data(data, store, session_id="s1", node_id="n1")
+
+        assert result["finish_reason"] == "stop"
+
+    async def test_existing_usage_keys_win_on_collision(self) -> None:
+        """When raw.usage and clone.usage share 'output' key, existing clone value (146) wins."""
+        store = MockBlobStore()
+        data = {
+            "usage": {"output": 146, "input": 200},
+            "raw": {"usage": {"output": 999, "cache_tokens": 5}},
+        }
+
+        result = await process_event_data(data, store, session_id="s1", node_id="n1")
+
+        # existing value wins on collision
+        assert result["usage"]["output"] == 146
+        # raw-only key is merged in
+        assert result["usage"]["cache_tokens"] == 5
+        # existing key not in raw is preserved
+        assert result["usage"]["input"] == 200
+
+    async def test_raw_not_dict_skips_lifting(self) -> None:
+        """raw='some string blob' — lifting skipped, no crash, existing usage unchanged."""
+        store = MockBlobStore()
+        data = {
+            "raw": "some string blob",
+            "usage": {"input": 10, "output": 20},
+        }
+
+        result = await process_event_data(data, store, session_id="s1", node_id="n1")
+
+        # no crash, usage unchanged
+        assert result["usage"] == {"input": 10, "output": 20}
+        # raw still offloaded (it's not None)
+        assert "$blob_ref" in result["raw"]
+
+    async def test_raw_without_usage_or_stop_reason(self) -> None:
+        """raw={'some_field': 'value'} — no crash, no mutation to stop_reason or usage."""
+        store = MockBlobStore()
+        data = {
+            "raw": {"some_field": "value"},
+        }
+
+        result = await process_event_data(data, store, session_id="s1", node_id="n1")
+
+        # no crash, no stop_reason or finish_reason injected
+        assert "stop_reason" not in result
+        assert "finish_reason" not in result
+        assert "usage" not in result
+        # raw still replaced with blob ref
+        assert "$blob_ref" in result["raw"]
+
+    async def test_lifts_raw_usage_when_no_existing_usage(self) -> None:
+        """clone has no usage dict — raw.usage promoted as-is."""
+        store = MockBlobStore()
+        data = {
+            "raw": {
+                "usage": {"input_tokens": 42, "output_tokens": 7},
+            },
+        }
+
+        result = await process_event_data(data, store, session_id="s1", node_id="n1")
+
+        assert result["usage"] == {"input_tokens": 42, "output_tokens": 7}
+        # raw replaced with blob ref
+        assert "$blob_ref" in result["raw"]
+
+    async def test_original_data_unchanged_after_lifting(self) -> None:
+        """Original data dict is NEVER mutated — data['raw'] is same object, no stop_reason in original, original usage unchanged."""
+        store = MockBlobStore()
+        original_raw = {
+            "stop_reason": "tool_use",
+            "usage": {"input_tokens": 100, "output_tokens": 50},
+        }
+        original_usage = {"input": 100, "output": 50}
+        data = {
+            "raw": original_raw,
+            "usage": original_usage,
+        }
+
+        await process_event_data(data, store, session_id="s1", node_id="n1")
+
+        # data['raw'] is the same object (not replaced)
+        assert data["raw"] is original_raw
+        # no stop_reason injected into original
+        assert "stop_reason" not in data
+        # original usage unchanged
+        assert data["usage"] is original_usage
+        assert data["usage"] == {"input": 100, "output": 50}
