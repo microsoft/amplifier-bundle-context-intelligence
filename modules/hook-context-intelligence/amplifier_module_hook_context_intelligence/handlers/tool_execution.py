@@ -59,8 +59,12 @@ class ToolExecutionHandler:
         timestamp = data.get("timestamp", "")
         cursors = self.services.get_cursors(session_id)
 
-        # Generate deterministic TE ID
-        te_id = make_node_id(session_id, "tool:pre", timestamp)
+        # Generate deterministic TE ID (tool_call_id disambiguates parallel calls)
+        tool_call_id = data.get("tool_call_id", "")
+        te_id = make_node_id(
+            session_id, "tool:pre", timestamp,
+            disambiguator=tool_call_id if tool_call_id else None,
+        )
 
         # Build ToolExecution node properties
         properties: dict[str, Any] = {
@@ -104,7 +108,6 @@ class ToolExecutionHandler:
             cursors.parallel_groups[parallel_group_id].append(te_id)
 
         # Populate tool_call_map
-        tool_call_id = data.get("tool_call_id", "")
         if tool_call_id:
             cursors.tool_call_map[tool_call_id] = te_id
 

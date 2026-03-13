@@ -30,9 +30,9 @@ TOOL_ERROR_TIMESTAMP = "2026-03-06T03:50:00Z"
 DELEGATE_SPAWNED_TIMESTAMP = "2026-03-06T04:00:00Z"
 DELEGATE_COMPLETED_TIMESTAMP = "2026-03-06T04:10:00Z"
 
-EXPECTED_TE1_ID = make_node_id("s1", "tool:pre", TOOL1_TIMESTAMP)
-EXPECTED_TE2_ID = make_node_id("s1", "tool:pre", TOOL2_TIMESTAMP)
-EXPECTED_TE3_ID = make_node_id("s1", "tool:pre", TOOL3_TIMESTAMP)
+EXPECTED_TE1_ID = make_node_id("s1", "tool:pre", TOOL1_TIMESTAMP, disambiguator="call_001")
+EXPECTED_TE2_ID = make_node_id("s1", "tool:pre", TOOL2_TIMESTAMP, disambiguator="call_002")
+EXPECTED_TE3_ID = make_node_id("s1", "tool:pre", TOOL3_TIMESTAMP, disambiguator="call_003")
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────
@@ -91,7 +91,7 @@ async def _seed_one_tool(
             "parallel_group_id": parallel_group_id,
         },
     )
-    return make_node_id(session_id, "tool:pre", timestamp)
+    return make_node_id(session_id, "tool:pre", timestamp, disambiguator=tool_call_id)
 
 
 # ── TestToolPreHappyPath (6 tests) ──────────────────────────────────────
@@ -811,3 +811,140 @@ class TestDelegateAgentCompletedDataProperty:
         assert "data_delegate_agent_completed" in props
         decoded = json.loads(props["data_delegate_agent_completed"])
         assert decoded["tool_call_id"] == "call_c1"
+
+
+# — TestParallelToolsSameTimestamp (collision fix)————————————————————————————
+
+
+class TestParallelToolsSameTimestamp:
+    """Two parallel tool:pre events with the SAME timestamp but different tool_call_ids
+    must produce TWO distinct ToolExecution nodes — not one merged node.
+    This is the critical test that validates the collision fix (Root B).
+    """
+
+    SAME_TIMESTAMP = "2026-03-06T03:10:00Z"
+
+    async def test_two_tools_same_timestamp_produce_distinct_nodes(
+        self, services: HookStateService
+    ) -> None:
+        """Two tool:pre with identical timestamp but different tool_call_id → 2 nodes."""
+        await _seed_through_step(services)
+        handler = ToolExecutionHandler(services)
+
+        await handler(
+            "tool:pre",
+            {
+                "session_id": "s1",
+                "timestamp": self.SAME_TIMESTAMP,
+                "tool_call_id": "toolu_AAAA",
+                "tool_name": "bash",
+                "parallel_group_id": "pg_same",
+            },
+        )
+        await handler(
+            "tool:pre",
+            {
+                "session_id": "s1",
+                "timestamp": self.SAME_TIMESTAMP,
+                "tool_call_id": "toolu_BBBB",
+                "tool_name": "read_file",
+                "parallel_group_id": "pg_same",
+            },
+        )
+
+        # Both nodes must exist and be distinct
+        te_a = make_node_id("s1", "tool:pre", self.SAME_TIMESTAMP, disambiguator="toolu_AAAA")
+        te_b = make_node_id("s1", "tool:pre", self.SAME_TIMESTAMP, disambiguator="toolu_BBBB")
+
+        node_a = await services.graph.get_node(te_a)
+        node_b = await services.graph.get_node(te_b)
+        assert node_a is not None, f"Node A not found: {te_a}"
+        assert node_b is not None, f"Node B not found: {te_b}"
+        assert te_a != te_b
+        assert node_a["properties"]["tool_name"] == "bash"
+        assert node_b["properties"]["tool_name"] == "read_file"
+
+    async def test_parallel_with_edge_not_self_loop(
+        self, services: HookStateService
+    ) -> None:
+        """PARALLEL_WITH edge connects two DIFFERENT nodes (not a self-loop)."""
+        await _seed_through_step(services)
+        handler = ToolExecutionHandler(services)
+
+        await handler(
+            "tool:pre",
+            {
+                "session_id": "s1",
+                "timestamp": self.SAME_TIMESTAMP,
+                "tool_call_id": "toolu_CCCC",
+                "tool_name": "bash",
+                "parallel_group_id": "pg_same",
+            },
+        )
+        await handler(
+            "tool:pre",
+            {
+                "session_id": "s1",
+                "timestamp": self.SAME_TIMESTAMP,
+                "tool_call_id": "toolu_DDDD",
+                "tool_name": "read_file",
+                "parallel_group_id": "pg_same",
+            },
+        )
+
+        te_c = make_node_id("s1", "tool:pre", self.SAME_TIMESTAMP, disambiguator="toolu_CCCC")
+        te_d = make_node_id("s1", "tool:pre", self.SAME_TIMESTAMP, disambiguator="toolu_DDDD")
+
+        # PARALLEL_WITH edge should exist between them
+        edge = await services.graph.get_edge(te_d, te_c, "PARALLEL_WITH")
+        assert edge is not None, "PARALLEL_WITH edge missing"
+
+        # Self-loop must NOT exist
+        self_loop_c = await services.graph.get_edge(te_c, te_c, "PARALLEL_WITH")
+        self_loop_d = await services.graph.get_edge(te_d, te_d, "PARALLEL_WITH")
+        assert self_loop_c is None, "Self-loop on node C"
+        assert self_loop_d is None, "Self-loop on node D"
+
+    async def test_tool_call_map_uses_disambiguated_ids(
+        self, services: HookStateService
+    ) -> None:
+        """tool_call_map entries use the disambiguated node IDs."""
+        await _seed_through_step(services)
+        handler = ToolExecutionHandler(services)
+
+        await handler(
+            "tool:pre",
+            {
+                "session_id": "s1",
+                "timestamp": self.SAME_TIMESTAMP,
+                "tool_call_id": "toolu_EEEE",
+                "tool_name": "bash",
+                "parallel_group_id": "pg_same",
+            },
+        )
+
+        cursors = services.get_cursors("s1")
+        expected_id = make_node_id("s1", "tool:pre", self.SAME_TIMESTAMP, disambiguator="toolu_EEEE")
+        assert cursors.tool_call_map["toolu_EEEE"] == expected_id
+
+    async def test_missing_tool_call_id_falls_back_to_old_format(
+        self, services: HookStateService
+    ) -> None:
+        """When tool_call_id is empty, make_node_id uses the old format (no disambiguator)."""
+        await _seed_through_step(services)
+        handler = ToolExecutionHandler(services)
+
+        await handler(
+            "tool:pre",
+            {
+                "session_id": "s1",
+                "timestamp": self.SAME_TIMESTAMP,
+                "tool_call_id": "",
+                "tool_name": "bash",
+                "parallel_group_id": "",
+            },
+        )
+
+        old_format_id = make_node_id("s1", "tool:pre", self.SAME_TIMESTAMP)
+        node = await services.graph.get_node(old_format_id)
+        assert node is not None, "Fallback to old format should work when tool_call_id is empty"

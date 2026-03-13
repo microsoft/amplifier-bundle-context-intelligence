@@ -247,8 +247,8 @@ class TestEventFiringProducesGraph:
         assert "Session" in session_node["labels"]
 
         # Verify ToolExecution node exists
-        # make_node_id produces: {session_id}__tool_pre__{epoch_ms}
-        te_id = make_node_id(session_id, "tool:pre", tool_timestamp)
+        # make_node_id produces: {session_id}__tool_pre__{epoch_ms}__{tool_call_id}
+        te_id = make_node_id(session_id, "tool:pre", tool_timestamp, disambiguator="call_integ_001")
         te_node = await neo4j_store.get_node(te_id)
         assert te_node is not None, f"ToolExecution node '{te_id}' not found in Neo4j"
         assert "ToolExecution" in te_node["labels"]
