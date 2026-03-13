@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 from typing import Any
 
@@ -92,7 +93,7 @@ class RecipeHandler:
             prompt = data.get("approval_prompt", "")
             properties["approval_prompt"] = prompt[:_APPROVAL_PROMPT_MAX_LEN]
 
-        await self._persist_event(node_id, derived, properties, session_id, timestamp, log)
+        await self._persist_event(node_id, derived, properties, session_id, timestamp, data, log)
 
     async def _handle_loop_event(
         self,
@@ -122,7 +123,7 @@ class RecipeHandler:
             properties["iterations_completed"] = data.get("iterations_completed", 0)
             properties["results_count"] = data.get("results_count", 0)
 
-        await self._persist_event(node_id, derived, properties, session_id, timestamp, log)
+        await self._persist_event(node_id, derived, properties, session_id, timestamp, data, log)
 
     async def _persist_event(
         self,
@@ -131,6 +132,7 @@ class RecipeHandler:
         properties: dict[str, Any],
         session_id: str,
         timestamp: str,
+        data: dict[str, Any],
         log: EventLogContext,
     ) -> None:
         """Create Event node and HAS_EVENT edge from session.
@@ -141,8 +143,10 @@ class RecipeHandler:
             properties: Key-value pairs to store on the node.
             session_id: Owning session, used as the edge source.
             timestamp: ISO-8601 timestamp written to the edge.
+            data: Full raw event payload serialised as JSON and stored on the node.
             log: Contextual logger for this event.
         """
+        properties["data"] = json.dumps(data)
         await self.services.graph.upsert_node(
             node_id,
             {"Event", derived},

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from amplifier_module_hook_context_intelligence.handlers.recipe import RecipeHandler
@@ -550,7 +551,9 @@ class TestRealSession44be6956:
         assert "steps" not in props
         assert len(props["approval_prompt"]) <= 500
 
-    async def test_full_sequence_creates_all_edges(self, services: HookStateService) -> None:
+    async def test_full_sequence_creates_all_edges(  # noqa: PLR0914
+        self, services: HookStateService
+    ) -> None:
         await _seed_real_session(services)
         handler = RecipeHandler(services)
 
@@ -617,3 +620,60 @@ class TestRealSession44be6956:
         assert edge1 is not None
         assert edge2 is not None
         assert edge3 is not None
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# data property tests
+# ══════════════════════════════════════════════════════════════════════════════
+
+
+class TestRecipeHandlerDataProperty:
+    async def test_lifecycle_event_stores_data(self, services: HookStateService) -> None:
+        """recipe:start node has a 'data' property with the full JSON event payload."""
+        await _seed_session(services)
+        handler = RecipeHandler(services)
+        data = _lifecycle_data(recipe_name="my-recipe")
+        await handler("recipe:start", data)
+        node_id = make_node_id(SESSION_ID, "recipe:start", TIMESTAMP)
+        node = await services.graph.get_node(node_id)
+        assert node is not None
+        props = node["properties"]
+        assert "data" in props
+        parsed = json.loads(props["data"])
+        assert parsed["recipe_name"] == "my-recipe"
+        assert parsed["session_id"] == SESSION_ID
+
+    async def test_loop_event_stores_data(self, services: HookStateService) -> None:
+        """recipe:loop_iteration node has a 'data' property with the full JSON event payload."""
+        await _seed_session(services)
+        handler = RecipeHandler(services)
+        loop_data = _loop_iteration_data(step_id="my-loop", iteration=3)
+        await handler("recipe:loop_iteration", loop_data)
+        node_id = make_node_id(SESSION_ID, "recipe:loop_iteration", TIMESTAMP)
+        node = await services.graph.get_node(node_id)
+        assert node is not None
+        props = node["properties"]
+        assert "data" in props
+        parsed = json.loads(props["data"])
+        assert parsed["step_id"] == "my-loop"
+        assert parsed["iteration"] == 3
+
+    async def test_data_contains_context_snapshot_for_loop_event(
+        self, services: HookStateService
+    ) -> None:
+        """context_snapshot is preserved in 'data' even though it's excluded from lifted props."""
+        await _seed_session(services)
+        handler = RecipeHandler(services)
+        loop_data = _loop_iteration_data()
+        await handler("recipe:loop_iteration", loop_data)
+        node_id = make_node_id(SESSION_ID, "recipe:loop_iteration", TIMESTAMP)
+        node = await services.graph.get_node(node_id)
+        assert node is not None
+        props = node["properties"]
+        # context_snapshot must NOT appear as a lifted property
+        assert "context_snapshot" not in props
+        # but it MUST be present in the full data blob
+        assert "data" in props
+        parsed = json.loads(props["data"])
+        assert "context_snapshot" in parsed
+        assert parsed["context_snapshot"] == {"plan_path": "/tmp/plan.md", "quality_approved": True}
