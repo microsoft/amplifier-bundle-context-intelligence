@@ -29,9 +29,15 @@ LOGGING_PRIORITY = 100
 # ---------------------------------------------------------------------------
 
 
-_DEFAULT_EVENTS = ["session:start", "session:end", "session:fork",
-                   "tool:pre", "tool:post", "orchestrator:start",
-                   "orchestrator:complete"]
+_DEFAULT_EVENTS = [
+    "session:start",
+    "session:end",
+    "session:fork",
+    "tool:pre",
+    "tool:post",
+    "orchestrator:start",
+    "orchestrator:complete",
+]
 
 
 def _make_coordinator(
@@ -113,7 +119,8 @@ class TestStorageDirectoryStructure:
     """The context-intelligence subfolder lives under sessions/{id}/."""
 
     async def test_files_land_in_context_intelligence_subfolder(
-        self, tmp_path: Path,
+        self,
+        tmp_path: Path,
     ) -> None:
         coordinator = _make_coordinator()
         cleanup = await mount(
@@ -124,9 +131,7 @@ class TestStorageDirectoryStructure:
         await _fire_session(handler, "sess-001")
 
         ci_dir = tmp_path / "myproject" / "sessions" / "sess-001" / "context-intelligence"
-        assert ci_dir.is_dir(), (
-            f"Expected context-intelligence dir at {ci_dir}"
-        )
+        assert ci_dir.is_dir(), f"Expected context-intelligence dir at {ci_dir}"
         assert (ci_dir / "events.jsonl").is_file()
         assert (ci_dir / "metadata.json").is_file()
         cleanup()
@@ -151,7 +156,8 @@ class TestStorageDirectoryStructure:
         cleanup()
 
     async def test_multiple_sessions_each_get_own_subfolder(
-        self, tmp_path: Path,
+        self,
+        tmp_path: Path,
     ) -> None:
         coordinator = _make_coordinator()
         cleanup = await mount(
@@ -180,7 +186,8 @@ class TestStorageFileContent:
     """Files written have correct structure and content."""
 
     async def test_events_jsonl_records_are_valid_json(
-        self, tmp_path: Path,
+        self,
+        tmp_path: Path,
     ) -> None:
         coordinator = _make_coordinator()
         cleanup = await mount(
@@ -212,7 +219,8 @@ class TestStorageFileContent:
         cleanup()
 
     async def test_metadata_json_has_required_fields(
-        self, tmp_path: Path,
+        self,
+        tmp_path: Path,
     ) -> None:
         coordinator = _make_coordinator()
         cleanup = await mount(
@@ -233,7 +241,8 @@ class TestStorageFileContent:
         cleanup()
 
     async def test_events_preserve_chronological_order(
-        self, tmp_path: Path,
+        self,
+        tmp_path: Path,
     ) -> None:
         coordinator = _make_coordinator()
         cleanup = await mount(
