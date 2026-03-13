@@ -618,3 +618,68 @@ class TestOrchestratorCompleteDataProperty:
         assert stored_data["session_id"] == "s1"
         assert stored_data["status"] == "success"
         assert flush_call_count == 1, "flush() must be called exactly once on orchestrator:complete"
+
+
+# ── Problem 4: Orphan Session node investigation ───────────────────────────
+
+
+class TestOrchestratorCompleteDoesNotCreateOrphan:
+    """orchestrator:complete must enrich the existing OrchestratorRun node,
+    not create a spurious Session node with the run's node_id.
+
+    Investigation for Problem 4: orphan Session node created during
+    orchestrator:complete.  The session-guarantee wrapper in mount.py
+    calls ensure_session_node(session_id, data) for every event.  If
+    session_id in the orchestrator:complete payload were somehow the
+    synthetic run node_id (containing '__' separators) rather than the
+    real session UUID, ensure_session_node would stamp Session labels
+    onto the OrchestratorRun node.
+
+    This test verifies the unit-test scenario is clean.  If the test
+    passes without a code fix, the orphan is a Neo4j async-flush race
+    that is not reproducible in unit tests (scenario c from the spec).
+    """
+
+    async def test_no_orphan_session_node_after_orchestrator_complete(
+        self, services: HookStateService
+    ) -> None:
+        """The full lifecycle should not create a Session node with the run's node_id."""
+        await _seed_session(services)
+        handler = OrchestratorRunHandler(services)
+
+        # Create the OrchestratorRun
+        await handler(
+            "prompt:submit",
+            {"session_id": "s1", "timestamp": "2026-03-06T01:00:00Z", "prompt": "Hello"},
+        )
+        await handler(
+            "execution:start",
+            {"session_id": "s1", "timestamp": "2026-03-06T02:00:00Z"},
+        )
+
+        run_id = services.get_cursors("s1").current_run_id
+        assert run_id is not None
+
+        # Close the run
+        await handler(
+            "orchestrator:complete",
+            {
+                "session_id": "s1",
+                "timestamp": "2026-03-06T03:00:00Z",
+                "status": "success",
+                "turn_count": 1,
+            },
+        )
+
+        # The OrchestratorRun should be updated with status=complete
+        run_node = await services.graph.get_node(run_id)
+        assert run_node is not None
+        assert run_node["properties"]["status"] == "complete"
+
+        # There should NOT be a Session node with node_id = run_id
+        orphan = await services.graph.get_node(run_id)
+        if orphan is not None:
+            # The node exists (it's the OrchestratorRun), but it must NOT have Session labels
+            assert "Session" not in orphan["labels"], (
+                f"Orphan Session node detected: a node with run_id {run_id} has Session label"
+            )
