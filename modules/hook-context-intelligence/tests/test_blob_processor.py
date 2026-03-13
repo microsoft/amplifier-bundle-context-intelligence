@@ -1,6 +1,6 @@
 """Tests for blob_processor module.
 
-16 tests covering:
+24 tests covering:
 - BLOB_FIELDS constant (expected set, is frozenset)
 - clone immutability (original dict unchanged, nested dicts unchanged — CRITICAL)
 - blob ref substitution (single field replaced, multiple fields replaced,
