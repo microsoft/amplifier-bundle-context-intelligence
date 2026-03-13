@@ -1,9 +1,6 @@
-bundle:
-  name: context-intelligence-behavior
-  version: 0.1.0
-  description: |
-    Context intelligence hooks for building a property graph
-    from orchestrator events.
+# context-intelligence-behavior v0.1.0
+# Context intelligence hooks for building a property graph
+# from orchestrator events.
 
 hooks:
   - module: hook-context-intelligence
