@@ -141,40 +141,62 @@ class StepHandler:
         properties: dict[str, Any] = {"response_at": timestamp}
 
         # Extract usage tokens.
-        # The llm:response event uses normalised short keys ("input", "output",
-        # "cache_read") but some providers may emit Anthropic-style long keys
-        # ("input_tokens", "output_tokens", "cache_read_input_tokens").
-        # Try the short (canonical) key first, fall back to the long form.
+        #
+        # Key distinction:
+        #   "input"        — orchestrator's message count (NOT a token count)
+        #   "input_tokens" — provider's real input token count
+        #
+        # Rules:
+        #   input_tokens:  ONLY from "input_tokens" (provider key) — never falls back to "input"
+        #   output_tokens: prefer "output_tokens", fall back to "output"
+        #   cached:        prefer "cache_read_input_tokens", fall back to "cache_read", then "cached_tokens"
+        #   cache_write:   prefer "cache_creation_input_tokens", fall back to "cache_write"
+        #   reasoning:     prefer "reasoning_tokens", fall back to "reasoning"
+        #   message_count: from "input" (orchestrator key) — stored separately from input_tokens
+        #
+        # All fallbacks use explicit "is None" checks to correctly handle zero values.
         usage = data.get("usage")
         if usage and isinstance(usage, dict):
-            input_tokens = usage.get("input") or usage.get("input_tokens")
+            input_tokens = usage.get("input_tokens")
             if input_tokens is not None:
                 properties["input_tokens"] = input_tokens
-            output_tokens = usage.get("output") or usage.get("output_tokens")
+
+            output_tokens = usage.get("output_tokens")
+            if output_tokens is None:
+                output_tokens = usage.get("output")
             if output_tokens is not None:
                 properties["output_tokens"] = output_tokens
-            cached = (
-                usage.get("cache_read")
-                or usage.get("cache_read_input_tokens")
-                or usage.get("cached_tokens")
-            )
+
+            cached = usage.get("cache_read_input_tokens")
+            if cached is None:
+                cached = usage.get("cache_read")
+            if cached is None:
+                cached = usage.get("cached_tokens")
             if cached is not None:
                 properties["cached_tokens"] = cached
-            cache_write = usage.get("cache_write") or usage.get("cache_creation_input_tokens")
+
+            cache_write = usage.get("cache_creation_input_tokens")
+            if cache_write is None:
+                cache_write = usage.get("cache_write")
             if cache_write is not None:
                 properties["cache_write_tokens"] = cache_write
-            reasoning_tokens = usage.get("reasoning") or usage.get("reasoning_tokens")
-            if reasoning_tokens is not None:
-                properties["reasoning_tokens"] = reasoning_tokens
 
-        # Extract finish_reason / stop_reason.
-        # Try top-level data first, then fall back to raw response payload
-        # (the orchestrator puts the provider response under data["raw"]).
-        finish_reason = data.get("finish_reason") or data.get("stop_reason")
+            reasoning = usage.get("reasoning_tokens")
+            if reasoning is None:
+                reasoning = usage.get("reasoning")
+            if reasoning is not None:
+                properties["reasoning_tokens"] = reasoning
+
+            message_count = usage.get("input")
+            if message_count is not None:
+                properties["message_count"] = message_count
+
+        # Extract finish_reason / stop_reason from top level only.
+        # The blob processor has already lifted provider-level fields from data["raw"]
+        # before this handler runs, so we only need to check the top level.
+        finish_reason = data.get("finish_reason")
         if finish_reason is None:
-            raw = data.get("raw")
-            if isinstance(raw, dict):
-                finish_reason = raw.get("stop_reason") or raw.get("finish_reason")
+            finish_reason = data.get("stop_reason")
         if finish_reason is not None:
             properties["finish_reason"] = finish_reason
 

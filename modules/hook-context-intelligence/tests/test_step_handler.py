@@ -392,6 +392,7 @@ class TestLlmResponse:
         assert props["output_tokens"] == 50
         assert props["cached_tokens"] == 30
         assert props["finish_reason"] == "end_turn"
+        assert "message_count" not in props  # no 'input' key in usage → no message_count
 
     async def test_handles_stop_reason_as_finish_reason(self, services: HookStateService) -> None:
         """stop_reason should be mapped to finish_reason when finish_reason absent."""
@@ -429,6 +430,7 @@ class TestLlmResponse:
         assert "output_tokens" not in node["properties"]
         assert "cached_tokens" not in node["properties"]
         assert "reasoning_tokens" not in node["properties"]
+        assert "message_count" not in node["properties"]  # empty usage → no message_count
 
     async def test_missing_usage_key_is_safe(self, services: HookStateService) -> None:
         """No usage key at all (not just empty dict) still writes response_at."""
@@ -449,6 +451,7 @@ class TestLlmResponse:
         assert "output_tokens" not in node["properties"]
         assert "cached_tokens" not in node["properties"]
         assert "reasoning_tokens" not in node["properties"]
+        assert "message_count" not in node["properties"]  # no usage → no message_count
 
     async def test_enriches_step_with_reasoning_tokens(self, services: HookStateService) -> None:
         """reasoning_tokens from usage is written to the step node."""
@@ -525,7 +528,12 @@ class TestLlmResponseCanonicalKeys:
     """llm:response with canonical short keys emitted by the orchestrator."""
 
     async def test_canonical_short_usage_keys(self, services: HookStateService) -> None:
-        """The orchestrator emits usage={input, output, cache_read, cache_write}."""
+        """The orchestrator emits usage={input, output, cache_read, cache_write}.
+
+        'input' is message count (not token count) → stored as message_count, NOT input_tokens.
+        'output' is the real output token count → stored as output_tokens (fallback).
+        stop_reason at top level (blob processor has lifted it from raw).
+        """
         step_id = await _seed_through_provider_request(services)
         handler = StepHandler(services)
         await handler(
@@ -533,19 +541,20 @@ class TestLlmResponseCanonicalKeys:
             {
                 "session_id": "s1",
                 "timestamp": LLM_RESP_TS,
+                "stop_reason": "tool_use",  # at top level — blob processor lifted from raw
                 "usage": {
-                    "input": 101132,
+                    "input": 3,  # message count, NOT token count
                     "output": 145,
                     "cache_read": 97000,
                     "cache_write": 3533,
                 },
-                "raw": {"stop_reason": "tool_use"},
             },
         )
         node = await services.graph.get_node(step_id)
         assert node is not None
         props = node["properties"]
-        assert props["input_tokens"] == 101132
+        assert "input_tokens" not in props  # 'input' is message count, not stored as input_tokens
+        assert props["message_count"] == 3
         assert props["output_tokens"] == 145
         assert props["cached_tokens"] == 97000
         assert props["cache_write_tokens"] == 3533
@@ -553,7 +562,7 @@ class TestLlmResponseCanonicalKeys:
         assert props["response_at"] == LLM_RESP_TS
 
     async def test_finish_reason_from_raw_stop_reason(self, services: HookStateService) -> None:
-        """stop_reason lives inside data['raw'], not at the top level."""
+        """stop_reason at top level — blob processor has lifted it from raw before handler runs."""
         step_id = await _seed_through_provider_request(services)
         handler = StepHandler(services)
         await handler(
@@ -561,8 +570,8 @@ class TestLlmResponseCanonicalKeys:
             {
                 "session_id": "s1",
                 "timestamp": LLM_RESP_TS,
+                "stop_reason": "end_turn",  # at top level, not in raw
                 "usage": {"input": 10, "output": 5},
-                "raw": {"stop_reason": "end_turn"},
             },
         )
         node = await services.graph.get_node(step_id)
@@ -570,7 +579,7 @@ class TestLlmResponseCanonicalKeys:
         assert node["properties"]["finish_reason"] == "end_turn"
 
     async def test_finish_reason_from_raw_finish_reason(self, services: HookStateService) -> None:
-        """OpenAI-style raw response uses finish_reason instead of stop_reason."""
+        """OpenAI-style finish_reason at top level — blob processor has lifted it from raw."""
         step_id = await _seed_through_provider_request(services)
         handler = StepHandler(services)
         await handler(
@@ -578,8 +587,8 @@ class TestLlmResponseCanonicalKeys:
             {
                 "session_id": "s1",
                 "timestamp": LLM_RESP_TS,
+                "finish_reason": "stop",  # at top level, not in raw
                 "usage": {"input": 10, "output": 5},
-                "raw": {"finish_reason": "stop"},
             },
         )
         node = await services.graph.get_node(step_id)
@@ -742,3 +751,72 @@ class TestLlmResponseDataProperty:
         assert "data_llm_response" in props
         parsed = json.loads(props["data_llm_response"])
         assert parsed["usage"] == {"input": 100, "output": 50}
+
+
+# ── TestLlmResponseTokenSeparation ────────────────────────────────────────────────────────────
+
+
+class TestLlmResponseTokenSeparation:
+    """Verify input_tokens vs message_count separation with explicit is-None checks."""
+
+    async def test_merged_usage_provider_and_orchestrator_keys(
+        self, services: HookStateService
+    ) -> None:
+        """Post-blob-processor usage has both short (orchestrator) and long (provider) keys.
+
+        input_tokens=107421 from provider's long key.
+        message_count=3 from orchestrator's short 'input' key.
+        These are stored separately and never confused.
+        """
+        step_id = await _seed_through_provider_request(services)
+        handler = StepHandler(services)
+        await handler(
+            "llm:response",
+            {
+                "session_id": "s1",
+                "timestamp": LLM_RESP_TS,
+                "stop_reason": "tool_use",  # blob processor lifted from raw
+                "usage": {
+                    "input": 3,  # orchestrator message count
+                    "input_tokens": 107421,  # provider token count (takes priority)
+                    "output_tokens": 146,
+                    "cache_read_input_tokens": 105205,
+                },
+            },
+        )
+        node = await services.graph.get_node(step_id)
+        assert node is not None
+        props = node["properties"]
+        assert props["input_tokens"] == 107421  # from provider's input_tokens key
+        assert props["message_count"] == 3  # from orchestrator's input key
+        assert props["output_tokens"] == 146
+        assert props["cached_tokens"] == 105205
+        assert props["finish_reason"] == "tool_use"
+
+    async def test_zero_message_count_not_treated_as_falsy(
+        self, services: HookStateService
+    ) -> None:
+        """input=0 must be stored as message_count=0, not skipped.
+
+        Explicit 'is None' checks handle 0 correctly — 'or' chains would skip it.
+        """
+        step_id = await _seed_through_provider_request(services)
+        handler = StepHandler(services)
+        await handler(
+            "llm:response",
+            {
+                "session_id": "s1",
+                "timestamp": LLM_RESP_TS,
+                "usage": {
+                    "input": 0,  # zero message count — must be stored, not skipped
+                    "input_tokens": 100,
+                    "output_tokens": 50,
+                },
+            },
+        )
+        node = await services.graph.get_node(step_id)
+        assert node is not None
+        props = node["properties"]
+        assert props["message_count"] == 0  # 0 is valid, not falsy-skipped
+        assert props["input_tokens"] == 100
+        assert props["output_tokens"] == 50
