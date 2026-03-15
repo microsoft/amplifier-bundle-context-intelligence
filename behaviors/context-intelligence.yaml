@@ -4,7 +4,7 @@
 
 hooks:
   - module: hook-context-intelligence
-    source: git+https://github.com/colombod/amplifier-bundle-context-intelligence@main
+    source: git+https://github.com/colombod/amplifier-bundle-context-intelligence@main#subdirectory=modules/hook-context-intelligence
     config:
       # Server URL (required to enable graph storage and blob tools)
       context_intelligence_server_url: "${CI_SERVER_URL:}"
