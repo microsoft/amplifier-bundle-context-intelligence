@@ -92,9 +92,8 @@ class TestBehaviorYaml:
         """Source must point to the main branch (post-merge)."""
         data = _load_behavior()
         source = data["hooks"][0].get("source", "")
-        assert source.endswith("@main"), (
-            f"Source must reference @main branch after merge, got: {source!r}"
-        )
+        # Source may have a #subdirectory= fragment after @main
+        assert "@main" in source, f"Source must reference @main branch after merge, got: {source!r}"
 
     def test_no_graph_store_in_config(self):
         """Thin forwarder has no graph_store config (moved to server)."""

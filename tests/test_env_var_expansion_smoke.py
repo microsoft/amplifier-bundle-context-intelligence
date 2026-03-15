@@ -22,6 +22,11 @@ import yaml
 BUNDLE_DIR = Path(__file__).parent.parent
 BEHAVIOR_YAML = BUNDLE_DIR / "behaviors" / "context-intelligence.yaml"
 
+# Env var names used in the behavior YAML
+_SERVER_URL_VAR = "AMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_URL"
+_WORKSPACE_VAR = "AMPLIFIER_CONTEXT_INTELLIGENCE_WORKSPACE"
+_LOG_LEVEL_VAR = "AMPLIFIER_CONTEXT_INTELLIGENCE_LOG_LEVEL"
+
 # ---------------------------------------------------------------------------
 # Replicate the Amplifier CLI expand_env_vars logic exactly
 # Source: amplifier_app_cli/runtime/config.py lines 599-619
@@ -61,8 +66,8 @@ def behavior_parsed() -> dict:
 
 
 @pytest.fixture(scope="session")
-def ci_raw_config(behavior_parsed) -> dict:
-    """The raw (unexpanded) CI config from the behavior YAML."""
+def hook_raw_config(behavior_parsed) -> dict:
+    """The raw (unexpanded) hook config from the behavior YAML."""
     return behavior_parsed["hooks"][0]["config"]
 
 
@@ -74,24 +79,22 @@ def ci_raw_config(behavior_parsed) -> dict:
 class TestEnvVarDefaultExpansion:
     """When env vars are unset, defaults must produce usable values."""
 
-    def test_ci_server_url_defaults_to_empty(self, ci_raw_config, monkeypatch):
-        """CI_SERVER_URL defaults to empty string (no server by default)."""
-        monkeypatch.delenv("CI_SERVER_URL", raising=False)
-        expanded = expand_env_vars(
-            {"url": ci_raw_config["context_intelligence_server_url"]}
-        )
+    def test_server_url_defaults_to_empty(self, hook_raw_config, monkeypatch):
+        """AMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_URL defaults to empty string (no server by default)."""
+        monkeypatch.delenv(_SERVER_URL_VAR, raising=False)
+        expanded = expand_env_vars({"url": hook_raw_config["context_intelligence_server_url"]})
         assert expanded["url"] == ""
 
-    def test_ci_workspace_defaults_to_empty(self, ci_raw_config, monkeypatch):
-        """CI_WORKSPACE defaults to empty string (auto-resolved from coordinator)."""
-        monkeypatch.delenv("CI_WORKSPACE", raising=False)
-        expanded = expand_env_vars({"workspace": ci_raw_config["workspace"]})
+    def test_workspace_defaults_to_empty(self, hook_raw_config, monkeypatch):
+        """AMPLIFIER_CONTEXT_INTELLIGENCE_WORKSPACE defaults to empty string (auto-resolved from coordinator)."""
+        monkeypatch.delenv(_WORKSPACE_VAR, raising=False)
+        expanded = expand_env_vars({"workspace": hook_raw_config["workspace"]})
         assert expanded["workspace"] == ""
 
-    def test_ci_log_level_defaults_to_info(self, ci_raw_config, monkeypatch):
-        """CI_LOG_LEVEL defaults to INFO."""
-        monkeypatch.delenv("CI_LOG_LEVEL", raising=False)
-        expanded = expand_env_vars({"log_level": ci_raw_config["log_level"]})
+    def test_log_level_defaults_to_info(self, hook_raw_config, monkeypatch):
+        """AMPLIFIER_CONTEXT_INTELLIGENCE_LOG_LEVEL defaults to INFO."""
+        monkeypatch.delenv(_LOG_LEVEL_VAR, raising=False)
+        expanded = expand_env_vars({"log_level": hook_raw_config["log_level"]})
         assert expanded["log_level"] == "INFO"
 
 
@@ -103,24 +106,22 @@ class TestEnvVarDefaultExpansion:
 class TestEnvVarOverride:
     """When env vars are set, they must take precedence over defaults."""
 
-    def test_ci_server_url_overridden_by_env(self, ci_raw_config, monkeypatch):
-        """CI_SERVER_URL env var overrides the empty default."""
-        monkeypatch.setenv("CI_SERVER_URL", "http://ci-server:8080")
-        expanded = expand_env_vars(
-            {"url": ci_raw_config["context_intelligence_server_url"]}
-        )
+    def test_server_url_overridden_by_env(self, hook_raw_config, monkeypatch):
+        """AMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_URL env var overrides the empty default."""
+        monkeypatch.setenv(_SERVER_URL_VAR, "http://ci-server:8080")
+        expanded = expand_env_vars({"url": hook_raw_config["context_intelligence_server_url"]})
         assert expanded["url"] == "http://ci-server:8080"
 
-    def test_ci_workspace_overridden_by_env(self, ci_raw_config, monkeypatch):
-        """CI_WORKSPACE env var overrides the empty default."""
-        monkeypatch.setenv("CI_WORKSPACE", "my-project")
-        expanded = expand_env_vars({"workspace": ci_raw_config["workspace"]})
+    def test_workspace_overridden_by_env(self, hook_raw_config, monkeypatch):
+        """AMPLIFIER_CONTEXT_INTELLIGENCE_WORKSPACE env var overrides the empty default."""
+        monkeypatch.setenv(_WORKSPACE_VAR, "my-project")
+        expanded = expand_env_vars({"workspace": hook_raw_config["workspace"]})
         assert expanded["workspace"] == "my-project"
 
-    def test_ci_log_level_overridden_by_env(self, ci_raw_config, monkeypatch):
-        """CI_LOG_LEVEL env var overrides the INFO default."""
-        monkeypatch.setenv("CI_LOG_LEVEL", "DEBUG")
-        expanded = expand_env_vars({"log_level": ci_raw_config["log_level"]})
+    def test_log_level_overridden_by_env(self, hook_raw_config, monkeypatch):
+        """AMPLIFIER_CONTEXT_INTELLIGENCE_LOG_LEVEL env var overrides the INFO default."""
+        monkeypatch.setenv(_LOG_LEVEL_VAR, "DEBUG")
+        expanded = expand_env_vars({"log_level": hook_raw_config["log_level"]})
         assert expanded["log_level"] == "DEBUG"
 
 
@@ -146,11 +147,11 @@ class TestBashStyleSyntaxCaught:
         expanded = expand_env_vars(good)
         assert expanded["uri"] == "bolt://localhost:7687"
 
-    def test_behavior_yaml_has_no_dash_defaults(self, ci_raw_config, monkeypatch):
+    def test_behavior_yaml_has_no_dash_defaults(self, hook_raw_config, monkeypatch):
         """Full expansion of actual YAML must produce no leading dashes."""
-        for var in ("CI_SERVER_URL", "CI_WORKSPACE", "CI_LOG_LEVEL"):
+        for var in (_SERVER_URL_VAR, _WORKSPACE_VAR, _LOG_LEVEL_VAR):
             monkeypatch.delenv(var, raising=False)
-        expanded = expand_env_vars(ci_raw_config)
+        expanded = expand_env_vars(hook_raw_config)
         for key, val in expanded.items():
             assert not str(val).startswith("-"), (
                 f"config.{key} expanded to '{val}' — "

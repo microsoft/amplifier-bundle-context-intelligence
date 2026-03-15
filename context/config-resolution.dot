@@ -1,0 +1,118 @@
+// ConfigResolver — lazy fallback chain for hook configuration values.
+//
+// Each property is resolved on first access and cached.
+// Empty strings in config are treated as absent and fall through
+// to the next source in the chain (standard or-chain falsy semantics).
+//
+// Render: dot -Tsvg config-resolution.dot -o config-resolution.svg
+
+digraph ConfigResolver {
+    rankdir=TB;
+    fontname="Helvetica";
+    node [fontname="Helvetica", shape=box, style="rounded,filled", fillcolor="#f0f0f0"];
+    edge [fontname="Helvetica", fontsize=10];
+
+    // --- Central node ---
+    resolver [label="ConfigResolver", shape=component, fillcolor="#d4e6f1", style="filled"];
+
+    // --- Input sources ---
+    subgraph cluster_inputs {
+        label="Input Sources";
+        style=dashed;
+        color="#999999";
+
+        hook_config [label="hook config\n(behavior YAML)"];
+        coord_config [label="coordinator.config\n(set by app at session creation)"];
+        session_cap [label="session.working_dir\ncapability\n(set by foundation bundle.py)"];
+        env_vars [label="Environment Variables\nAMPLIFIER_CONTEXT_INTELLIGENCE_*\n(expanded in YAML before mount)", shape=note, fillcolor="#fff3cd"];
+    }
+
+    env_vars -> hook_config [label="expanded into", style=dashed];
+
+    // --- project_slug resolution ---
+    subgraph cluster_project_slug {
+        label="project_slug resolution";
+        style=filled;
+        fillcolor="#e8f5e9";
+        color="#4caf50";
+
+        ps_config [label="1. config['project_slug']"];
+        ps_coord [label="2. coordinator.config\n['project_slug']"];
+        ps_working_dir [label="3. session.working_dir\n→ _slugify_path()"];
+        ps_default [label="4. 'default'"];
+
+        ps_config -> ps_coord [label="empty?"];
+        ps_coord -> ps_working_dir [label="empty?"];
+        ps_working_dir -> ps_default [label="empty?"];
+    }
+
+    // --- base_path resolution ---
+    subgraph cluster_base_path {
+        label="base_path resolution";
+        style=filled;
+        fillcolor="#e3f2fd";
+        color="#2196f3";
+
+        bp_config [label="1. config['base_path']"];
+        bp_coord [label="2. coordinator.config\n['base_path']"];
+        bp_default [label="3. ~/.amplifier/projects\n(expanduser)"];
+
+        bp_config -> bp_coord [label="empty?"];
+        bp_coord -> bp_default [label="empty?"];
+    }
+
+    // --- workspace resolution ---
+    subgraph cluster_workspace {
+        label="workspace resolution";
+        style=filled;
+        fillcolor="#fce4ec";
+        color="#e91e63";
+
+        ws_coord [label="1. coordinator.config\n['workspace']"];
+        ws_config [label="2. config['workspace']"];
+        ws_slug [label="3. → project_slug\nfallback chain"];
+
+        ws_coord -> ws_config [label="empty?"];
+        ws_config -> ws_slug [label="empty?"];
+    }
+
+    // --- Simple properties (no fallback chain) ---
+    subgraph cluster_simple {
+        label="Direct config properties\n(no coordinator fallback)";
+        style=filled;
+        fillcolor="#f3e5f5";
+        color="#9c27b0";
+
+        server_url [label="context_intelligence_server_url\nNone if empty"];
+        log_level [label="log_level\ndefault: WARNING"];
+        exclude [label="exclude_events\ndefault: frozenset()"];
+    }
+
+    // --- Derived paths ---
+    subgraph cluster_derived {
+        label="Derived Paths";
+        style=filled;
+        fillcolor="#fff8e1";
+        color="#ff9800";
+
+        session_dir [label="session_dir(session_id)\nbase_path / project_slug /\nsessions / session_id /\ncontext-intelligence"];
+        blob_root [label="blob_store_root\nbase_path / project_slug /\nsessions"];
+    }
+
+    // --- Edges from resolver ---
+    resolver -> ps_config [lhead=cluster_project_slug];
+    resolver -> bp_config [lhead=cluster_base_path];
+    resolver -> ws_coord [lhead=cluster_workspace];
+    resolver -> server_url [lhead=cluster_simple];
+
+    hook_config -> resolver [label="config dict"];
+    coord_config -> resolver [label="coordinator"];
+    session_cap -> ps_working_dir [label="working_dir", style=dashed];
+
+    // --- Derived path dependencies ---
+    ps_default -> session_dir [style=dashed, label="project_slug", color="#999999"];
+    bp_default -> session_dir [style=dashed, label="base_path", color="#999999"];
+    ps_default -> blob_root [style=dashed, label="project_slug", color="#999999"];
+    bp_default -> blob_root [style=dashed, label="base_path", color="#999999"];
+    ws_slug -> ws_coord [style=invis]; // layout hint
+}

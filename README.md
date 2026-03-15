@@ -19,9 +19,20 @@ The `context-intelligence-analyst` agent is also included for querying session d
 
 ## Quick Start
 
-### 0. Start the Context Intelligence Server
+### 1. Install the bundle
 
-The bundle forwards events to the CI server for graph storage. Start it first:
+```bash
+amplifier bundle add git+https://github.com/colombod/amplifier-bundle-context-intelligence@main --app
+amplifier bundle use context-intelligence
+```
+
+At this point the bundle is active. Every Amplifier session will write events to local JSONL files automatically — no server required.
+
+### 2. (Optional) Enable forwarding to the Context Intelligence Server
+
+To also push events to the server for graph storage and querying, start the server and configure the bundle to point at it.
+
+**Start the server:**
 
 ```bash
 git clone https://github.com/colombod/amplifier-context-intelligence
@@ -30,51 +41,31 @@ docker compose up -d
 # Server ready at http://localhost:8000
 ```
 
-> If you only want local JSONL logging (no graph), skip this step —
-> the bundle works without a server and simply writes events to disk.
-
-### 1. Install
+**Configure the hook** via environment variables:
 
 ```bash
-amplifier bundle add git+https://github.com/colombod/amplifier-bundle-context-intelligence@main
-amplifier bundle use context-intelligence
+export AMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_URL=http://localhost:8000
+export AMPLIFIER_CONTEXT_INTELLIGENCE_WORKSPACE=my-project    # optional, auto-resolved from project slug
+export AMPLIFIER_CONTEXT_INTELLIGENCE_LOG_LEVEL=INFO          # optional, default: INFO
 ```
 
-### 2. Configure (app-cli `settings.yaml`)
-
-Using [amplifier-app-cli](https://github.com/microsoft/amplifier-app-cli) ≥ the [overrides wiring PR](https://github.com/microsoft/amplifier-app-cli/pull/143), configure the hook via the `overrides` section:
+Or via `settings.yaml` overrides (requires [amplifier-app-cli](https://github.com/microsoft/amplifier-app-cli) with [overrides wiring PR #143](https://github.com/microsoft/amplifier-app-cli/pull/143)):
 
 ```yaml
 # ~/.amplifier/settings.yaml  (or project .amplifier/settings.yaml)
 overrides:
   hook-context-intelligence:
     config:
-      # Point at your running Context Intelligence Server
       context_intelligence_server_url: "http://localhost:8000"
-
-      # Optional: explicit workspace name.
-      # Auto-resolved from project_slug when not set.
-      workspace: "my-project"
+      workspace: "my-project"   # optional
 ```
 
-> **Note:** `amplifier-app-cli` PR #143 wired `overrides.<id>.config` to work for hooks.
-> Without it, the `overrides` block for hooks was silently ignored.
-> If you're on an older version, set config via environment variables instead (see below).
-
-### 3. Environment variable fallback
-
-```bash
-export CI_SERVER_URL=http://localhost:8000
-export CI_WORKSPACE=my-project
-export CI_LOG_LEVEL=INFO
-```
-
-### Verify it's working
+### 3. Verify it's working
 
 After running an Amplifier session, check for the JSONL file:
 
 ```bash
-ls ~/.amplifier/projects/<project_slug>/context-intelligence/sessions/
+ls ~/.amplifier/projects/<project_slug>/sessions/*/context-intelligence/
 # You should see: events.jsonl  metadata.json
 ```
 
@@ -85,31 +76,15 @@ If `context_intelligence_server_url` is configured, check the server dashboard a
 ## Configuration reference
 
 All config keys are read from the `overrides.hook-context-intelligence.config` block
-in `settings.yaml`, or from environment variables as shown.
+in `settings.yaml`, or from environment variables via the behavior YAML.
 
 | Key | Env var | Default | Description |
 |-----|---------|---------|-------------|
-| `context_intelligence_server_url` | `CI_SERVER_URL` | *(empty)* | Base URL of the CI server. Events are only forwarded when this is set. |
-| `workspace` | `CI_WORKSPACE` | *(auto)* | Scopes graph data on the server. Resolved from `coordinator.config['workspace']`, then `project_slug`, then working directory slug. |
-| `log_level` | `CI_LOG_LEVEL` | `INFO` | Hook logging level. |
-| `base_path` | — | *(working dir)* | Root directory for local JSONL output. |
+| `context_intelligence_server_url` | `AMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_URL` | *(empty)* | Base URL of the CI server. Events are only forwarded when this is set. |
+| `workspace` | `AMPLIFIER_CONTEXT_INTELLIGENCE_WORKSPACE` | *(auto)* | Scopes graph data on the server. Resolved from `coordinator.config['workspace']`, then `project_slug`, then working directory slug. |
+| `log_level` | `AMPLIFIER_CONTEXT_INTELLIGENCE_LOG_LEVEL` | `INFO` | Hook logging level. |
+| `base_path` | — | `~/.amplifier/projects` | Root directory for local JSONL output. |
 | `exclude_events` | — | `[]` | fnmatch patterns for events to suppress. |
-
----
-
-## Context Intelligence Server
-
-The server that receives events, stores the graph, and serves blobs is at:
-👉 **[colombod/amplifier-context-intelligence](https://github.com/colombod/amplifier-context-intelligence)**
-
-```bash
-# Start the server
-git clone https://github.com/colombod/amplifier-context-intelligence
-cd amplifier-context-intelligence
-docker compose up
-```
-
-The server runs at `http://localhost:8000` by default.
 
 ---
 
@@ -124,7 +99,7 @@ Every session writes to:
 └── metadata.json   ← started_at, ended_at, status, parent_id
 ```
 
-### Server-side graph (when CI server configured)
+### Server-side graph (when server configured)
 
 All graph building, Neo4j writes, and blob management happen in the CI server.
 The graph model is documented in [`context/graph-model-reference.md`](context/graph-model-reference.md).
@@ -155,6 +130,8 @@ amplifier-bundle-context-intelligence/
 │   ├── event-schema.md                 ← all 51+ Amplifier events
 │   ├── graph-model-reference.md        ← Neo4j graph model for Cypher queries
 │   ├── safe-extraction-patterns.md     ← JSONL navigation patterns
+│   ├── config-resolution.dot           ← ConfigResolver fallback chain diagram
+│   ├── session-disk-layout.dot         ← on-disk session directory structure
 │   └── agents/
 │       └── session-storage-knowledge.md
 ├── modules/
@@ -170,17 +147,19 @@ amplifier-bundle-context-intelligence/
 
 ## Development
 
-### Branch status
-
-`main` is the thin-forwarder architecture (this branch). Events are forwarded to the Context Intelligence Server for graph storage.
-
-### Run tests
+### Run module tests
 
 ```bash
 cd modules/hook-context-intelligence
-uv venv && source .venv/bin/activate
-uv pip install -e ".[dev]"
-pytest tests/ -q
+uv sync
+uv run pytest tests/ -q
+```
+
+### Run bundle-level tests
+
+```bash
+cd modules/hook-context-intelligence
+uv run pytest ../../tests/ -q
 ```
 
 ---

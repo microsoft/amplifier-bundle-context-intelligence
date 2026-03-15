@@ -7,14 +7,14 @@ hooks:
     source: git+https://github.com/colombod/amplifier-bundle-context-intelligence@main#subdirectory=modules/hook-context-intelligence
     config:
       # Server URL (required to enable graph storage and blob tools)
-      context_intelligence_server_url: "${CI_SERVER_URL:}"
+      context_intelligence_server_url: "${AMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_URL:}"
 
       # Workspace identifier — scopes graph data on the server.
       # Auto-resolved from coordinator project_slug when not set.
-      workspace: "${CI_WORKSPACE:}"
+      workspace: "${AMPLIFIER_CONTEXT_INTELLIGENCE_WORKSPACE:}"
 
       # Log level for the hook itself
-      log_level: "${CI_LOG_LEVEL:INFO}"
+      log_level: "${AMPLIFIER_CONTEXT_INTELLIGENCE_LOG_LEVEL:INFO}"
 
       # Events to suppress from logging and dispatch (fnmatch patterns)
       # exclude_events:

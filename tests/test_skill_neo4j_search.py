@@ -12,11 +12,7 @@ from pathlib import Path
 
 import yaml
 
-SKILL_DIR = (
-    Path(__file__).resolve().parent.parent
-    / "skills"
-    / "context-intelligence-neo4j-search"
-)
+SKILL_DIR = Path(__file__).resolve().parent.parent / "skills" / "context-intelligence-neo4j-search"
 SKILL_FILE = SKILL_DIR / "SKILL.md"
 
 # Read and parse once at module level.
@@ -47,29 +43,19 @@ def _extract_section(content: str, heading: str) -> str:
 
 
 # Pre-extract sections referenced by multiple tests.
-_SCHEMA_SECTION: str = (
-    _extract_section(_SKILL_CONTENT, "Schema") if _SKILL_CONTENT else ""
-)
-_LABELS_SECTION: str = (
-    _extract_section(_SKILL_CONTENT, "Node Labels") if _SKILL_CONTENT else ""
-)
+_SCHEMA_SECTION: str = _extract_section(_SKILL_CONTENT, "Schema") if _SKILL_CONTENT else ""
+_LABELS_SECTION: str = _extract_section(_SKILL_CONTENT, "Node Labels") if _SKILL_CONTENT else ""
 _EDGES_SECTION: str = (
     _extract_section(_SKILL_CONTENT, "Relationship Types") if _SKILL_CONTENT else ""
 )
-_FOREST_SECTION: str = (
-    _extract_section(_SKILL_CONTENT, "Forest Scoping") if _SKILL_CONTENT else ""
-)
+_FOREST_SECTION: str = _extract_section(_SKILL_CONTENT, "Forest Scoping") if _SKILL_CONTENT else ""
 _PATTERNS_SECTION: str = (
     _extract_section(_SKILL_CONTENT, "Query Patterns") if _SKILL_CONTENT else ""
 )
 _ALGORITHMS_SECTION: str = (
-    _extract_section(_SKILL_CONTENT, "Graph Algorithm Examples")
-    if _SKILL_CONTENT
-    else ""
+    _extract_section(_SKILL_CONTENT, "Graph Algorithm Examples") if _SKILL_CONTENT else ""
 )
-_NOTES_SECTION: str = (
-    _extract_section(_SKILL_CONTENT, "Notes") if _SKILL_CONTENT else ""
-)
+_NOTES_SECTION: str = _extract_section(_SKILL_CONTENT, "Notes") if _SKILL_CONTENT else ""
 _ID_FORMAT_SECTION: str = (
     _extract_section(_SKILL_CONTENT, "ID Format Reference") if _SKILL_CONTENT else ""
 )
@@ -181,9 +167,7 @@ def test_labels_section_exists() -> None:
 
 def test_all_12_labels_present() -> None:
     for label in _REQUIRED_LABELS:
-        assert f"`{label}`" in _LABELS_SECTION, (
-            f"Node Labels section missing label: {label}"
-        )
+        assert f"`{label}`" in _LABELS_SECTION, f"Node Labels section missing label: {label}"
 
 
 def test_label_count() -> None:
@@ -191,10 +175,7 @@ def test_label_count() -> None:
     label_rows = [
         line
         for line in _LABELS_SECTION.strip().splitlines()
-        if line.startswith("|")
-        and "`" in line
-        and "Label" not in line
-        and "---" not in line
+        if line.startswith("|") and "`" in line and "Label" not in line and "---" not in line
     ]
     assert len(label_rows) == 12, f"Expected 12 label rows, got {len(label_rows)}"
 
@@ -294,15 +275,12 @@ def test_forest_scoping_section_exists() -> None:
 
 def test_forest_scoping_explains_parameter_injection() -> None:
     assert (
-        "parameter injection" in _FOREST_SECTION.lower()
-        or "$graph_forest_name" in _FOREST_SECTION
+        "parameter injection" in _FOREST_SECTION.lower() or "$graph_forest_name" in _FOREST_SECTION
     )
 
 
 def test_forest_scoping_documents_default_query() -> None:
-    assert (
-        "default" in _FOREST_SECTION.lower() or "own forest" in _FOREST_SECTION.lower()
-    )
+    assert "default" in _FOREST_SECTION.lower() or "own forest" in _FOREST_SECTION.lower()
 
 
 def test_forest_scoping_documents_wildcard() -> None:
@@ -310,9 +288,7 @@ def test_forest_scoping_documents_wildcard() -> None:
 
 
 def test_forest_scoping_documents_explicit_override() -> None:
-    assert (
-        "explicit" in _FOREST_SECTION.lower() or "override" in _FOREST_SECTION.lower()
-    )
+    assert "explicit" in _FOREST_SECTION.lower() or "override" in _FOREST_SECTION.lower()
 
 
 # -- AC-11: Query patterns -----------------------------------------------------
@@ -359,9 +335,7 @@ def test_algorithms_section_exists() -> None:
 
 
 def test_algorithms_shortest_path() -> None:
-    assert (
-        "shortestPath" in _ALGORITHMS_SECTION or "Shortest Path" in _ALGORITHMS_SECTION
-    )
+    assert "shortestPath" in _ALGORITHMS_SECTION or "Shortest Path" in _ALGORITHMS_SECTION
 
 
 def test_algorithms_variable_length_traversal() -> None:
@@ -389,9 +363,7 @@ def test_id_format_section_exists() -> None:
 
 
 def test_id_format_documents_session_nodes() -> None:
-    assert (
-        "Session nodes" in _ID_FORMAT_SECTION or "session" in _ID_FORMAT_SECTION.lower()
-    )
+    assert "Session nodes" in _ID_FORMAT_SECTION or "session" in _ID_FORMAT_SECTION.lower()
 
 
 def test_id_format_documents_make_node_id() -> None:
@@ -410,10 +382,7 @@ def test_notes_section_exists() -> None:
 
 
 def test_notes_properties_vs_labels() -> None:
-    assert (
-        "Properties vs labels" in _NOTES_SECTION
-        or "properties" in _NOTES_SECTION.lower()
-    )
+    assert "Properties vs labels" in _NOTES_SECTION or "properties" in _NOTES_SECTION.lower()
 
 
 def test_notes_multi_label_nodes() -> None:
@@ -508,9 +477,7 @@ if _blob_refs_match:
 
 def test_blob_references_section_exists() -> None:
     """SKILL.md must contain a Blob References section."""
-    assert _BLOB_REFS_SECTION, (
-        "SKILL.md must contain a '### Blob References' section"
-    )
+    assert _BLOB_REFS_SECTION, "SKILL.md must contain a '### Blob References' section"
 
 
 def test_blob_references_documents_blob_ref_pattern() -> None:
@@ -552,9 +519,7 @@ if _resolving_match:
 
 def test_resolving_blob_refs_section_exists() -> None:
     """SKILL.md must contain a 'Resolving blob refs' section."""
-    assert _RESOLVING_BLOBS_SECTION, (
-        "SKILL.md must contain a '### Resolving blob refs' section"
-    )
+    assert _RESOLVING_BLOBS_SECTION, "SKILL.md must contain a '### Resolving blob refs' section"
 
 
 def test_resolving_blobs_documents_blob_list() -> None:
@@ -600,9 +565,7 @@ if _workflow_match:
 
 def test_agent_workflow_section_exists() -> None:
     """SKILL.md must contain an Agent workflow section."""
-    assert _AGENT_WORKFLOW_SECTION, (
-        "SKILL.md must contain a '### Agent workflow' section"
-    )
+    assert _AGENT_WORKFLOW_SECTION, "SKILL.md must contain a '### Agent workflow' section"
 
 
 def test_agent_workflow_has_5_steps() -> None:
@@ -637,9 +600,7 @@ def test_agent_workflow_step_call_blob_dump() -> None:
 
 def test_agent_workflow_step_read_file_or_jq() -> None:
     """Step 4: use read_file or bash+jq."""
-    assert (
-        "read_file" in _AGENT_WORKFLOW_SECTION or "jq" in _AGENT_WORKFLOW_SECTION
-    ), (
+    assert "read_file" in _AGENT_WORKFLOW_SECTION or "jq" in _AGENT_WORKFLOW_SECTION, (
         "Agent workflow must include a step for using read_file or bash+jq"
     )
 
