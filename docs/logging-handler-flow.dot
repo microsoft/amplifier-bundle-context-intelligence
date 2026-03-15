@@ -1,8 +1,9 @@
-// LoggingHandler — Event Processing Flow
+// LoggingHandler — Complete Event Processing Flow
 // Context-Intelligence Bundle
 //
-// Shows how LoggingHandler processes each event: session_id gating,
-// event_type branching, and disk I/O for session lifecycle events.
+// Shows both paths: local JSONL persistence (always-on) and
+// fire-and-forget HTTP dispatch to the Context Intelligence server.
+// Includes payload shapes for both the local record and the server POST.
 //
 // Render: dot -Tsvg logging-handler-flow.dot -o logging-handler-flow.svg
 
@@ -19,171 +20,358 @@ digraph LoggingHandlerFlow {
     node [fontname="Helvetica", fontsize=11];
     edge [fontname="Helvetica", fontsize=10];
 
-    // ─── Entry ───────────────────────────────────────────────────────
-    node [shape=box, style="rounded,filled", penwidth=2];
-
-    event_arrives [
-        label="event_arrives\n───────────────────\nLoggingHandler.__call__\n(event_name, data)",
-        fillcolor="#E3F2FD",
-        color="#1565C0"
-    ];
-
-    // ─── Decision: session_id present? ───────────────────────────────
-    node [shape=diamond, style=filled, penwidth=2];
-
-    check_session_id [
-        label="session_id\npresent?",
-        fillcolor="#FFEBEE",
-        color="#C62828",
-        fontcolor="#C62828"
-    ];
-
-    // ─── Skip path ───────────────────────────────────────────────────
-    node [shape=box, style="rounded,filled", penwidth=2];
-
-    skip [
-        label="skip\n───────────────────\nNo session context.\nReturn HookResult(continue)",
-        fillcolor="#EEEEEE",
-        color="#757575"
-    ];
-
-    // ─── Decision: event_type ────────────────────────────────────────
-    node [shape=diamond, style=filled, penwidth=2];
-
-    check_event_type [
-        label="event_type?",
-        fillcolor="#FFF8E1",
-        color="#F57F17",
-        fontcolor="#F57F17"
-    ];
-
-    // ─── Session init (start/fork) ───────────────────────────────────
-    node [shape=box, style="rounded,filled", penwidth=2];
-
-    session_init [
-        label="session_init\n───────────────────\nTriggered by:\nsession:start / session:fork\n\n1. mkdir session dir\n2. Write metadata.json\n3. Create events.jsonl\n4. Append event",
-        fillcolor="#E8F5E9",
-        color="#2E7D32"
-    ];
-
-    // ─── Session end ─────────────────────────────────────────────────
-    session_end [
-        label="session_end\n───────────────────\nTriggered by:\nsession:end\n\n1. Append to events.jsonl\n2. Update metadata.json\n   (end_time, status)",
-        fillcolor="#FFF3E0",
-        color="#E65100"
-    ];
-
-    // ─── Regular event ───────────────────────────────────────────────
-    regular [
-        label="regular\n───────────────────\nAll other event types\n\n1. Append to events.jsonl",
-        fillcolor="#F3E5F5",
-        color="#6A1B9A"
-    ];
-
-    // ─── Return ──────────────────────────────────────────────────────
-    return_result [
-        label="return HookResult(continue)\n───────────────────\nEvent processed.\nPipeline continues.",
-        fillcolor="#E3F2FD",
-        color="#1565C0"
-    ];
-
-    // ─── Storage nodes (folder shapes) ───────────────────────────────
-    node [shape=folder, style=filled, penwidth=1.5];
-
-    storage_session_dir [
-        label="~/.amplifier/projects/\n{slug}/sessions/{id}/",
-        fillcolor="#ECEFF1",
-        color="#546E7A"
-    ];
-
-    storage_metadata [
-        label="metadata.json",
-        fillcolor="#ECEFF1",
-        color="#546E7A"
-    ];
-
-    storage_events [
-        label="events.jsonl",
-        fillcolor="#ECEFF1",
-        color="#546E7A"
-    ];
-
     // ═══════════════════════════════════════════════════════════════════
-    // ─── Transition edges ─────────────────────────────────────────────
+    // MOUNT PHASE — what happens at hook registration time
     // ═══════════════════════════════════════════════════════════════════
 
-    event_arrives -> check_session_id [
-        penwidth=2
+    subgraph cluster_mount {
+        label="mount(coordinator, config)";
+        style=filled;
+        fillcolor="#FAFAFA";
+        color="#B0BEC5";
+        fontsize=12;
+        fontname="Helvetica Bold";
+
+        node [shape=box, style="rounded,filled", penwidth=1.5];
+
+        mount_start [
+            label="mount() called\n───────────────────\ncoordinator + config dict\n(env vars already expanded\nby Amplifier CLI)",
+            fillcolor="#E3F2FD",
+            color="#1565C0"
+        ];
+
+        mount_resolver [
+            label="ConfigResolver(config, coordinator)\n───────────────────\nLazy fallback chains for:\nproject_slug, base_path,\nworkspace, server_url, log_level",
+            fillcolor="#E8F5E9",
+            color="#2E7D32"
+        ];
+
+        mount_discover [
+            label="_discover_events(coordinator)\n───────────────────\nALL_EVENTS (amplifier_core.events)\n∪ contributions (observability.events)\n∪ capability (observability.events)\n→ minus exclude_events (fnmatch)",
+            fillcolor="#FFF8E1",
+            color="#F57F17"
+        ];
+
+        mount_register [
+            label="Register LoggingHandler\n───────────────────\ncoordinator.hooks.register(\n  event, handler, priority=100\n)\nfor each active event",
+            fillcolor="#F3E5F5",
+            color="#6A1B9A"
+        ];
+
+        node [shape=diamond, style=filled, penwidth=1.5];
+        mount_check_server [
+            label="server_url\nconfigured?",
+            fillcolor="#FFEBEE",
+            color="#C62828",
+            fontcolor="#C62828"
+        ];
+
+        node [shape=box, style="rounded,filled", penwidth=1.5];
+        mount_blob_tool [
+            label="Register BlobTool\n───────────────────\ncoordinator.tools.register(\n  'blob_list', 'blob_dump'\n)\nHTTP client → CI server /blobs/*",
+            fillcolor="#E0F7FA",
+            color="#00838F"
+        ];
+
+        mount_done [
+            label="return cleanup()\n───────────────────\nCleanup unregisters\nall hook handlers",
+            fillcolor="#ECEFF1",
+            color="#546E7A"
+        ];
+
+        mount_start -> mount_resolver;
+        mount_resolver -> mount_discover;
+        mount_discover -> mount_register;
+        mount_register -> mount_check_server;
+        mount_check_server -> mount_blob_tool [label="  YES  ", color="#2E7D32", fontcolor="#2E7D32"];
+        mount_check_server -> mount_done [label="  NO  ", color="#757575", fontcolor="#757575"];
+        mount_blob_tool -> mount_done;
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    // EVENT PHASE — what happens when each event fires
+    // ═══════════════════════════════════════════════════════════════════
+
+    subgraph cluster_event {
+        label="LoggingHandler.__call__(event, data)  — per event";
+        style=filled;
+        fillcolor="#FAFAFA";
+        color="#B0BEC5";
+        fontsize=12;
+        fontname="Helvetica Bold";
+
+        // ─── Entry ───────────────────────────────────────────────────
+        node [shape=box, style="rounded,filled", penwidth=2];
+
+        event_arrives [
+            label="event arrives\n───────────────────\nLoggingHandler.__call__\n(event_name, data)",
+            fillcolor="#E3F2FD",
+            color="#1565C0"
+        ];
+
+        // ─── Decision: session_id present? ───────────────────────────
+        node [shape=diamond, style=filled, penwidth=2];
+
+        check_session_id [
+            label="session_id\npresent?",
+            fillcolor="#FFEBEE",
+            color="#C62828",
+            fontcolor="#C62828"
+        ];
+
+        // ─── Skip path ──────────────────────────────────────────────
+        node [shape=box, style="rounded,filled", penwidth=2];
+
+        skip [
+            label="skip\n───────────────────\nNo session context.\nReturn HookResult(continue)",
+            fillcolor="#EEEEEE",
+            color="#757575"
+        ];
+
+        // ─── Lazy metadata init ─────────────────────────────────────
+        node [shape=diamond, style=filled, penwidth=2];
+        check_first_event [
+            label="first event\nfor this\nsession?",
+            fillcolor="#FFF8E1",
+            color="#F57F17",
+            fontcolor="#F57F17"
+        ];
+
+        node [shape=box, style="rounded,filled", penwidth=1.5];
+        ensure_metadata [
+            label="_ensure_metadata()\n───────────────────\nmkdir session_dir\nWrite initial metadata.json:\n{\n  session_id, parent_id,\n  started_at, status: 'running',\n  working_dir\n}",
+            fillcolor="#E8F5E9",
+            color="#2E7D32"
+        ];
+
+        // ─── Decision: event_type ───────────────────────────────────
+        node [shape=diamond, style=filled, penwidth=2];
+
+        check_event_type [
+            label="event_type?",
+            fillcolor="#FFF8E1",
+            color="#F57F17",
+            fontcolor="#F57F17"
+        ];
+
+        // ─── Session init (start/fork) ──────────────────────────────
+        node [shape=box, style="rounded,filled", penwidth=2];
+
+        session_init [
+            label="session:start / session:fork\n───────────────────\n_enrich_metadata_from_session_init()\n  Overwrites: parent_id, started_at,\n    working_dir\n  Adds optional: agent_name,\n    parallel_group_id, recipe_name,\n    recipe_step",
+            fillcolor="#E8F5E9",
+            color="#2E7D32"
+        ];
+
+        // ─── Session end ────────────────────────────────────────────
+        session_end [
+            label="session:end / execution:end\n───────────────────\n_finalize_metadata()\n  Sets: status, ended_at",
+            fillcolor="#FFF3E0",
+            color="#E65100"
+        ];
+
+        // ─── Regular event ──────────────────────────────────────────
+        regular [
+            label="all other events\n───────────────────\n(no metadata changes)",
+            fillcolor="#F3E5F5",
+            color="#6A1B9A"
+        ];
+
+        // ─── JSONL append — always happens ──────────────────────────
+        append_event [
+            label="_append_event()\n───────────────────\nAppend to events.jsonl",
+            fillcolor="#E8EAF6",
+            color="#283593"
+        ];
+
+        // ─── Decision: server configured? ───────────────────────────
+        node [shape=diamond, style=filled, penwidth=2];
+        check_server [
+            label="server_url\nconfigured?",
+            fillcolor="#FFEBEE",
+            color="#C62828",
+            fontcolor="#C62828"
+        ];
+
+        // ─── Server dispatch ────────────────────────────────────────
+        node [shape=box, style="rounded,filled", penwidth=2];
+        dispatch [
+            label="asyncio.create_task(\n  _dispatch_to_server()\n)\n───────────────────\nFire-and-forget.\nFailure logged as warning.\nDisk write is the durable record.",
+            fillcolor="#E0F7FA",
+            color="#00838F"
+        ];
+
+        // ─── Return ─────────────────────────────────────────────────
+        return_result [
+            label="return HookResult(continue)\n───────────────────\nEvent processed.\nPipeline continues.",
+            fillcolor="#E3F2FD",
+            color="#1565C0"
+        ];
+
+        // ─── Edges ──────────────────────────────────────────────────
+        event_arrives -> check_session_id [penwidth=2];
+
+        check_session_id -> skip [
+            label="  NO  ", color="#757575", fontcolor="#757575", penwidth=1.5
+        ];
+
+        check_session_id -> check_first_event [
+            label="  YES  ", color="#2E7D32", fontcolor="#2E7D32", penwidth=2
+        ];
+
+        check_first_event -> ensure_metadata [
+            label="  YES  ", color="#2E7D32", fontcolor="#2E7D32", penwidth=1.5
+        ];
+        check_first_event -> check_event_type [
+            label="  NO  ", color="#757575", fontcolor="#757575", penwidth=1.5
+        ];
+        ensure_metadata -> check_event_type [penwidth=1.5];
+
+        check_event_type -> session_init [
+            label="  start / fork  ", color="#2E7D32", fontcolor="#2E7D32", penwidth=1.5
+        ];
+        check_event_type -> session_end [
+            label="  end  ", color="#E65100", fontcolor="#E65100", penwidth=1.5
+        ];
+        check_event_type -> regular [
+            label="  other  ", color="#6A1B9A", fontcolor="#6A1B9A", penwidth=1.5
+        ];
+
+        session_init -> append_event [penwidth=1.5];
+        session_end -> append_event [penwidth=1.5];
+        regular -> append_event [penwidth=1.5];
+
+        append_event -> check_server [penwidth=1.5];
+
+        check_server -> dispatch [
+            label="  YES  ", color="#00838F", fontcolor="#00838F", penwidth=1.5
+        ];
+        check_server -> return_result [
+            label="  NO  ", color="#757575", fontcolor="#757575", penwidth=1.5
+        ];
+
+        dispatch -> return_result [penwidth=1.5];
+        skip -> return_result [penwidth=1.5, style=dashed, color=grey];
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    // PAYLOAD SHAPES — what data looks like at each stage
+    // ═══════════════════════════════════════════════════════════════════
+
+    subgraph cluster_payloads {
+        label="Payload Shapes";
+        style=filled;
+        fillcolor="#FAFAFA";
+        color="#B0BEC5";
+        fontsize=12;
+        fontname="Helvetica Bold";
+
+        node [shape=note, style=filled, penwidth=1.5, fontsize=10];
+
+        payload_jsonl [
+            label=<<TABLE BORDER="0" CELLBORDER="0" CELLSPACING="2">
+                <TR><TD ALIGN="LEFT"><B>events.jsonl record</B> (one per line)</TD></TR>
+                <TR><TD ALIGN="LEFT">───────────────────────────</TD></TR>
+                <TR><TD ALIGN="LEFT"><FONT FACE="Courier">{</FONT></TD></TR>
+                <TR><TD ALIGN="LEFT"><FONT FACE="Courier">  "event": "tool:post",</FONT></TD></TR>
+                <TR><TD ALIGN="LEFT"><FONT FACE="Courier">  "timestamp": "2026-03-15T...",</FONT></TD></TR>
+                <TR><TD ALIGN="LEFT"><FONT FACE="Courier">  "data": {</FONT></TD></TR>
+                <TR><TD ALIGN="LEFT"><FONT FACE="Courier">    "session_id": "abc-123",</FONT></TD></TR>
+                <TR><TD ALIGN="LEFT"><FONT FACE="Courier">    "tool_name": "bash",</FONT></TD></TR>
+                <TR><TD ALIGN="LEFT"><FONT FACE="Courier">    "tool_call_id": "tc_01",</FONT></TD></TR>
+                <TR><TD ALIGN="LEFT"><FONT FACE="Courier">    ... full event data ...</FONT></TD></TR>
+                <TR><TD ALIGN="LEFT"><FONT FACE="Courier">  }</FONT></TD></TR>
+                <TR><TD ALIGN="LEFT"><FONT FACE="Courier">}</FONT></TD></TR>
+                <TR><TD ALIGN="LEFT">───────────────────────────</TD></TR>
+                <TR><TD ALIGN="LEFT">data is sanitized: Pydantic→dict,</TD></TR>
+                <TR><TD ALIGN="LEFT">set→sorted list, fallback→str()</TD></TR>
+            </TABLE>>,
+            fillcolor="#E8EAF6",
+            color="#283593"
+        ];
+
+        payload_server [
+            label=<<TABLE BORDER="0" CELLBORDER="0" CELLSPACING="2">
+                <TR><TD ALIGN="LEFT"><B>POST {server_url}/events</B></TD></TR>
+                <TR><TD ALIGN="LEFT">───────────────────────────</TD></TR>
+                <TR><TD ALIGN="LEFT"><FONT FACE="Courier">{</FONT></TD></TR>
+                <TR><TD ALIGN="LEFT"><FONT FACE="Courier">  "event": "tool:post",</FONT></TD></TR>
+                <TR><TD ALIGN="LEFT"><FONT FACE="Courier">  "workspace": "my-project",</FONT></TD></TR>
+                <TR><TD ALIGN="LEFT"><FONT FACE="Courier">  "data": {</FONT></TD></TR>
+                <TR><TD ALIGN="LEFT"><FONT FACE="Courier">    "session_id": "abc-123",</FONT></TD></TR>
+                <TR><TD ALIGN="LEFT"><FONT FACE="Courier">    "tool_name": "bash",</FONT></TD></TR>
+                <TR><TD ALIGN="LEFT"><FONT FACE="Courier">    "tool_call_id": "tc_01",</FONT></TD></TR>
+                <TR><TD ALIGN="LEFT"><FONT FACE="Courier">    "timestamp": "2026-03-...",</FONT></TD></TR>
+                <TR><TD ALIGN="LEFT"><FONT FACE="Courier">    ... full event data ...</FONT></TD></TR>
+                <TR><TD ALIGN="LEFT"><FONT FACE="Courier">  }</FONT></TD></TR>
+                <TR><TD ALIGN="LEFT"><FONT FACE="Courier">}</FONT></TD></TR>
+                <TR><TD ALIGN="LEFT">───────────────────────────</TD></TR>
+                <TR><TD ALIGN="LEFT">workspace scopes data on server</TD></TR>
+                <TR><TD ALIGN="LEFT">data is raw (not sanitized) —</TD></TR>
+                <TR><TD ALIGN="LEFT">server handles serialization</TD></TR>
+                <TR><TD ALIGN="LEFT">───────────────────────────</TD></TR>
+                <TR><TD ALIGN="LEFT">httpx.AsyncClient(timeout=5s)</TD></TR>
+                <TR><TD ALIGN="LEFT">Fire-and-forget: failure → warning</TD></TR>
+            </TABLE>>,
+            fillcolor="#E0F7FA",
+            color="#00838F"
+        ];
+
+        payload_metadata [
+            label=<<TABLE BORDER="0" CELLBORDER="0" CELLSPACING="2">
+                <TR><TD ALIGN="LEFT"><B>metadata.json</B></TD></TR>
+                <TR><TD ALIGN="LEFT">───────────────────────────</TD></TR>
+                <TR><TD ALIGN="LEFT"><FONT FACE="Courier">{</FONT></TD></TR>
+                <TR><TD ALIGN="LEFT"><FONT FACE="Courier">  "session_id": "abc-123",</FONT></TD></TR>
+                <TR><TD ALIGN="LEFT"><FONT FACE="Courier">  "parent_id": "" | "parent-id",</FONT></TD></TR>
+                <TR><TD ALIGN="LEFT"><FONT FACE="Courier">  "started_at": "2026-03-...",</FONT></TD></TR>
+                <TR><TD ALIGN="LEFT"><FONT FACE="Courier">  "ended_at": "2026-03-...",</FONT></TD></TR>
+                <TR><TD ALIGN="LEFT"><FONT FACE="Courier">  "status": "running"|"completed",</FONT></TD></TR>
+                <TR><TD ALIGN="LEFT"><FONT FACE="Courier">  "working_dir": "/home/...",</FONT></TD></TR>
+                <TR><TD ALIGN="LEFT"><FONT FACE="Courier">  "agent_name": "explorer",</FONT></TD></TR>
+                <TR><TD ALIGN="LEFT"><FONT FACE="Courier">  "recipe_name": "...",</FONT></TD></TR>
+                <TR><TD ALIGN="LEFT"><FONT FACE="Courier">  "recipe_step": "...",</FONT></TD></TR>
+                <TR><TD ALIGN="LEFT"><FONT FACE="Courier">  "parallel_group_id": "..."</FONT></TD></TR>
+                <TR><TD ALIGN="LEFT"><FONT FACE="Courier">}</FONT></TD></TR>
+                <TR><TD ALIGN="LEFT">───────────────────────────</TD></TR>
+                <TR><TD ALIGN="LEFT">Required: session_id, parent_id,</TD></TR>
+                <TR><TD ALIGN="LEFT">  started_at, status, working_dir</TD></TR>
+                <TR><TD ALIGN="LEFT">Optional: agent_name, recipe_name,</TD></TR>
+                <TR><TD ALIGN="LEFT">  recipe_step, parallel_group_id</TD></TR>
+                <TR><TD ALIGN="LEFT">No nulls — absent fields omitted</TD></TR>
+                <TR><TD ALIGN="LEFT">parent_id="" for root sessions</TD></TR>
+            </TABLE>>,
+            fillcolor="#E8F5E9",
+            color="#2E7D32"
+        ];
+    }
+
+    // ─── Cross-cluster edges from event flow to payloads ────────────
+    append_event -> payload_jsonl [
+        style=dotted, color="#283593", arrowhead=vee,
+        label="  writes  ", constraint=false
+    ];
+    dispatch -> payload_server [
+        style=dotted, color="#00838F", arrowhead=vee,
+        label="  POSTs  ", constraint=false
+    ];
+    ensure_metadata -> payload_metadata [
+        style=dotted, color="#2E7D32", arrowhead=vee,
+        label="  creates  ", constraint=false
+    ];
+    session_init -> payload_metadata [
+        style=dotted, color="#2E7D32", arrowhead=vee,
+        label="  enriches  ", constraint=false
+    ];
+    session_end -> payload_metadata [
+        style=dotted, color="#E65100", arrowhead=vee,
+        label="  finalizes  ", constraint=false
     ];
 
-    check_session_id -> skip [
-        label="  NO  ",
-        color="#757575",
-        fontcolor="#757575",
-        penwidth=1.5
-    ];
-
-    check_session_id -> check_event_type [
-        label="  YES  ",
-        color="#2E7D32",
-        fontcolor="#2E7D32",
-        penwidth=2
-    ];
-
-    check_event_type -> session_init [
-        label="  start / fork  ",
-        color="#2E7D32",
-        fontcolor="#2E7D32",
-        penwidth=1.5
-    ];
-
-    check_event_type -> session_end [
-        label="  end  ",
-        color="#E65100",
-        fontcolor="#E65100",
-        penwidth=1.5
-    ];
-
-    check_event_type -> regular [
-        label="  other  ",
-        color="#6A1B9A",
-        fontcolor="#6A1B9A",
-        penwidth=1.5
-    ];
-
-    session_init -> return_result [penwidth=1.5];
-    session_end -> return_result [penwidth=1.5];
-    regular -> return_result [penwidth=1.5];
-    skip -> return_result [penwidth=1.5, style=dashed, color=grey];
-
-    // ─── Storage associations ────────────────────────────────────────
-    session_init -> storage_session_dir [
-        style=dotted, color="#546E7A", arrowhead=vee,
-        label="  mkdir  ", constraint=false
-    ];
-
-    session_init -> storage_metadata [
-        style=dotted, color="#546E7A", arrowhead=vee,
-        label="  write  "
-    ];
-
-    session_init -> storage_events [
-        style=dotted, color="#546E7A", arrowhead=vee,
-        label="  create + append  "
-    ];
-
-    session_end -> storage_events [
-        style=dotted, color="#546E7A", arrowhead=vee,
-        label="  append  "
-    ];
-
-    session_end -> storage_metadata [
-        style=dotted, color="#546E7A", arrowhead=vee,
-        label="  update  "
-    ];
-
-    regular -> storage_events [
-        style=dotted, color="#546E7A", arrowhead=vee,
-        label="  append  "
+    // ─── Mount to event connection ──────────────────────────────────
+    mount_done -> event_arrives [
+        style=dashed, color="#B0BEC5", penwidth=1.5,
+        label="  events fire during session  ",
+        ltail=cluster_mount, lhead=cluster_event
     ];
 }
