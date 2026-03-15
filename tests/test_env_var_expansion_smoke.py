@@ -61,9 +61,9 @@ def behavior_parsed() -> dict:
 
 
 @pytest.fixture(scope="session")
-def neo4j_raw_config(behavior_parsed) -> dict:
-    """The raw (unexpanded) graph_store.config from the behavior YAML."""
-    return behavior_parsed["hooks"][0]["config"]["graph_store"]["config"]
+def ci_raw_config(behavior_parsed) -> dict:
+    """The raw (unexpanded) CI config from the behavior YAML."""
+    return behavior_parsed["hooks"][0]["config"]
 
 
 # ---------------------------------------------------------------------------
@@ -74,25 +74,25 @@ def neo4j_raw_config(behavior_parsed) -> dict:
 class TestEnvVarDefaultExpansion:
     """When env vars are unset, defaults must produce usable values."""
 
-    def test_uri_defaults_to_bolt_localhost(self, neo4j_raw_config, monkeypatch):
-        monkeypatch.delenv("NEO4J_URI", raising=False)
-        expanded = expand_env_vars({"uri": neo4j_raw_config["uri"]})
-        assert expanded["uri"] == "bolt://localhost:7687"
+    def test_ci_server_url_defaults_to_empty(self, ci_raw_config, monkeypatch):
+        """CI_SERVER_URL defaults to empty string (no server by default)."""
+        monkeypatch.delenv("CI_SERVER_URL", raising=False)
+        expanded = expand_env_vars(
+            {"url": ci_raw_config["context_intelligence_server_url"]}
+        )
+        assert expanded["url"] == ""
 
-    def test_username_defaults_to_neo4j(self, neo4j_raw_config, monkeypatch):
-        monkeypatch.delenv("NEO4J_USERNAME", raising=False)
-        expanded = expand_env_vars({"username": neo4j_raw_config["username"]})
-        assert expanded["username"] == "neo4j"
+    def test_ci_workspace_defaults_to_empty(self, ci_raw_config, monkeypatch):
+        """CI_WORKSPACE defaults to empty string (auto-resolved from coordinator)."""
+        monkeypatch.delenv("CI_WORKSPACE", raising=False)
+        expanded = expand_env_vars({"workspace": ci_raw_config["workspace"]})
+        assert expanded["workspace"] == ""
 
-    def test_password_defaults_to_empty(self, neo4j_raw_config, monkeypatch):
-        monkeypatch.delenv("NEO4J_PASSWORD", raising=False)
-        expanded = expand_env_vars({"password": neo4j_raw_config["password"]})
-        assert expanded["password"] == ""
-
-    def test_database_defaults_to_neo4j(self, neo4j_raw_config, monkeypatch):
-        monkeypatch.delenv("NEO4J_DATABASE", raising=False)
-        expanded = expand_env_vars({"database": neo4j_raw_config["database"]})
-        assert expanded["database"] == "neo4j"
+    def test_ci_log_level_defaults_to_info(self, ci_raw_config, monkeypatch):
+        """CI_LOG_LEVEL defaults to INFO."""
+        monkeypatch.delenv("CI_LOG_LEVEL", raising=False)
+        expanded = expand_env_vars({"log_level": ci_raw_config["log_level"]})
+        assert expanded["log_level"] == "INFO"
 
 
 # ---------------------------------------------------------------------------
@@ -103,25 +103,25 @@ class TestEnvVarDefaultExpansion:
 class TestEnvVarOverride:
     """When env vars are set, they must take precedence over defaults."""
 
-    def test_uri_overridden_by_env(self, neo4j_raw_config, monkeypatch):
-        monkeypatch.setenv("NEO4J_URI", "bolt://prod:7687")
-        expanded = expand_env_vars({"uri": neo4j_raw_config["uri"]})
-        assert expanded["uri"] == "bolt://prod:7687"
+    def test_ci_server_url_overridden_by_env(self, ci_raw_config, monkeypatch):
+        """CI_SERVER_URL env var overrides the empty default."""
+        monkeypatch.setenv("CI_SERVER_URL", "http://ci-server:8080")
+        expanded = expand_env_vars(
+            {"url": ci_raw_config["context_intelligence_server_url"]}
+        )
+        assert expanded["url"] == "http://ci-server:8080"
 
-    def test_username_overridden_by_env(self, neo4j_raw_config, monkeypatch):
-        monkeypatch.setenv("NEO4J_USERNAME", "admin")
-        expanded = expand_env_vars({"username": neo4j_raw_config["username"]})
-        assert expanded["username"] == "admin"
+    def test_ci_workspace_overridden_by_env(self, ci_raw_config, monkeypatch):
+        """CI_WORKSPACE env var overrides the empty default."""
+        monkeypatch.setenv("CI_WORKSPACE", "my-project")
+        expanded = expand_env_vars({"workspace": ci_raw_config["workspace"]})
+        assert expanded["workspace"] == "my-project"
 
-    def test_password_overridden_by_env(self, neo4j_raw_config, monkeypatch):
-        monkeypatch.setenv("NEO4J_PASSWORD", "s3cret")
-        expanded = expand_env_vars({"password": neo4j_raw_config["password"]})
-        assert expanded["password"] == "s3cret"
-
-    def test_database_overridden_by_env(self, neo4j_raw_config, monkeypatch):
-        monkeypatch.setenv("NEO4J_DATABASE", "production")
-        expanded = expand_env_vars({"database": neo4j_raw_config["database"]})
-        assert expanded["database"] == "production"
+    def test_ci_log_level_overridden_by_env(self, ci_raw_config, monkeypatch):
+        """CI_LOG_LEVEL env var overrides the INFO default."""
+        monkeypatch.setenv("CI_LOG_LEVEL", "DEBUG")
+        expanded = expand_env_vars({"log_level": ci_raw_config["log_level"]})
+        assert expanded["log_level"] == "DEBUG"
 
 
 # ---------------------------------------------------------------------------
@@ -146,11 +146,11 @@ class TestBashStyleSyntaxCaught:
         expanded = expand_env_vars(good)
         assert expanded["uri"] == "bolt://localhost:7687"
 
-    def test_behavior_yaml_has_no_dash_defaults(self, neo4j_raw_config, monkeypatch):
+    def test_behavior_yaml_has_no_dash_defaults(self, ci_raw_config, monkeypatch):
         """Full expansion of actual YAML must produce no leading dashes."""
-        for var in ("NEO4J_URI", "NEO4J_USERNAME", "NEO4J_PASSWORD", "NEO4J_DATABASE"):
+        for var in ("CI_SERVER_URL", "CI_WORKSPACE", "CI_LOG_LEVEL"):
             monkeypatch.delenv(var, raising=False)
-        expanded = expand_env_vars(neo4j_raw_config)
+        expanded = expand_env_vars(ci_raw_config)
         for key, val in expanded.items():
             assert not str(val).startswith("-"), (
                 f"config.{key} expanded to '{val}' — "

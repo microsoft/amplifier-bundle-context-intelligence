@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 from typing import Any
 
@@ -33,8 +32,7 @@ class ConfigResolver:
 
     - project_slug: config → coordinator.config → session.working_dir capability → 'default'
     - base_path:    config → coordinator.config → default
-    - forest_name:  config[graph_store][graph_forest_name] → config[project]
-                    → project_slug (full chain above) → 'default'
+    - workspace:    coordinator.config['workspace'] → config['workspace'] → project_slug
 
     Resolved values are cached after first access.
 
@@ -47,7 +45,6 @@ class ConfigResolver:
         self._coordinator = coordinator
         self._base_path: Path | None = None
         self._project_slug: str | None = None
-        self._forest_name: str | None = None
         self._exclude_events: frozenset[str] | None = None
 
     # ------------------------------------------------------------------
@@ -70,7 +67,7 @@ class ConfigResolver:
 
         The Amplifier CLI stamps ``project_slug`` into ``coordinator.config``
         *after* session creation, but hooks mount *during* creation — so
-        ``coordinator.config["project_slug"]`` is not yet available.  The
+        ``coordinator.config[\"project_slug\"]`` is not yet available.  The
         ``session.working_dir`` capability IS registered by the foundation's
         ``bundle.py`` before hooks mount, so we can derive the slug from it.
 
@@ -126,96 +123,28 @@ class ConfigResolver:
         return self._base_path
 
     @property
-    def forest_name(self) -> str:
-        """Resolved forest name for graph storage.
+    def workspace(self) -> str:
+        """Workspace identifier for this session.
 
-        Chain: config['graph_store']['graph_forest_name']
-               → config['project']
-               → project_slug (includes working_dir capability fallback)
-
-        Non-dict graph_store values are skipped gracefully.
-        Result is cached after first access.
+        Priority (first truthy value wins):
+        1. coordinator.config[\"workspace\"]  — set by integrations at coordinator level
+        2. config[\"workspace\"]              — explicit hook config
+        3. project_slug / project chain     — from CLI or working dir
         """
-        if self._forest_name is None:
-            value: Any = None
+        # 1. Coordinator-level workspace (highest — set by integrations)
+        if self._coordinator is not None:
+            coord_config = getattr(self._coordinator, "config", {}) or {}
+            ws = coord_config.get("workspace")
+            if ws:
+                return str(ws)
 
-            # Step 1: graph_store.graph_forest_name (explicit override)
-            graph_store = self._config.get("graph_store")
-            if isinstance(graph_store, dict):
-                value = graph_store.get("graph_forest_name")
+        # 2. Explicit workspace in hook config
+        ws = self._config.get("workspace")
+        if ws:
+            return str(ws)
 
-            # Step 2: config['project']
-            if not value:
-                value = self._config.get("project")
-
-            # Step 3: delegate to project_slug (has its own full chain
-            #         including working_dir capability fallback)
-            if not value:
-                value = self.project_slug
-
-            self._forest_name = str(value) if value else _DEFAULT_PROJECT_SLUG
-
-        return self._forest_name
-
-    @property
-    def enable_graph(self) -> bool:
-        """Whether graph storage is enabled.
-
-        Resolution chain (first truthy wins):
-          1. Environment variable ``CI_ENABLE_GRAPH`` (e.g. ``CI_ENABLE_GRAPH=true``)
-          2. config['enable_graph']
-
-        The env-var override exists because the Amplifier CLI merges behavior
-        YAML config ON TOP of settings.yaml hook config, so a behavior default
-        of ``enable_graph: false`` silently wins over the user's
-        ``enable_graph: true`` in settings.yaml.  The env var gives users a
-        reliable override path unaffected by YAML merge ordering.
-        """
-        env = os.environ.get("CI_ENABLE_GRAPH", "").strip().lower()
-        if env in ("1", "true", "yes"):
-            return True
-        if env in ("0", "false", "no"):
-            return False
-        val = self._config.get("enable_graph", False)
-        if isinstance(val, str):
-            # Handles YAML env-interpolation like '${CI_ENABLE_GRAPH:false}' →
-            # only the literal strings "1", "true", "yes" are truthy.
-            return val.strip().lower() in ("1", "true", "yes")
-        return bool(val)
-
-    @property
-    def graph_store_config(self) -> dict[str, Any] | None:
-        """Full graph_store configuration dict, or None if absent.
-
-        Reads directly from config['graph_store']. No coordinator fallback.
-        """
-        value = self._config.get("graph_store")
-        return value if isinstance(value, dict) else None
-
-    @property
-    def neo4j_config(self) -> dict[str, Any] | None:
-        """Extracted Neo4j connection parameters, or None if unavailable.
-
-        Extracts uri, auth (as a (username, password) tuple or None),
-        and database (defaulting to 'neo4j') from graph_store['config'].
-
-        Returns None if graph_store is absent or has no 'config' key.
-        """
-        store = self.graph_store_config
-        if store is None:
-            return None
-
-        inner = store.get("config")
-        if not isinstance(inner, dict):
-            return None
-
-        uri = inner.get("uri")
-        username = inner.get("username")
-        password = inner.get("password")
-        auth = (username, password) if username is not None and password is not None else None
-        database = inner.get("database", "neo4j")
-
-        return {"uri": uri, "auth": auth, "database": database}
+        # 3. Fall through project_slug / project / working_dir / 'default'
+        return self.project_slug
 
     @property
     def exclude_events(self) -> frozenset[str]:
@@ -259,3 +188,22 @@ class ConfigResolver:
         which places them alongside the session's context-intelligence directory.
         """
         return self.base_path / self.project_slug / "sessions"
+
+    @property
+    def context_intelligence_server_url(self) -> str | None:
+        """URL of the context-intelligence server, or None if not configured.
+
+        Reads directly from config['context_intelligence_server_url'].
+        No coordinator fallback.
+        """
+        value = self._config.get("context_intelligence_server_url")
+        return str(value) if value else None
+
+    @property
+    def neo4j_config(self) -> dict[str, Any] | None:
+        """Extracted Neo4j connection parameters, or None if unavailable.
+
+        Retained for backward compatibility — returns None since graph_store
+        configuration has been removed from the thin-forwarder bundle.
+        """
+        return None

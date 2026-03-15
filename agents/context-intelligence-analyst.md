@@ -222,3 +222,9 @@ The `metadata.json` in `context-intelligence/` belongs to the context-intelligen
 
 @context-intelligence:context/agents/session-storage-knowledge.md
 <!-- path conventions, metadata structure, and context-intelligence/ vs foundation/ separation -->
+
+## Graph model reference (for Cypher queries)
+@context-intelligence:context/graph-model-reference.md
+
+## Session disk layout (JSONL output structure)
+@context-intelligence:context/session-disk-layout.dot

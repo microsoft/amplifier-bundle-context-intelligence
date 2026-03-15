@@ -1,38 +1,21 @@
-# context-intelligence-behavior v0.1.0
-# Context intelligence hooks for building a property graph
-# from orchestrator events.
+# Context Intelligence — thin event forwarder behavior
+# Writes session events to local JSONL and optionally dispatches to
+# the Context Intelligence server.
 
 hooks:
   - module: hook-context-intelligence
-    source: git+https://github.com/colombod/amplifier-bundle-context-intelligence@main#subdirectory=modules/hook-context-intelligence
+    source: git+https://github.com/colombod/amplifier-bundle-context-intelligence@main
     config:
-      # Resolution order: explicit config -> coordinator.config -> sensible default
-      # base_path: '~/.amplifier/projects'  # optional; resolved lazily if omitted
-      # project_slug: 'my-project'          # optional; resolved lazily if omitted
-      # project: 'my-project'              # optional; used as graph_forest_name fallback
-      exclude_events: []
-      log_level: 'WARNING'
-      # enable_graph: resolved from CI_ENABLE_GRAPH env var (true/false) or
-      # settings.yaml hook config.  Defaults to false when unset.
-      enable_graph: '${CI_ENABLE_GRAPH:false}'
-      graph_store:
-        type: 'neo4j'
-        # graph_forest_name: auto-resolved via coordinator.config.project_slug -> "default"
-        # Set explicitly here only if you need to override the auto-resolved value
-        config:
-          uri: '${NEO4J_URI:bolt://localhost:7687}'
-          username: '${NEO4J_USERNAME:neo4j}'
-          password: '${NEO4J_PASSWORD:password}'
-          database: '${NEO4J_DATABASE:neo4j}'
+      # Server URL (required to enable graph storage and blob tools)
+      context_intelligence_server_url: "${CI_SERVER_URL:}"
 
-tools:
-  - module: tool-skills
-    source: git+https://github.com/microsoft/amplifier-module-tool-skills@main
-    config:
-      skills:
-        - git+https://github.com/microsoft/amplifier-bundle-skills@main#subdirectory=skills
-        - context-intelligence:skills/
+      # Workspace identifier — scopes graph data on the server.
+      # Auto-resolved from coordinator project_slug when not set.
+      workspace: "${CI_WORKSPACE:}"
 
-agents:
-  include:
-    - context-intelligence:context-intelligence-analyst
+      # Log level for the hook itself
+      log_level: "${CI_LOG_LEVEL:INFO}"
+
+      # Events to suppress from logging and dispatch (fnmatch patterns)
+      # exclude_events:
+      #   - "debug:*"

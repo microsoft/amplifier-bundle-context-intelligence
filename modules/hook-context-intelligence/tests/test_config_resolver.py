@@ -129,203 +129,80 @@ class TestProjectSlugResolution:
         assert isinstance(resolver.project_slug, str)
 
 
-class TestForestNameResolution:
-    def test_graph_store_config_wins(self) -> None:
-        """graph_store.graph_forest_name wins over all other options."""
-        coordinator = _make_coordinator(config={"project_slug": "from-coordinator"})
-        resolver = ConfigResolver(
-            config={
-                "graph_store": {"graph_forest_name": "from-graph-store"},
-                "project": "from-project",
-            },
-            coordinator=coordinator,
-        )
+class TestWorkspaceResolution:
+    """workspace property — coordinator.config > config > project_slug."""
 
-        assert resolver.forest_name == "from-graph-store"
+    def test_coordinator_config_wins_over_hook_config(self) -> None:
+        """coordinator.config['workspace'] has highest priority."""
+        coordinator = _make_coordinator(config={"workspace": "from-coordinator"})
+        resolver = ConfigResolver(config={"workspace": "from-hook"}, coordinator=coordinator)
 
-    def test_config_project_fallback(self) -> None:
-        """config['project'] used when no graph_forest_name."""
-        coordinator = _make_coordinator(config={"project_slug": "from-coordinator"})
-        resolver = ConfigResolver(
-            config={"project": "from-config-project"},
-            coordinator=coordinator,
-        )
+        assert resolver.workspace == "from-coordinator"
 
-        assert resolver.forest_name == "from-config-project"
+    def test_hook_config_wins_over_project_slug(self) -> None:
+        """config['workspace'] wins when coordinator has no workspace."""
+        coordinator = _make_coordinator(config={"project_slug": "proj-slug"})
+        resolver = ConfigResolver(config={"workspace": "from-hook"}, coordinator=coordinator)
 
-    def test_coordinator_project_slug_fallback(self) -> None:
-        """coordinator.config.project_slug used when no config.project."""
-        coordinator = _make_coordinator(config={"project_slug": "from-coordinator-slug"})
+        assert resolver.workspace == "from-hook"
+
+    def test_falls_back_to_project_slug(self) -> None:
+        """When both coordinator.config and config lack workspace, falls back to project_slug."""
+        coordinator = _make_coordinator(config={"project_slug": "slug-fallback"})
         resolver = ConfigResolver(config={}, coordinator=coordinator)
 
-        assert resolver.forest_name == "from-coordinator-slug"
+        assert resolver.workspace == "slug-fallback"
 
-    def test_default_when_all_absent(self) -> None:
-        """Resolves to 'default' when all sources absent."""
+    def test_defaults_to_default_when_all_absent(self) -> None:
+        """When all workspace sources are absent, resolves to 'default'."""
         coordinator = _make_coordinator(config={})
         resolver = ConfigResolver(config={}, coordinator=coordinator)
 
-        assert resolver.forest_name == "default"
-
-    def test_graph_store_not_a_dict_skips_gracefully(self) -> None:
-        """Non-dict graph_store is skipped gracefully, falls through to config.project."""
-        coordinator = _make_coordinator(config={})
-        resolver = ConfigResolver(
-            config={"graph_store": "not-a-dict", "project": "fallback-project"},
-            coordinator=coordinator,
-        )
-
-        assert resolver.forest_name == "fallback-project"
-
-    def test_graph_store_missing_forest_key_falls_through(self) -> None:
-        """Dict graph_store without graph_forest_name falls through to config.project."""
-        coordinator = _make_coordinator(config={})
-        resolver = ConfigResolver(
-            config={"graph_store": {"type": "neo4j"}, "project": "from-project-key"},
-            coordinator=coordinator,
-        )
-
-        assert resolver.forest_name == "from-project-key"
-
-    def test_cached_after_first_access(self) -> None:
-        """forest_name returns the same object on repeated access (cached)."""
-        coordinator = _make_coordinator(config={})
-        resolver = ConfigResolver(config={}, coordinator=coordinator)
-
-        first = resolver.forest_name
-        second = resolver.forest_name
-
-        assert first is second
-
-    def test_coordinator_without_config_attr_falls_back_to_default(self) -> None:
-        """Coordinator without .config attribute safely falls back to 'default'."""
-        bare = _make_bare_coordinator()
-        resolver = ConfigResolver(config={}, coordinator=bare)
-
-        assert resolver.forest_name == "default"
+        assert resolver.workspace == "default"
 
     def test_returns_str_type(self) -> None:
-        """forest_name always returns a str instance."""
+        """workspace always returns a str."""
+        coordinator = _make_coordinator(config={"workspace": "my-ws"})
+        resolver = ConfigResolver(config={}, coordinator=coordinator)
+
+        assert isinstance(resolver.workspace, str)
+
+    def test_coordinator_none_falls_back_to_config(self) -> None:
+        """When coordinator is None, falls back to config['workspace']."""
+        resolver = ConfigResolver(config={"workspace": "from-config"}, coordinator=None)
+
+        assert resolver.workspace == "from-config"
+
+
+class TestContextIntelligenceServerUrl:
+    """context_intelligence_server_url property."""
+
+    def test_returns_none_when_absent(self) -> None:
+        """Returns None when context_intelligence_server_url not in config."""
+        coordinator = _make_coordinator(config={})
+        resolver = ConfigResolver(config={}, coordinator=coordinator)
+
+        assert resolver.context_intelligence_server_url is None
+
+    def test_returns_string_when_set(self) -> None:
+        """Returns the URL string when configured."""
         coordinator = _make_coordinator(config={})
         resolver = ConfigResolver(
-            config={"graph_store": {"graph_forest_name": "my-forest"}},
+            config={"context_intelligence_server_url": "http://localhost:8000"},
             coordinator=coordinator,
         )
 
-        assert isinstance(resolver.forest_name, str)
+        assert resolver.context_intelligence_server_url == "http://localhost:8000"
 
-
-class TestEnableGraph:
-    def test_defaults_to_false(self) -> None:
-        """enable_graph returns False when not set in config."""
+    def test_returns_none_for_empty_string(self) -> None:
+        """Returns None when value is an empty string (falsy)."""
         coordinator = _make_coordinator(config={})
-        resolver = ConfigResolver(config={}, coordinator=coordinator)
+        resolver = ConfigResolver(
+            config={"context_intelligence_server_url": ""},
+            coordinator=coordinator,
+        )
 
-        assert resolver.enable_graph is False
-
-    def test_explicit_true_works(self) -> None:
-        """enable_graph returns True when explicitly set to True."""
-        coordinator = _make_coordinator(config={})
-        resolver = ConfigResolver(config={"enable_graph": True}, coordinator=coordinator)
-
-        assert resolver.enable_graph is True
-
-    def test_returns_bool_type(self) -> None:
-        """enable_graph always returns a bool instance."""
-        coordinator = _make_coordinator(config={})
-        resolver = ConfigResolver(config={"enable_graph": 1}, coordinator=coordinator)
-
-        assert isinstance(resolver.enable_graph, bool)
-
-
-class TestGraphStoreConfig:
-    def test_returns_none_when_absent(self) -> None:
-        """graph_store_config returns None when graph_store not in config."""
-        coordinator = _make_coordinator(config={})
-        resolver = ConfigResolver(config={}, coordinator=coordinator)
-
-        assert resolver.graph_store_config is None
-
-    def test_returns_dict_when_present(self) -> None:
-        """graph_store_config returns the full dict when graph_store is set."""
-        store = {"type": "neo4j", "uri": "bolt://localhost:7687"}
-        coordinator = _make_coordinator(config={})
-        resolver = ConfigResolver(config={"graph_store": store}, coordinator=coordinator)
-
-        assert resolver.graph_store_config == store
-
-    def test_returns_none_when_graph_store_is_not_a_dict(self) -> None:
-        """graph_store_config returns None when graph_store value is a non-dict."""
-        coordinator = _make_coordinator(config={})
-        resolver = ConfigResolver(config={"graph_store": "not-a-dict"}, coordinator=coordinator)
-
-        assert resolver.graph_store_config is None
-
-
-class TestNeo4jConfig:
-    def test_returns_none_when_no_graph_store(self) -> None:
-        """neo4j_config returns None when graph_store is absent."""
-        coordinator = _make_coordinator(config={})
-        resolver = ConfigResolver(config={}, coordinator=coordinator)
-
-        assert resolver.neo4j_config is None
-
-    def test_extracts_full_config(self) -> None:
-        """neo4j_config extracts uri, auth tuple, and database from graph_store.config."""
-        store = {
-            "config": {
-                "uri": "bolt://localhost:7687",
-                "username": "neo4j",
-                "password": "secret",
-                "database": "mydb",
-            }
-        }
-        coordinator = _make_coordinator(config={})
-        resolver = ConfigResolver(config={"graph_store": store}, coordinator=coordinator)
-
-        result = resolver.neo4j_config
-        assert result is not None
-        assert result["uri"] == "bolt://localhost:7687"
-        assert result["auth"] == ("neo4j", "secret")
-        assert result["database"] == "mydb"
-
-    def test_auth_none_when_credentials_absent(self) -> None:
-        """neo4j_config returns auth=None when username/password are not present."""
-        store = {
-            "config": {
-                "uri": "bolt://localhost:7687",
-            }
-        }
-        coordinator = _make_coordinator(config={})
-        resolver = ConfigResolver(config={"graph_store": store}, coordinator=coordinator)
-
-        result = resolver.neo4j_config
-        assert result is not None
-        assert result["auth"] is None
-
-    def test_database_defaults_to_neo4j(self) -> None:
-        """neo4j_config database defaults to 'neo4j' when not explicitly set."""
-        store = {
-            "config": {
-                "uri": "bolt://localhost:7687",
-                "username": "neo4j",
-                "password": "secret",
-            }
-        }
-        coordinator = _make_coordinator(config={})
-        resolver = ConfigResolver(config={"graph_store": store}, coordinator=coordinator)
-
-        result = resolver.neo4j_config
-        assert result is not None
-        assert result["database"] == "neo4j"
-
-    def test_returns_none_when_no_config_key(self) -> None:
-        """neo4j_config returns None when graph_store has no 'config' key."""
-        store = {"type": "neo4j"}
-        coordinator = _make_coordinator(config={})
-        resolver = ConfigResolver(config={"graph_store": store}, coordinator=coordinator)
-
-        assert resolver.neo4j_config is None
+        assert resolver.context_intelligence_server_url is None
 
 
 class TestExcludeEvents:

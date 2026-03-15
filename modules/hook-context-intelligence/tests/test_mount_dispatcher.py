@@ -1,8 +1,8 @@
 """Tests for the mount() dispatcher in __init__.py.
 
-Validates the two-path architecture:
-  [ALWAYS]       LoggingHandler  (flat JSONL)
-  [CONDITIONAL]  GraphDataHook   (wraps existing 7 graph handlers)
+Validates the thin-forwarder architecture:
+  [ALWAYS]       LoggingHandler  (flat JSONL + optional server dispatch)
+  [CONDITIONAL]  BlobTool        (registered when context_intelligence_server_url set)
 """
 
 from __future__ import annotations
@@ -58,9 +58,9 @@ def _make_coordinator(
 # TestLoggingOnlyPath
 # ---------------------------------------------------------------------------
 class TestLoggingOnlyPath:
-    """When graph is disabled, only LoggingHandler is registered."""
+    """LoggingHandler is always registered; no graph handlers exist."""
 
-    async def test_mount_returns_cleanup_with_no_graph(self) -> None:
+    async def test_mount_returns_cleanup_callable(self) -> None:
         from amplifier_module_hook_context_intelligence import mount
 
         coordinator = _make_coordinator(
@@ -95,77 +95,12 @@ class TestLoggingOnlyPath:
         for call in logging_calls:
             assert call.kwargs.get("priority") == 100
 
-    async def test_no_graph_handlers_when_enable_graph_false(self) -> None:
-        from amplifier_module_hook_context_intelligence import mount
-
-        events = ["session:start", "session:end"]
-        coordinator = _make_coordinator(contributed_events=[events])
-        await mount(coordinator, config={"enable_graph": False})
-
-        # No graph registrations at priority 90
-        graph_calls = [
-            c for c in coordinator.hooks.register.call_args_list if c.kwargs.get("priority") == 90
-        ]
-        assert len(graph_calls) == 0
-
-    async def test_no_graph_handlers_when_graph_store_missing(self) -> None:
-        from amplifier_module_hook_context_intelligence import mount
-
-        events = ["session:start", "session:end"]
-        coordinator = _make_coordinator(contributed_events=[events])
-        await mount(coordinator, config={"enable_graph": True})
-
-        # No graph registrations at priority 90 (no graph_store key)
-        graph_calls = [
-            c for c in coordinator.hooks.register.call_args_list if c.kwargs.get("priority") == 90
-        ]
-        assert len(graph_calls) == 0
-
-
-# ---------------------------------------------------------------------------
-# TestLoggingPlusGraphPath
-# ---------------------------------------------------------------------------
-class TestLoggingPlusGraphPath:
-    """When graph is enabled with store, both paths are active."""
-
-    async def test_both_paths_active(self) -> None:
-        from unittest.mock import AsyncMock, MagicMock, patch
-
-        from amplifier_module_hook_context_intelligence import mount
-
-        events = ["session:start", "session:end", "tool:pre"]
-        coordinator = _make_coordinator(contributed_events=[events])
-        config = {
-            "enable_graph": True,
-            "graph_store": {
-                "type": "neo4j",
-                "graph_forest_name": "default",
-                "config": {
-                    "uri": "neo4j://localhost:7687",
-                    "username": "neo4j",
-                    "password": "test",
-                    "database": "neo4j",
-                },
-            },
-        }
-        mock_store = MagicMock()
-        mock_store.close = AsyncMock()
-        with patch(
-            "amplifier_module_hook_context_intelligence.graph_data_hook.Neo4jGraphStore",
-            return_value=mock_store,
-        ):
-            result = await mount(coordinator, config=config)
-        assert callable(result)
-
-        # Total registrations should be more than just logging (events + graph)
-        assert coordinator.hooks.register.call_count > len(events)
-
 
 # ---------------------------------------------------------------------------
 # TestCleanup
 # ---------------------------------------------------------------------------
 class TestCleanup:
-    """Cleanup callable tears down both paths."""
+    """Cleanup callable tears down registered hooks."""
 
     async def test_cleanup_is_callable(self) -> None:
         from amplifier_module_hook_context_intelligence import mount
@@ -270,13 +205,13 @@ class TestEventDiscovery:
         # The duplicate event should appear exactly once
         assert registered_events.count(duplicate_event) == 1
 
-    async def test_discovery_does_not_apply_exclusion_filter(self) -> None:
-        """Exclusion patterns must NOT be applied at discovery level; LoggingHandler sees ALL events."""
+    async def test_discovery_applies_exclusion_filter(self) -> None:
+        """Exclusion patterns suppress events from registration."""
         from amplifier_module_hook_context_intelligence import mount
 
-        # Even with exclude_events config, ALL_EVENTS should still register
         coordinator = _make_coordinator()
-        config = {"exclude_events": ["session:*", "tool:*"]}
+        # Exclude all session:* events
+        config = {"exclude_events": ["session:*"]}
         await mount(coordinator, config=config)
 
         registered_events = set()
@@ -284,11 +219,9 @@ class TestEventDiscovery:
             if call.kwargs.get("name") == "LoggingHandler":
                 registered_events.add(call.args[0])
 
-        # ALL_EVENTS must still be fully registered — no exclusion filtering
-        for event in ALL_EVENTS:
-            assert event in registered_events, (
-                f"Event {event!r} was excluded but should not be — exclusion is a downstream concern"
-            )
+        # session:start and session:end should be excluded
+        assert "session:start" not in registered_events
+        assert "session:end" not in registered_events
 
     async def test_mount_always_returns_callable(self) -> None:
         """With ALL_EVENTS base, mount() should never return None — must return a cleanup callable."""
@@ -343,3 +276,41 @@ class TestModuleContract:
         params = list(sig.parameters.keys())
         assert params[0] == "coordinator"
         assert params[1] == "config"
+
+
+# ---------------------------------------------------------------------------
+# TestBlobToolRegistration
+# ---------------------------------------------------------------------------
+class TestBlobToolRegistration:
+    """BlobTool is registered with coordinator.tools only when context_intelligence_server_url is configured."""
+
+    async def test_blob_tool_not_registered_without_server_url(self) -> None:
+        """When config has no context_intelligence_server_url, no blob tools should be registered."""
+        from amplifier_module_hook_context_intelligence import mount
+
+        coordinator = _make_coordinator()
+        coordinator.tools = MagicMock()
+
+        await mount(coordinator, config={})
+
+        # No blob tool registrations should have been made
+        registered_names = [call.args[0] for call in coordinator.tools.register.call_args_list]
+        assert "blob_list" not in registered_names
+        assert "blob_dump" not in registered_names
+
+    async def test_blob_tool_registered_with_server_url(self) -> None:
+        """When context_intelligence_server_url is configured, blob_list and blob_dump are registered."""
+        from amplifier_module_hook_context_intelligence import mount
+
+        coordinator = _make_coordinator()
+        coordinator.tools = MagicMock()
+
+        await mount(
+            coordinator,
+            config={"context_intelligence_server_url": "http://localhost:8000"},
+        )
+
+        # Both blob tools should have been registered
+        registered_names = [call.args[0] for call in coordinator.tools.register.call_args_list]
+        assert "blob_list" in registered_names
+        assert "blob_dump" in registered_names

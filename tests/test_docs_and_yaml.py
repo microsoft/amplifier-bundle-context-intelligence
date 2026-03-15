@@ -1,9 +1,10 @@
 """Tests verifying behaviors/context-intelligence.yaml and README.md reflect
-ConfigResolver lazy fallback chains.
+the thin-forwarder architecture introduced with the server-dispatch redesign.
 
 These are documentation-state tests: they verify that the YAML config block and
-README Quick Start accurately document the lazy resolution behaviour introduced
-with ConfigResolver.
+README Quick Start accurately document the thin forwarder pattern where session
+events are written to local JSONL and optionally forwarded to a Context
+Intelligence server.
 """
 
 from pathlib import Path
@@ -64,7 +65,7 @@ class TestBehaviorYamlValid:
 
 
 class TestBehaviorYamlCommentedOptionals:
-    """base_path and project_slug must be commented out (lazy-resolved)."""
+    """Thin-forwarder optionals must be commented out (not active YAML keys)."""
 
     def test_base_path_commented_out_not_active_key(self, behavior_parsed):
         """base_path must NOT be an active key in config (it should be commented out)."""
@@ -80,81 +81,64 @@ class TestBehaviorYamlCommentedOptionals:
             "project_slug should be commented out (lazy fallback), not an active YAML key"
         )
 
-    def test_base_path_comment_present_in_raw(self, behavior_raw):
-        """Raw YAML file must contain commented-out base_path reference."""
-        assert "# base_path" in behavior_raw, (
-            "behaviors/context-intelligence.yaml must have a commented-out # base_path line"
-        )
-
-    def test_project_slug_comment_present_in_raw(self, behavior_raw):
-        """Raw YAML file must contain commented-out project_slug reference."""
-        assert "# project_slug" in behavior_raw, (
-            "behaviors/context-intelligence.yaml must have a commented-out # project_slug line"
+    def test_exclude_events_comment_present_in_raw(self, behavior_raw):
+        """Raw YAML file must contain commented-out exclude_events reference."""
+        assert "# exclude_events" in behavior_raw, (
+            "behaviors/context-intelligence.yaml must have a commented-out # exclude_events line"
         )
 
     def test_resolution_order_comment_present(self, behavior_raw):
-        """Raw YAML must contain a comment explaining the resolution chain."""
-        assert "coordinator.config" in behavior_raw, (
-            "YAML must document 'coordinator.config' in the resolution order comment"
-        )
-        assert "sensible default" in behavior_raw, (
-            "YAML must document 'sensible default' in the resolution order comment"
+        """Raw YAML must contain a comment explaining workspace auto-resolution."""
+        assert "coordinator project_slug" in behavior_raw, (
+            "YAML must document workspace auto-resolution from 'coordinator project_slug'"
         )
 
 
 class TestBehaviorYamlRequiredKeys:
-    """Required config keys must remain active."""
+    """Required config keys for the thin-forwarder architecture must remain active."""
 
-    def test_exclude_events_present(self, behavior_parsed):
+    def test_exclude_events_not_active_in_config(self, behavior_parsed):
+        """exclude_events must be commented out, not an active config key."""
         config = behavior_parsed["hooks"][0]["config"]
-        assert "exclude_events" in config
+        assert "exclude_events" not in config, (
+            "exclude_events should be commented out (optional), not an active YAML key"
+        )
 
     def test_log_level_present(self, behavior_parsed):
+        """log_level must be an active key controlling hook verbosity."""
         config = behavior_parsed["hooks"][0]["config"]
         assert "log_level" in config
 
-    def test_enable_graph_present(self, behavior_parsed):
-        """enable_graph must be an active key so settings.yaml can override it during merge."""
+    def test_context_intelligence_server_url_present(self, behavior_parsed):
+        """context_intelligence_server_url must be active — it controls server dispatch."""
         config = behavior_parsed["hooks"][0]["config"]
-        assert "enable_graph" in config
-        assert config["enable_graph"] is False, (
-            "behavior default must be false; users override in settings.yaml"
-        )
+        assert "context_intelligence_server_url" in config
 
-    def test_graph_store_present(self, behavior_parsed):
+    def test_workspace_present(self, behavior_parsed):
+        """workspace must be active — it scopes session data on the server."""
         config = behavior_parsed["hooks"][0]["config"]
-        assert "graph_store" in config
-
-    def test_graph_store_type_neo4j(self, behavior_parsed):
-        config = behavior_parsed["hooks"][0]["config"]
-        assert config["graph_store"]["type"] == "neo4j"
+        assert "workspace" in config
 
 
 class TestBehaviorYamlEnvVarSyntax:
-    """Neo4j config values must use env-var syntax."""
+    """CI_ config values must use env-var syntax with empty defaults."""
 
-    def test_neo4j_uri_uses_env_var_syntax(self, behavior_raw):
-        """uri must use ${NEO4J_URI:bolt://localhost:7687} syntax."""
-        assert "${NEO4J_URI:bolt://localhost:7687}" in behavior_raw, (
-            "Neo4j uri must use env var syntax: ${NEO4J_URI:bolt://localhost:7687}"
+    def test_ci_server_url_uses_env_var_syntax(self, behavior_raw):
+        """context_intelligence_server_url must use ${CI_SERVER_URL:} syntax."""
+        assert "${CI_SERVER_URL:}" in behavior_raw, (
+            "context_intelligence_server_url must use env var syntax: ${CI_SERVER_URL:}"
         )
 
-    def test_neo4j_username_uses_env_var_syntax(self, behavior_raw):
-        """username must use ${NEO4J_USERNAME:neo4j} syntax."""
-        assert "${NEO4J_USERNAME:neo4j}" in behavior_raw, (
-            "Neo4j username must use env var syntax: ${NEO4J_USERNAME:neo4j}"
+    def test_ci_workspace_uses_env_var_syntax(self, behavior_raw):
+        """workspace must use ${CI_WORKSPACE:} syntax."""
+        assert "${CI_WORKSPACE:}" in behavior_raw, (
+            "workspace must use env var syntax: ${CI_WORKSPACE:}"
         )
 
-    def test_neo4j_password_uses_env_var_syntax(self, behavior_raw):
-        """password must use ${NEO4J_PASSWORD} syntax (no default — must be set)."""
-        assert "${NEO4J_PASSWORD}" in behavior_raw, (
-            "Neo4j password must use env var syntax: ${NEO4J_PASSWORD}"
-        )
-
-    def test_neo4j_database_uses_env_var_syntax(self, behavior_raw):
-        """database must use ${NEO4J_DATABASE:neo4j} syntax."""
-        assert "${NEO4J_DATABASE:neo4j}" in behavior_raw, (
-            "Neo4j database must use env var syntax: ${NEO4J_DATABASE:neo4j}"
+    def test_ci_log_level_uses_env_var_syntax(self, behavior_raw):
+        """log_level must use ${CI_LOG_LEVEL:INFO} syntax with INFO as default."""
+        assert "${CI_LOG_LEVEL:INFO}" in behavior_raw, (
+            "log_level must use env var syntax: ${CI_LOG_LEVEL:INFO}"
         )
 
     def test_no_bash_style_default_syntax(self, behavior_raw):
@@ -166,15 +150,15 @@ class TestBehaviorYamlEnvVarSyntax:
         )
 
 
-class TestBehaviorYamlGraphForestName:
-    """graph_forest_name comment must document its resolution chain."""
+class TestBehaviorYamlWorkspace:
+    """workspace must document its auto-resolution chain."""
 
-    def test_graph_forest_name_comment_present(self, behavior_raw):
-        """Raw YAML must include a comment explaining graph_forest_name resolution."""
-        assert "graph_forest_name" in behavior_raw
-        # The comment must document the resolution chain including config.project
-        assert "config.project" in behavior_raw, (
-            "YAML must document 'config.project' in the graph_forest_name resolution comment"
+    def test_workspace_auto_resolution_documented(self, behavior_raw):
+        """Raw YAML must include a comment explaining workspace auto-resolution."""
+        assert "workspace" in behavior_raw
+        # The comment must document auto-resolution from coordinator project_slug
+        assert "coordinator project_slug" in behavior_raw, (
+            "YAML must document workspace auto-resolution from coordinator project_slug"
         )
 
 
@@ -184,58 +168,38 @@ class TestBehaviorYamlGraphForestName:
 
 
 class TestReadmeQuickStart:
-    """README Quick Start YAML block must show lazy fallback documentation."""
+    """README Quick Start YAML block must show thin-forwarder configuration."""
 
     def test_readme_has_quick_start_section(self, readme_raw):
         """README must contain a Quick Start section."""
         assert "## Quick Start" in readme_raw
 
-    def test_readme_quick_start_base_path_commented_out(self, readme_raw):
-        """README Quick Start must show base_path as a commented-out optional."""
-        assert "# base_path:" in readme_raw, (
-            "README Quick Start must show '# base_path:' as commented-out optional"
+    def test_readme_quick_start_server_url_present(self, readme_raw):
+        """README Quick Start must show context_intelligence_server_url."""
+        assert "context_intelligence_server_url" in readme_raw, (
+            "README Quick Start must show 'context_intelligence_server_url'"
         )
 
-    def test_readme_quick_start_project_slug_commented_out(self, readme_raw):
-        """README Quick Start must show project_slug as a commented-out optional."""
-        assert "# project_slug:" in readme_raw, (
-            "README Quick Start must show '# project_slug:' as commented-out optional"
+    def test_readme_quick_start_workspace_present(self, readme_raw):
+        """README Quick Start must show workspace configuration."""
+        assert "workspace" in readme_raw
+
+    def test_readme_quick_start_ci_server_url_env_var(self, readme_raw):
+        """README Quick Start must show CI_SERVER_URL env var syntax."""
+        assert "${CI_SERVER_URL" in readme_raw, (
+            "README Quick Start must show env var syntax for CI_SERVER_URL"
         )
 
-    def test_readme_quick_start_enable_graph_with_comment(self, readme_raw):
-        """README Quick Start must show enable_graph: false with a comment."""
-        assert "enable_graph: false" in readme_raw
-
-    def test_readme_quick_start_graph_store_present(self, readme_raw):
-        """README Quick Start must show graph_store configuration."""
-        assert "graph_store:" in readme_raw
-
-    def test_readme_quick_start_graph_forest_name_present(self, readme_raw):
-        """README Quick Start must show graph_forest_name."""
-        assert "graph_forest_name" in readme_raw
-
-    def test_readme_quick_start_env_var_syntax_uri(self, readme_raw):
-        """README Quick Start must show env var syntax for Neo4j uri."""
-        assert "${NEO4J_URI" in readme_raw, (
-            "README Quick Start must show env var syntax for Neo4j URI"
+    def test_readme_quick_start_ci_workspace_env_var(self, readme_raw):
+        """README Quick Start must show CI_WORKSPACE env var syntax."""
+        assert "${CI_WORKSPACE" in readme_raw, (
+            "README Quick Start must show env var syntax for CI_WORKSPACE"
         )
 
-    def test_readme_quick_start_env_var_syntax_username(self, readme_raw):
-        """README Quick Start must show env var syntax for Neo4j username."""
-        assert "${NEO4J_USERNAME" in readme_raw, (
-            "README Quick Start must show env var syntax for Neo4j username"
-        )
-
-    def test_readme_quick_start_env_var_syntax_password(self, readme_raw):
-        """README Quick Start must show env var syntax for Neo4j password."""
-        assert "${NEO4J_PASSWORD}" in readme_raw, (
-            "README Quick Start must show env var syntax for Neo4j password"
-        )
-
-    def test_readme_quick_start_env_var_syntax_database(self, readme_raw):
-        """README Quick Start must show env var syntax for Neo4j database."""
-        assert "${NEO4J_DATABASE" in readme_raw, (
-            "README Quick Start must show env var syntax for Neo4j database"
+    def test_readme_quick_start_ci_log_level_env_var(self, readme_raw):
+        """README Quick Start must show CI_LOG_LEVEL env var syntax."""
+        assert "${CI_LOG_LEVEL" in readme_raw, (
+            "README Quick Start must show env var syntax for CI_LOG_LEVEL"
         )
 
 

@@ -6,10 +6,13 @@ Writes per-session events.jsonl and metadata.json files.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from pathlib import Path
 from typing import Any
+
+import httpx
 
 from amplifier_core.models import HookResult
 
@@ -63,6 +66,10 @@ class LoggingHandler:
         self._resolver = resolver
         self.handled_events = set()
         self._seen_sessions: set[str] = set()
+        self._server_url: str | None = (
+            getattr(resolver, "context_intelligence_server_url", None) or None
+        )
+        self._workspace: str | None = getattr(resolver, "workspace", None) or None
 
     def _session_dir(self, session_id: str) -> Path:
         return self._resolver.session_dir(session_id)
@@ -90,6 +97,9 @@ class LoggingHandler:
             self._append_event(session_dir, event, data)
         except Exception:
             logger.exception("LoggingHandler error processing %s", event)
+
+        if self._server_url:
+            asyncio.create_task(self._dispatch_to_server(event, data))
 
         return HookResult(action="continue")
 
@@ -152,6 +162,28 @@ class LoggingHandler:
         meta["ended_at"] = data.get("timestamp", "")
 
         meta_path.write_text(json.dumps(meta, separators=(",", ":")))
+
+    # -- server dispatch (fire-and-forget) ----------------------------------
+    async def _dispatch_to_server(self, event: str, data: dict[str, Any]) -> None:
+        """Fire-and-forget POST to the configured server URL.
+
+        JSONL writing is the durable record — HTTP dispatch is best-effort.
+        Failures are caught and logged as warnings without affecting the caller.
+        """
+        try:
+            payload = {
+                "event": event,
+                "workspace": self._workspace,
+                "data": data,
+            }
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                await client.post(f"{self._server_url}/events", json=payload)
+        except Exception:
+            logger.warning(
+                "server_dispatch_failed: event=%s url=%s",
+                event,
+                self._server_url,
+            )
 
     # -- shared JSONL appender ----------------------------------------------
     @staticmethod

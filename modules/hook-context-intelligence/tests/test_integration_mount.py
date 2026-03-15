@@ -1,6 +1,6 @@
 """Full end-to-end integration tests exercising the complete mount -> event -> cleanup cycle.
 
-Tests both logging-only and logging+graph paths through the real mount() entry point.
+Tests the thin-forwarder path: LoggingHandler always active, no graph handlers.
 """
 
 from __future__ import annotations
@@ -8,15 +8,14 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 from amplifier_core.events import ALL_EVENTS
 
 from amplifier_module_hook_context_intelligence import mount
 
-# Registration priorities used by production code
+# Registration priority used by production code
 LOGGING_PRIORITY = 100
-GRAPH_PRIORITY = 90
 
 
 # ---------------------------------------------------------------------------
@@ -26,12 +25,7 @@ def _make_coordinator(
     contributed_events: list[list[str]] | None = None,
     working_dir: str = "/home/user/test-project",
 ) -> MagicMock:
-    """Build a mock coordinator for integration tests.
-
-    - get_capability returns None for 'observability.events',
-      working_dir string for 'session.working_dir'
-    - hooks.register returns tracked unregister MagicMock fns
-    """
+    """Build a mock coordinator for integration tests."""
     coordinator = MagicMock()
     coordinator.config = {}
     unregister_fns: list[MagicMock] = []
@@ -52,8 +46,6 @@ def _make_coordinator(
     def _get_capability(name: str) -> Any:
         if name == "session.working_dir":
             return working_dir
-        if name == "observability.events":
-            return None
         return None
 
     coordinator.get_capability = MagicMock(side_effect=_get_capability)
@@ -116,7 +108,7 @@ class TestLoggingOnlyIntegration:
             },
         )
 
-        # Verify session directory exists at tmp_path/test-project/sessions/int-sess-001/context-intelligence/
+        # Verify session directory exists
         session_dir = tmp_path / "test-project" / "sessions" / session_id / "context-intelligence"
         assert session_dir.exists(), f"Session dir not found: {session_dir}"
 
@@ -141,69 +133,18 @@ class TestLoggingOnlyIntegration:
         # cleanup() does not raise
         cleanup()
 
+    async def test_logging_handler_registers_for_all_events(self) -> None:
+        """LoggingHandler registers for ALL_EVENTS base."""
+        coordinator = _make_coordinator()
+        await mount(coordinator, config={})
 
-# ---------------------------------------------------------------------------
-# TestLoggingPlusGraphIntegration
-# ---------------------------------------------------------------------------
-class TestLoggingPlusGraphIntegration:
-    """Both logging and graph paths mount successfully."""
-
-    async def test_both_paths_mount_successfully(self) -> None:
-        events = ["session:start", "session:end", "tool:pre"]
-        coordinator = _make_coordinator(contributed_events=[events])
-        config = {
-            "enable_graph": True,
-            "graph_store": {
-                "type": "neo4j",
-                "config": {"uri": "bolt://localhost:7687", "username": "neo4j", "password": "test"},
-            },
-        }
-        mock_store = MagicMock()
-        mock_store.close = AsyncMock()
-        with patch(
-            "amplifier_module_hook_context_intelligence.graph_data_hook.Neo4jGraphStore",
-            return_value=mock_store,
-        ):
-            result = await mount(coordinator, config=config)
-        assert callable(result)
-
-        # Count registrations by priority
         logging_regs = [
             c
             for c in coordinator.hooks.register.call_args_list
             if c.kwargs.get("priority") == LOGGING_PRIORITY
+            or c.kwargs.get("name") == "LoggingHandler"
         ]
-        graph_regs = [
-            c
-            for c in coordinator.hooks.register.call_args_list
-            if c.kwargs.get("priority") == GRAPH_PRIORITY
-        ]
-
-        # Logging registrations at priority=100 >= len(ALL_EVENTS) (base + contributed)
         assert len(logging_regs) >= len(ALL_EVENTS)
-        # Graph registrations at priority=90 >= 3
-        assert len(graph_regs) >= 3
-
-
-# ---------------------------------------------------------------------------
-# TestGraphNotCreatedWithoutStore
-# ---------------------------------------------------------------------------
-class TestGraphNotCreatedWithoutStore:
-    """enable_graph=True without graph_store does NOT create graph handlers."""
-
-    async def test_enable_graph_without_stores_is_logging_only(self) -> None:
-        events = ["session:start", "session:end", "tool:pre"]
-        coordinator = _make_coordinator(contributed_events=[events])
-        config = {"enable_graph": True}  # No graph_store key
-        await mount(coordinator, config=config)
-
-        # Graph regs at GRAPH_PRIORITY == 0
-        graph_regs = [
-            c
-            for c in coordinator.hooks.register.call_args_list
-            if c.kwargs.get("priority") == GRAPH_PRIORITY
-        ]
-        assert len(graph_regs) == 0
 
 
 # ---------------------------------------------------------------------------

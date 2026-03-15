@@ -80,14 +80,20 @@ class TestPyprojectStructure:
         assert attr == "mount"
         assert module_path == "amplifier_module_hook_context_intelligence"
 
-    def test_runtime_dependencies(self):
+    def test_runtime_dependencies_httpx_present(self):
+        """httpx must be a runtime dependency (used by LoggingHandler + BlobTool)."""
         data = self._load_pyproject()
         deps = data["project"].get("dependencies", [])
-        assert any(d.startswith("neo4j") for d in deps), (
-            f"Expected neo4j in runtime dependencies, got: {deps}"
+        assert any(d.startswith("httpx") for d in deps), (
+            f"Expected httpx in runtime dependencies, got: {deps}"
         )
-        assert not any(d.startswith("duckdb") for d in deps), (
-            f"duckdb must not be in runtime dependencies, got: {deps}"
+
+    def test_runtime_dependencies_no_neo4j(self):
+        """neo4j must NOT be a runtime dependency (graph creation is now server-side)."""
+        data = self._load_pyproject()
+        deps = data["project"].get("dependencies", [])
+        assert not any(d.startswith("neo4j") for d in deps), (
+            f"neo4j must not be in runtime dependencies (graph is server-side), got: {deps}"
         )
 
     def test_hatchling_build_backend(self):
@@ -100,7 +106,7 @@ class TestPyprojectStructure:
 
 
 class TestBehaviorYamlConfigShape:
-    """Validate the behavior YAML has the expected config shape."""
+    """Validate the behavior YAML has the expected thin-forwarder config shape."""
 
     def _load_behavior_yaml(self) -> dict:
         path = REPO_ROOT / "behaviors" / "context-intelligence.yaml"
@@ -116,40 +122,23 @@ class TestBehaviorYamlConfigShape:
         data = self._load_behavior_yaml()
         assert data["hooks"][0]["module"] == "hook-context-intelligence"
 
-    def test_config_has_required_keys(self):
-        """Config must have: exclude_events, log_level, graph_store, enable_graph."""
+    def test_config_has_thin_forwarder_keys(self):
+        """Config must have: context_intelligence_server_url, workspace, log_level."""
         data = self._load_behavior_yaml()
         config = data["hooks"][0]["config"]
-        expected_keys = {"exclude_events", "log_level", "graph_store", "enable_graph"}
-        assert expected_keys == set(config.keys())
+        assert "context_intelligence_server_url" in config
+        assert "workspace" in config
+        assert "log_level" in config
 
-    def test_graph_store_is_dict(self):
-        """graph_store must be a dict (singular store config)."""
+    def test_no_graph_store_in_config(self):
+        """graph_store (singular or plural) must not be in config."""
         data = self._load_behavior_yaml()
         config = data["hooks"][0]["config"]
-        assert isinstance(config["graph_store"], dict)
-
-    def test_enable_graph_in_behavior_yaml_uses_env_interpolation(self):
-        """enable_graph must be present and use env-var interpolation syntax.
-
-        The value '${CI_ENABLE_GRAPH:false}' allows the config loader to
-        resolve the key from the environment at startup, defaulting to false.
-        config_resolver handles the resulting string value correctly.
-        """
-        data = self._load_behavior_yaml()
-        config = data["hooks"][0]["config"]
-        assert "enable_graph" in config
-        assert config["enable_graph"] == "${CI_ENABLE_GRAPH:false}"
-
-    def test_graph_store_entry_has_type_and_config(self):
-        """graph_store entry must have type and config keys."""
-        data = self._load_behavior_yaml()
-        store = data["hooks"][0]["config"]["graph_store"]
-        assert "type" in store
-        assert "config" in store
-
-    def test_old_graph_stores_plural_removed(self):
-        """The old 'graph_stores' (plural) key must not be in config."""
-        data = self._load_behavior_yaml()
-        config = data["hooks"][0]["config"]
+        assert "graph_store" not in config
         assert "graph_stores" not in config
+
+    def test_no_enable_graph_in_config(self):
+        """enable_graph must not be in config (graph is server-side now)."""
+        data = self._load_behavior_yaml()
+        config = data["hooks"][0]["config"]
+        assert "enable_graph" not in config

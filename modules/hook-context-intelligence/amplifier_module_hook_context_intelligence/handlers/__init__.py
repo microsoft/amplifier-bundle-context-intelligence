@@ -1,12 +1,8 @@
-"""Event handlers for the context-intelligence hook module.
+"""Context Intelligence event handlers.
 
-Eight handlers, each conforming to the EventHandler protocol:
-- SessionHandler — :Session nodes
-- OrchestratorRunHandler — :OrchestratorRun and :Step:PromptStep nodes
-- StepHandler — :Step:AssistantStep nodes
-- RecipeHandler — recipe orchestration events (:Event:RecipeStart, :Event:RecipeStep, etc.)
-- ToolExecutionHandler — :ToolExecution nodes
-- SystemEventHandler — :Event:ContextCompaction, :Event:CancelRequested, etc.
-- DefaultHandler — :Event:{DerivedFullScope} (dynamic labels)
-- LoggingHandler — always-on flat JSONL session file writer
+Only LoggingHandler is retained in the thin-forwarder bundle.
+All graph-creation handlers (SessionHandler, OrchestratorRunHandler,
+StepHandler, ToolExecutionHandler, RecipeHandler, DefaultHandler,
+SystemEventHandler) have been moved to the amplifier-context-intelligence
+server.
 """

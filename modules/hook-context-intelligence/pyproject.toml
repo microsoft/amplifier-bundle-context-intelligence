@@ -6,7 +6,7 @@ requires-python = ">=3.11"
 license = "MIT"
 
 dependencies = [
-    "neo4j>=5.0,<7.0",
+    "httpx>=0.28.1",
 ]
 
 [project.entry-points."amplifier.modules"]
