@@ -2,6 +2,10 @@
 # Writes session events to local JSONL and optionally dispatches to
 # the Context Intelligence server.
 
+agents:
+  include:
+    - context-intelligence:context-intelligence-analyst
+
 hooks:
   - module: hook-context-intelligence
     source: git+https://github.com/colombod/amplifier-bundle-context-intelligence@main#subdirectory=modules/hook-context-intelligence
@@ -15,6 +19,12 @@ hooks:
 
       # Log level for the hook itself
       log_level: "${AMPLIFIER_CONTEXT_INTELLIGENCE_LOG_LEVEL:INFO}"
+
+      # HTTP timeout in seconds for server dispatch (default: 30)
+      dispatch_timeout: "${AMPLIFIER_CONTEXT_INTELLIGENCE_DISPATCH_TIMEOUT:30}"
+
+      # Consecutive dispatch failures before circuit breaker trips (default: 3)
+      dispatch_failure_threshold: "${AMPLIFIER_CONTEXT_INTELLIGENCE_DISPATCH_FAILURE_THRESHOLD:3}"
 
       # Events to suppress from logging and dispatch (fnmatch patterns)
       # exclude_events:
