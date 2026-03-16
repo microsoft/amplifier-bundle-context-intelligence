@@ -167,12 +167,6 @@ class LoggingHandler:
 
         meta_path.write_text(json.dumps(meta, separators=(",", ":")))
 
-        if self._client is not None:
-            try:
-                asyncio.get_running_loop().create_task(self._client.aclose())
-            except Exception:
-                logger.warning("Failed to schedule client cleanup")
-
     # -- server dispatch (fire-and-forget) ----------------------------------
     async def _dispatch_to_server(self, event: str, data: dict[str, Any]) -> None:
         """Fire-and-forget POST to the configured server URL.
@@ -184,8 +178,8 @@ class LoggingHandler:
         if not self._dispatch_enabled:
             return
 
-        # Lazy client creation
-        if self._client is None:
+        # Lazy client creation (or recreation if a prior close left it stale)
+        if self._client is None or self._client.is_closed:
             client = httpx.AsyncClient(timeout=httpx.Timeout(self._dispatch_timeout))
             self._client = client
         else:
