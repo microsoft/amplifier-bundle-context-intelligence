@@ -357,3 +357,30 @@ class TestDispatchTimeout:
         resolver = ConfigResolver(config={"dispatch_timeout": "45"}, coordinator=coordinator)
 
         assert isinstance(resolver.dispatch_timeout, float)
+        assert resolver.dispatch_timeout == 45.0
+
+
+class TestDispatchFailureThreshold:
+    def test_defaults_to_3(self) -> None:
+        """dispatch_failure_threshold returns 3 when not configured."""
+        coordinator = _make_coordinator(config={})
+        resolver = ConfigResolver(config={}, coordinator=coordinator)
+
+        assert resolver.dispatch_failure_threshold == 3
+
+    def test_reads_from_config(self) -> None:
+        """dispatch_failure_threshold returns the configured value as an int."""
+        coordinator = _make_coordinator(config={})
+        resolver = ConfigResolver(config={"dispatch_failure_threshold": 5}, coordinator=coordinator)
+
+        assert resolver.dispatch_failure_threshold == 5
+
+    def test_returns_int_type(self) -> None:
+        """dispatch_failure_threshold always returns an int even when config value is a string."""
+        coordinator = _make_coordinator(config={})
+        resolver = ConfigResolver(
+            config={"dispatch_failure_threshold": "7"}, coordinator=coordinator
+        )
+
+        assert isinstance(resolver.dispatch_failure_threshold, int)
+        assert resolver.dispatch_failure_threshold == 7

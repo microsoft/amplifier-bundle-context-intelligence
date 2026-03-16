@@ -175,6 +175,15 @@ class ConfigResolver:
         """
         return float(self._config.get("dispatch_timeout", 30.0))
 
+    @property
+    def dispatch_failure_threshold(self) -> int:
+        """Number of consecutive dispatch failures before the circuit opens.
+
+        Reads directly from config['dispatch_failure_threshold'], defaults to 3.
+        No coordinator fallback.  Always returns an int.
+        """
+        return int(self._config.get("dispatch_failure_threshold", 3))
+
     # ------------------------------------------------------------------
     # Methods
     # ------------------------------------------------------------------
