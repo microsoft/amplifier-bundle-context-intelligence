@@ -32,11 +32,8 @@ _SCAN_DIRS = [
     / "amplifier_module_hook_context_intelligence",
 ]
 
-_SKIP_PATTERNS = [
-    "config_resolver.py",
-    "test_no_neo4j_leakage.py",
-    "plans/",
-]
+_SKIP_NAMES = {"config_resolver.py", "test_no_neo4j_leakage.py"}
+_SKIP_DIRS = {"plans"}
 
 
 # ---------------------------------------------------------------------------
@@ -46,10 +43,11 @@ _SKIP_PATTERNS = [
 
 def _should_skip(path: Path) -> bool:
     """Return True if the path matches any skip pattern."""
-    path_str = str(path)
-    for pattern in _SKIP_PATTERNS:
-        if pattern in path_str:
-            return True
+    if path.name in _SKIP_NAMES:
+        return True
+    # Use parts for directory matching — avoids false positives like 'deployment-plans/'
+    if _SKIP_DIRS.intersection(path.parts):
+        return True
     return False
 
 
@@ -66,6 +64,10 @@ def _scan_files() -> list[Path]:
     return files
 
 
+# Computed once at import time; all helpers share the same list
+_FILES: list[Path] = _scan_files()
+
+
 def _check_term(term: str, *, case_insensitive: bool = False) -> list[str]:
     """Search scanned files for a prohibited term.
 
@@ -74,7 +76,7 @@ def _check_term(term: str, *, case_insensitive: bool = False) -> list[str]:
     violations: list[str] = []
     search_term = term.lower() if case_insensitive else term
 
-    for path in _scan_files():
+    for path in _FILES:
         try:
             text = path.read_text(encoding="utf-8", errors="replace")
         except OSError:
