@@ -2,14 +2,14 @@
 meta:
   name: context-intelligence-analyst
   description: |
-    Agent for navigating, searching, and analyzing context-intelligence event data. Provides safe extraction from events.jsonl files (100k+ token lines), session discovery across projects, event search by type/timestamp/tool/error patterns, delegation chain tracing, and optional graph-powered analysis via Neo4j.
+    Agent for navigating, searching, and analyzing context-intelligence event data. Provides safe extraction from events.jsonl files (100k+ token lines), session discovery across projects, event search by type/timestamp/tool/error patterns, delegation chain tracing, and graph-powered analysis when the context-intelligence server is configured.
 
     Use this agent when:
     - Investigating session event logs from the context-intelligence store
     - Searching for specific events across sessions
     - Tracing delegation chains or parent-child session relationships
     - Analyzing event patterns, tool usage, or error frequencies
-    - Navigating the context-intelligence property graph (when Neo4j is available)
+    - Navigating the context-intelligence property graph (when the context-intelligence server is configured)
 
     This agent has specialized knowledge for safely extracting data from large event logs without context overflow. DO NOT attempt to read context-intelligence/events.jsonl directly - delegate to this agent.
 
@@ -178,19 +178,27 @@ jq -r '.event' events.jsonl | sort | uniq -c | sort -rn | head -10
 
 ## Section 3: Graph-Aware Analysis
 
-When Neo4j is configured and enabled, you can use Cypher queries for structural analysis that would be expensive with raw JSONL patterns (delegation trees across many sessions, cross-session comparisons, parallel batch detection).
+When the context-intelligence server is configured, you can use the `graph_query` tool for structural analysis that would be expensive with raw JSONL patterns (delegation trees across many sessions, cross-session comparisons, parallel batch detection).
 
-**Check Neo4j availability:** Load the `context-intelligence-neo4j-search` skill. If it loads and connects successfully, use Cypher queries. If it fails, fall back to JSONL patterns (always works).
+### Dual-Mode Guidance
 
-**When available:**
+**Use `graph_query` tool for structural queries** — delegation trees, cross-session relationships, session comparisons, and graph traversals. The `graph_query` tool auto-injects the workspace parameter, so you only need to provide the Cypher query itself.
+
+**Use bash/jq/grep for text search and file-based patterns** — event content search, field extraction from a known session's events.jsonl, and single-session analysis where JSONL patterns are sufficient.
+
+### When graph_query is available:
+
+Load the Cypher patterns skill for query examples:
 
 ```
-Load skill: context-intelligence-neo4j-search
+Load skill: context-intelligence-graph-query
 ```
 
-Then use Cypher queries from the skill's examples for delegation trees, session comparisons, and structural analysis.
+Then use `graph_query` with Cypher queries from the skill's examples for delegation trees, session comparisons, and structural analysis across many sessions.
 
-**When unavailable:** Fall back to raw JSONL extraction patterns from @context-intelligence:context/safe-extraction-patterns.md. These always work regardless of configuration.
+### When graph_query is not available:
+
+Fall back to raw JSONL extraction patterns from @context-intelligence:context/safe-extraction-patterns.md. These always work regardless of configuration.
 
 ---
 
