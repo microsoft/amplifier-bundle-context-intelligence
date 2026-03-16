@@ -211,6 +211,29 @@ _FORBIDDEN_TERMS = [
     "QueryableStore",
     "supported_dialects",
 ]
+# Note: _FORBIDDEN_TERMS is the authoritative list. test_ac3_forbidden_terms_list_all_absent
+# loops over it so adding a new term here automatically adds coverage. The individual
+# test_ac3_* functions below remain for CI traceability — each maps to a named AC item.
+
+
+def test_ac3_forbidden_terms_list_all_absent() -> None:
+    """All items in _FORBIDDEN_TERMS must be absent from SKILL.md (drives the list).
+
+    This is the authoritative gate: adding a term to _FORBIDDEN_TERMS is sufficient
+    to add coverage — no companion test function required.
+    """
+    content_lower = _SKILL_CONTENT.lower()
+    found = []
+    for term in _FORBIDDEN_TERMS:
+        # 'neo4j' check is case-insensitive; all other terms are checked as-is
+        if term == "neo4j":
+            if term in content_lower:
+                found.append(term)
+        elif term in _SKILL_CONTENT:
+            found.append(term)
+    assert not found, (
+        f"SKILL.md contains forbidden terms (from _FORBIDDEN_TERMS): {found}"
+    )
 
 
 def test_ac3_no_neo4j_lowercase() -> None:
@@ -332,13 +355,22 @@ def test_ac4_section_id_format_reference() -> None:
 
 
 def test_ac4_section_usage_via_graph_query() -> None:
-    """Section '## Usage via graph_query Tool' or similar must be present."""
+    """Section '## Usage via graph_query Tool' or similar must be present.
+
+    Bonus check: this section is not in the 10-item AC-4 list in the spec, but is
+    required by AC-14 and adds useful coverage here as well.
+    """
     usage = _extract_section(_SKILL_CONTENT, "Usage via graph_query Tool")
     assert usage, "Must have a ## Usage via graph_query Tool section"
 
 
 def test_ac4_section_notes() -> None:
-    """Section '## Notes' must be present."""
+    """Section '## Notes' must be present.
+
+    Bonus check: this section is not in the 10-item AC-4 list in the spec, but the
+    Notes section is part of the required SKILL.md structure and tested here for
+    completeness.
+    """
     assert _NOTES_SECTION, "Must have a ## Notes section"
 
 

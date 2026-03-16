@@ -697,7 +697,7 @@ MATCH (s:Session {workspace: $workspace})
 WHERE s:Root ...
 ```
 
-### Forest property on relationships
+### Workspace property on relationships
 
 Relationships also carry `workspace`. For cross-workspace queries where
 you traverse relationships, add a relationship filter if needed:
