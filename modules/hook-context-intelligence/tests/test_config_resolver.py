@@ -334,3 +334,26 @@ class TestBlobStoreRoot:
         result = resolver.blob_store_root
         expected = Path("~/.amplifier/projects").expanduser() / "default" / "sessions"
         assert result == expected
+
+
+class TestDispatchTimeout:
+    def test_defaults_to_30(self) -> None:
+        """dispatch_timeout returns 30.0 when not configured."""
+        coordinator = _make_coordinator(config={})
+        resolver = ConfigResolver(config={}, coordinator=coordinator)
+
+        assert resolver.dispatch_timeout == 30.0
+
+    def test_reads_from_config(self) -> None:
+        """dispatch_timeout returns the configured value as a float."""
+        coordinator = _make_coordinator(config={})
+        resolver = ConfigResolver(config={"dispatch_timeout": 10}, coordinator=coordinator)
+
+        assert resolver.dispatch_timeout == 10.0
+
+    def test_returns_float_type(self) -> None:
+        """dispatch_timeout always returns a float even when config value is a string."""
+        coordinator = _make_coordinator(config={})
+        resolver = ConfigResolver(config={"dispatch_timeout": "45"}, coordinator=coordinator)
+
+        assert isinstance(resolver.dispatch_timeout, float)

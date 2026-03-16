@@ -166,6 +166,15 @@ class ConfigResolver:
         """
         return str(self._config.get("log_level", "WARNING"))
 
+    @property
+    def dispatch_timeout(self) -> float:
+        """Timeout in seconds for dispatching context-intelligence requests.
+
+        Reads directly from config['dispatch_timeout'], defaults to 30.0.
+        No coordinator fallback.  Always returns a float.
+        """
+        return float(self._config.get("dispatch_timeout", 30.0))
+
     # ------------------------------------------------------------------
     # Methods
     # ------------------------------------------------------------------
