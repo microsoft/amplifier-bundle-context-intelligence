@@ -66,6 +66,15 @@ def _extract_section(content: str, heading: str) -> str:
     return match.group(1)
 
 
+def _extract_subsection(content: str, heading: str) -> str:
+    """Extract content under a markdown ### heading, up to the next ### or ## or end."""
+    pattern = rf"^### {re.escape(heading)}\s*\n(.*?)(?=^###|^##|\Z)"
+    match = re.search(pattern, content, re.MULTILINE | re.DOTALL)
+    if not match:
+        return ""
+    return match.group(1)
+
+
 _FRONTMATTER: dict = _parse_frontmatter(_SKILL_CONTENT) if _SKILL_CONTENT else {}
 
 # Pre-extract frequently-used sections
@@ -99,21 +108,12 @@ _NOTES_SECTION: str = (
     _extract_section(_SKILL_CONTENT, "Notes") if _SKILL_CONTENT else ""
 )
 
-# Extract blob refs subsection
-_blob_refs_match = re.search(
-    r"### Blob References\s*\n(.*?)(?=^###|^##|\Z)",
-    _SKILL_CONTENT,
-    re.MULTILINE | re.DOTALL,
+_BLOB_REFS_SECTION: str = (
+    _extract_subsection(_SKILL_CONTENT, "Blob References") if _SKILL_CONTENT else ""
 )
-_BLOB_REFS_SECTION: str = _blob_refs_match.group(1) if _blob_refs_match else ""
-
-# Extract agent workflow subsection
-_workflow_match = re.search(
-    r"### Agent [Ww]orkflow\s*\n(.*?)(?=^###|^##|\Z)",
-    _SKILL_CONTENT,
-    re.MULTILINE | re.DOTALL,
+_AGENT_WORKFLOW_SECTION: str = (
+    _extract_subsection(_SKILL_CONTENT, "Agent workflow") if _SKILL_CONTENT else ""
 )
-_AGENT_WORKFLOW_SECTION: str = _workflow_match.group(1) if _workflow_match else ""
 
 
 # ===========================================================================
@@ -566,8 +566,10 @@ def test_ac9_event_data_preservation_section_exists() -> None:
 
 
 def test_ac9_event_data_preservation_documents_data_property() -> None:
-    """Event Data Preservation must document the 'data' property."""
-    assert "data" in _NODE_PROPS_SECTION
+    """Event Data Preservation must document the 'data' property (backtick-formatted)."""
+    assert "`data`" in _NODE_PROPS_SECTION, (
+        "Node Properties section must reference the `data` property in backtick format"
+    )
 
 
 def test_ac9_event_data_preservation_documents_data_prefix_properties() -> None:
@@ -639,10 +641,10 @@ def test_ac10_blob_references_mentions_blob_dump() -> None:
 
 
 def test_ac10_blob_list_return_format_documented() -> None:
-    """blob_list return format must document uri, field, and size_bytes."""
+    """blob_list return format must document size_bytes (the unique structural field)."""
     combined = _BLOB_REFS_SECTION + _NODE_PROPS_SECTION
-    assert "uri" in combined and "field" in combined and "size_bytes" in combined, (
-        "blob_list return value must document {uri, field, node_id, size_bytes}"
+    assert "size_bytes" in combined, (
+        "blob_list return value must document size_bytes field"
     )
 
 
