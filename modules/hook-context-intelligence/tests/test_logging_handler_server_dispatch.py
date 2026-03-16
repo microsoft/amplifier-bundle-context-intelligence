@@ -27,11 +27,15 @@ class _FakeResolver:
         project_slug: str,
         context_intelligence_server_url: str | None = None,
         workspace: str | None = None,
+        dispatch_timeout: float = 30.0,
+        dispatch_failure_threshold: int = 3,
     ) -> None:
         self.base_path = base_path
         self.project_slug = project_slug
         self.context_intelligence_server_url = context_intelligence_server_url
         self.workspace = workspace
+        self.dispatch_timeout = dispatch_timeout
+        self.dispatch_failure_threshold = dispatch_failure_threshold
 
     def session_dir(self, session_id: str) -> Path:
         return self.base_path / self.project_slug / "sessions" / session_id / "context-intelligence"
