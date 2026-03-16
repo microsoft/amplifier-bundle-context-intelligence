@@ -314,3 +314,59 @@ class TestBlobToolRegistration:
         registered_names = [call.args[0] for call in coordinator.tools.register.call_args_list]
         assert "blob_list" in registered_names
         assert "blob_dump" in registered_names
+
+
+# ---------------------------------------------------------------------------
+# TestGraphQueryToolRegistration
+# ---------------------------------------------------------------------------
+class TestGraphQueryToolRegistration:
+    """GraphQueryTool is registered with coordinator.tools only when context_intelligence_server_url is configured."""
+
+    async def test_graph_query_not_registered_without_server_url(self) -> None:
+        """When config has no context_intelligence_server_url, graph_query should not be registered."""
+        from amplifier_module_hook_context_intelligence import mount
+
+        coordinator = _make_coordinator()
+        coordinator.tools = MagicMock()
+
+        await mount(coordinator, config={})
+
+        registered_names = [call.args[0] for call in coordinator.tools.register.call_args_list]
+        assert "graph_query" not in registered_names
+
+    async def test_graph_query_registered_with_server_url(self) -> None:
+        """When context_intelligence_server_url is configured, graph_query is registered."""
+        from amplifier_module_hook_context_intelligence import mount
+
+        coordinator = _make_coordinator()
+        coordinator.tools = MagicMock()
+
+        await mount(
+            coordinator,
+            config={"context_intelligence_server_url": "http://localhost:8000"},
+        )
+
+        registered_names = [call.args[0] for call in coordinator.tools.register.call_args_list]
+        assert "graph_query" in registered_names
+
+    async def test_blob_tools_survive_graph_query_tool_import_failure(self) -> None:
+        """If GraphQueryTool import fails, blob_list and blob_dump are still registered."""
+        from unittest.mock import patch
+
+        from amplifier_module_hook_context_intelligence import mount
+
+        coordinator = _make_coordinator()
+        coordinator.tools = MagicMock()
+
+        with patch(
+            "amplifier_module_hook_context_intelligence.graph_query_tool.GraphQueryTool",
+            side_effect=ImportError("simulated import failure"),
+        ):
+            await mount(
+                coordinator,
+                config={"context_intelligence_server_url": "http://localhost:8000"},
+            )
+
+        registered_names = [call.args[0] for call in coordinator.tools.register.call_args_list]
+        assert "blob_list" in registered_names
+        assert "blob_dump" in registered_names
