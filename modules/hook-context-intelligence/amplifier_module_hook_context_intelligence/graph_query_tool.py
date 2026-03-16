@@ -1,26 +1,127 @@
 """GraphQueryTool — agent-facing tool for executing Cypher queries against the context-intelligence server.
 
-Agents use graph_query() to run Cypher queries against the property graph,
-with automatic workspace injection so queries are scoped to the correct session namespace.
+Implements the Amplifier Tool protocol so it can be registered via
+``coordinator.mount("tools", tool, name=tool.name)``.  The ``execute()``
+method is the primary entry-point; ``_graph_query()`` is an internal helper
+that performs the actual HTTP call and returns raw results.
 """
 
 from __future__ import annotations
 
+from typing import Any
+
 import httpx
+
+from amplifier_core.models import ToolResult
 
 
 class GraphQueryTool:
     """Agent-facing tool for executing Cypher queries against the context-intelligence server.
 
-    Automatically injects the configured workspace into every query request,
-    scoping results to the correct session namespace.
+    Implements the Amplifier Tool protocol (name, description, execute) so it
+    can be mounted directly via ``coordinator.mount()``.  Automatically injects
+    the configured workspace into every query request, scoping results to the
+    correct session namespace.
     """
 
     def __init__(self, server_url: str, workspace: str) -> None:
         self._server_url = server_url.rstrip("/")
         self._workspace = workspace
 
-    async def graph_query(
+    # ------------------------------------------------------------------
+    # Amplifier Tool protocol
+    # ------------------------------------------------------------------
+
+    @property
+    def name(self) -> str:
+        """Tool name for invocation."""
+        return "graph_query"
+
+    @property
+    def description(self) -> str:
+        """Human-readable tool description."""
+        return (
+            "Execute a Cypher query against the context-intelligence property graph. "
+            "Use this to explore session history, relationships between entities, "
+            "and metadata stored in the graph. The workspace is automatically injected "
+            "to scope results to the current session namespace."
+        )
+
+    def get_schema(self) -> dict[str, Any]:
+        """Return the JSON Schema describing the tool's input parameters."""
+        return {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": (
+                        "Cypher query string to execute against the context-intelligence graph. "
+                        'Example: "MATCH (n:Session) RETURN n LIMIT 10"'
+                    ),
+                },
+                "params": {
+                    "type": "object",
+                    "description": (
+                        "Optional query parameters dict passed to the Cypher query as "
+                        'named parameters (e.g. {"id": "abc-123"}). Defaults to empty dict.'
+                    ),
+                },
+                "workspace": {
+                    "type": "string",
+                    "description": (
+                        "Optional workspace override. Omit to use the configured workspace value. "
+                        'Pass "*" to query across all workspaces.'
+                    ),
+                },
+            },
+            "required": ["query"],
+        }
+
+    async def execute(self, input: dict[str, Any]) -> ToolResult:  # noqa: A002
+        """Execute tool with given input.
+
+        Extracts ``query``, ``params``, and ``workspace`` from *input*,
+        delegates to ``_graph_query()``, and wraps the result in a
+        :class:`ToolResult`.
+
+        Args:
+            input: Dict with keys ``query`` (required), ``params`` (optional),
+                ``workspace`` (optional — omit to use instance workspace,
+                pass ``"*"`` for cross-workspace queries).
+
+        Returns:
+            :class:`ToolResult` with ``success=True`` and ``output`` set to
+            the parsed JSON response on success, or ``success=False`` and
+            ``error`` set on failure.
+        """
+        query: str = input["query"]
+        params: dict[str, Any] | None = input.get("params")
+        workspace: str | None = input.get("workspace")
+
+        raw = await self._graph_query(query, params=params, workspace=workspace)
+
+        if isinstance(raw, dict) and "error" in raw:
+            # _graph_query returns {"error": "..."} on failure; lift into ToolResult
+            error_msg: str = raw["error"]
+            # Classify the error type
+            if "Server returned" in error_msg:
+                error_type = "http_error"
+            elif "unavailable" in error_msg.lower():
+                error_type = "connection_error"
+            else:
+                error_type = "query_error"
+            return ToolResult(
+                success=False,
+                error={"message": error_msg, "type": error_type},
+            )
+
+        return ToolResult(success=True, output=raw)
+
+    # ------------------------------------------------------------------
+    # Internal HTTP helper
+    # ------------------------------------------------------------------
+
+    async def _graph_query(
         self,
         query: str,
         params: dict | None = None,

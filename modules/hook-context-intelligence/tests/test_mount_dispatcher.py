@@ -40,6 +40,9 @@ def _make_coordinator(
         contributed_events = []
     coordinator.collect_contributions = AsyncMock(return_value=contributed_events)
 
+    # mount() is async — must be an AsyncMock so it can be awaited
+    coordinator.mount = AsyncMock()
+
     # Build get_capability side_effect that handles both
     # 'session.working_dir' and 'observability.events'
     def _get_capability(name: str) -> Any:
@@ -320,10 +323,10 @@ class TestBlobToolRegistration:
 # TestGraphQueryToolRegistration
 # ---------------------------------------------------------------------------
 class TestGraphQueryToolRegistration:
-    """GraphQueryTool is registered with coordinator.tools only when context_intelligence_server_url is configured."""
+    """GraphQueryTool is mounted via coordinator.mount only when context_intelligence_server_url is configured."""
 
-    async def test_graph_query_not_registered_without_server_url(self) -> None:
-        """When config has no context_intelligence_server_url, graph_query should not be registered."""
+    async def test_graph_query_not_mounted_without_server_url(self) -> None:
+        """When config has no context_intelligence_server_url, coordinator.mount should not be called with graph_query."""
         from amplifier_module_hook_context_intelligence import mount
 
         coordinator = _make_coordinator()
@@ -331,11 +334,15 @@ class TestGraphQueryToolRegistration:
 
         await mount(coordinator, config={})
 
-        registered_names = [call.args[0] for call in coordinator.tools.register.call_args_list]
-        assert "graph_query" not in registered_names
+        # coordinator.mount should not have been called with a tool named graph_query
+        for call in coordinator.mount.call_args_list:
+            # If mount was called at all, the second positional arg would be the tool
+            args = call.args
+            if len(args) >= 2 and hasattr(args[1], "name"):
+                assert args[1].name != "graph_query"
 
-    async def test_graph_query_registered_with_server_url(self) -> None:
-        """When context_intelligence_server_url is configured, graph_query is registered."""
+    async def test_graph_query_mounted_with_server_url(self) -> None:
+        """When context_intelligence_server_url is configured, coordinator.mount is called with a Tool-compliant object."""
         from amplifier_module_hook_context_intelligence import mount
 
         coordinator = _make_coordinator()
@@ -346,8 +353,31 @@ class TestGraphQueryToolRegistration:
             config={"context_intelligence_server_url": "http://localhost:8000"},
         )
 
-        registered_names = [call.args[0] for call in coordinator.tools.register.call_args_list]
-        assert "graph_query" in registered_names
+        # coordinator.mount should have been called
+        assert coordinator.mount.called, "coordinator.mount should have been called"
+
+        # Find the call where a tool named 'graph_query' was mounted
+        graph_tool_calls = [
+            call
+            for call in coordinator.mount.call_args_list
+            if call.kwargs.get("name") == "graph_query"
+        ]
+        assert len(graph_tool_calls) == 1, (
+            "coordinator.mount should be called once with name='graph_query'"
+        )
+
+        # Verify it was called as: coordinator.mount("tools", tool, name=tool.name)
+        graph_call = graph_tool_calls[0]
+        assert graph_call.args[0] == "tools", "First arg to mount should be 'tools'"
+        tool_obj = graph_call.args[1]
+
+        # Tool must be Protocol-compliant: name, description, execute
+        assert hasattr(tool_obj, "name"), "Tool must have name property"
+        assert hasattr(tool_obj, "description"), "Tool must have description property"
+        assert hasattr(tool_obj, "execute"), "Tool must have execute method"
+        assert tool_obj.name == "graph_query"
+        assert isinstance(tool_obj.description, str)
+        assert len(tool_obj.description) > 0
 
     async def test_blob_tools_survive_graph_query_tool_import_failure(self) -> None:
         """If GraphQueryTool import fails, blob_list and blob_dump are still registered."""

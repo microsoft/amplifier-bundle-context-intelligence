@@ -108,13 +108,7 @@ async def mount(coordinator: Any, config: dict[str, Any]):  # noqa: ANN202
                 server_url=resolver.context_intelligence_server_url,
                 workspace=resolver.workspace,
             )
-            tools = getattr(coordinator, "tools", None)
-            if tools is not None and hasattr(tools, "register"):
-                tools.register(
-                    "graph_query",
-                    graph_tool.graph_query,
-                    description="Execute a Cypher query against the context-intelligence graph.",
-                )
+            await coordinator.mount("tools", graph_tool, name=graph_tool.name)
         except Exception:
             log.exception("Failed to register GraphQueryTool — continuing without graph tools")
 
