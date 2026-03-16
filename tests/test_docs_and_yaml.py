@@ -15,6 +15,7 @@ BUNDLE_DIR = Path(__file__).parent.parent
 BEHAVIOR_YAML = BUNDLE_DIR / "behaviors" / "context-intelligence.yaml"
 README = BUNDLE_DIR / "README.md"
 CONFIG_DOT = BUNDLE_DIR / "context" / "config-resolution.dot"
+DISPATCH_CIRCUIT_BREAKER_DOT = BUNDLE_DIR / "docs" / "dispatch-circuit-breaker.dot"
 
 
 # ---------------------------------------------------------------------------
@@ -274,3 +275,69 @@ class TestConfigResolutionDot:
     def test_dot_has_env_var_reference(self, config_dot_raw):
         """DOT must reference AMPLIFIER_CONTEXT_INTELLIGENCE_ env vars."""
         assert "AMPLIFIER_CONTEXT_INTELLIGENCE" in config_dot_raw
+
+
+# ---------------------------------------------------------------------------
+# docs/dispatch-circuit-breaker.dot tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(scope="session")
+def dispatch_dot_raw() -> str:
+    return DISPATCH_CIRCUIT_BREAKER_DOT.read_text()
+
+
+class TestDispatchCircuitBreakerDot:
+    """dispatch-circuit-breaker.dot must document the dispatch circuit breaker architecture."""
+
+    def test_dot_file_exists(self):
+        """dispatch-circuit-breaker.dot must exist in docs/."""
+        assert DISPATCH_CIRCUIT_BREAKER_DOT.exists(), (
+            f"dispatch-circuit-breaker.dot not found at {DISPATCH_CIRCUIT_BREAKER_DOT}"
+        )
+
+    def test_dot_starts_with_comment_header(self, dispatch_dot_raw):
+        """File must start with a comment header identifying the diagram."""
+        assert dispatch_dot_raw.strip().startswith("//"), (
+            "dispatch-circuit-breaker.dot must start with a // comment header"
+        )
+
+    def test_dot_has_valid_digraph(self, dispatch_dot_raw):
+        """File must contain a digraph declaration (valid DOT syntax)."""
+        assert "digraph" in dispatch_dot_raw
+
+    def test_dot_has_cluster_dispatch(self, dispatch_dot_raw):
+        """Must contain cluster_dispatch subgraph for the _dispatch_to_server flow."""
+        assert "cluster_dispatch" in dispatch_dot_raw
+
+    def test_dot_has_cluster_lifecycle(self, dispatch_dot_raw):
+        """Must contain cluster_lifecycle subgraph for the Client Lifecycle."""
+        assert "cluster_lifecycle" in dispatch_dot_raw
+
+    def test_dot_has_dispatch_enabled_flag(self, dispatch_dot_raw):
+        """Must reference _dispatch_enabled circuit breaker flag from the implementation."""
+        assert "_dispatch_enabled" in dispatch_dot_raw
+
+    def test_dot_has_client_reference(self, dispatch_dot_raw):
+        """Must reference _client for the lazy-created AsyncClient."""
+        assert "_client" in dispatch_dot_raw
+
+    def test_dot_has_aclose_reference(self, dispatch_dot_raw):
+        """Must reference aclose() for session end cleanup in _finalize_metadata."""
+        assert "aclose" in dispatch_dot_raw
+
+    def test_dot_has_server_url_events_post(self, dispatch_dot_raw):
+        """Must reference POST to {server_url}/events endpoint."""
+        assert "/events" in dispatch_dot_raw
+
+    def test_dot_has_failure_counter(self, dispatch_dot_raw):
+        """Must document the consecutive failure counter."""
+        assert "failure" in dispatch_dot_raw.lower()
+
+    def test_dot_has_render_command(self, dispatch_dot_raw):
+        """Must include the render command as a comment."""
+        assert "dot -Tsvg" in dispatch_dot_raw
+
+    def test_dot_has_async_client_creation(self, dispatch_dot_raw):
+        """Must reference AsyncClient creation for the lazy client init path."""
+        assert "AsyncClient" in dispatch_dot_raw
