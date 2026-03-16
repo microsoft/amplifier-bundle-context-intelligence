@@ -1,18 +1,39 @@
 ---
-name: context-intelligence-neo4j-search
-version: 0.1.0
-description: Cypher query patterns for the Neo4j-backed context-intelligence graph store
+name: context-intelligence-graph-query
+version: 0.2.0
+description: Cypher query patterns for the context-intelligence graph store via graph_query tool
 license: MIT
 ---
 
-# Context Intelligence Graph Search (Cypher Dialect)
+# Context Intelligence Graph Query (Cypher Dialect)
 
-This skill applies to QueryableStore backends that report `"cypher"` in
-`supported_dialects` (currently: Neo4j via `Neo4jGraphStore`).
+This skill teaches how to query the context-intelligence property graph using
+the `graph_query` tool. All structural traversal — sessions, runs, steps, tool
+executions, delegations — is done through Cypher queries executed via the
+`graph_query` tool.
 
-Query patterns for searching and traversing the context-intelligence graph
-stored in Neo4j. Covers forest scoping, structural traversal, delegation
-chains, step sequencing, and graph algorithm patterns using native Cypher.
+Query patterns for searching and traversing the context-intelligence graph.
+Covers workspace scoping, structural traversal, delegation chains, step
+sequencing, and graph algorithm patterns using native Cypher.
+
+---
+
+## When to Use Graph vs File Patterns
+
+Choose the right approach based on what you need to find:
+
+| Query Type | Tool | Example |
+|-----------|------|---------|
+| Structural navigation (sessions, runs, steps, delegations) | `graph_query` | "Find all runs in this session" |
+| Relationship traversal (parent-child, SPAWNED, SUBSESSION_OF) | `graph_query` | "Find all child sessions" |
+| Session statistics and aggregations | `graph_query` | "Count tool executions by tool name" |
+| Prompt text keyword search | `bash`+`grep` or `graph_query` | "Find prompts containing 'authentication'" |
+| Large payload inspection (messages, results) | `bash`+`jq` after `blob_dump` | "Read tool result JSON" |
+| Event log text search across sessions | `bash`+`grep` on events.jsonl | "Find all sessions with a specific error" |
+
+**Fallback guidance:** If `graph_query` returns no results, fall back to
+`bash`+`grep`/`jq` on the raw events.jsonl file — the graph may not have
+been populated yet for in-progress sessions.
 
 ---
 
@@ -36,25 +57,11 @@ filesystem-safe on all platforms.
 - Example: `6afb3613-7041-4735-9c0f-c2171452ed18__prompt_submit__1741270343000`
 - ToolExecution example: `6afb3613-...ed18__tool_pre__1741270343000__toolu_01G9FD9g`
 
-### Relationship ID Format
-
-Relationships have no separate ID column in Neo4j. They are identified by
-their composite key: `(source_node_id, target_node_id, relationship_type)`.
-The `make_edge_id()` pattern used in other backends is a reference identifier
-only — it does not appear as a stored property in Neo4j.
-
-### Storage Backend
-
-Neo4j is a native property graph database. Unlike the DuckDB backend, there
-are no tables or SQL columns. Labels, properties, and relationship types are
-first-class Neo4j concepts. Query capability is declared via `supported_dialects`
-— `Neo4jGraphStore` reports `{"cypher"}`.
-
 ---
 
 ## Node Labels
 
-Every node carries one or more Neo4j labels. Base type labels plus optional
+Every node carries one or more labels. Base type labels plus optional
 sub-type discriminator labels are applied at write time.
 
 | Label | Meaning |
@@ -94,13 +101,13 @@ PascalCase join. Examples: `ContextCompaction`, `SkillLoaded`, `OrchestrationSta
 
 ## Node Properties
 
-Properties are stored directly on Neo4j nodes (not in a JSON blob). The
+Properties are stored directly on nodes (not in a JSON blob). The
 following properties appear on all or most nodes:
 
 | Property | Present On | Notes |
 |----------|-----------|-------|
 | `node_id` | All nodes | Unique across the database; see ID Format above |
-| `graph_forest_name` | All nodes | Forest partition key (default: `"default"`) |
+| `workspace` | All nodes | Workspace partition key (default: `"default"`) |
 | `session_id` | Most nodes | The session this node belongs to |
 | `occurred_at` | Most nodes | ISO-8601 timestamp string of the originating event |
 | `prompt_text` | `PromptStep` nodes | Full user prompt or delegation instruction text |
@@ -161,8 +168,6 @@ Known blob fields:
 | `context_snapshot` | Context snapshot at execution boundary |
 | `debug` | Debug diagnostic data |
 
-### Resolving Blob Refs
-
 Two tools are available to work with blob references:
 
 - **`blob_list(session_id)`** — returns a list of blob metadata records for a
@@ -175,10 +180,10 @@ Two tools are available to work with blob references:
 When working with event data or blob references in the graph, follow this
 5-step process:
 
-1. **Query Neo4j** to find the node(s) of interest and retrieve their `data`
-   or `data_<event_name>` property using a Cypher query. Alternatively, call
-   `blob_list(session_id)` to enumerate all blobs for a session without a
-   prior graph query.
+1. **Call `graph_query`** with a Cypher query to find the node(s) of interest
+   and retrieve their `data` or `data_<event_name>` property. Alternatively,
+   call `blob_list(session_id)` to enumerate all blobs for a session without
+   a prior graph query.
 2. **Parse the `data` property** (a JSON string) to inspect the event payload
    and identify any `$blob_ref` pointers within the property values.
 3. **Call `blob_dump(uri)`** for each `$blob_ref` URI encountered to resolve
@@ -193,98 +198,63 @@ When working with event data or blob references in the graph, follow this
 
 | Property | Present On | Notes |
 |----------|-----------|-------|
-| `graph_forest_name` | All relationships | Forest partition key; always written on flush |
+| `workspace` | All relationships | Workspace partition key; always written on flush |
 | `seq` | Ordering relationships | Integer sequence number for `HAS_RUN`, `HAS_STEP`, `NEXT` |
 | `occurred_at` | Most relationships | ISO-8601 timestamp string |
 
 ---
 
-## Indexes
+## Workspace Scoping
 
-Indexes are created on first `flush()` via `_ensure_schema()`:
+Every query is scoped to a **workspace** — an isolated partition identified
+by the `workspace` property present on all nodes and relationships.
 
-| Index Name | Target | Property | Purpose |
-|------------|--------|----------|---------|
-| `idx_node_id` | `(n:Node)` | `n.node_id` | Fast point lookups by node ID |
-| `idx_forest` | `(n:Node)` | `n.graph_forest_name` | Fast forest-scoped scans |
-| `idx_session_node_id` | `(n:Session)` | `n.node_id` | Session-label point lookups |
+The `graph_query` tool handles automatic injection of the `$workspace`
+parameter. When querying within the current workspace, the tool injects
+the workspace value for you. Write Cypher queries that reference `$workspace`
+explicitly in node patterns or WHERE clauses.
 
----
+### 1. Default query (own workspace)
 
-## Forest Scoping
-
-Every query is scoped to a **graph forest** — an isolated partition identified
-by the `graph_forest_name` property present on all nodes and relationships.
-
-### How parameter injection works
-
-Unlike the DuckDB backend (which wraps queries in CTE shadow tables),
-`Neo4jGraphStore.execute_query()` injects forest scoping via **Cypher
-parameters**. When `forest != "*"`, it adds `graph_forest_name` to the
-resolved params before running the query:
-
-```python
-# From neo4j_store.py execute_query():
-resolved_params["graph_forest_name"] = forest  # injected when forest != "*"
-```
-
-Your Cypher queries must reference `$graph_forest_name` explicitly in node
-patterns or WHERE clauses.
-
-### 1. Default query (own forest)
-
-When `graph_forest_name=None` (the default), the store injects its own forest
-name. Write queries that filter on `$graph_forest_name`:
+The `graph_query` tool auto-injects `$workspace` from the current session
+context. Write queries that filter on `$workspace`:
 
 ```cypher
-// $graph_forest_name auto-injected from store's own forest
-MATCH (s:Session {graph_forest_name: $graph_forest_name})
+// $workspace auto-injected by graph_query tool
+MATCH (s:Session {workspace: $workspace})
 RETURN s.node_id, s.occurred_at
 ORDER BY s.occurred_at DESC
 ```
 
-### 2. Explicit forest query
+### 2. Explicit workspace query
 
-Pass `graph_forest_name="other-project"` to target a specific forest:
-
-```python
-results = await store.execute_query(
-    "MATCH (s:Session {graph_forest_name: $graph_forest_name}) RETURN s.node_id",
-    graph_forest_name="other-project",
-    dialect="cypher",
-)
-```
-
-### 3. Cross-forest (wildcard) query
-
-Pass `graph_forest_name="*"` — the store skips parameter injection entirely.
-Write queries without `$graph_forest_name` filter, or add your own:
+Pass `workspace="other-project"` to target a specific workspace:
 
 ```cypher
-// graph_forest_name="*" — no automatic injection
-MATCH (s:Session)
-RETURN s.graph_forest_name, s.node_id, s.occurred_at
-ORDER BY s.graph_forest_name, s.occurred_at DESC
+MATCH (s:Session {workspace: $workspace})
+RETURN s.node_id, s.occurred_at
 ```
 
-Or filter to a subset of forests manually:
+### 3. Cross-workspace (wildcard) query
+
+Pass `workspace="*"` — the tool skips parameter injection entirely.
+Write queries without `$workspace` filter, or add your own:
 
 ```cypher
-// graph_forest_name="*"
+// workspace="*" — no automatic injection
 MATCH (s:Session)
-WHERE s.graph_forest_name IN $forest_names
-RETURN s.graph_forest_name, s.node_id, s.occurred_at
-ORDER BY s.graph_forest_name, s.occurred_at DESC
+RETURN s.workspace, s.node_id, s.occurred_at
+ORDER BY s.workspace, s.occurred_at DESC
 ```
 
 ---
 
 ## Query Patterns
 
-### Pattern 1: Find All Sessions in a Forest
+### Pattern 1: Find All Sessions in a Workspace
 
 ```cypher
-MATCH (s:Session {graph_forest_name: $graph_forest_name})
+MATCH (s:Session {workspace: $workspace})
 RETURN s.node_id       AS session_id,
        s.occurred_at   AS started_at,
        labels(s)       AS session_labels
@@ -294,7 +264,7 @@ ORDER BY s.occurred_at DESC
 To restrict to only top-level (root) sessions:
 
 ```cypher
-MATCH (s:Session:Root {graph_forest_name: $graph_forest_name})
+MATCH (s:Session:Root {workspace: $workspace})
 RETURN s.node_id AS session_id, s.occurred_at AS started_at
 ORDER BY s.occurred_at DESC
 ```
@@ -302,7 +272,7 @@ ORDER BY s.occurred_at DESC
 ### Pattern 2: Get a Session's Orchestrator Runs
 
 ```cypher
-MATCH (s:Session {graph_forest_name: $graph_forest_name, node_id: $session_id})
+MATCH (s:Session {workspace: $workspace, node_id: $session_id})
       -[:HAS_RUN]->(r:OrchestratorRun)
 RETURN r.node_id    AS run_id,
        r.occurred_at AS started_at,
@@ -315,7 +285,7 @@ ORDER BY r.seq
 Walk all steps in order using `NEXT` chain within each run:
 
 ```cypher
-MATCH (s:Session {graph_forest_name: $graph_forest_name, node_id: $session_id})
+MATCH (s:Session {workspace: $workspace, node_id: $session_id})
       -[:HAS_RUN]->(r:OrchestratorRun)
       -[:HAS_STEP]->(first:Step)
 WHERE NOT (:Step)-[:NEXT]->(first)
@@ -330,7 +300,7 @@ ORDER BY r.seq, step.occurred_at
 Simpler alternative — fetch all steps without ordering by NEXT chain:
 
 ```cypher
-MATCH (s:Session {graph_forest_name: $graph_forest_name, node_id: $session_id})
+MATCH (s:Session {workspace: $workspace, node_id: $session_id})
       -[:HAS_RUN]->(r:OrchestratorRun)
       -[:HAS_STEP]->(step:Step)
 RETURN r.node_id        AS run_id,
@@ -343,7 +313,7 @@ ORDER BY step.occurred_at
 ### Pattern 4: Find All Tool Executions in a Run
 
 ```cypher
-MATCH (s:Session {graph_forest_name: $graph_forest_name, node_id: $session_id})
+MATCH (s:Session {workspace: $workspace, node_id: $session_id})
       -[:HAS_RUN]->(r:OrchestratorRun {node_id: $run_id})
       -[:HAS_STEP]->(step:Step)
       -[:TRIGGERED]->(te:ToolExecution)
@@ -360,7 +330,7 @@ ORDER BY te.occurred_at
 Tool executions that spawned sub-sessions via the delegate tool:
 
 ```cypher
-MATCH (parent:Session {graph_forest_name: $graph_forest_name})
+MATCH (parent:Session {workspace: $workspace})
       -[:HAS_RUN]->()-[:HAS_STEP]->()-[:TRIGGERED]->
       (d:Delegation)-[:SPAWNED]->(child:Session)
 RETURN parent.node_id  AS parent_session_id,
@@ -374,7 +344,7 @@ ORDER BY child.occurred_at
 ### Pattern 6: Full Execution Tree (Session → Runs → Steps → Tools)
 
 ```cypher
-MATCH (s:Session {graph_forest_name: $graph_forest_name, node_id: $session_id})
+MATCH (s:Session {workspace: $workspace, node_id: $session_id})
 OPTIONAL MATCH (s)-[:HAS_RUN]->(r:OrchestratorRun)
 OPTIONAL MATCH (r)-[:HAS_STEP]->(step:Step)
 OPTIONAL MATCH (step)-[:TRIGGERED]->(te:ToolExecution)
@@ -391,7 +361,7 @@ ORDER BY r.occurred_at, step.occurred_at, te.occurred_at
 ### Pattern 7: Find Parallel Tool Executions
 
 ```cypher
-MATCH (s:Session {graph_forest_name: $graph_forest_name})
+MATCH (s:Session {workspace: $workspace})
       -[:HAS_RUN]->()-[:HAS_STEP]->()-[:TRIGGERED]->
       (te1:ToolExecution)-[:PARALLEL_WITH]->(te2:ToolExecution)
 RETURN te1.node_id  AS tool_a,
@@ -403,7 +373,7 @@ RETURN te1.node_id  AS tool_a,
 To avoid duplicate pairs (A→B and B→A), use `id(te1) < id(te2)`:
 
 ```cypher
-MATCH (s:Session {graph_forest_name: $graph_forest_name})
+MATCH (s:Session {workspace: $workspace})
       -[:HAS_RUN]->()-[:HAS_STEP]->()-[:TRIGGERED]->
       (te1:ToolExecution)-[:PARALLEL_WITH]->(te2:ToolExecution)
 WHERE id(te1) < id(te2)
@@ -418,7 +388,7 @@ RETURN te1.node_id   AS tool_a,
 Find `PromptStep` nodes whose prompt text contains a keyword:
 
 ```cypher
-MATCH (step:PromptStep {graph_forest_name: $graph_forest_name})
+MATCH (step:PromptStep {workspace: $workspace})
 WHERE step.prompt_text CONTAINS $search_term
 RETURN step.node_id     AS step_id,
        step.prompt_text  AS prompt_text,
@@ -430,7 +400,7 @@ ORDER BY step.occurred_at DESC
 Case-insensitive search using `toLower()`:
 
 ```cypher
-MATCH (step:PromptStep {graph_forest_name: $graph_forest_name})
+MATCH (step:PromptStep {workspace: $workspace})
 WHERE toLower(step.prompt_text) CONTAINS toLower($search_term)
 RETURN step.node_id     AS step_id,
        step.prompt_text  AS prompt_text,
@@ -442,7 +412,7 @@ ORDER BY step.occurred_at DESC
 ### Pattern 9: Count Nodes by Label
 
 ```cypher
-MATCH (n {graph_forest_name: $graph_forest_name})
+MATCH (n {workspace: $workspace})
 RETURN labels(n) AS node_labels,
        count(n)   AS node_count
 ORDER BY node_count DESC
@@ -451,7 +421,7 @@ ORDER BY node_count DESC
 Count a specific label type:
 
 ```cypher
-MATCH (n:ToolExecution {graph_forest_name: $graph_forest_name})
+MATCH (n:ToolExecution {workspace: $workspace})
 RETURN count(n) AS tool_execution_count
 ```
 
@@ -460,7 +430,7 @@ RETURN count(n) AS tool_execution_count
 Direct children only:
 
 ```cypher
-MATCH (child:Session {graph_forest_name: $graph_forest_name})
+MATCH (child:Session {workspace: $workspace})
       -[:SUBSESSION_OF]->(parent:Session {node_id: $parent_session_id})
 RETURN child.node_id    AS child_session_id,
        child.occurred_at AS started_at,
@@ -471,7 +441,7 @@ ORDER BY child.occurred_at
 All descendants (any depth) of a parent session:
 
 ```cypher
-MATCH (child:Session {graph_forest_name: $graph_forest_name})
+MATCH (child:Session {workspace: $workspace})
       -[:SUBSESSION_OF*1..]->(ancestor:Session {node_id: $ancestor_session_id})
 RETURN child.node_id    AS descendant_session_id,
        child.occurred_at AS started_at
@@ -481,7 +451,7 @@ ORDER BY child.occurred_at
 ### Pattern 11: Find Events Attached to a Session
 
 ```cypher
-MATCH (s:Session {graph_forest_name: $graph_forest_name, node_id: $session_id})
+MATCH (s:Session {workspace: $workspace, node_id: $session_id})
       -[:HAS_EVENT]->(e:Event)
 RETURN e.node_id    AS event_id,
        labels(e)    AS event_labels,
@@ -497,7 +467,7 @@ ORDER BY e.occurred_at
 Events across all scopes (session, run, step) for a given session:
 
 ```cypher
-MATCH (s:Session {graph_forest_name: $graph_forest_name, node_id: $session_id})
+MATCH (s:Session {workspace: $workspace, node_id: $session_id})
 OPTIONAL MATCH (s)-[:HAS_EVENT]->(se:Event)
 OPTIONAL MATCH (s)-[:HAS_RUN]->(r:OrchestratorRun)-[:HAS_EVENT]->(re:Event)
 OPTIONAL MATCH (s)-[:HAS_RUN]->()-[:HAS_STEP]->(step:Step)-[:HAS_EVENT]->(ste:Event)
@@ -511,7 +481,7 @@ ORDER BY occurred_at
 ### Pattern 12: Tool Execution Success/Failure Stats per Session
 
 ```cypher
-MATCH (s:Session {graph_forest_name: $graph_forest_name})
+MATCH (s:Session {workspace: $workspace})
       -[:HAS_RUN]->()-[:HAS_STEP]->()-[:TRIGGERED]->(te:ToolExecution)
 RETURN s.node_id        AS session_id,
        te.tool_name     AS tool_name,
@@ -529,8 +499,8 @@ ORDER BY session_id, tool_name, status
 Find the shortest undirected path between any two nodes by `node_id`:
 
 ```cypher
-MATCH (a {node_id: $source_id, graph_forest_name: $graph_forest_name}),
-      (b {node_id: $target_id, graph_forest_name: $graph_forest_name}),
+MATCH (a {node_id: $source_id, workspace: $workspace}),
+      (b {node_id: $target_id, workspace: $workspace}),
       path = shortestPath((a)-[*]-(b))
 RETURN [n IN nodes(path)         | n.node_id]  AS node_chain,
        [r IN relationships(path) | type(r)]    AS rel_chain,
@@ -540,8 +510,8 @@ RETURN [n IN nodes(path)         | n.node_id]  AS node_chain,
 ### All Paths from Session to a Specific Tool Execution
 
 ```cypher
-MATCH (s:Session {node_id: $session_id, graph_forest_name: $graph_forest_name}),
-      (te:ToolExecution {node_id: $tool_exec_id, graph_forest_name: $graph_forest_name}),
+MATCH (s:Session {node_id: $session_id, workspace: $workspace}),
+      (te:ToolExecution {node_id: $tool_exec_id, workspace: $workspace}),
       path = (s)-[*]->(te)
 RETURN [n IN nodes(path) | n.node_id]          AS path_nodes,
        [r IN relationships(path) | type(r)]    AS rel_types,
@@ -555,7 +525,7 @@ LIMIT 10
 Walk up to 6 hops outward from a session to find all reachable nodes:
 
 ```cypher
-MATCH (s:Session {node_id: $session_id, graph_forest_name: $graph_forest_name})
+MATCH (s:Session {node_id: $session_id, workspace: $workspace})
       -[:HAS_RUN | HAS_STEP | TRIGGERED | SPAWNED*1..6]->(descendant)
 RETURN descendant.node_id AS node_id,
        labels(descendant)  AS node_labels,
@@ -566,7 +536,7 @@ ORDER BY descendant.occurred_at
 Walk the delegation lineage (any depth):
 
 ```cypher
-MATCH path = (root:Session {graph_forest_name: $graph_forest_name})
+MATCH path = (root:Session {workspace: $workspace})
              -[:HAS_RUN*0..1]->()-[:HAS_STEP*0..1]->()
              -[:TRIGGERED*0..1]->(d:Delegation)
              -[:SPAWNED*0..1]->(child:Session)
@@ -577,56 +547,56 @@ LIMIT 50
 
 ---
 
-## Usage via `execute_query`
+## Usage via graph_query Tool
 
-All patterns above are executed through `Neo4jGraphStore.execute_query()`:
+All patterns above are executed through the `graph_query` tool. Pass a Cypher
+query string as the first argument; the tool handles workspace scoping and
+returns results as a list of row dicts.
 
-```python
-results = await store.execute_query(
-    "MATCH (s:Session {graph_forest_name: $graph_forest_name}) "
-    "RETURN s.node_id, s.occurred_at ORDER BY s.occurred_at DESC",
-    dialect="cypher",
+Basic usage — find sessions in the current workspace:
+
+```
+graph_query(
+  "MATCH (s:Session {workspace: $workspace}) "
+  "RETURN s.node_id, s.occurred_at ORDER BY s.occurred_at DESC"
 )
-# results: list[dict[str, Any]], one dict per row
+# Returns: list of dicts, one per row
 ```
 
-Passing query parameters (user params merge with auto-injected forest param):
+With additional parameters — find runs for a specific session:
 
-```python
-results = await store.execute_query(
-    "MATCH (s:Session {graph_forest_name: $graph_forest_name, node_id: $session_id})"
-    "-[:HAS_RUN]->(r:OrchestratorRun) "
-    "RETURN r.node_id AS run_id, r.occurred_at AS started_at",
-    params={"session_id": "6afb3613-7041-4735-9c0f-c2171452ed18"},
-    dialect="cypher",
-)
 ```
-
-Querying another forest explicitly:
-
-```python
-results = await store.execute_query(
-    "MATCH (s:Session {graph_forest_name: $graph_forest_name}) RETURN s.node_id",
-    graph_forest_name="project-alpha",
-    dialect="cypher",
+graph_query(
+  "MATCH (s:Session {workspace: $workspace, node_id: $session_id})"
+  "-[:HAS_RUN]->(r:OrchestratorRun) "
+  "RETURN r.node_id AS run_id, r.occurred_at AS started_at",
+  params={"session_id": "6afb3613-7041-4735-9c0f-c2171452ed18"}
 )
 ```
 
-Cross-forest query (wildcard — no `$graph_forest_name` injected):
+Query another workspace explicitly:
 
-```python
-results = await store.execute_query(
-    "MATCH (s:Session) "
-    "RETURN s.graph_forest_name AS forest, count(s) AS session_count "
-    "ORDER BY session_count DESC",
-    graph_forest_name="*",
-    dialect="cypher",
+```
+graph_query(
+  "MATCH (s:Session {workspace: $workspace}) RETURN s.node_id",
+  workspace="project-alpha"
 )
 ```
 
-> **Note:** `execute_query` operates on the **persisted (flushed) store only**.
-> In-memory buffered writes are not visible to Cypher queries until `flush()`
-> has been called. Use `get_node()` / `get_edge()` for buffer-aware reads.
+Cross-workspace query (wildcard — no `$workspace` injected):
+
+```
+graph_query(
+  "MATCH (s:Session) "
+  "RETURN s.workspace AS ws, count(s) AS session_count "
+  "ORDER BY session_count DESC",
+  workspace="*"
+)
+```
+
+> **Note:** `graph_query` operates on the **persisted (flushed) store only**.
+> In-memory buffered writes are not visible to Cypher queries until the store
+> has been flushed. Use `get_node()` / `get_edge()` for buffer-aware reads.
 
 ---
 
@@ -634,7 +604,8 @@ results = await store.execute_query(
 
 ### Session nodes
 
-Session `node_id` is the raw UUID from the Amplifier session:
+Session `node_id` is the raw UUID from the Amplifier session. No
+transformation is applied — the UUID is used directly:
 
 ```
 55c8841a-1234-4abc-8def-000000000001
@@ -642,7 +613,8 @@ Session `node_id` is the raw UUID from the Amplifier session:
 
 ### All other nodes
 
-Non-session nodes follow the pattern `{session_id}__{event_name}__{epoch_ms}`:
+Non-session nodes follow the pattern `{session_id}__{event_name}__{epoch_ms}`,
+using `__` (double underscore) as the separator:
 
 ```
 55c8841a-1234-4abc-8def-000000000001__prompt_submit__1737972001000
@@ -653,7 +625,7 @@ Non-session nodes follow the pattern `{session_id}__{event_name}__{epoch_ms}`:
 Parsing the ID:
 
 ```python
-# Split on double underscore
+# Split on double underscore separator
 parts = node_id.split("__")
 # parts[0] = session_id UUID
 # parts[1] = event_name (colons replaced with underscores)
@@ -663,7 +635,8 @@ parts = node_id.split("__")
 ### ToolExecution nodes
 
 ToolExecution nodes include the `tool_call_id` as a disambiguator to prevent
-collisions when parallel tool calls share the same millisecond timestamp:
+collisions when parallel tool calls share the same millisecond timestamp.
+The `__` (double underscore) separator is used between all four segments:
 
 ```
 55c8841a-1234-4abc-8def-000000000001__tool_pre__1737972005000__toolu_01G9FD9g
@@ -672,7 +645,7 @@ collisions when parallel tool calls share the same millisecond timestamp:
 Parsing the ID:
 
 ```python
-# Split on double underscore
+# Split on double underscore separator
 parts = node_id.split("__")
 # parts[0] = session_id UUID
 # parts[1] = event_name (colons replaced with underscores)
@@ -682,7 +655,7 @@ parts = node_id.split("__")
 
 ### Relationship identity
 
-Relationships have no stored ID property. Identity in Neo4j is composite:
+Relationships have no stored ID property. Identity is composite:
 `(source.node_id, target.node_id, type(r))`. To locate a specific
 relationship, match by endpoint `node_id` values and relationship type.
 
@@ -692,15 +665,15 @@ relationship, match by endpoint `node_id` values and relationship type.
 
 ### Properties vs labels
 
-In Neo4j, labels are separate from properties. You can filter on both:
+Labels are separate from properties. You can filter on both:
 
 ```cypher
 // Filter by label AND property
-MATCH (step:PromptStep {graph_forest_name: $graph_forest_name})
+MATCH (step:PromptStep {workspace: $workspace})
 RETURN step.node_id
 
 // Filter by property only (scans more nodes)
-MATCH (n {graph_forest_name: $graph_forest_name})
+MATCH (n {workspace: $workspace})
 WHERE 'PromptStep' IN labels(n)
 RETURN n.node_id
 ```
@@ -714,31 +687,31 @@ Nodes carry both a base label and a sub-type label. Both can be used in MATCH:
 
 ```cypher
 // Matches any Session regardless of subtype
-MATCH (s:Session {graph_forest_name: $graph_forest_name}) ...
+MATCH (s:Session {workspace: $workspace}) ...
 
 // Matches only root sessions (both labels present)
-MATCH (s:Session:Root {graph_forest_name: $graph_forest_name}) ...
+MATCH (s:Session:Root {workspace: $workspace}) ...
 
 // Equivalent WHERE form
-MATCH (s:Session {graph_forest_name: $graph_forest_name})
+MATCH (s:Session {workspace: $workspace})
 WHERE s:Root ...
 ```
 
 ### Forest property on relationships
 
-Relationships also carry `graph_forest_name`. For cross-forest queries where
+Relationships also carry `workspace`. For cross-workspace queries where
 you traverse relationships, add a relationship filter if needed:
 
 ```cypher
-// graph_forest_name="*"
+// workspace="*"
 MATCH (s:Session)-[r:HAS_RUN]->(run:OrchestratorRun)
-WHERE r.graph_forest_name = $target_forest
+WHERE r.workspace = $target_workspace
 RETURN s.node_id, run.node_id
 ```
 
 ### Buffer visibility
 
-`execute_query` runs against Neo4j's **persisted state only**. Nodes and
+`graph_query` runs against the **persisted state only**. Nodes and
 relationships buffered via `upsert_node`/`upsert_edge` but not yet flushed
-will **not** appear in Cypher query results. Always call `await store.flush()`
-before running analysis queries when you need up-to-date results.
+will **not** appear in Cypher query results. Always flush before running
+analysis queries when you need up-to-date results.
