@@ -169,7 +169,7 @@ class LoggingHandler:
 
         if self._client is not None:
             try:
-                asyncio.get_event_loop().create_task(self._client.aclose())
+                asyncio.get_running_loop().create_task(self._client.aclose())
             except Exception:
                 logger.warning("Failed to schedule client cleanup")
 
@@ -186,9 +186,10 @@ class LoggingHandler:
 
         # Lazy client creation
         if self._client is None:
-            self._client = httpx.AsyncClient(timeout=httpx.Timeout(self._dispatch_timeout))
-        client = self._client
-        assert client is not None  # guaranteed by initialization above
+            client = httpx.AsyncClient(timeout=httpx.Timeout(self._dispatch_timeout))
+            self._client = client
+        else:
+            client = self._client
 
         try:
             payload = {

@@ -17,6 +17,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 
+from amplifier_module_hook_context_intelligence.handlers.logging_handler import LoggingHandler
+
 
 # ---------------------------------------------------------------------------
 # _FakeResolver with optional context_intelligence_server_url / workspace
@@ -52,10 +54,6 @@ class TestServerDispatchDisabled:
 
     async def test_no_dispatch_without_server_url(self, tmp_path: Path) -> None:
         """asyncio.create_task is NOT called when resolver has no context_intelligence_server_url."""
-        from amplifier_module_hook_context_intelligence.handlers.logging_handler import (
-            LoggingHandler,
-        )
-
         handler = LoggingHandler(_FakeResolver(tmp_path, "proj"))  # no server_url
 
         with patch(
@@ -70,10 +68,6 @@ class TestServerDispatchDisabled:
 
     async def test_jsonl_still_written_without_server_url(self, tmp_path: Path) -> None:
         """JSONL is written even when no context_intelligence_server_url is configured."""
-        from amplifier_module_hook_context_intelligence.handlers.logging_handler import (
-            LoggingHandler,
-        )
-
         handler = LoggingHandler(_FakeResolver(tmp_path, "proj"))  # no server_url
         await handler(
             "session:start",
@@ -94,10 +88,6 @@ class TestServerDispatchEnabled:
 
     async def test_dispatch_creates_task(self, tmp_path: Path) -> None:
         """asyncio.create_task is called once when context_intelligence_server_url is configured."""
-        from amplifier_module_hook_context_intelligence.handlers.logging_handler import (
-            LoggingHandler,
-        )
-
         handler = LoggingHandler(
             _FakeResolver(
                 tmp_path,
@@ -121,10 +111,6 @@ class TestServerDispatchEnabled:
 
     async def test_jsonl_still_written_with_server_url(self, tmp_path: Path) -> None:
         """JSONL is written even when context_intelligence_server_url dispatch is active."""
-        from amplifier_module_hook_context_intelligence.handlers.logging_handler import (
-            LoggingHandler,
-        )
-
         handler = LoggingHandler(
             _FakeResolver(
                 tmp_path,
@@ -157,10 +143,6 @@ class TestServerDispatchFailure:
 
     async def test_http_failure_logs_warning_with_exc_info(self, tmp_path: Path) -> None:
         """An exception during dispatch is logged as a warning with exc_info=True."""
-        from amplifier_module_hook_context_intelligence.handlers.logging_handler import (
-            LoggingHandler,
-        )
-
         handler = LoggingHandler(
             _FakeResolver(
                 tmp_path,
@@ -197,10 +179,6 @@ class TestCircuitBreaker:
 
     async def test_trips_after_threshold_failures(self, tmp_path: Path) -> None:
         """3 consecutive failures trip the circuit breaker (_dispatch_enabled=False, _consecutive_failures=3)."""
-        from amplifier_module_hook_context_intelligence.handlers.logging_handler import (
-            LoggingHandler,
-        )
-
         handler = LoggingHandler(
             _FakeResolver(
                 tmp_path,
@@ -223,10 +201,6 @@ class TestCircuitBreaker:
 
     async def test_resets_on_success(self, tmp_path: Path) -> None:
         """2 failures then a success resets _consecutive_failures to 0 and keeps _dispatch_enabled=True."""
-        from amplifier_module_hook_context_intelligence.handlers.logging_handler import (
-            LoggingHandler,
-        )
-
         handler = LoggingHandler(
             _FakeResolver(
                 tmp_path,
@@ -256,10 +230,6 @@ class TestCircuitBreaker:
 
     async def test_disabled_dispatch_is_silent(self, tmp_path: Path) -> None:
         """After the circuit trips, subsequent calls make no HTTP requests and log no warnings."""
-        from amplifier_module_hook_context_intelligence.handlers.logging_handler import (
-            LoggingHandler,
-        )
-
         handler = LoggingHandler(
             _FakeResolver(
                 tmp_path,
@@ -293,10 +263,6 @@ class TestCircuitBreaker:
 
     async def test_trip_emits_final_warning(self, tmp_path: Path) -> None:
         """Exactly 1 warning containing 'dispatch disabled' is emitted when circuit trips."""
-        from amplifier_module_hook_context_intelligence.handlers.logging_handler import (
-            LoggingHandler,
-        )
-
         handler = LoggingHandler(
             _FakeResolver(
                 tmp_path,
@@ -322,10 +288,6 @@ class TestCircuitBreaker:
 
     async def test_configurable_threshold(self, tmp_path: Path) -> None:
         """threshold=5: 4 failures leaves dispatch enabled, 5th failure trips it."""
-        from amplifier_module_hook_context_intelligence.handlers.logging_handler import (
-            LoggingHandler,
-        )
-
         handler = LoggingHandler(
             _FakeResolver(
                 tmp_path,
@@ -352,10 +314,6 @@ class TestCircuitBreaker:
 
     async def test_non_2xx_treated_as_failure(self, tmp_path: Path) -> None:
         """HTTPStatusError from raise_for_status() increments the failure counter."""
-        from amplifier_module_hook_context_intelligence.handlers.logging_handler import (
-            LoggingHandler,
-        )
-
         handler = LoggingHandler(
             _FakeResolver(
                 tmp_path,
@@ -395,10 +353,6 @@ class TestPersistentClient:
 
     def test_lazy_client_creation(self, tmp_path: Path) -> None:
         """_client is None immediately after __init__."""
-        from amplifier_module_hook_context_intelligence.handlers.logging_handler import (
-            LoggingHandler,
-        )
-
         handler = LoggingHandler(
             _FakeResolver(
                 tmp_path,
@@ -410,10 +364,6 @@ class TestPersistentClient:
 
     async def test_client_created_on_first_dispatch(self, tmp_path: Path) -> None:
         """httpx.AsyncClient constructor is called exactly once on first dispatch."""
-        from amplifier_module_hook_context_intelligence.handlers.logging_handler import (
-            LoggingHandler,
-        )
-
         handler = LoggingHandler(
             _FakeResolver(
                 tmp_path,
@@ -435,10 +385,6 @@ class TestPersistentClient:
 
     async def test_client_reused_across_dispatches(self, tmp_path: Path) -> None:
         """httpx.AsyncClient constructor called once; post() called 5 times across 5 dispatches."""
-        from amplifier_module_hook_context_intelligence.handlers.logging_handler import (
-            LoggingHandler,
-        )
-
         handler = LoggingHandler(
             _FakeResolver(
                 tmp_path,
@@ -462,10 +408,6 @@ class TestPersistentClient:
 
     async def test_client_created_with_configured_timeout(self, tmp_path: Path) -> None:
         """httpx.AsyncClient is constructed with timeout=httpx.Timeout(dispatch_timeout)."""
-        from amplifier_module_hook_context_intelligence.handlers.logging_handler import (
-            LoggingHandler,
-        )
-
         handler = LoggingHandler(
             _FakeResolver(
                 tmp_path,
@@ -489,10 +431,6 @@ class TestPersistentClient:
 
     async def test_client_cleanup_on_finalize(self, tmp_path: Path) -> None:
         """_finalize_metadata schedules aclose() on the persistent client."""
-        from amplifier_module_hook_context_intelligence.handlers.logging_handler import (
-            LoggingHandler,
-        )
-
         handler = LoggingHandler(
             _FakeResolver(
                 tmp_path,
@@ -516,10 +454,6 @@ class TestPersistentClient:
 
     async def test_no_cleanup_when_no_client(self, tmp_path: Path) -> None:
         """_finalize_metadata works when _client is None; metadata is still written."""
-        from amplifier_module_hook_context_intelligence.handlers.logging_handler import (
-            LoggingHandler,
-        )
-
         handler = LoggingHandler(_FakeResolver(tmp_path, "proj"))  # no server_url
         assert handler._client is None
 
