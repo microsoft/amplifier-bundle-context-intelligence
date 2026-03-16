@@ -186,7 +186,7 @@ When the context-intelligence server is configured, you can use the `graph_query
 
 **Use bash/jq/grep for text search and file-based patterns** — event content search, field extraction from a known session's events.jsonl, and single-session analysis where JSONL patterns are sufficient.
 
-### When graph_query is available:
+### When graph_query is available
 
 Load the Cypher patterns skill for query examples:
 
@@ -196,7 +196,7 @@ Load skill: context-intelligence-graph-query
 
 Then use `graph_query` with Cypher queries from the skill's examples for delegation trees, session comparisons, and structural analysis across many sessions.
 
-### When graph_query is not available:
+### When graph_query is not available
 
 Fall back to raw JSONL extraction patterns from @context-intelligence:context/safe-extraction-patterns.md. These always work regardless of configuration.
 
