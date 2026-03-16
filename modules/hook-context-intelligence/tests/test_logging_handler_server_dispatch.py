@@ -9,7 +9,6 @@ Covers server-dispatch behavior added in the feat/server-dispatch branch:
 
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
 from pathlib import Path
@@ -214,6 +213,7 @@ class TestCircuitBreaker:
         mock_response.raise_for_status.return_value = None
 
         mock_client = AsyncMock()
+        mock_client.is_closed = False
         mock_client.post.side_effect = [
             Exception("fail"),
             Exception("fail"),
@@ -394,6 +394,7 @@ class TestPersistentClient:
         )
 
         mock_client = AsyncMock()
+        mock_client.is_closed = False
         mock_client.post.return_value = MagicMock(raise_for_status=MagicMock(return_value=None))
 
         with patch(
@@ -429,8 +430,8 @@ class TestPersistentClient:
         call_kwargs = mock_ctor.call_args[1]
         assert call_kwargs["timeout"] == httpx.Timeout(45.0)
 
-    async def test_client_cleanup_on_finalize(self, tmp_path: Path) -> None:
-        """_finalize_metadata schedules aclose() on the persistent client."""
+    async def test_closed_client_silently_skips(self, tmp_path: Path) -> None:
+        """A RuntimeError about a closed client is silently skipped, not counted as failure."""
         handler = LoggingHandler(
             _FakeResolver(
                 tmp_path,
@@ -440,17 +441,17 @@ class TestPersistentClient:
         )
 
         mock_client = AsyncMock()
+        mock_client.is_closed = False
+        mock_client.post.side_effect = RuntimeError(
+            "Cannot send a request, as the client has been closed."
+        )
         handler._client = mock_client
 
-        session_dir = tmp_path / "proj" / "sessions" / "s1" / "context-intelligence"
-        session_dir.mkdir(parents=True)
+        await handler._dispatch_to_server("session:end", {"session_id": "s1"})
 
-        handler._finalize_metadata(session_dir, {"status": "completed", "timestamp": "t1"})
-
-        # Yield to let scheduled tasks run
-        await asyncio.sleep(0)
-
-        mock_client.aclose.assert_called_once()
+        # Should NOT increment failure counter -- this is a teardown race, not a server issue
+        assert handler._consecutive_failures == 0
+        assert handler._dispatch_enabled is True
 
     async def test_no_cleanup_when_no_client(self, tmp_path: Path) -> None:
         """_finalize_metadata works when _client is None; metadata is still written."""

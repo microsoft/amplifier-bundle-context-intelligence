@@ -194,6 +194,12 @@ class LoggingHandler:
             response = await client.post(f"{self._server_url}/events", json=payload)
             response.raise_for_status()
             self._consecutive_failures = 0
+        except RuntimeError as exc:
+            # Client closed during session teardown -- skip silently.
+            # These are the last events of a dying session; nothing to retry.
+            if "closed" in str(exc):
+                return
+            raise
         except Exception:
             self._consecutive_failures += 1
             logger.warning(
