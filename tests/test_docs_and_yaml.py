@@ -341,3 +341,173 @@ class TestDispatchCircuitBreakerDot:
     def test_dot_has_async_client_creation(self, dispatch_dot_raw):
         """Must reference AsyncClient creation for the lazy client init path."""
         assert "AsyncClient" in dispatch_dot_raw
+
+
+# ---------------------------------------------------------------------------
+# README Server Dispatch section tests
+# ---------------------------------------------------------------------------
+
+
+class TestReadmeDispatchConfigRows:
+    """README configuration table must include dispatch_timeout and dispatch_failure_threshold."""
+
+    def test_readme_has_dispatch_timeout_row(self, readme_raw):
+        """README config table must include a dispatch_timeout row."""
+        assert "dispatch_timeout" in readme_raw, (
+            "README config table must include dispatch_timeout row"
+        )
+
+    def test_readme_has_dispatch_timeout_env_var(self, readme_raw):
+        """README must show AMPLIFIER_CONTEXT_INTELLIGENCE_DISPATCH_TIMEOUT env var."""
+        assert "AMPLIFIER_CONTEXT_INTELLIGENCE_DISPATCH_TIMEOUT" in readme_raw, (
+            "README config table must include AMPLIFIER_CONTEXT_INTELLIGENCE_DISPATCH_TIMEOUT"
+        )
+
+    def test_readme_dispatch_timeout_default_is_30(self, readme_raw):
+        """README must show default of 30 for dispatch_timeout."""
+        # Find the dispatch_timeout row and confirm 30 appears near it
+        lines = readme_raw.splitlines()
+        for line in lines:
+            if "dispatch_timeout" in line and "AMPLIFIER_CONTEXT_INTELLIGENCE_DISPATCH_TIMEOUT" in line:
+                assert "30" in line, (
+                    "dispatch_timeout row must show default of 30"
+                )
+                return
+        pytest.fail("No dispatch_timeout row found with env var in README config table")
+
+    def test_readme_has_dispatch_failure_threshold_row(self, readme_raw):
+        """README config table must include a dispatch_failure_threshold row."""
+        assert "dispatch_failure_threshold" in readme_raw, (
+            "README config table must include dispatch_failure_threshold row"
+        )
+
+    def test_readme_has_dispatch_failure_threshold_env_var(self, readme_raw):
+        """README must show AMPLIFIER_CONTEXT_INTELLIGENCE_DISPATCH_FAILURE_THRESHOLD env var."""
+        assert "AMPLIFIER_CONTEXT_INTELLIGENCE_DISPATCH_FAILURE_THRESHOLD" in readme_raw, (
+            "README config table must include AMPLIFIER_CONTEXT_INTELLIGENCE_DISPATCH_FAILURE_THRESHOLD"
+        )
+
+    def test_readme_dispatch_failure_threshold_default_is_3(self, readme_raw):
+        """README must show default of 3 for dispatch_failure_threshold."""
+        lines = readme_raw.splitlines()
+        for line in lines:
+            if (
+                "dispatch_failure_threshold" in line
+                and "AMPLIFIER_CONTEXT_INTELLIGENCE_DISPATCH_FAILURE_THRESHOLD" in line
+            ):
+                assert "3" in line, (
+                    "dispatch_failure_threshold row must show default of 3"
+                )
+                return
+        pytest.fail(
+            "No dispatch_failure_threshold row found with env var in README config table"
+        )
+
+
+class TestReadmeServerDispatchSection:
+    """README must contain a Server dispatch section between Configuration reference and What gets stored."""
+
+    def test_readme_has_server_dispatch_heading(self, readme_raw):
+        """README must contain a 'Server dispatch' section heading."""
+        assert "## Server dispatch" in readme_raw, (
+            "README must contain a '## Server dispatch' section"
+        )
+
+    def test_server_dispatch_section_before_what_gets_stored(self, readme_raw):
+        """Server dispatch section must appear before 'What gets stored'."""
+        dispatch_pos = readme_raw.find("## Server dispatch")
+        what_gets_stored_pos = readme_raw.find("## What gets stored")
+        assert dispatch_pos != -1, "README must contain '## Server dispatch'"
+        assert what_gets_stored_pos != -1, "README must contain '## What gets stored'"
+        assert dispatch_pos < what_gets_stored_pos, (
+            "'## Server dispatch' must appear before '## What gets stored'"
+        )
+
+    def test_server_dispatch_section_after_configuration_reference(self, readme_raw):
+        """Server dispatch section must appear after '## Configuration reference'."""
+        config_pos = readme_raw.find("## Configuration reference")
+        dispatch_pos = readme_raw.find("## Server dispatch")
+        assert config_pos != -1, "README must contain '## Configuration reference'"
+        assert dispatch_pos != -1, "README must contain '## Server dispatch'"
+        assert config_pos < dispatch_pos, (
+            "'## Server dispatch' must appear after '## Configuration reference'"
+        )
+
+    def test_readme_has_connection_reuse_subsection(self, readme_raw):
+        """Server dispatch section must contain a Connection reuse subsection."""
+        assert "Connection reuse" in readme_raw, (
+            "README Server dispatch section must document connection reuse"
+        )
+
+    def test_readme_connection_reuse_mentions_async_client(self, readme_raw):
+        """Connection reuse subsection must mention persistent httpx.AsyncClient."""
+        assert "AsyncClient" in readme_raw, (
+            "README must mention httpx.AsyncClient in the connection reuse description"
+        )
+
+    def test_readme_connection_reuse_mentions_lazy_creation(self, readme_raw):
+        """Connection reuse subsection must mention lazy creation."""
+        assert "lazy" in readme_raw.lower(), (
+            "README must describe lazy client creation in connection reuse"
+        )
+
+    def test_readme_connection_reuse_mentions_tcp_pooling(self, readme_raw):
+        """Connection reuse subsection must mention TCP connection pooling."""
+        assert "TCP" in readme_raw, (
+            "README must mention TCP connection pooling in connection reuse"
+        )
+
+    def test_readme_has_circuit_breaker_subsection(self, readme_raw):
+        """Server dispatch section must contain a Circuit breaker subsection."""
+        assert "Circuit breaker" in readme_raw, (
+            "README Server dispatch section must document circuit breaker behavior"
+        )
+
+    def test_readme_circuit_breaker_warning_message(self, readme_raw):
+        """Circuit breaker section must include the exact warning message text."""
+        assert "dispatch disabled for this session" in readme_raw, (
+            "README circuit breaker section must include the exact warning message: "
+            "'dispatch disabled for this session'"
+        )
+
+    def test_readme_has_recovery_subsection(self, readme_raw):
+        """Server dispatch section must contain a Recovery subsection."""
+        assert "Recovery" in readme_raw, (
+            "README Server dispatch section must document recovery instructions"
+        )
+
+    def test_readme_recovery_mentions_restart(self, readme_raw):
+        """Recovery subsection must instruct users to restart the Amplifier session."""
+        assert "Restart" in readme_raw or "restart" in readme_raw, (
+            "README recovery section must mention restarting the Amplifier session"
+        )
+
+    def test_readme_recovery_mentions_no_mid_session_recovery(self, readme_raw):
+        """Recovery subsection must note no mid-session auto-recovery."""
+        assert "mid-session" in readme_raw, (
+            "README recovery section must note there is no mid-session auto-recovery"
+        )
+
+    def test_readme_recovery_mentions_jsonl_complete_record(self, readme_raw):
+        """Recovery subsection must note JSONL files contain complete record."""
+        assert "JSONL" in readme_raw or "jsonl" in readme_raw.lower(), (
+            "README recovery section must mention JSONL files as the complete record"
+        )
+
+    def test_readme_has_dispatch_circuit_breaker_dot_link(self, readme_raw):
+        """Server dispatch section must link to docs/dispatch-circuit-breaker.dot."""
+        assert "dispatch-circuit-breaker.dot" in readme_raw, (
+            "README Server dispatch section must link to docs/dispatch-circuit-breaker.dot"
+        )
+
+    def test_readme_server_dispatch_uses_separator_pattern(self, readme_raw):
+        """Server dispatch section must be separated by --- like other sections."""
+        dispatch_pos = readme_raw.find("## Server dispatch")
+        assert dispatch_pos != -1
+        # Find --- separator before the Server dispatch heading
+        before_section = readme_raw[:dispatch_pos]
+        # The last --- before the section should be close to the section start
+        last_sep_pos = before_section.rfind("\n---\n")
+        assert last_sep_pos != -1, (
+            "Server dispatch section must be preceded by a --- separator"
+        )

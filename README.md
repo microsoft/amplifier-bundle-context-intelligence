@@ -85,6 +85,32 @@ in `settings.yaml`, or from environment variables via the behavior YAML.
 | `log_level` | `AMPLIFIER_CONTEXT_INTELLIGENCE_LOG_LEVEL` | `INFO` | Hook logging level. |
 | `base_path` | — | `~/.amplifier/projects` | Root directory for local JSONL output. |
 | `exclude_events` | — | `[]` | fnmatch patterns for events to suppress. |
+| `dispatch_timeout` | `AMPLIFIER_CONTEXT_INTELLIGENCE_DISPATCH_TIMEOUT` | `30` | HTTP timeout in seconds for server dispatch. |
+| `dispatch_failure_threshold` | `AMPLIFIER_CONTEXT_INTELLIGENCE_DISPATCH_FAILURE_THRESHOLD` | `3` | Consecutive dispatch failures before the circuit breaker disables dispatch for the session. |
+
+---
+
+## Server dispatch
+
+### Connection reuse
+
+The hook maintains a persistent `httpx.AsyncClient` for HTTP dispatch to the CI server. The client uses lazy creation — it is instantiated on the first dispatch attempt and reused for all subsequent events in the same session. This gives TCP connection pooling without paying the connection-setup cost per event. On session end the client is closed automatically via `aclose()` in `_finalize_metadata`.
+
+### Circuit breaker
+
+1. Every failed dispatch (network error or non-2xx response) increments the consecutive failure counter.
+2. Once the counter reaches `dispatch_failure_threshold`, dispatch is permanently disabled for the session.
+3. One clear warning is emitted:
+   > `Context intelligence server unreachable after N attempts — dispatch disabled for this session. Local JSONL capture continues.`
+4. Subsequent events are silently skipped (no further log noise); local JSONL capture continues unaffected.
+
+### Recovery
+
+Restart the Amplifier session once the server is back. There is no mid-session auto-recovery — once the circuit opens it stays open for that session. The JSONL files contain a complete record of all events and can be replayed into the server after it recovers.
+
+### Architecture diagram
+
+See [`docs/dispatch-circuit-breaker.dot`](docs/dispatch-circuit-breaker.dot) for the full dispatch flow and circuit breaker state machine.
 
 ---
 
