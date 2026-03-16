@@ -1,10 +1,12 @@
 """Tests for GraphQueryTool class.
 
-7 tests covering:
+9 tests covering:
 - TestGraphQuery: correct URL with trailing slash stripped, workspace injected as top-level
   field, user params forwarded, returns parsed JSON list, no params sends empty dict
 - TestGraphQueryErrors: HTTP 500 returns error dict with '500' in message, connection error
   returns error dict
+- TestGraphQueryWorkspaceOverride: per-call workspace= overrides instance workspace, wildcard
+  workspace is forwarded as-is
 """
 
 from __future__ import annotations
@@ -157,3 +159,40 @@ class TestGraphQueryErrors:
             assert isinstance(result, dict)
             assert "error" in result
             assert "unavailable" in result["error"].lower()
+
+
+# ---------------------------------------------------------------------------
+# TestGraphQueryWorkspaceOverride
+# ---------------------------------------------------------------------------
+
+
+class TestGraphQueryWorkspaceOverride:
+    """graph_query() accepts a per-call workspace= that overrides the instance workspace."""
+
+    async def test_per_call_workspace_overrides_instance_workspace(self) -> None:
+        """graph_query(workspace=...) sends the per-call workspace, not the instance one."""
+        mock_client, mock_cls = _make_mock_client()
+        with patch("httpx.AsyncClient", mock_cls):
+            tool = GraphQueryTool("http://localhost:8080", "default-workspace")
+            await tool.graph_query(
+                "MATCH (s:Session {workspace: $workspace}) RETURN s.node_id",
+                workspace="project-alpha",
+            )
+
+            call_args = mock_client.post.call_args
+            body = call_args[1]["json"]
+            assert body["workspace"] == "project-alpha"
+
+    async def test_wildcard_workspace_forwarded_as_is(self) -> None:
+        """graph_query(workspace='*') forwards the wildcard string verbatim."""
+        mock_client, mock_cls = _make_mock_client()
+        with patch("httpx.AsyncClient", mock_cls):
+            tool = GraphQueryTool("http://localhost:8080", "default-workspace")
+            await tool.graph_query(
+                "MATCH (s:Session) RETURN s.workspace, s.node_id",
+                workspace="*",
+            )
+
+            call_args = mock_client.post.call_args
+            body = call_args[1]["json"]
+            assert body["workspace"] == "*"

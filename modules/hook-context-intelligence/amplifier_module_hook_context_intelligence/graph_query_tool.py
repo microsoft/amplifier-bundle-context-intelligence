@@ -20,24 +20,34 @@ class GraphQueryTool:
         self._server_url = server_url.rstrip("/")
         self._workspace = workspace
 
-    async def graph_query(self, query: str, params: dict | None = None) -> list[dict] | dict:
+    async def graph_query(
+        self,
+        query: str,
+        params: dict | None = None,
+        workspace: str | None = None,
+    ) -> list[dict] | dict:
         """Execute a Cypher query against the context-intelligence server.
 
         POSTs to {server_url}/cypher with JSON body containing query, params,
-        and workspace. The workspace is automatically injected as a top-level field.
+        and workspace. The workspace is automatically injected from the instance
+        configuration, but can be overridden per-call for cross-workspace queries.
 
         Args:
             query: Cypher query string to execute.
             params: Optional query parameters dict. Defaults to empty dict if None.
+            workspace: Optional workspace override. When provided, uses this value
+                instead of the instance workspace. Pass ``"*"`` for cross-workspace
+                (wildcard) queries.
 
         Returns:
             Parsed JSON response (typically a list of result dicts) on success,
             or an error dict on failure.
         """
+        effective_workspace = workspace if workspace is not None else self._workspace
         body = {
             "query": query,
             "params": params if params is not None else {},
-            "workspace": self._workspace,
+            "workspace": effective_workspace,
         }
         try:
             async with httpx.AsyncClient() as client:
