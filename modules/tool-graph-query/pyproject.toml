@@ -1,0 +1,49 @@
+[project]
+name = "amplifier-module-tool-graph-query"
+version = "0.1.0"
+description = "Graph query tool — executes Cypher queries against the context-intelligence server"
+requires-python = ">=3.11"
+license = "MIT"
+
+dependencies = [
+    "httpx>=0.28.1",
+]
+
+[project.entry-points."amplifier.modules"]
+tool-graph-query = "amplifier_module_tool_graph_query:mount"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.uv]
+package = true
+
+[tool.hatch.build.targets.wheel]
+packages = ["amplifier_module_tool_graph_query"]
+
+[dependency-groups]
+dev = [
+    "amplifier-core",
+    "pytest>=8.0",
+    "pytest-asyncio>=0.24",
+    "pyright>=1.1",
+    "ruff>=0.4",
+]
+
+[tool.uv.sources]
+amplifier-core = { git = "https://github.com/microsoft/amplifier-core", branch = "main" }
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+
+[tool.pyright]
+pythonVersion = "3.11"
+typeCheckingMode = "basic"
+venvPath = "."
+venv = ".venv"
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
