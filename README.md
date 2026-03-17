@@ -11,9 +11,13 @@ The bundle writes every session event to a local JSONL log and — when configur
 | Always active | When `context_intelligence_server_url` is set |
 |---------------|-----------------------------------------------|
 | Writes `events.jsonl` + `metadata.json` per session | POSTs every event to the CI server |
-| | Registers `blob_list` / `blob_dump` as agent tools |
+| | Enables graph-powered Cypher queries via `graph_query` tool |
+| | Enables `blob_read` tool for resolving `ci-blob://` URIs |
 
-The `context-intelligence-analyst` agent is also included for querying session data — navigating local JSONL files and running Cypher queries against the CI server's Neo4j graph.
+Two agents are included for querying session data:
+
+- **`context-intelligence-graph-analyst`** — primary entry point. Queries the context-intelligence property graph using Cypher, resolves `ci-blob://` URIs, and automatically delegates to `context-intelligence-navigator` when the graph server is unreachable or returns 0 sessions.
+- **`context-intelligence-navigator`** — local fallback agent. Navigates session data via flat JSONL files using safe `bash`/`jq`/`grep` extraction patterns when the server is unavailable. Invoked only by `graph-analyst` via the delegation chain — external callers should use `graph-analyst` as the entry point.
 
 ---
 
@@ -49,7 +53,7 @@ export AMPLIFIER_CONTEXT_INTELLIGENCE_WORKSPACE=my-project    # optional, auto-r
 export AMPLIFIER_CONTEXT_INTELLIGENCE_LOG_LEVEL=INFO          # optional, default: INFO
 ```
 
-Or via `settings.yaml` overrides (requires [amplifier-app-cli](https://github.com/microsoft/amplifier-app-cli) with [overrides wiring PR #143](https://github.com/microsoft/amplifier-app-cli/pull/143)):
+Or via `settings.yaml` overrides:
 
 ```yaml
 # ~/.amplifier/settings.yaml  (or project .amplifier/settings.yaml)
@@ -85,7 +89,7 @@ in `settings.yaml`, or from environment variables via the behavior YAML.
 | `log_level` | `AMPLIFIER_CONTEXT_INTELLIGENCE_LOG_LEVEL` | `INFO` | Hook logging level. |
 | `base_path` | — | `~/.amplifier/projects` | Root directory for local JSONL output. |
 | `exclude_events` | — | `[]` | fnmatch patterns for events to suppress. |
-| `dispatch_timeout` | `AMPLIFIER_CONTEXT_INTELLIGENCE_DISPATCH_TIMEOUT` | `10` | HTTP write timeout in seconds for server dispatch uploads. |
+| `dispatch_timeout` | `AMPLIFIER_CONTEXT_INTELLIGENCE_DISPATCH_TIMEOUT` | `30` | HTTP write timeout in seconds for server dispatch uploads. |
 | `dispatch_failure_threshold` | `AMPLIFIER_CONTEXT_INTELLIGENCE_DISPATCH_FAILURE_THRESHOLD` | `3` | Consecutive dispatch failures before the circuit breaker disables dispatch for the session. |
 | `dispatch_queue_capacity` | — | `256` | Maximum queued HTTP dispatches before dispatch is disabled for the session. |
 | `close_drain_timeout` | — | `0.5` | Shutdown grace period in seconds for draining queued HTTP dispatches. |
@@ -103,6 +107,10 @@ HTTP timeouts are phase-specific rather than one blanket timeout: short `connect
 Each live POST also carries a deterministic top-level `idempotency_key` derived from the sanitized event envelope. The server may use that key to suppress duplicate live submissions while still allowing explicit replay mode from local `events.jsonl`.
 
 If the dispatch queue fills, dispatch is disabled for the rest of the session and local JSONL capture continues. This prevents stalled network I/O from feeding back into hook latency or memory growth.
+
+### Connection reuse
+
+The worker uses lazy creation: it creates an `httpx.AsyncClient` on the first dispatch request and keeps it alive for the entire session lifetime. This lazy init avoids opening a connection before any events are dispatched. The shared client provides TCP connection pooling — a single keep-alive TCP connection is reused for all POSTs rather than opening a new connection per event. The client is closed via `aclose()` during session finalization.
 
 ### Circuit breaker
 
@@ -140,14 +148,16 @@ The graph model is documented in [`context/graph-model-reference.md`](context/gr
 
 ---
 
-## Analyst agent
+## Agents
 
-The `context-intelligence-analyst` agent can:
-- Navigate and search local `events.jsonl` files safely (avoids 100k+ token lines)
-- Query the server's Neo4j graph via `POST /cypher`
-- List and retrieve blobs via `GET /blobs/*`
+| Agent | Tools | Role |
+|-------|-------|------|
+| `context-intelligence-graph-analyst` | `graph_query`, `blob_read`, `tool-filesystem`, `tool-bash`, `tool-skills` | Primary entry point — graph-powered analysis via Cypher, blob resolution |
+| `context-intelligence-navigator` | `tool-filesystem`, `tool-search`, `tool-bash` | Local fallback — safe JSONL navigation via bash/jq/grep |
 
-**Safe JSONL navigation** — the agent knows about large-file pitfalls and uses streaming extraction patterns. See [`context/safe-extraction-patterns.md`](context/safe-extraction-patterns.md).
+**Delegation chain:** External callers always invoke `context-intelligence-graph-analyst`. Before each analysis run, `graph-analyst` checks server availability. If the server is unreachable or the workspace contains 0 sessions, it delegates to `context-intelligence-navigator`, which navigates local JSONL files using safe extraction patterns. Navigator is never invoked directly by external callers.
+
+**Safe JSONL navigation** — navigator knows about large-file pitfalls and uses streaming extraction patterns. See [`context/safe-extraction-patterns.md`](context/safe-extraction-patterns.md).
 
 ---
 
@@ -156,25 +166,29 @@ The `context-intelligence-analyst` agent can:
 ```
 amplifier-bundle-context-intelligence/
 ├── bundle.md                           ← root bundle definition
-├── behaviors/
-│   └── context-intelligence.yaml      ← hook behavior (thin mount)
 ├── agents/
-│   └── context-intelligence-analyst.md
+│   ├── context-intelligence-graph-analyst.md  ← primary entry point agent
+│   └── context-intelligence-navigator.md      ← local fallback agent
 ├── context/
 │   ├── event-schema.md                 ← all 51+ Amplifier events
 │   ├── graph-model-reference.md        ← Neo4j graph model for Cypher queries
 │   ├── safe-extraction-patterns.md     ← JSONL navigation patterns
 │   ├── config-resolution.dot           ← ConfigResolver fallback chain diagram
 │   ├── session-disk-layout.dot         ← on-disk session directory structure
+│   ├── delegation-strategy.dot         ← graph-analyst → navigator delegation logic
 │   └── agents/
 │       └── session-storage-knowledge.md
 ├── modules/
-│   └── hook-context-intelligence/      ← the Python hook module
+│   ├── hook-context-intelligence/      ← the Python hook module
+│   ├── tool-graph-query/               ← graph_query tool module
+│   └── tool-blob-read/                 ← blob_read tool module
 ├── docs/
+│   ├── dispatch-circuit-breaker.dot    ← dispatch flow and circuit breaker state machine
 │   └── logging-handler-flow.dot        ← thin forwarder architecture
-└── skills/
-    ├── context-intelligence-neo4j-search/
-    └── context-intelligence-session-navigation/
+├── skills/
+│   ├── context-intelligence-graph-query/
+│   └── context-intelligence-session-navigation/
+└── tests/
 ```
 
 ---
