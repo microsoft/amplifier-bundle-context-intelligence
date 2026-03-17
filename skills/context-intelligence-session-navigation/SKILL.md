@@ -17,7 +17,7 @@ For ready-to-use jq/grep recipes, see `context/safe-extraction-patterns.md`.
 ## Disk Layout
 
 ```
-~/.amplifier/projects/{project-slug}/sessions/{session_id}/
+~/.amplifier/projects/{project-slug}/sessions/{session_id}/context-intelligence/
 ├── events.jsonl      # one JSON object per line, append-only
 └── metadata.json     # session metadata, written on start, updated on end
 ```
@@ -25,14 +25,15 @@ For ready-to-use jq/grep recipes, see `context/safe-extraction-patterns.md`.
 - `~/.amplifier/projects/` — default base path (configurable via `config.base_path`)
 - `{project-slug}` — derived from the working directory (see Project Slug Algorithm below)
 - `{session_id}` — unique session identifier (UUID or UUID with agent suffix for child sessions)
+- `context-intelligence/` — subdirectory containing the session data files
 - `events.jsonl` — append-only log of every event the kernel emits during the session
 - `metadata.json` — compact session metadata for quick lookup without parsing the full event log
 
 Example paths:
 
 ```
-~/.amplifier/projects/my-project/sessions/55c8841a-1234-5678-9abc-def012345678/events.jsonl
-~/.amplifier/projects/my-project/sessions/55c8841a-1234-5678-9abc-def012345678/metadata.json
+~/.amplifier/projects/my-project/sessions/55c8841a-1234-5678-9abc-def012345678/context-intelligence/events.jsonl
+~/.amplifier/projects/my-project/sessions/55c8841a-1234-5678-9abc-def012345678/context-intelligence/metadata.json
 ```
 
 ## Record Format
@@ -144,7 +145,7 @@ jq -c '.event' events.jsonl | sort | uniq -c | sort -rn
 
 ```bash
 # Find all running sessions
-for f in ~/.amplifier/projects/my-project/sessions/*/metadata.json; do
+for f in ~/.amplifier/projects/my-project/sessions/*/context-intelligence/metadata.json; do
   jq -r 'select(.status == "running") | .session_id' "$f" 2>/dev/null
 done
 ```
