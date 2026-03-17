@@ -203,24 +203,19 @@ Written by `LoggingHandler` on `session:start` / `session:fork`, updated on `ses
 
 ## Skill Routing
 
-Context-intelligence skills route queries exclusively to **Neo4j** for graph traversal and Cypher queries.
+Context-intelligence skills cover two complementary approaches for working with session data.
 
-**Available Neo4j skills:**
+**Available skills:**
 
-- `skill-neo4j-search` — execute Cypher queries against the Neo4j graph store
-- `skill-session-navigation` — navigate session hierarchies via graph relationships
-- `skill-graph-search` — find nodes and edges by property pattern matching
+- `context-intelligence-graph-query` — Cypher query patterns for the property graph via the `graph_query` tool; requires the context-intelligence server to be configured
+- `context-intelligence-session-navigation` — flat JSONL session file navigation via bash/jq/grep; always available without any server dependency
 
-**When to use Neo4j skills:**
+**Routing table:**
 
-```
-Session search → skill-neo4j-search    (Cypher: MATCH (s:Session) WHERE ...)
-Hierarchy nav  → skill-session-navigation  (find parent/child sessions)
-Node lookup    → skill-graph-search    (find by session_id, agent_name, etc.)
-```
-
-Skills in this bundle speak Cypher and require a live Neo4j connection. They are the correct
-interface when `enable_graph: true` and a Neo4j graph store is configured.
+| Task | Skill | Availability |
+|------|-------|--------------|
+| Graph traversal / Cypher queries | `context-intelligence-graph-query` | Requires server |
+| Local JSONL extraction / search | `context-intelligence-session-navigation` | Always works |
 
 ## Key Principle
 
