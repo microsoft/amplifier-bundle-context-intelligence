@@ -24,7 +24,7 @@ def _parse_frontmatter(text: str) -> tuple[dict, str]:
         raise ValueError("No YAML frontmatter found")
     end = text.index("---", 3)
     yaml_text = text[3:end].strip()
-    body = text[end + 3:].strip()
+    body = text[end + 3 :].strip()
     return yaml.safe_load(yaml_text), body
 
 
@@ -227,16 +227,12 @@ class TestToolDeclarations:
     def test_tool_bash_declared(self) -> None:
         """tool-bash must be declared in tools."""
         modules = self._get_tool_modules()
-        assert "tool-bash" in modules, (
-            f"tool-bash not found in tools: {modules}"
-        )
+        assert "tool-bash" in modules, f"tool-bash not found in tools: {modules}"
 
     def test_tool_skills_declared(self) -> None:
         """tool-skills must be declared in tools."""
         modules = self._get_tool_modules()
-        assert "tool-skills" in modules, (
-            f"tool-skills not found in tools: {modules}"
-        )
+        assert "tool-skills" in modules, f"tool-skills not found in tools: {modules}"
 
     def test_tool_skills_config(self) -> None:
         """tool-skills must have skills config pointing to context-intelligence:skills/."""
@@ -261,9 +257,7 @@ class TestProhibitedTerms:
         text = _agent_text()
         lower = text.lower()
         count = lower.count("neo4j")
-        assert count == 0, (
-            f"Found {count} occurrence(s) of 'neo4j' in agent file"
-        )
+        assert count == 0, f"Found {count} occurrence(s) of 'neo4j' in agent file"
 
     def test_no_graph_forest_name(self) -> None:
         """'graph_forest_name' must not appear in the agent file."""
@@ -288,9 +282,7 @@ class TestBodyContent:
     def test_identity_notice_present(self) -> None:
         """Body must contain an IDENTITY NOTICE section."""
         body = self._body()
-        assert "IDENTITY NOTICE" in body, (
-            "Body must contain an IDENTITY NOTICE section"
-        )
+        assert "IDENTITY NOTICE" in body, "Body must contain an IDENTITY NOTICE section"
 
     def test_identity_notice_anti_self_delegation(self) -> None:
         """IDENTITY NOTICE must warn against self-delegation."""
@@ -299,10 +291,12 @@ class TestBodyContent:
         assert "IDENTITY NOTICE" in body
         # Find the identity notice section and verify it contains self-delegation warning
         idx = body.index("IDENTITY NOTICE")
-        vicinity = body[idx:idx + 500]
-        assert "yourself" in vicinity.lower() or "self" in vicinity.lower() or "loop" in vicinity.lower(), (
-            "IDENTITY NOTICE must warn against self-delegation/infinite loop"
-        )
+        vicinity = body[idx : idx + 500]
+        assert (
+            "yourself" in vicinity.lower()
+            or "self" in vicinity.lower()
+            or "loop" in vicinity.lower()
+        ), "IDENTITY NOTICE must warn against self-delegation/infinite loop"
 
     def test_server_availability_check_present(self) -> None:
         """Body must contain a CRITICAL Server Availability Check section."""
@@ -361,16 +355,12 @@ class TestBodyContent:
         """Blob safety section must say to check size first."""
         body = self._body()
         lower = body.lower()
-        assert "size" in lower, (
-            "Blob safety section must mention checking size first"
-        )
+        assert "size" in lower, "Blob safety section must mention checking size first"
 
     def test_blob_safety_use_jq(self) -> None:
         """Blob safety section must recommend using jq."""
         body = self._body()
-        assert "jq" in body, (
-            "Blob safety section must recommend using jq"
-        )
+        assert "jq" in body, "Blob safety section must recommend using jq"
 
     def test_section_1_graph_powered_analysis(self) -> None:
         """Body must contain Section 1 about Graph-Powered Analysis."""
@@ -378,7 +368,7 @@ class TestBodyContent:
         assert "Section 1" in body, "Body must contain Section 1"
         # Section 1 should be about graph-powered analysis
         idx = body.index("Section 1")
-        vicinity = body[idx:idx + 200]
+        vicinity = body[idx : idx + 200]
         assert "graph" in vicinity.lower() or "Graph" in vicinity, (
             "Section 1 must be about graph-powered analysis"
         )
@@ -388,7 +378,7 @@ class TestBodyContent:
         body = self._body()
         assert "Section 2" in body, "Body must contain Section 2"
         idx = body.index("Section 2")
-        vicinity = body[idx:idx + 200]
+        vicinity = body[idx : idx + 200]
         assert "blob" in vicinity.lower() or "Blob" in vicinity, (
             "Section 2 must be about Blob Resolution"
         )
@@ -398,7 +388,7 @@ class TestBodyContent:
         body = self._body()
         assert "Section 3" in body, "Body must contain Section 3"
         idx = body.index("Section 3")
-        vicinity = body[idx:idx + 200]
+        vicinity = body[idx : idx + 200]
         assert "delegation" in vicinity.lower() or "fallback" in vicinity.lower(), (
             "Section 3 must be about Delegation Fallback"
         )
@@ -412,9 +402,7 @@ class TestBodyContent:
         """Body must contain exactly 4 numbered sections (Section 1 through Section 4)."""
         body = self._body()
         for n in range(1, 5):
-            assert f"Section {n}" in body, (
-                f"Body must contain Section {n}"
-            )
+            assert f"Section {n}" in body, f"Body must contain Section {n}"
 
     def test_context_reference_graph_model(self) -> None:
         """Body must reference @context-intelligence:context/graph-model-reference.md."""
@@ -461,28 +449,37 @@ class TestBodyContent:
         # The section should have multiple steps (at least mention steps/numbered items)
         idx = body.index("Section 2")
         next_section = body.find("Section 3", idx)
-        section2_content = body[idx:next_section] if next_section != -1 else body[idx:idx + 2000]
-        # Should have at least 3 steps described
-        assert "1." in section2_content or "Step 1" in section2_content or "1)" in section2_content, (
-            "Section 2 must describe a multi-step blob resolution workflow"
+        section2_content = (
+            body[idx:next_section] if next_section != -1 else body[idx : idx + 2000]
         )
+        # Should have at least 3 steps described
+        assert (
+            "1." in section2_content
+            or "Step 1" in section2_content
+            or "1)" in section2_content
+        ), "Section 2 must describe a multi-step blob resolution workflow"
 
     def test_section_3_never_retry_server(self) -> None:
         """Section 3 must warn to never retry the server repeatedly."""
         body = self._body()
         idx = body.index("Section 3")
         next_section = body.find("Section 4", idx)
-        section3_content = body[idx:next_section] if next_section != -1 else body[idx:idx + 2000]
-        assert "retry" in section3_content.lower() or "repeatedly" in section3_content.lower(), (
-            "Section 3 must warn against retrying the server repeatedly"
+        section3_content = (
+            body[idx:next_section] if next_section != -1 else body[idx : idx + 2000]
         )
+        assert (
+            "retry" in section3_content.lower()
+            or "repeatedly" in section3_content.lower()
+        ), "Section 3 must warn against retrying the server repeatedly"
 
     def test_section_3_never_read_local_jsonl(self) -> None:
         """Section 3 must warn to never read local JSONL files directly."""
         body = self._body()
         idx = body.index("Section 3")
         next_section = body.find("Section 4", idx)
-        section3_content = body[idx:next_section] if next_section != -1 else body[idx:idx + 2000]
+        section3_content = (
+            body[idx:next_section] if next_section != -1 else body[idx : idx + 2000]
+        )
         assert "jsonl" in section3_content.lower() or "JSONL" in section3_content, (
             "Section 3 must warn against reading local JSONL files"
         )
@@ -492,7 +489,9 @@ class TestBodyContent:
         body = self._body()
         idx = body.index("Section 3")
         next_section = body.find("Section 4", idx)
-        section3_content = body[idx:next_section] if next_section != -1 else body[idx:idx + 2000]
-        assert "yourself" in section3_content.lower() or "self" in section3_content.lower(), (
-            "Section 3 must warn against self-delegation"
+        section3_content = (
+            body[idx:next_section] if next_section != -1 else body[idx : idx + 2000]
         )
+        assert (
+            "yourself" in section3_content.lower() or "self" in section3_content.lower()
+        ), "Section 3 must warn against self-delegation"

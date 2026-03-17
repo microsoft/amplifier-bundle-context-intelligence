@@ -184,7 +184,9 @@ class TestReadmeInstallation:
 
     def test_readme_shows_app_flag(self, readme_raw):
         """README must show --app flag for bundle installation."""
-        assert "--app" in readme_raw, "README must show --app flag for bundle installation"
+        assert "--app" in readme_raw, (
+            "README must show --app flag for bundle installation"
+        )
 
     def test_readme_shows_bundle_add(self, readme_raw):
         """README must show amplifier bundle add command."""
@@ -368,10 +370,11 @@ class TestReadmeDispatchConfigRows:
         # Find the dispatch_timeout row and confirm 30 appears near it
         lines = readme_raw.splitlines()
         for line in lines:
-            if "dispatch_timeout" in line and "AMPLIFIER_CONTEXT_INTELLIGENCE_DISPATCH_TIMEOUT" in line:
-                assert "30" in line, (
-                    "dispatch_timeout row must show default of 30"
-                )
+            if (
+                "dispatch_timeout" in line
+                and "AMPLIFIER_CONTEXT_INTELLIGENCE_DISPATCH_TIMEOUT" in line
+            ):
+                assert "30" in line, "dispatch_timeout row must show default of 30"
                 return
         pytest.fail("No dispatch_timeout row found with env var in README config table")
 
@@ -383,7 +386,9 @@ class TestReadmeDispatchConfigRows:
 
     def test_readme_has_dispatch_failure_threshold_env_var(self, readme_raw):
         """README must show AMPLIFIER_CONTEXT_INTELLIGENCE_DISPATCH_FAILURE_THRESHOLD env var."""
-        assert "AMPLIFIER_CONTEXT_INTELLIGENCE_DISPATCH_FAILURE_THRESHOLD" in readme_raw, (
+        assert (
+            "AMPLIFIER_CONTEXT_INTELLIGENCE_DISPATCH_FAILURE_THRESHOLD" in readme_raw
+        ), (
             "README config table must include AMPLIFIER_CONTEXT_INTELLIGENCE_DISPATCH_FAILURE_THRESHOLD"
         )
 

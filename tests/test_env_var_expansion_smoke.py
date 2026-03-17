@@ -82,7 +82,9 @@ class TestEnvVarDefaultExpansion:
     def test_server_url_defaults_to_empty(self, hook_raw_config, monkeypatch):
         """AMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_URL defaults to empty string (no server by default)."""
         monkeypatch.delenv(_SERVER_URL_VAR, raising=False)
-        expanded = expand_env_vars({"url": hook_raw_config["context_intelligence_server_url"]})
+        expanded = expand_env_vars(
+            {"url": hook_raw_config["context_intelligence_server_url"]}
+        )
         assert expanded["url"] == ""
 
     def test_workspace_defaults_to_empty(self, hook_raw_config, monkeypatch):
@@ -109,7 +111,9 @@ class TestEnvVarOverride:
     def test_server_url_overridden_by_env(self, hook_raw_config, monkeypatch):
         """AMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_URL env var overrides the empty default."""
         monkeypatch.setenv(_SERVER_URL_VAR, "http://ci-server:8080")
-        expanded = expand_env_vars({"url": hook_raw_config["context_intelligence_server_url"]})
+        expanded = expand_env_vars(
+            {"url": hook_raw_config["context_intelligence_server_url"]}
+        )
         assert expanded["url"] == "http://ci-server:8080"
 
     def test_workspace_overridden_by_env(self, hook_raw_config, monkeypatch):
