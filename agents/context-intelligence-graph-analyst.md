@@ -129,6 +129,12 @@ Before writing Cypher queries, load the patterns skill for examples:
 Load skill: context-intelligence-graph-query
 ```
 
+For event type reference (all 41 canonical event types, payload structures, and safe extraction sizes), load:
+
+```
+Load skill: context-intelligence-session-navigation
+```
+
 ### Using graph_query
 
 The `graph_query` tool auto-injects the `$workspace` parameter scoping results to the current workspace. You only need to provide the Cypher query:
@@ -209,9 +215,6 @@ Task: [original analysis task]
 
 @context-intelligence:context/graph-model-reference.md
 <!-- Graph node types, relationship types, and property schemas for writing Cypher queries -->
-
-@context-intelligence:context/event-schema.md
-<!-- Event types, payload structures, field sizes, and which events are safe to extract fully -->
 
 @context-intelligence:context/config-resolution.dot
 <!-- ConfigResolver fallback chain: how context_intelligence_server_url, workspace, and log_level are resolved from env vars and settings -->

@@ -555,6 +555,13 @@ class TestBodyContent:
         for n in range(1, 5):
             assert f"Section {n}" in body, f"Body must contain Section {n}"
 
+    def test_context_reference_safe_extraction_patterns(self) -> None:
+        """Section 4 must reference @context-intelligence:context/safe-extraction-patterns.md."""
+        body = self._body()
+        assert "@context-intelligence:context/safe-extraction-patterns.md" in body, (
+            "Body must reference @context-intelligence:context/safe-extraction-patterns.md"
+        )
+
     def test_context_reference_session_storage_knowledge(self) -> None:
         """Body must reference @context-intelligence:context/agents/session-storage-knowledge.md."""
         body = self._body()
@@ -578,10 +585,11 @@ class TestBodyContent:
             "Body must reference @context-intelligence:context/delegation-strategy.dot"
         )
 
-    def test_three_context_file_references_total(self) -> None:
-        """Body must contain all three required context file references."""
+    def test_four_context_file_references_total(self) -> None:
+        """Body must contain all four required context file references."""
         body = self._body()
         refs = [
+            "@context-intelligence:context/safe-extraction-patterns.md",
             "@context-intelligence:context/agents/session-storage-knowledge.md",
             "@context-intelligence:context/session-disk-layout.dot",
             "@context-intelligence:context/delegation-strategy.dot",

@@ -193,6 +193,9 @@ Task: [original analysis task]
 
 ## Section 4: Context File References
 
+@context-intelligence:context/safe-extraction-patterns.md
+<!-- jq / grep / sed recipes for bounded extraction without context overflow -->
+
 @context-intelligence:context/agents/session-storage-knowledge.md
 <!-- Path conventions, metadata structure, and context-intelligence/ vs foundation/ separation -->
 
