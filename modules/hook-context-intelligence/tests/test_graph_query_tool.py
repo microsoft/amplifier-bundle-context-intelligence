@@ -158,6 +158,7 @@ class TestGraphQueryToolProtocol:
         assert result.success is False
         assert result.error is not None
         assert "message" in result.error
+        assert result.error.get("type") == "http_error"
 
     async def test_execute_returns_tool_result_on_connection_error(self) -> None:
         """execute() returns ToolResult(success=False, error={...}) on connection error."""
@@ -174,6 +175,8 @@ class TestGraphQueryToolProtocol:
         assert isinstance(result, ToolResult)
         assert result.success is False
         assert result.error is not None
+        assert "message" in result.error
+        assert result.error.get("type") == "connection_error"
 
 
 # ---------------------------------------------------------------------------
@@ -275,6 +278,7 @@ class TestGraphQueryErrors:
             assert result.success is False
             assert result.error is not None
             assert "500" in result.error.get("message", "")
+            assert result.error.get("type") == "http_error"
 
     async def test_connection_error_returns_failure_tool_result(self) -> None:
         """execute() returns ToolResult(success=False, error={...}) on transport error."""
@@ -291,6 +295,7 @@ class TestGraphQueryErrors:
             assert result.success is False
             assert result.error is not None
             assert "unavailable" in result.error.get("message", "").lower()
+            assert result.error.get("type") == "connection_error"
 
 
 # ---------------------------------------------------------------------------

@@ -82,6 +82,8 @@ async def mount(coordinator: Any, config: dict[str, Any]):  # noqa: ANN202
         unregister_fns.append(unreg)
 
     if resolver.context_intelligence_server_url:
+        # BlobTool predates the Tool protocol; it uses the legacy tools.register() API.
+        # GraphQueryTool follows the Tool protocol and registers via coordinator.mount().
         try:
             from .blob_tool import BlobTool
 

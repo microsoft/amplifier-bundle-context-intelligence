@@ -101,18 +101,10 @@ class GraphQueryTool:
         raw = await self._graph_query(query, params=params, workspace=workspace)
 
         if isinstance(raw, dict) and "error" in raw:
-            # _graph_query returns {"error": "..."} on failure; lift into ToolResult
-            error_msg: str = raw["error"]
-            # Classify the error type
-            if "Server returned" in error_msg:
-                error_type = "http_error"
-            elif "unavailable" in error_msg.lower():
-                error_type = "connection_error"
-            else:
-                error_type = "query_error"
+            # _graph_query returns {"error": "...", "type": "..."} on failure; lift into ToolResult
             return ToolResult(
                 success=False,
-                error={"message": error_msg, "type": error_type},
+                error={"message": raw["error"], "type": raw.get("type", "query_error")},
             )
 
         return ToolResult(success=True, output=raw)
@@ -156,8 +148,11 @@ class GraphQueryTool:
                 resp.raise_for_status()
                 return resp.json()
         except httpx.HTTPStatusError as exc:
-            return {"error": f"Server returned {exc.response.status_code}: {exc.response.text}"}
+            return {
+                "error": f"Server returned {exc.response.status_code}: {exc.response.text}",
+                "type": "http_error",
+            }
         except httpx.TransportError as exc:
-            return {"error": f"Server unavailable: {exc}"}
+            return {"error": f"Server unavailable: {exc}", "type": "connection_error"}
         except Exception as exc:  # noqa: BLE001
-            return {"error": f"Graph query failed: {exc}"}
+            return {"error": f"Graph query failed: {exc}", "type": "query_error"}
