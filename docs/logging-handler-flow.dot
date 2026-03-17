@@ -2,7 +2,7 @@
 // Context-Intelligence Bundle
 //
 // Shows both paths: local JSONL persistence (always-on) and
-// fire-and-forget HTTP dispatch to the Context Intelligence server.
+// bounded best-effort HTTP dispatch to the Context Intelligence server.
 // Includes payload shapes for both the local record and the server POST.
 //
 // Render: dot -Tsvg logging-handler-flow.dot -o logging-handler-flow.svg
@@ -139,7 +139,7 @@ digraph LoggingHandlerFlow {
 
         node [shape=box, style="rounded,filled", penwidth=1.5];
         ensure_metadata [
-            label="_ensure_metadata()\n───────────────────\nmkdir session_dir\nWrite initial metadata.json:\n{\n  session_id, parent_id,\n  started_at, status: 'running',\n  working_dir\n}",
+            label="_ensure_metadata()\n───────────────────\nmkdir session_dir\nWrite initial metadata.json:\n{\n  format: 'context-intelligence',\n  version: '1.0.0',\n  session_id, parent_id,\n  started_at, status: 'running',\n  working_dir\n}",
             fillcolor="#E8F5E9",
             color="#2E7D32"
         ];
@@ -158,14 +158,14 @@ digraph LoggingHandlerFlow {
         node [shape=box, style="rounded,filled", penwidth=2];
 
         session_init [
-            label="session:start / session:fork\n───────────────────\n_enrich_metadata_from_session_init()\n  Overwrites: parent_id, started_at,\n    working_dir\n  Adds optional: agent_name,\n    parallel_group_id, recipe_name,\n    recipe_step",
+            label="session:start / session:fork\n───────────────────\n_enrich_metadata_from_session_init()\n  Overwrites: parent_id, started_at,\n    working_dir\n  Adds optional: agent_name,\n    parallel_group_id, recipe_name,\n    recipe_step\n  Reasserts: format, version",
             fillcolor="#E8F5E9",
             color="#2E7D32"
         ];
 
         // ─── Session end ────────────────────────────────────────────
         session_end [
-            label="session:end / execution:end\n───────────────────\n_finalize_metadata()\n  Sets: status, ended_at",
+            label="session:end / execution:end\n───────────────────\n_finalize_metadata()\n  Sets: status, ended_at\n  Reasserts: format, version",
             fillcolor="#FFF3E0",
             color="#E65100"
         ];
@@ -196,7 +196,7 @@ digraph LoggingHandlerFlow {
         // ─── Server dispatch ────────────────────────────────────────
         node [shape=box, style="rounded,filled", penwidth=2];
         dispatch [
-            label="asyncio.create_task(\n  _dispatch_to_server()\n)\n───────────────────\nFire-and-forget.\nFailure logged as warning.\nDisk write is the durable record.",
+            label="_enqueue_dispatch()\n───────────────────\nput_nowait(event, sanitized data)\ninto bounded queue\nspawn shared worker if needed\nqueue full => disable dispatch\nlocal JSONL remains durable",
             fillcolor="#E0F7FA",
             color="#00838F"
         ];
@@ -297,6 +297,7 @@ digraph LoggingHandlerFlow {
                 <TR><TD ALIGN="LEFT"><FONT FACE="Courier">{</FONT></TD></TR>
                 <TR><TD ALIGN="LEFT"><FONT FACE="Courier">  "event": "tool:post",</FONT></TD></TR>
                 <TR><TD ALIGN="LEFT"><FONT FACE="Courier">  "workspace": "my-project",</FONT></TD></TR>
+                <TR><TD ALIGN="LEFT"><FONT FACE="Courier">  "idempotency_key": "aci-event-v1:...",</FONT></TD></TR>
                 <TR><TD ALIGN="LEFT"><FONT FACE="Courier">  "data": {</FONT></TD></TR>
                 <TR><TD ALIGN="LEFT"><FONT FACE="Courier">    "session_id": "abc-123",</FONT></TD></TR>
                 <TR><TD ALIGN="LEFT"><FONT FACE="Courier">    "tool_name": "bash",</FONT></TD></TR>
@@ -307,11 +308,12 @@ digraph LoggingHandlerFlow {
                 <TR><TD ALIGN="LEFT"><FONT FACE="Courier">}</FONT></TD></TR>
                 <TR><TD ALIGN="LEFT">───────────────────────────</TD></TR>
                 <TR><TD ALIGN="LEFT">workspace scopes data on server</TD></TR>
-                <TR><TD ALIGN="LEFT">data is raw (not sanitized) —</TD></TR>
-                <TR><TD ALIGN="LEFT">server handles serialization</TD></TR>
+                <TR><TD ALIGN="LEFT">data is sanitized before enqueue</TD></TR>
+                <TR><TD ALIGN="LEFT">single worker serializes POSTs</TD></TR>
+                <TR><TD ALIGN="LEFT">deterministic key supports server dedup</TD></TR>
                 <TR><TD ALIGN="LEFT">───────────────────────────</TD></TR>
-                <TR><TD ALIGN="LEFT">httpx.AsyncClient(timeout=5s)</TD></TR>
-                <TR><TD ALIGN="LEFT">Fire-and-forget: failure → warning</TD></TR>
+                <TR><TD ALIGN="LEFT">httpx.AsyncClient(connect=0.5s, write=10s, read=3s)</TD></TR>
+                <TR><TD ALIGN="LEFT">bounded queue: failure/full => disable dispatch</TD></TR>
             </TABLE>>,
             fillcolor="#E0F7FA",
             color="#00838F"
@@ -322,6 +324,8 @@ digraph LoggingHandlerFlow {
                 <TR><TD ALIGN="LEFT"><B>metadata.json</B></TD></TR>
                 <TR><TD ALIGN="LEFT">───────────────────────────</TD></TR>
                 <TR><TD ALIGN="LEFT"><FONT FACE="Courier">{</FONT></TD></TR>
+                <TR><TD ALIGN="LEFT"><FONT FACE="Courier">  "format": "context-intelligence",</FONT></TD></TR>
+                <TR><TD ALIGN="LEFT"><FONT FACE="Courier">  "version": "1.0.0",</FONT></TD></TR>
                 <TR><TD ALIGN="LEFT"><FONT FACE="Courier">  "session_id": "abc-123",</FONT></TD></TR>
                 <TR><TD ALIGN="LEFT"><FONT FACE="Courier">  "parent_id": "" | "parent-id",</FONT></TD></TR>
                 <TR><TD ALIGN="LEFT"><FONT FACE="Courier">  "started_at": "2026-03-...",</FONT></TD></TR>
@@ -334,8 +338,8 @@ digraph LoggingHandlerFlow {
                 <TR><TD ALIGN="LEFT"><FONT FACE="Courier">  "parallel_group_id": "..."</FONT></TD></TR>
                 <TR><TD ALIGN="LEFT"><FONT FACE="Courier">}</FONT></TD></TR>
                 <TR><TD ALIGN="LEFT">───────────────────────────</TD></TR>
-                <TR><TD ALIGN="LEFT">Required: session_id, parent_id,</TD></TR>
-                <TR><TD ALIGN="LEFT">  started_at, status, working_dir</TD></TR>
+                <TR><TD ALIGN="LEFT">Required: format, version, session_id,</TD></TR>
+                <TR><TD ALIGN="LEFT">  parent_id, started_at, status, working_dir</TD></TR>
                 <TR><TD ALIGN="LEFT">Optional: agent_name, recipe_name,</TD></TR>
                 <TR><TD ALIGN="LEFT">  recipe_step, parallel_group_id</TD></TR>
                 <TR><TD ALIGN="LEFT">No nulls — absent fields omitted</TD></TR>

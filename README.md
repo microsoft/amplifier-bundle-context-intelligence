@@ -85,16 +85,24 @@ in `settings.yaml`, or from environment variables via the behavior YAML.
 | `log_level` | `AMPLIFIER_CONTEXT_INTELLIGENCE_LOG_LEVEL` | `INFO` | Hook logging level. |
 | `base_path` | — | `~/.amplifier/projects` | Root directory for local JSONL output. |
 | `exclude_events` | — | `[]` | fnmatch patterns for events to suppress. |
-| `dispatch_timeout` | `AMPLIFIER_CONTEXT_INTELLIGENCE_DISPATCH_TIMEOUT` | `30` | HTTP timeout in seconds for server dispatch. |
+| `dispatch_timeout` | `AMPLIFIER_CONTEXT_INTELLIGENCE_DISPATCH_TIMEOUT` | `10` | HTTP write timeout in seconds for server dispatch uploads. |
 | `dispatch_failure_threshold` | `AMPLIFIER_CONTEXT_INTELLIGENCE_DISPATCH_FAILURE_THRESHOLD` | `3` | Consecutive dispatch failures before the circuit breaker disables dispatch for the session. |
+| `dispatch_queue_capacity` | — | `256` | Maximum queued HTTP dispatches before dispatch is disabled for the session. |
+| `close_drain_timeout` | — | `0.5` | Shutdown grace period in seconds for draining queued HTTP dispatches. |
 
 ---
 
 ## Server dispatch
 
-### Connection reuse
+### Dispatch isolation
 
-The hook maintains a persistent `httpx.AsyncClient` for HTTP dispatch to the CI server. The client uses lazy creation — it is instantiated on the first dispatch attempt and reused for all subsequent events in the same session. This gives TCP connection pooling without paying the connection-setup cost per event. On session end the client is closed automatically via `aclose()` in `_finalize_metadata`.
+The hook isolates server traffic behind a single bounded background worker per session. The event callback only appends local JSONL and enqueues best-effort HTTP work; it never waits for a server round trip. The worker lazily creates a persistent `httpx.AsyncClient`, reuses one keep-alive connection, and serializes POSTs to avoid unbounded task growth when the server is slow or unavailable.
+
+HTTP timeouts are phase-specific rather than one blanket timeout: short `connect`/`pool` fail-fast bounds, a moderate `read` timeout, and `dispatch_timeout` applied to the `write` phase so larger payload uploads do not fail prematurely.
+
+Each live POST also carries a deterministic top-level `idempotency_key` derived from the sanitized event envelope. The server may use that key to suppress duplicate live submissions while still allowing explicit replay mode from local `events.jsonl`.
+
+If the dispatch queue fills, dispatch is disabled for the rest of the session and local JSONL capture continues. This prevents stalled network I/O from feeding back into hook latency or memory growth.
 
 ### Circuit breaker
 
@@ -106,7 +114,7 @@ The hook maintains a persistent `httpx.AsyncClient` for HTTP dispatch to the CI 
 
 ### Recovery
 
-Restart the Amplifier session once the server is back. There is no mid-session auto-recovery — once the circuit opens it stays open for that session. The JSONL files contain a complete record of all events and can be replayed into the server after it recovers.
+Restart the Amplifier session once the server is back. There is no mid-session auto-recovery — once the circuit opens or the dispatch queue saturates, dispatch stays disabled for that session. The JSONL files contain a complete record of all events and can be replayed into the server after it recovers.
 
 ### Architecture diagram
 
@@ -122,7 +130,7 @@ Every session writes to:
 ```
 <base_path>/<project_slug>/sessions/<session_id>/context-intelligence/
 ├── events.jsonl    ← one JSON line per event
-└── metadata.json   ← started_at, ended_at, status, parent_id
+└── metadata.json   ← format, version, session lifecycle metadata
 ```
 
 ### Server-side graph (when server configured)

@@ -7,6 +7,7 @@ Writes per-session events.jsonl and metadata.json files.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 from pathlib import Path
@@ -19,6 +20,13 @@ from amplifier_core.models import HookResult
 logger = logging.getLogger(__name__)
 
 _OPTIONAL_METADATA_FIELDS = ("agent_name", "parallel_group_id", "recipe_name", "recipe_step")
+_DEFAULT_DISPATCH_QUEUE_CAPACITY = 256
+_DEFAULT_CLOSE_DRAIN_TIMEOUT = 0.5
+_METADATA_FORMAT = "context-intelligence"
+_METADATA_VERSION = "1.0.0"
+_CONNECT_TIMEOUT = 0.5
+_READ_TIMEOUT = 3.0
+_POOL_TIMEOUT = 0.5
 
 
 # ---------------------------------------------------------------------------
@@ -50,6 +58,24 @@ def _sanitize_for_json(data: dict[str, Any]) -> dict[str, Any]:
     return {k: _sanitize_value(v) for k, v in data.items()}
 
 
+def _canonical_json(data: dict[str, Any]) -> str:
+    """Serialize *data* to a stable compact JSON string."""
+    return json.dumps(data, sort_keys=True, separators=(",", ":"))
+
+
+def _compute_idempotency_key(event: str, workspace: str | None, data: dict[str, Any]) -> str:
+    """Build a deterministic request id from the sanitized event envelope."""
+    canonical = _canonical_json(
+        {
+            "event": event,
+            "workspace": workspace or "",
+            "data": data,
+        }
+    )
+    digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+    return f"aci-event-v1:{digest}"
+
+
 # ---------------------------------------------------------------------------
 # LoggingHandler
 # ---------------------------------------------------------------------------
@@ -71,17 +97,28 @@ class LoggingHandler:
         )
         self._workspace: str | None = getattr(resolver, "workspace", None) or None
         self._client: httpx.AsyncClient | None = None
-        self._dispatch_timeout: float = getattr(resolver, "dispatch_timeout", 30.0)
+        self._dispatch_timeout: float = getattr(resolver, "dispatch_timeout", 10.0)
         self._consecutive_failures: int = 0
         self._dispatch_enabled: bool = True
         self._failure_threshold: int = getattr(resolver, "dispatch_failure_threshold", 3)
+        self._dispatch_queue_capacity: int = getattr(
+            resolver, "dispatch_queue_capacity", _DEFAULT_DISPATCH_QUEUE_CAPACITY
+        )
+        self._close_drain_timeout: float = getattr(
+            resolver, "close_drain_timeout", _DEFAULT_CLOSE_DRAIN_TIMEOUT
+        )
+        self._dispatch_queue: asyncio.Queue[tuple[str, dict[str, Any]]] = asyncio.Queue(
+            maxsize=self._dispatch_queue_capacity
+        )
+        self._dispatch_worker_task: asyncio.Task[None] | None = None
 
     def _session_dir(self, session_id: str) -> Path:
         return self._resolver.session_dir(session_id)
 
     async def __call__(self, event: str, data: dict[str, Any]) -> HookResult:
+        sanitized_data = _sanitize_for_json(data)
         try:
-            session_id = data.get("session_id")
+            session_id = sanitized_data.get("session_id")
             if not session_id:
                 return HookResult(action="continue")
 
@@ -92,19 +129,19 @@ class LoggingHandler:
             # event we see for a given session_id, regardless of event type.
             if session_id not in self._seen_sessions:
                 self._seen_sessions.add(session_id)
-                self._ensure_metadata(session_dir, session_id, data)
+                self._ensure_metadata(session_dir, session_id, sanitized_data)
 
             if event in ("session:start", "session:fork"):
-                self._enrich_metadata_from_session_init(session_dir, session_id, data)
+                self._enrich_metadata_from_session_init(session_dir, session_id, sanitized_data)
             elif event in ("session:end", "execution:end"):
-                self._finalize_metadata(session_dir, data)
+                self._finalize_metadata(session_dir, sanitized_data)
 
-            self._append_event(session_dir, event, data)
+            self._append_event(session_dir, event, sanitized_data)
         except Exception:
             logger.exception("LoggingHandler error processing %s", event)
 
         if self._server_url and self._dispatch_enabled:
-            asyncio.create_task(self._dispatch_to_server(event, data))
+            self._enqueue_dispatch(event, sanitized_data)
 
         return HookResult(action="continue")
 
@@ -121,6 +158,8 @@ class LoggingHandler:
             return
 
         metadata: dict[str, Any] = {
+            "format": _METADATA_FORMAT,
+            "version": _METADATA_VERSION,
             "session_id": session_id,
             "parent_id": data.get("parent_id") or data.get("parent") or "",
             "started_at": data.get("timestamp", ""),
@@ -140,7 +179,15 @@ class LoggingHandler:
         if meta_path.exists():
             meta = json.loads(meta_path.read_text())
         else:
-            meta = {"session_id": session_id, "status": "running"}
+            meta = {
+                "format": _METADATA_FORMAT,
+                "version": _METADATA_VERSION,
+                "session_id": session_id,
+                "status": "running",
+            }
+
+        meta["format"] = _METADATA_FORMAT
+        meta["version"] = _METADATA_VERSION
 
         # Overwrite with authoritative values from session init
         meta["parent_id"] = data.get("parent_id") or data.get("parent") or meta.get("parent_id", "")
@@ -160,18 +207,81 @@ class LoggingHandler:
         if meta_path.exists():
             meta = json.loads(meta_path.read_text())
         else:
-            meta = {}
+            meta = {
+                "format": _METADATA_FORMAT,
+                "version": _METADATA_VERSION,
+            }
+
+        meta["format"] = _METADATA_FORMAT
+        meta["version"] = _METADATA_VERSION
 
         meta["status"] = data.get("status", "completed")
         meta["ended_at"] = data.get("timestamp", "")
 
         meta_path.write_text(json.dumps(meta, separators=(",", ":")))
 
+    # -- lifecycle management ------------------------------------------------
+    async def close(self) -> None:
+        """Drain queued dispatch work briefly and close the HTTP client.
+
+        Called from the hook cleanup path. Waits briefly for queued
+        dispatches to complete, then cancels the worker and closes the underlying
+        ``httpx.AsyncClient`` so connections are released cleanly.
+        """
+        worker = self._dispatch_worker_task
+        if worker is not None:
+            try:
+                await asyncio.wait_for(self._dispatch_queue.join(), timeout=self._close_drain_timeout)
+            except asyncio.TimeoutError:
+                logger.warning(
+                    "server_dispatch_drain_timeout: queued events discarded during shutdown url=%s",
+                    self._server_url,
+                )
+            worker.cancel()
+            try:
+                await worker
+            except asyncio.CancelledError:
+                pass
+            self._dispatch_worker_task = None
+
+        if self._client is not None and not self._client.is_closed:
+            await self._client.aclose()
+
+    def _ensure_dispatch_worker(self) -> None:
+        if self._dispatch_worker_task is None or self._dispatch_worker_task.done():
+            self._dispatch_worker_task = asyncio.create_task(self._dispatch_worker())
+
+    def _enqueue_dispatch(self, event: str, data: dict[str, Any]) -> None:
+        if not self._dispatch_enabled:
+            return
+
+        self._ensure_dispatch_worker()
+        try:
+            self._dispatch_queue.put_nowait((event, data))
+        except asyncio.QueueFull:
+            self._dispatch_enabled = False
+            logger.warning(
+                "server_dispatch_queue_full: capacity=%d event=%s url=%s dispatch disabled;"
+                " local JSONL capture continues.",
+                self._dispatch_queue_capacity,
+                event,
+                self._server_url,
+            )
+
+    async def _dispatch_worker(self) -> None:
+        while True:
+            event, payload_data = await self._dispatch_queue.get()
+            try:
+                await self._dispatch_to_server(event, payload_data)
+            finally:
+                self._dispatch_queue.task_done()
+
     # -- server dispatch (fire-and-forget) ----------------------------------
     async def _dispatch_to_server(self, event: str, data: dict[str, Any]) -> None:
         """Fire-and-forget POST to the configured server URL.
 
-        JSONL writing is the durable record — HTTP dispatch is best-effort.
+        JSONL writing is the durable record. HTTP dispatch is best-effort and
+        runs behind a single worker so server slowness never blocks the hook.
         Failures are caught and logged as warnings without affecting the caller.
         Uses a persistent client (lazy-created) with a circuit breaker.
         """
@@ -180,7 +290,15 @@ class LoggingHandler:
 
         # Lazy client creation (or recreation if a prior close left it stale)
         if self._client is None or self._client.is_closed:
-            client = httpx.AsyncClient(timeout=httpx.Timeout(self._dispatch_timeout))
+            client = httpx.AsyncClient(
+                timeout=httpx.Timeout(
+                    connect=_CONNECT_TIMEOUT,
+                    write=self._dispatch_timeout,
+                    read=_READ_TIMEOUT,
+                    pool=_POOL_TIMEOUT,
+                ),
+                limits=httpx.Limits(max_connections=1, max_keepalive_connections=1),
+            )
             self._client = client
         else:
             client = self._client
@@ -189,6 +307,7 @@ class LoggingHandler:
             payload = {
                 "event": event,
                 "workspace": self._workspace,
+                "idempotency_key": _compute_idempotency_key(event, self._workspace, data),
                 "data": data,
             }
             response = await client.post(f"{self._server_url}/events", json=payload)
@@ -224,7 +343,7 @@ class LoggingHandler:
         record = {
             "event": event,
             "timestamp": data.get("timestamp", ""),
-            "data": _sanitize_for_json(data),
+            "data": data,
         }
         with (session_dir / "events.jsonl").open("a") as f:
-            f.write(json.dumps(record) + "\n")
+            f.write(_canonical_json(record) + "\n")

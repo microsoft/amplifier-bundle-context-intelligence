@@ -168,12 +168,14 @@ class ConfigResolver:
 
     @property
     def dispatch_timeout(self) -> float:
-        """Timeout in seconds for dispatching context-intelligence requests.
+        """Write timeout in seconds for dispatching context-intelligence requests.
 
-        Reads directly from config['dispatch_timeout'], defaults to 30.0.
-        No coordinator fallback.  Always returns a float.
+        Reads directly from config['dispatch_timeout'], defaults to 10.0.
+        This budget applies to the HTTP write phase; connect/read/pool
+        timeouts are fixed in the handler. No coordinator fallback.
+        Always returns a float.
         """
-        return float(self._config.get("dispatch_timeout", 30.0))
+        return float(self._config.get("dispatch_timeout", 10.0))
 
     @property
     def dispatch_failure_threshold(self) -> int:
@@ -183,6 +185,24 @@ class ConfigResolver:
         No coordinator fallback.  Always returns an int.
         """
         return int(self._config.get("dispatch_failure_threshold", 3))
+
+    @property
+    def dispatch_queue_capacity(self) -> int:
+        """Maximum queued HTTP dispatches before dispatch is disabled.
+
+        Reads directly from config['dispatch_queue_capacity'], defaults to 256.
+        No coordinator fallback. Always returns an int.
+        """
+        return int(self._config.get("dispatch_queue_capacity", 256))
+
+    @property
+    def close_drain_timeout(self) -> float:
+        """Max seconds to wait for queued HTTP dispatches during cleanup.
+
+        Reads directly from config['close_drain_timeout'], defaults to 0.5.
+        No coordinator fallback. Always returns a float.
+        """
+        return float(self._config.get("close_drain_timeout", 0.5))
 
     # ------------------------------------------------------------------
     # Methods

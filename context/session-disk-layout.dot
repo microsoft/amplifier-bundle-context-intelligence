@@ -2,7 +2,7 @@
 // Context-Intelligence Bundle
 //
 // Shows the on-disk directory structure for session logging:
-// ~/.amplifier/projects/{project-slug}/sessions/{session-id}/
+// ~/.amplifier/projects/{project-slug}/sessions/{session-id}/context-intelligence/
 //
 // Render: dot -Tsvg session-disk-layout.dot -o session-disk-layout.svg
 
@@ -14,11 +14,9 @@ digraph SessionDiskLayout {
     ranksep=0.8;
     pad=0.5;
 
-    // ─── Global defaults ─────────────────────────────────────────────
     node [fontname="Helvetica", fontsize=11];
     edge [fontname="Helvetica", fontsize=10];
 
-    // ─── Directory nodes (folder shapes) ─────────────────────────────
     node [shape=folder, style=filled, penwidth=1.5];
 
     root [
@@ -51,17 +49,28 @@ digraph SessionDiskLayout {
         color="#2E7D32"
     ];
 
-    // ─── File nodes (note shapes) ────────────────────────────────────
+    ci_dir_a [
+        label="context-intelligence/",
+        fillcolor="#C8E6C9",
+        color="#2E7D32"
+    ];
+
+    ci_dir_b [
+        label="context-intelligence/",
+        fillcolor="#C8E6C9",
+        color="#2E7D32"
+    ];
+
     node [shape=note, style=filled, penwidth=1];
 
     metadata_a [
-        label="metadata.json\n─────────────────\nstart_time, end_time\nstatus, session_id\nproject_slug",
+        label="metadata.json\n─────────────────\nformat, version\nsession_id, parent_id\nstarted_at, ended_at\nstatus, working_dir\noptional agent/recipe fields",
         fillcolor="#FFF8E1",
         color="#F57F17"
     ];
 
     events_a [
-        label="events.jsonl\n─────────────────\nOne JSON line per event.\nAppend-only log.\nFull event payload.",
+        label="events.jsonl\n─────────────────\nOne JSON line per event.\nAppend-only log.\nFull sanitized event payload.",
         fillcolor="#FFF8E1",
         color="#F57F17"
     ];
@@ -78,51 +87,18 @@ digraph SessionDiskLayout {
         color="#F57F17"
     ];
 
-    // ═══════════════════════════════════════════════════════════════════
-    // ─── Tree edges ───────────────────────────────────────────────────
-    // ═══════════════════════════════════════════════════════════════════
+    root -> project_slug [color="#1565C0", penwidth=1.5];
+    project_slug -> sessions [color="#1565C0", penwidth=1.5];
+    sessions -> session_id_a [color="#2E7D32", penwidth=1.5];
+    sessions -> session_id_b [color="#2E7D32", penwidth=1.5];
+    session_id_a -> ci_dir_a [color="#2E7D32", penwidth=1.5];
+    session_id_b -> ci_dir_b [color="#2E7D32", penwidth=1.5];
+    ci_dir_a -> metadata_a [color="#F57F17", penwidth=1];
+    ci_dir_a -> events_a [color="#F57F17", penwidth=1];
+    ci_dir_b -> metadata_b [color="#F57F17", penwidth=1];
+    ci_dir_b -> events_b [color="#F57F17", penwidth=1];
 
-    root -> project_slug [
-        color="#1565C0",
-        penwidth=1.5
-    ];
-
-    project_slug -> sessions [
-        color="#1565C0",
-        penwidth=1.5
-    ];
-
-    sessions -> session_id_a [
-        color="#2E7D32",
-        penwidth=1.5
-    ];
-
-    sessions -> session_id_b [
-        color="#2E7D32",
-        penwidth=1.5
-    ];
-
-    session_id_a -> metadata_a [
-        color="#F57F17",
-        penwidth=1
-    ];
-
-    session_id_a -> events_a [
-        color="#F57F17",
-        penwidth=1
-    ];
-
-    session_id_b -> metadata_b [
-        color="#F57F17",
-        penwidth=1
-    ];
-
-    session_id_b -> events_b [
-        color="#F57F17",
-        penwidth=1
-    ];
-
-    // ─── Layout hints ────────────────────────────────────────────────
     {rank=same; session_id_a; session_id_b}
+    {rank=same; ci_dir_a; ci_dir_b}
     {rank=same; metadata_a; events_a; metadata_b; events_b}
 }

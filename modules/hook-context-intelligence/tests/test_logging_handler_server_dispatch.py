@@ -16,7 +16,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 
-from amplifier_module_hook_context_intelligence.handlers.logging_handler import LoggingHandler
+from amplifier_module_hook_context_intelligence.handlers.logging_handler import (
+    LoggingHandler,
+    _compute_idempotency_key,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -31,8 +34,10 @@ class _FakeResolver:
         project_slug: str,
         context_intelligence_server_url: str | None = None,
         workspace: str | None = None,
-        dispatch_timeout: float = 30.0,
+        dispatch_timeout: float = 10.0,
         dispatch_failure_threshold: int = 3,
+        dispatch_queue_capacity: int = 256,
+        close_drain_timeout: float = 0.5,
     ) -> None:
         self.base_path = base_path
         self.project_slug = project_slug
@@ -40,6 +45,8 @@ class _FakeResolver:
         self.workspace = workspace
         self.dispatch_timeout = dispatch_timeout
         self.dispatch_failure_threshold = dispatch_failure_threshold
+        self.dispatch_queue_capacity = dispatch_queue_capacity
+        self.close_drain_timeout = close_drain_timeout
 
     def session_dir(self, session_id: str) -> Path:
         return self.base_path / self.project_slug / "sessions" / session_id / "context-intelligence"
@@ -165,6 +172,34 @@ class TestServerDispatchFailure:
         mock_warning.assert_called_once()
         call_kwargs = mock_warning.call_args[1]
         assert call_kwargs.get("exc_info") is True
+
+
+class TestIdempotencyKey:
+    """Hook HTTP payloads carry deterministic idempotency keys."""
+
+    def test_same_payload_produces_same_key(self) -> None:
+        data = {
+            "session_id": "s1",
+            "timestamp": "2026-03-17T10:00:00.123456+00:00",
+            "tool_call_id": "call-1",
+            "payload": {"b": 2, "a": 1},
+        }
+
+        key_a = _compute_idempotency_key("tool:pre", "ws", data)
+        key_b = _compute_idempotency_key("tool:pre", "ws", data)
+
+        assert key_a == key_b
+
+    def test_different_payload_produces_different_key(self) -> None:
+        base = {
+            "session_id": "s1",
+            "timestamp": "2026-03-17T10:00:00.123456+00:00",
+        }
+
+        key_a = _compute_idempotency_key("tool:pre", "ws", {**base, "tool_call_id": "call-1"})
+        key_b = _compute_idempotency_key("tool:pre", "ws", {**base, "tool_call_id": "call-2"})
+
+        assert key_a != key_b
 
 
 # ---------------------------------------------------------------------------
@@ -349,7 +384,7 @@ class TestCircuitBreaker:
 # TestPersistentClient
 # ---------------------------------------------------------------------------
 class TestPersistentClient:
-    """Persistent httpx.AsyncClient created lazily, reused, and closed on session end."""
+    """Persistent httpx.AsyncClient created lazily, reused, and closed via close()."""
 
     def test_lazy_client_creation(self, tmp_path: Path) -> None:
         """_client is None immediately after __init__."""
@@ -407,8 +442,8 @@ class TestPersistentClient:
         mock_ctor.assert_called_once()
         assert mock_client.post.call_count == 5
 
-    async def test_client_created_with_configured_timeout(self, tmp_path: Path) -> None:
-        """httpx.AsyncClient is constructed with timeout=httpx.Timeout(dispatch_timeout)."""
+    async def test_client_created_with_phase_specific_timeout(self, tmp_path: Path) -> None:
+        """httpx.AsyncClient uses short connect/read/pool timeouts and dispatch_timeout for writes."""
         handler = LoggingHandler(
             _FakeResolver(
                 tmp_path,
@@ -428,7 +463,40 @@ class TestPersistentClient:
             await handler._dispatch_to_server("session:start", {"session_id": "s1"})
 
         call_kwargs = mock_ctor.call_args[1]
-        assert call_kwargs["timeout"] == httpx.Timeout(45.0)
+        assert call_kwargs["timeout"] == httpx.Timeout(
+            connect=0.5,
+            write=45.0,
+            read=3.0,
+            pool=0.5,
+        )
+
+    async def test_dispatch_payload_includes_idempotency_key(self, tmp_path: Path) -> None:
+        """Server POST payload includes a deterministic top-level idempotency_key."""
+        handler = LoggingHandler(
+            _FakeResolver(
+                tmp_path,
+                "proj",
+                context_intelligence_server_url="http://localhost:8080",
+                workspace="ws",
+            )
+        )
+
+        mock_response = MagicMock()
+        mock_response.raise_for_status.return_value = None
+        mock_client = AsyncMock()
+        mock_client.is_closed = False
+        mock_client.post.return_value = mock_response
+        handler._client = mock_client
+
+        data = {
+            "session_id": "s1",
+            "timestamp": "2026-03-17T10:00:00.123456+00:00",
+            "tool_call_id": "call-1",
+        }
+        await handler._dispatch_to_server("tool:pre", data)
+
+        payload = mock_client.post.await_args.kwargs["json"]
+        assert payload["idempotency_key"] == _compute_idempotency_key("tool:pre", "ws", data)
 
     async def test_closed_client_silently_skips(self, tmp_path: Path) -> None:
         """A RuntimeError about a closed client is silently skipped, not counted as failure."""
@@ -468,3 +536,211 @@ class TestPersistentClient:
         assert meta_path.exists()
         meta = json.loads(meta_path.read_text())
         assert meta["status"] == "completed"
+
+
+# ---------------------------------------------------------------------------
+# TestDispatchQueue
+# ---------------------------------------------------------------------------
+class TestDispatchQueue:
+    """Server dispatch uses a single worker and a bounded queue."""
+
+    async def test_queue_empty_on_init(self, tmp_path: Path) -> None:
+        """The dispatch queue starts empty and no worker exists yet."""
+        handler = LoggingHandler(
+            _FakeResolver(
+                tmp_path,
+                "proj",
+                context_intelligence_server_url="http://localhost:8080",
+            )
+        )
+        assert handler._dispatch_queue.qsize() == 0
+        assert handler._dispatch_worker_task is None
+
+    async def test_worker_created_on_dispatch(self, tmp_path: Path) -> None:
+        """Calling __call__ with server_url creates the shared worker."""
+        import asyncio
+
+        handler = LoggingHandler(
+            _FakeResolver(
+                tmp_path,
+                "proj",
+                context_intelligence_server_url="http://localhost:8080",
+                workspace="ws",
+            )
+        )
+
+        # Inject a mock client that succeeds
+        mock_client = AsyncMock()
+        mock_client.is_closed = False
+        mock_client.post.return_value = MagicMock(raise_for_status=MagicMock(return_value=None))
+        handler._client = mock_client
+
+        await handler(
+            "session:start",
+            {"session_id": "s1", "timestamp": "t0", "working_dir": "/w"},
+        )
+
+        # Task was created — it may have already completed, but the set was
+        # populated (tasks self-remove via done_callback).
+        # Give the event loop two ticks: one for the task to finish,
+        # one for the done_callback to fire and remove it from the set.
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+
+        assert handler._dispatch_worker_task is not None
+        assert handler._dispatch_worker_task.done() is False
+        assert handler._dispatch_queue.qsize() == 0
+
+        await handler.close()
+
+    async def test_no_worker_without_server_url(self, tmp_path: Path) -> None:
+        """No worker is created when context_intelligence_server_url is absent."""
+        handler = LoggingHandler(_FakeResolver(tmp_path, "proj"))
+        await handler(
+            "session:start",
+            {"session_id": "s1", "timestamp": "t0", "working_dir": "/w"},
+        )
+        assert handler._dispatch_worker_task is None
+
+    async def test_queue_full_disables_dispatch(self, tmp_path: Path) -> None:
+        """A saturated queue disables dispatch instead of blocking the hook."""
+        handler = LoggingHandler(
+            _FakeResolver(
+                tmp_path,
+                "proj",
+                context_intelligence_server_url="http://localhost:8080",
+                dispatch_queue_capacity=1,
+            )
+        )
+
+        handler._ensure_dispatch_worker = lambda: None  # type: ignore[method-assign]
+        handler._dispatch_queue.put_nowait(("session:start", {"session_id": "s1"}))
+
+        await handler("tool:call", {"session_id": "s1", "timestamp": "t1"})
+
+        assert handler._dispatch_enabled is False
+        await handler.close()
+
+
+# ---------------------------------------------------------------------------
+# TestClose
+# ---------------------------------------------------------------------------
+class TestClose:
+    """close() drains queued dispatch work briefly and closes the HTTP client."""
+
+    async def test_close_closes_client(self, tmp_path: Path) -> None:
+        """close() calls aclose() on the HTTP client."""
+        handler = LoggingHandler(
+            _FakeResolver(
+                tmp_path,
+                "proj",
+                context_intelligence_server_url="http://localhost:8080",
+            )
+        )
+
+        mock_client = AsyncMock()
+        mock_client.is_closed = False
+        handler._client = mock_client
+
+        await handler.close()
+
+        mock_client.aclose.assert_awaited_once()
+
+    async def test_close_safe_when_no_client(self, tmp_path: Path) -> None:
+        """close() is a no-op when _client is None."""
+        handler = LoggingHandler(_FakeResolver(tmp_path, "proj"))
+        assert handler._client is None
+
+        # Should not raise
+        await handler.close()
+
+    async def test_close_safe_when_client_already_closed(self, tmp_path: Path) -> None:
+        """close() skips aclose() when client is already closed."""
+        handler = LoggingHandler(
+            _FakeResolver(
+                tmp_path,
+                "proj",
+                context_intelligence_server_url="http://localhost:8080",
+            )
+        )
+
+        mock_client = AsyncMock()
+        mock_client.is_closed = True
+        handler._client = mock_client
+
+        await handler.close()
+
+        mock_client.aclose.assert_not_awaited()
+
+    async def test_close_drains_pending_dispatch(self, tmp_path: Path) -> None:
+        """close() waits briefly for queued work before closing the client."""
+        import asyncio
+
+        handler = LoggingHandler(
+            _FakeResolver(
+                tmp_path,
+                "proj",
+                context_intelligence_server_url="http://localhost:8080",
+                workspace="ws",
+            )
+        )
+
+        # Create a slow dispatch that takes a bit
+        slow_future: asyncio.Future[None] = asyncio.get_running_loop().create_future()
+
+        async def slow_post(*args, **kwargs):
+            await slow_future
+            return MagicMock(raise_for_status=MagicMock(return_value=None))
+
+        mock_client = AsyncMock()
+        mock_client.is_closed = False
+        mock_client.post = slow_post
+        handler._client = mock_client
+
+        await handler(
+            "session:start",
+            {"session_id": "s1", "timestamp": "t0", "working_dir": "/w"},
+        )
+
+        assert handler._dispatch_worker_task is not None
+
+        # Resolve the slow future so the task can complete
+        slow_future.set_result(None)
+
+        await handler.close()
+
+        assert handler._dispatch_worker_task is None
+
+    async def test_close_cancels_straggler_worker(self, tmp_path: Path) -> None:
+        """close() cancels the worker when queued dispatches exceed the drain timeout."""
+        import asyncio
+
+        handler = LoggingHandler(
+            _FakeResolver(
+                tmp_path,
+                "proj",
+                context_intelligence_server_url="http://localhost:8080",
+                workspace="ws",
+                close_drain_timeout=0.01,
+            )
+        )
+
+        # Create a task that will never complete on its own
+        async def stuck_post(*args, **kwargs):
+            await asyncio.sleep(999)
+
+        mock_client = AsyncMock()
+        mock_client.is_closed = False
+        mock_client.post = stuck_post
+        handler._client = mock_client
+
+        await handler(
+            "session:start",
+            {"session_id": "s1", "timestamp": "t0", "working_dir": "/w"},
+        )
+
+        assert handler._dispatch_worker_task is not None
+
+        await handler.close()
+
+        assert handler._dispatch_worker_task is None

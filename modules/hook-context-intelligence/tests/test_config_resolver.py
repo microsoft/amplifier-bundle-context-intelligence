@@ -337,12 +337,12 @@ class TestBlobStoreRoot:
 
 
 class TestDispatchTimeout:
-    def test_defaults_to_30(self) -> None:
-        """dispatch_timeout returns 30.0 when not configured."""
+    def test_defaults_to_10(self) -> None:
+        """dispatch_timeout returns 10.0 when not configured."""
         coordinator = _make_coordinator(config={})
         resolver = ConfigResolver(config={}, coordinator=coordinator)
 
-        assert resolver.dispatch_timeout == 30.0
+        assert resolver.dispatch_timeout == 10.0
 
     def test_reads_from_config(self) -> None:
         """dispatch_timeout returns the configured value as a float."""
@@ -384,3 +384,35 @@ class TestDispatchFailureThreshold:
 
         assert isinstance(resolver.dispatch_failure_threshold, int)
         assert resolver.dispatch_failure_threshold == 7
+
+
+class TestDispatchQueueCapacity:
+    def test_defaults_to_256(self) -> None:
+        """dispatch_queue_capacity returns 256 when not configured."""
+        coordinator = _make_coordinator(config={})
+        resolver = ConfigResolver(config={}, coordinator=coordinator)
+
+        assert resolver.dispatch_queue_capacity == 256
+
+    def test_reads_from_config(self) -> None:
+        """dispatch_queue_capacity returns the configured value as an int."""
+        coordinator = _make_coordinator(config={})
+        resolver = ConfigResolver(config={"dispatch_queue_capacity": 64}, coordinator=coordinator)
+
+        assert resolver.dispatch_queue_capacity == 64
+
+
+class TestCloseDrainTimeout:
+    def test_defaults_to_half_second(self) -> None:
+        """close_drain_timeout returns 0.5 when not configured."""
+        coordinator = _make_coordinator(config={})
+        resolver = ConfigResolver(config={}, coordinator=coordinator)
+
+        assert resolver.close_drain_timeout == 0.5
+
+    def test_reads_from_config(self) -> None:
+        """close_drain_timeout returns the configured value as a float."""
+        coordinator = _make_coordinator(config={})
+        resolver = ConfigResolver(config={"close_drain_timeout": "1.25"}, coordinator=coordinator)
+
+        assert resolver.close_drain_timeout == 1.25

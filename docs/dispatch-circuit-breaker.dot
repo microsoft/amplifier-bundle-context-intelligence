@@ -1,9 +1,10 @@
-// Dispatch Circuit Breaker — _dispatch_to_server Flow + Client Lifecycle
+// Dispatch Circuit Breaker — Queue Worker + _dispatch_to_server + Client Lifecycle
 // Context-Intelligence Bundle — LoggingHandler
 //
-// Shows the full dispatch flow with circuit breaker protection:
+// Shows the full bounded dispatch flow with circuit breaker protection:
+// - enqueue path in __call__ (bounded queue + worker startup)
 // - _dispatch_to_server internal logic (enabled check, lazy client, POST, failure tracking)
-// - Client Lifecycle (_client=None → lazy create → reuse → aclose on session end)
+// - client lifecycle (_client=None -> lazy create -> reuse -> aclose on close())
 //
 // Color coding:
 //   blue   (#E3F2FD / #1565C0) — entry / exit nodes
@@ -23,32 +24,31 @@ digraph DispatchCircuitBreaker {
     ranksep=0.9;
     pad=0.5;
 
-    // ─── Global defaults ──────────────────────────────────────────────────────
     node [fontname="Helvetica", fontsize=11];
     edge [fontname="Helvetica", fontsize=10];
 
-    // ═══════════════════════════════════════════════════════════════════════
-    // DISPATCH FLOW — _dispatch_to_server(event, data)
-    // ═══════════════════════════════════════════════════════════════════════
-
     subgraph cluster_dispatch {
-        label="_dispatch_to_server(event, data)";
+        label="Bounded dispatch flow";
         style=filled;
         fillcolor="#FAFAFA";
         color="#B0BEC5";
         fontsize=12;
         fontname="Helvetica Bold";
 
-        // ─── Entry ────────────────────────────────────────────────────────
         node [shape=box, style="rounded,filled", penwidth=2];
 
         entry [
-            label="asyncio task starts\n─────────────────────\n_dispatch_to_server()\nfire-and-forget coroutine\nlaunched from __call__",
+            label="__call__ enqueue path\n─────────────────────\n_enqueue_dispatch(event, data)\nput_nowait() into bounded queue\nspawn shared worker if needed",
             fillcolor="#E3F2FD",
             color="#1565C0"
         ];
 
-        // ─── Check: dispatch enabled? ─────────────────────────────────────
+        queue_full [
+            label="queue full\n─────────────────────\n_dispatch_enabled = False\nlogger.warning(\n  \"server_dispatch_queue_full\"\n)\nlocal JSONL capture continues",
+            fillcolor="#FFF3E0",
+            color="#E65100"
+        ];
+
         node [shape=diamond, style=filled, penwidth=2];
 
         check_enabled [
@@ -58,42 +58,43 @@ digraph DispatchCircuitBreaker {
             fontcolor="#C62828"
         ];
 
-        // ─── Skip (circuit open) ──────────────────────────────────────────
         node [shape=box, style="rounded,filled", penwidth=1.5];
 
         skip [
-            label="silent no-op\n─────────────────────\nreturn immediately\n(circuit breaker open)",
+            label="silent no-op\n─────────────────────\nreturn immediately\n(circuit open / disabled)",
             fillcolor="#EEEEEE",
             color="#757575"
         ];
 
-        // ─── Check: client exists? ────────────────────────────────────────
+        worker_entry [
+            label="dispatch worker dequeues\n─────────────────────\n_dispatch_worker()\nserializes POSTs\none event at a time",
+            fillcolor="#E3F2FD",
+            color="#1565C0"
+        ];
+
         node [shape=diamond, style=filled, penwidth=1.5];
 
         check_client [
-            label="_client is None?",
+            label="_client is None\nor is_closed?",
             fillcolor="#FFF8E1",
             color="#F57F17",
             fontcolor="#F57F17"
         ];
 
-        // ─── Create client ────────────────────────────────────────────────
         node [shape=box, style="rounded,filled", penwidth=1.5];
 
         create_client [
-            label="create _client\n─────────────────────\nhttpx.AsyncClient(\n  timeout=Timeout(\n    _dispatch_timeout\n  )\n)",
+            label="create _client\n─────────────────────\nhttpx.AsyncClient(\n  timeout=Timeout(\n    connect=0.5,\n    write=_dispatch_timeout,\n    read=3.0,\n    pool=0.5\n  ),\n  limits=Limits(max_connections=1,\n    max_keepalive_connections=1)\n)",
             fillcolor="#E8F5E9",
             color="#2E7D32"
         ];
 
-        // ─── POST to server ───────────────────────────────────────────────
         post [
-            label="POST {server_url}/events\n─────────────────────\npayload = {\n  \"event\": event,\n  \"workspace\": _workspace,\n  \"data\": data\n}\nclient.post(..., json=payload)\nresponse.raise_for_status()",
+            label="POST {server_url}/events\n─────────────────────\npayload = {\n  \"event\": event,\n  \"workspace\": _workspace,\n  \"idempotency_key\": deterministic_hash,\n  \"data\": sanitized_data\n}\nclient.post(..., json=payload)\nresponse.raise_for_status()",
             fillcolor="#E0F7FA",
             color="#00838F"
         ];
 
-        // ─── Check result ─────────────────────────────────────────────────
         node [shape=diamond, style=filled, penwidth=1.5];
 
         check_result [
@@ -103,23 +104,20 @@ digraph DispatchCircuitBreaker {
             fontcolor="#F57F17"
         ];
 
-        // ─── On success ───────────────────────────────────────────────────
         node [shape=box, style="rounded,filled", penwidth=1.5];
 
         on_success [
-            label="on_success\n─────────────────────\n_consecutive_failures = 0\ncircuit remains closed",
+            label="on_success\n─────────────────────\n_consecutive_failures = 0\ncircuit remains closed\nqueue keeps draining",
             fillcolor="#E8F5E9",
             color="#2E7D32"
         ];
 
-        // ─── On failure ───────────────────────────────────────────────────
         on_failure [
             label="on_failure\n─────────────────────\n_consecutive_failures += 1\nlogger.warning(\n  \"server_dispatch_failed:\n  attempt N/threshold\n  event=... url=...\"\n)",
             fillcolor="#FFF3E0",
             color="#E65100"
         ];
 
-        // ─── Check threshold ──────────────────────────────────────────────
         node [shape=diamond, style=filled, penwidth=2];
 
         check_threshold [
@@ -129,7 +127,6 @@ digraph DispatchCircuitBreaker {
             fontcolor="#C62828"
         ];
 
-        // ─── Trip circuit breaker ─────────────────────────────────────────
         node [shape=box, style="rounded,filled", penwidth=2];
 
         trip [
@@ -138,63 +135,88 @@ digraph DispatchCircuitBreaker {
             color="#C62828"
         ];
 
-        // ─── Done ─────────────────────────────────────────────────────────
         done [
-            label="done\n─────────────────────\ntask completes\nlocal JSONL is the\ndurable record",
+            label="done\n─────────────────────\nworker iteration completes\nlocal JSONL is the\ndurable record",
             fillcolor="#E3F2FD",
             color="#1565C0"
         ];
 
-        // ─── Edges ────────────────────────────────────────────────────────
         entry -> check_enabled [penwidth=2];
+        entry -> queue_full [
+            label="  put_nowait fails  ",
+            color="#E65100",
+            fontcolor="#E65100",
+            penwidth=1.5
+        ];
 
         check_enabled -> skip [
-            label="  False (open)  ", color="#757575", fontcolor="#757575", penwidth=1.5
+            label="  False  ",
+            color="#757575",
+            fontcolor="#757575",
+            penwidth=1.5
         ];
-        check_enabled -> check_client [
-            label="  True (closed)  ", color="#2E7D32", fontcolor="#2E7D32", penwidth=2
+        check_enabled -> worker_entry [
+            label="  True  ",
+            color="#2E7D32",
+            fontcolor="#2E7D32",
+            penwidth=2
         ];
 
         skip -> done [penwidth=1.5, style=dashed, color="#757575"];
+        queue_full -> done [penwidth=1.5, color="#E65100"];
+
+        worker_entry -> check_client [penwidth=1.5];
 
         check_client -> create_client [
-            label="  None  ", color="#2E7D32", fontcolor="#2E7D32", penwidth=1.5
+            label="  Yes  ",
+            color="#2E7D32",
+            fontcolor="#2E7D32",
+            penwidth=1.5
         ];
         check_client -> post [
-            label="  not None\n  (reuse)  ", color="#00838F", fontcolor="#00838F", penwidth=1.5
+            label="  No (reuse)  ",
+            color="#00838F",
+            fontcolor="#00838F",
+            penwidth=1.5
         ];
 
         create_client -> post [penwidth=1.5];
-
         post -> check_result [penwidth=1.5];
 
         check_result -> on_success [
-            label="  2xx  ", color="#2E7D32", fontcolor="#2E7D32", penwidth=1.5
+            label="  2xx  ",
+            color="#2E7D32",
+            fontcolor="#2E7D32",
+            penwidth=1.5
         ];
         check_result -> on_failure [
-            label="  exception /\n  non-2xx  ", color="#E65100", fontcolor="#E65100", penwidth=1.5
+            label="  exception /\n  non-2xx  ",
+            color="#E65100",
+            fontcolor="#E65100",
+            penwidth=1.5
         ];
 
         on_success -> done [penwidth=1.5];
-
         on_failure -> check_threshold [penwidth=1.5];
 
         check_threshold -> done [
-            label="  No  ", color="#757575", fontcolor="#757575", penwidth=1.5
+            label="  No  ",
+            color="#757575",
+            fontcolor="#757575",
+            penwidth=1.5
         ];
         check_threshold -> trip [
-            label="  Yes  ", color="#C62828", fontcolor="#C62828", penwidth=2
+            label="  Yes  ",
+            color="#C62828",
+            fontcolor="#C62828",
+            penwidth=2
         ];
 
         trip -> done [penwidth=2, color="#C62828"];
     }
 
-    // ═══════════════════════════════════════════════════════════════════════
-    // CLIENT LIFECYCLE — _client state across a session
-    // ═══════════════════════════════════════════════════════════════════════
-
     subgraph cluster_lifecycle {
-        label="Client Lifecycle  (_client field on LoggingHandler)";
+        label="Client Lifecycle (_client field on LoggingHandler)";
         style=filled;
         fillcolor="#F9FBE7";
         color="#C5CAE9";
@@ -204,50 +226,63 @@ digraph DispatchCircuitBreaker {
         node [shape=box, style="rounded,filled", penwidth=1.5];
 
         lc_init [
-            label="__init__\n─────────────────────\nself._client = None\n(no connection yet)",
+            label="__init__\n─────────────────────\nself._client = None\nself._dispatch_worker_task = None\nbounded queue allocated",
             fillcolor="#E3F2FD",
             color="#1565C0"
         ];
 
         lc_lazy [
-            label="first dispatch\n─────────────────────\n_client = httpx.AsyncClient(\n  timeout=Timeout(_dispatch_timeout)\n)\nTCP connection established",
+            label="first dequeued dispatch\n─────────────────────\n_client = httpx.AsyncClient(...)\nTCP connection established",
             fillcolor="#E8F5E9",
             color="#2E7D32"
         ];
 
         lc_reuse [
-            label="subsequent dispatches\n─────────────────────\nexisting _client reused\nTCP connection pooled\n(no reconnect overhead)",
+            label="subsequent dequeued dispatches\n─────────────────────\nexisting _client reused\nsingle keep-alive connection\n(no task fanout)",
             fillcolor="#E8F5E9",
             color="#2E7D32"
         ];
 
         lc_close [
-            label="session end\n─────────────────────\n_finalize_metadata() called\non session:end / execution:end\n─────────────────────\nasyncio task: _client.aclose()\n(graceful TCP teardown)",
+            label="close()\n─────────────────────\nwait briefly for queue drain\ncancel worker\n_client.aclose()\n(graceful TCP teardown)",
             fillcolor="#FFF3E0",
             color="#E65100"
         ];
 
         lc_init -> lc_lazy [
-            label="  first _dispatch_to_server call  ",
-            color="#2E7D32", fontcolor="#2E7D32", penwidth=1.5
+            label="  first dequeued dispatch  ",
+            color="#2E7D32",
+            fontcolor="#2E7D32",
+            penwidth=1.5
         ];
         lc_lazy -> lc_reuse [
-            label="  all subsequent calls  ",
-            color="#00838F", fontcolor="#00838F", penwidth=1.5
+            label="  all subsequent dispatches  ",
+            color="#00838F",
+            fontcolor="#00838F",
+            penwidth=1.5
         ];
         lc_reuse -> lc_close [
-            label="  session:end event  ",
-            color="#E65100", fontcolor="#E65100", penwidth=1.5
+            label="  hook cleanup  ",
+            color="#E65100",
+            fontcolor="#E65100",
+            penwidth=1.5
         ];
     }
 
-    // ─── Cross-cluster annotation ──────────────────────────────────────────
     create_client -> lc_lazy [
-        style=dotted, color="#2E7D32", arrowhead=vee, penwidth=1.5,
-        label="  lazy init  ", constraint=false
+        style=dotted,
+        color="#2E7D32",
+        arrowhead=vee,
+        penwidth=1.5,
+        label="  lazy init  ",
+        constraint=false
     ];
     post -> lc_reuse [
-        style=dotted, color="#00838F", arrowhead=vee, penwidth=1.5,
-        label="  reuses  ", constraint=false
+        style=dotted,
+        color="#00838F",
+        arrowhead=vee,
+        penwidth=1.5,
+        label="  reuses  ",
+        constraint=false
     ];
 }

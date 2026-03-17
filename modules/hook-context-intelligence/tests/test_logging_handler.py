@@ -100,6 +100,8 @@ class TestSessionStart:
         meta_path = tmp_path / "proj" / "sessions" / "s1" / "context-intelligence" / "metadata.json"
         assert meta_path.exists()
         meta = json.loads(meta_path.read_text())
+        assert meta["format"] == "context-intelligence"
+        assert meta["version"] == "1.0.0"
         assert meta["session_id"] == "s1"
         assert meta["parent_id"] == "p1"
         assert meta["started_at"] == "2026-01-15T10:00:00Z"
@@ -237,6 +239,8 @@ class TestSessionFork:
                 tmp_path / "proj" / "sessions" / "child1" / "context-intelligence" / "metadata.json"
             ).read_text()
         )
+        assert meta["format"] == "context-intelligence"
+        assert meta["version"] == "1.0.0"
         assert meta["session_id"] == "child1"
         assert meta["parent_id"] == "parent1"
         assert meta["status"] == "running"
@@ -277,6 +281,8 @@ class TestSessionEnd:
                 tmp_path / "proj" / "sessions" / "s1" / "context-intelligence" / "metadata.json"
             ).read_text()
         )
+        assert meta["format"] == "context-intelligence"
+        assert meta["version"] == "1.0.0"
         assert meta["status"] == "completed"
         assert meta["ended_at"] == "2026-01-15T10:05:00Z"
 

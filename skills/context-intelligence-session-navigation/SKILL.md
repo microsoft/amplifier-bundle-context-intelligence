@@ -59,6 +59,8 @@ Written on `session:start` or `session:fork`, updated on `session:end`.
 
 | Field | Type | Description |
 |-------|------|-------------|
+| `format` | string | Schema family identifier, always `"context-intelligence"` |
+| `version` | string | Schema version, always `"1.0.0"` |
 | `session_id` | string | Unique session identifier |
 | `parent_id` | string | Parent session identifier (empty string for root sessions) |
 | `started_at` | string | ISO 8601 timestamp |
@@ -80,7 +82,7 @@ Optional fields are omitted entirely when absent — no null values, compact JSO
 Example (minimal root session):
 
 ```json
-{"session_id":"55c8841a-...","parent_id":"","started_at":"2026-03-10T11:13:09.000+00:00","status":"running","working_dir":"/home/user/project"}
+{"format":"context-intelligence","version":"1.0.0","session_id":"55c8841a-...","parent_id":"","started_at":"2026-03-10T11:13:09.000+00:00","status":"running","working_dir":"/home/user/project"}
 ```
 
 Example (child session with optional fields):

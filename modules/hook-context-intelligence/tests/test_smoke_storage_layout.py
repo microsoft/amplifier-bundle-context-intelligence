@@ -134,7 +134,7 @@ class TestStorageDirectoryStructure:
         assert ci_dir.is_dir(), f"Expected context-intelligence dir at {ci_dir}"
         assert (ci_dir / "events.jsonl").is_file()
         assert (ci_dir / "metadata.json").is_file()
-        cleanup()
+        await cleanup()
 
     async def test_no_files_at_session_root(self, tmp_path: Path) -> None:
         """events.jsonl and metadata.json must NOT be at session root level."""
@@ -153,7 +153,7 @@ class TestStorageDirectoryStructure:
         assert not (session_root / "metadata.json").exists(), (
             "metadata.json must be inside context-intelligence/, not at session root"
         )
-        cleanup()
+        await cleanup()
 
     async def test_multiple_sessions_each_get_own_subfolder(
         self,
@@ -174,7 +174,7 @@ class TestStorageDirectoryStructure:
             assert ci_dir.is_dir(), f"Missing dir for {sid}"
             assert (ci_dir / "events.jsonl").is_file()
             assert (ci_dir / "metadata.json").is_file()
-        cleanup()
+        await cleanup()
 
 
 # ---------------------------------------------------------------------------
@@ -216,7 +216,7 @@ class TestStorageFileContent:
                 f"Line {i}: record keys must be exactly {{event, timestamp, data}}, "
                 f"got {set(record.keys())}"
             )
-        cleanup()
+        await cleanup()
 
     async def test_metadata_json_has_required_fields(
         self,
@@ -234,11 +234,13 @@ class TestStorageFileContent:
             tmp_path / "proj" / "sessions" / "sess-meta" / "context-intelligence" / "metadata.json"
         )
         meta = json.loads(meta_file.read_text())
+        assert meta["format"] == "context-intelligence"
+        assert meta["version"] == "1.0.0"
         assert meta["session_id"] == "sess-meta"
         assert meta["status"] == "completed"
         assert "started_at" in meta
         assert "ended_at" in meta
-        cleanup()
+        await cleanup()
 
     async def test_events_preserve_chronological_order(
         self,
@@ -264,4 +266,4 @@ class TestStorageFileContent:
         records = [json.loads(line) for line in events_file.read_text().strip().split("\n")]
         event_names = [r["event"] for r in records]
         assert event_names == ["session:start", "tool:pre", "session:end"]
-        cleanup()
+        await cleanup()

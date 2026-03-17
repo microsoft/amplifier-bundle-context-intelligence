@@ -131,7 +131,7 @@ class TestLoggingOnlyIntegration:
         assert meta["ended_at"] != ""
 
         # cleanup() does not raise
-        cleanup()
+        await cleanup()
 
     async def test_logging_handler_registers_for_all_events(self) -> None:
         """LoggingHandler registers for ALL_EVENTS base."""
@@ -164,7 +164,7 @@ class TestCleanupIntegration:
             unreg.assert_not_called()
 
         # Call cleanup
-        cleanup()
+        await cleanup()
 
         # Verify all unregister fns called after cleanup()
         for unreg in coordinator._unregister_fns:
