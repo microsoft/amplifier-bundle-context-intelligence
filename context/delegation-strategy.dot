@@ -1,0 +1,145 @@
+// Delegation Strategy — Agent Delegation Chain
+// Context-Intelligence Bundle
+//
+// Shows the delegation flow: graph-analyst → navigator → foundation:session-analyst
+//
+// Render: dot -Tsvg delegation-strategy.dot -o delegation-strategy.svg
+
+digraph delegation_strategy {
+    rankdir=TB;
+    fontname="Helvetica";
+    fontsize=12;
+    nodesep=0.7;
+    ranksep=0.9;
+    pad=0.5;
+
+    node [fontname="Helvetica", fontsize=11];
+    edge [fontname="Helvetica", fontsize=10];
+
+    // --- Box nodes ---
+
+    caller [
+        label="Any Caller",
+        shape=box,
+        style=filled,
+        fillcolor="#E8E8E8",
+        color="#999999"
+    ];
+
+    graph_analyst [
+        label="context-intelligence-graph-analyst\ntools: graph_query / blob_read / bash / skills",
+        shape=box,
+        style=filled,
+        fillcolor="#4A90D9",
+        fontcolor=white,
+        color="#2C6FAC",
+        penwidth=2
+    ];
+
+    navigator [
+        label="context-intelligence-navigator\ntools: filesystem / search / bash / skills",
+        shape=box,
+        style=filled,
+        fillcolor="#7AB648",
+        fontcolor=white,
+        color="#4E7D2E",
+        penwidth=2
+    ];
+
+    session_analyst [
+        label="foundation:session-analyst\n(external bundle)",
+        shape=box,
+        style="filled,dashed",
+        fillcolor="#F5A623",
+        color="#C47A10",
+        penwidth=2
+    ];
+
+    // --- Diamond decision nodes ---
+
+    server_check [
+        label="Server reachable\nand data found?",
+        shape=diamond,
+        style=filled,
+        fillcolor="#FAFAFA",
+        color="#888888",
+        fontsize=10
+    ];
+
+    local_check [
+        label="JSONL resolves\nthe request?",
+        shape=diamond,
+        style=filled,
+        fillcolor="#FAFAFA",
+        color="#888888",
+        fontsize=10
+    ];
+
+    // --- Edges ---
+
+    caller -> graph_analyst [label="always delegate here first", fontsize=10];
+    graph_analyst -> server_check;
+    server_check -> graph_analyst [
+        label="yes",
+        color="#4A90D9",
+        fontcolor="#4A90D9",
+        penwidth=2,
+        style=bold
+    ];
+    server_check -> navigator [
+        label="no — server unreachable or no relevant data",
+        fontsize=9
+    ];
+    navigator -> local_check;
+    local_check -> navigator [
+        label="yes",
+        color="#7AB648",
+        fontcolor="#7AB648",
+        penwidth=2,
+        style=bold
+    ];
+    local_check -> session_analyst [
+        label="no — can't resolve locally",
+        fontsize=9
+    ];
+
+    // --- Legend ---
+
+    subgraph cluster_legend {
+        label="Legend";
+        style=filled;
+        fillcolor="#F8F8F8";
+        color="#CCCCCC";
+        fontname="Helvetica";
+        fontsize=10;
+
+        legend_primary [
+            label="Primary entry point",
+            shape=box,
+            style=filled,
+            fillcolor="#4A90D9",
+            fontcolor=white,
+            color="#2C6FAC",
+            fontsize=9
+        ];
+
+        legend_local [
+            label="Local fallback",
+            shape=box,
+            style=filled,
+            fillcolor="#7AB648",
+            fontcolor=white,
+            color="#4E7D2E",
+            fontsize=9
+        ];
+
+        legend_external [
+            label="Final fallback external",
+            shape=box,
+            style="filled,dashed",
+            fillcolor="#F5A623",
+            color="#C47A10",
+            fontsize=9
+        ];
+    }
+}
