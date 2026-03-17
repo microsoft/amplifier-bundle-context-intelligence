@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import fnmatch
 import logging
+from collections.abc import Callable, Coroutine
 from typing import Any
 
 log = logging.getLogger(__name__)
@@ -53,7 +54,9 @@ async def _discover_events(coordinator: Any) -> set[str]:
     return discovered
 
 
-async def mount(coordinator: Any, config: dict[str, Any]):  # noqa: ANN202
+async def mount(
+    coordinator: Any, config: dict[str, Any]
+) -> Callable[[], Coroutine[Any, Any, None]]:
     """Mount the context-intelligence hook.
 
     Always:
@@ -71,7 +74,7 @@ async def mount(coordinator: Any, config: dict[str, Any]):  # noqa: ANN202
     active_events = {e for e in events if not any(fnmatch.fnmatch(e, p) for p in exclude)}
 
     logging_handler = LoggingHandler(resolver)
-    unregister_fns: list[Any] = []
+    unregister_fns: list[Callable[[], None]] = []
     for event in active_events:
         unreg = coordinator.hooks.register(
             event, logging_handler, priority=100, name="LoggingHandler"
