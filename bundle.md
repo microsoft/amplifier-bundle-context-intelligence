@@ -8,7 +8,7 @@ bundle:
 
 includes:
   - bundle: git+https://github.com/microsoft/amplifier-foundation@main
-  - bundle: context-intelligence:behaviors/context-intelligence
+  - bundle: git+https://github.com/colombod/amplifier-bundle-context-intelligence@main#subdirectory=behaviors/context-intelligence.yaml
 
 ---
 
