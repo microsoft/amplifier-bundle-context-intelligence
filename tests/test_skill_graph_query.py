@@ -602,7 +602,7 @@ def test_ac9_enrichment_table_has_9_event_names() -> None:
 
 
 # ===========================================================================
-# AC-10: Blob references section with 6 fields, blob_list/blob_dump mentioned
+# AC-10: Blob references section with 6 fields, blob_read and ci-blob:// documented
 # ===========================================================================
 
 _REQUIRED_BLOB_FIELDS = [
@@ -626,17 +626,17 @@ def test_ac10_blob_references_has_all_6_fields() -> None:
     assert not missing, f"Blob References section missing fields: {missing}"
 
 
-def test_ac10_blob_references_mentions_blob_list() -> None:
-    """Blob References section must mention blob_list tool."""
-    assert "blob_list" in _BLOB_REFS_SECTION or "blob_list" in _NODE_PROPS_SECTION, (
-        "SKILL.md must document blob_list tool"
+def test_ac10_blob_references_mentions_blob_read() -> None:
+    """Blob References section must mention blob_read tool."""
+    assert "blob_read" in _BLOB_REFS_SECTION or "blob_read" in _NODE_PROPS_SECTION, (
+        "SKILL.md must document blob_read tool"
     )
 
 
-def test_ac10_blob_references_mentions_blob_dump() -> None:
-    """Blob References section must mention blob_dump tool."""
-    assert "blob_dump" in _BLOB_REFS_SECTION or "blob_dump" in _NODE_PROPS_SECTION, (
-        "SKILL.md must document blob_dump tool"
+def test_ac10_blob_references_mentions_ci_blob_uri() -> None:
+    """Blob References section must mention ci-blob:// URI scheme."""
+    assert "ci-blob://" in _BLOB_REFS_SECTION or "ci-blob://" in _NODE_PROPS_SECTION, (
+        "SKILL.md must document ci-blob:// URI scheme"
     )
 
 
@@ -682,10 +682,10 @@ def test_ac11_agent_workflow_step_references_data_property() -> None:
     )
 
 
-def test_ac11_agent_workflow_step_references_blob_dump() -> None:
-    """Agent workflow must include a step for calling blob_dump."""
-    assert "blob_dump" in _AGENT_WORKFLOW_SECTION, (
-        "Agent workflow must include a step for calling blob_dump"
+def test_ac11_agent_workflow_step_references_blob_read() -> None:
+    """Agent workflow must include a step for calling blob_read."""
+    assert "blob_read" in _AGENT_WORKFLOW_SECTION, (
+        "Agent workflow must include a step for calling blob_read"
     )
 
 
