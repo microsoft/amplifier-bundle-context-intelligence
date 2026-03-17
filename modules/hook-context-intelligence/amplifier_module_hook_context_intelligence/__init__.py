@@ -109,6 +109,9 @@ async def mount(coordinator: Any, config: dict[str, Any]):  # noqa: ANN202
                 unreg()
             except Exception:
                 pass
-        coordinator.register_capability("context_intelligence.config_resolver", None)
+        try:
+            coordinator.register_capability("context_intelligence.config_resolver", None)
+        except Exception:
+            pass
 
     return cleanup

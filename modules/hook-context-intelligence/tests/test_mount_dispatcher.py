@@ -1,7 +1,7 @@
 """Tests for the mount() dispatcher in __init__.py.
 
 Validates the thin-forwarder architecture:
-  [ALWAYS]       config_resolver capability (registered for tool-graph-query)
+  [ALWAYS]       config_resolver capability (enables downstream graph tool lookup)
   [ALWAYS]       LoggingHandler             (flat JSONL + optional server dispatch)
   [CONDITIONAL]  BlobTool                   (registered when context_intelligence_server_url set)
 """
@@ -354,5 +354,3 @@ class TestCapabilityRegistration:
         coordinator.register_capability.assert_called_once_with(
             "context_intelligence.config_resolver", None
         )
-
-
