@@ -27,7 +27,8 @@ hooks:
 
 agents:
   include:
-    - context-intelligence:context-intelligence-analyst
+    - context-intelligence:context-intelligence-graph-analyst
+    - context-intelligence:context-intelligence-navigator
 
 ---
 
