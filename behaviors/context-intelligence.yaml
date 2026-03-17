@@ -9,6 +9,8 @@ agents:
 tools:
   - module: tool-graph-query
     source: git+https://github.com/colombod/amplifier-bundle-context-intelligence@main#subdirectory=modules/tool-graph-query
+  - module: tool-blob-read
+    source: git+https://github.com/colombod/amplifier-bundle-context-intelligence@main#subdirectory=modules/tool-blob-read
 
 hooks:
   - module: hook-context-intelligence
