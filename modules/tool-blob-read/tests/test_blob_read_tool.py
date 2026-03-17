@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import pathlib
+import shutil
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
+import pytest
 
 from amplifier_core import ToolResult
 
@@ -83,6 +85,21 @@ def _make_error_client(side_effect: BaseException) -> MagicMock:
 
 
 # ---------------------------------------------------------------------------
+# Module-level fixture
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(autouse=True)
+def _clean_blob_dir():  # type: ignore[no-untyped-def]
+    """Remove /tmp/ci-blobs/ before each test to prevent cross-test pollution."""
+    blob_dir = pathlib.Path("/tmp/ci-blobs")
+    if blob_dir.exists():
+        shutil.rmtree(blob_dir)
+    yield
+    # Leave files after test for debugging; next test's setup cleans up
+
+
+# ---------------------------------------------------------------------------
 # (1) Protocol surface
 # ---------------------------------------------------------------------------
 
@@ -102,11 +119,12 @@ class TestBlobReadToolProtocol:
         tool = BlobReadTool(_make_coordinator(None))
         assert "ci-blob://" in tool.description
 
-    def test_description_mentions_disk(self) -> None:
+    def test_description_mentions_file_path(self) -> None:
         from amplifier_module_tool_blob_read.blob_read_tool import BlobReadTool
 
         tool = BlobReadTool(_make_coordinator(None))
-        assert "disk" in tool.description.lower()
+        assert "file path" in tool.description.lower()
+        assert "disk path" not in tool.description.lower()
 
     def test_schema_type_is_object(self) -> None:
         from amplifier_module_tool_blob_read.blob_read_tool import BlobReadTool
@@ -381,6 +399,20 @@ class TestBlobReadSuccess:
             await tool.execute({"uri": "ci-blob://my-session/my-key"})
 
         mock_client.get.assert_called_once_with("http://localhost:8080/blobs/my-session/my-key")
+
+    async def test_httpx_client_uses_timeout(self) -> None:
+        """Client must set an explicit timeout to prevent indefinite hangs."""
+        from amplifier_module_tool_blob_read.blob_read_tool import BlobReadTool
+
+        resolver = _make_resolver("http://localhost:8080")
+        tool = BlobReadTool(_make_coordinator(resolver))
+        _, mock_cls = _make_mock_client('{"ok": true}', 200)
+        with patch(
+            "amplifier_module_tool_blob_read.blob_read_tool.httpx.AsyncClient",
+            mock_cls,
+        ):
+            await tool.execute({"uri": "ci-blob://session/key"})
+        mock_cls.assert_called_once_with(timeout=30.0)
 
 
 # ---------------------------------------------------------------------------

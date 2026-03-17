@@ -20,7 +20,7 @@ def _sanitize_path_component(s: str) -> str:
 
 
 class BlobReadTool:
-    """Tool that reads blob content from ci-blob:// URIs or disk paths."""
+    """Tool that fetches a ci-blob:// URI from the server and writes it to disk."""
 
     def __init__(self, coordinator: Any) -> None:
         self._coordinator = coordinator
@@ -33,8 +33,8 @@ class BlobReadTool:
     @property
     def description(self) -> str:
         return (
-            "Read blob content from a ci-blob:// URI or a disk path. "
-            "Supports binary and text blobs stored in the context-intelligence server."
+            "Fetch a ci-blob:// URI from the server and write it to disk. "
+            "Returns the file path. Use bash+jq to inspect the file as the content would be likely large."
         )
 
     def get_schema(self) -> dict[str, Any]:
@@ -43,7 +43,7 @@ class BlobReadTool:
             "properties": {
                 "uri": {
                     "type": "string",
-                    "description": "The blob URI (ci-blob://) or disk path to read.",
+                    "description": "A ci-blob:// URI to fetch (e.g. ci-blob://session_id/key).",
                 },
             },
             "required": ["uri"],
@@ -105,7 +105,7 @@ class BlobReadTool:
 
         # (5) HTTP GET using ORIGINAL unsanitized values for the URL
         try:
-            async with httpx.AsyncClient() as client:
+            async with httpx.AsyncClient(timeout=30.0) as client:
                 resp = await client.get(f"{server_url}/blobs/{session_id}/{key}")
                 resp.raise_for_status()
         except httpx.HTTPStatusError as e:
