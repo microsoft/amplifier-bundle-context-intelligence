@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import pathlib
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -65,6 +66,20 @@ def _make_mock_client(text_return: str, status_code: int) -> tuple[AsyncMock, Ma
     mock_cls = MagicMock(return_value=mock_ctx)
 
     return mock_client, mock_cls
+
+
+def _make_error_client(side_effect: BaseException) -> MagicMock:
+    """Return mock_cls where client.get raises *side_effect*.
+
+    Mirrors the shape of _make_mock_client but for error-path testing where
+    the GET call itself raises rather than returning a response.
+    """
+    mock_client = AsyncMock()
+    mock_client.get = AsyncMock(side_effect=side_effect)
+    mock_ctx = AsyncMock()
+    mock_ctx.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_ctx.__aexit__ = AsyncMock(return_value=None)
+    return MagicMock(return_value=mock_ctx)
 
 
 # ---------------------------------------------------------------------------
@@ -311,8 +326,6 @@ class TestBlobReadSuccess:
 
     async def test_successful_get_writes_file_and_returns_path(self) -> None:
         """Response text must be written verbatim; output is the file path."""
-        import pathlib
-
         from amplifier_module_tool_blob_read.blob_read_tool import BlobReadTool
 
         content = '{"session": "test", "data": [1, 2, 3]}'
@@ -334,8 +347,6 @@ class TestBlobReadSuccess:
 
     async def test_output_path_structure(self) -> None:
         """Parent directory name == session_id, filename == key.json."""
-        import pathlib
-
         from amplifier_module_tool_blob_read.blob_read_tool import BlobReadTool
 
         resolver = _make_resolver("http://localhost:8080")
@@ -420,13 +431,7 @@ class TestBlobReadErrors:
         resolver = _make_resolver("http://localhost:8080")
         tool = BlobReadTool(_make_coordinator(resolver))
 
-        mock_client = AsyncMock()
-        mock_client.get = AsyncMock(side_effect=httpx.TransportError("Connection refused"))
-        mock_ctx = AsyncMock()
-        mock_ctx.__aenter__ = AsyncMock(return_value=mock_client)
-        mock_ctx.__aexit__ = AsyncMock(return_value=None)
-        mock_cls = MagicMock(return_value=mock_ctx)
-
+        mock_cls = _make_error_client(httpx.TransportError("Connection refused"))
         with patch(
             "amplifier_module_tool_blob_read.blob_read_tool.httpx.AsyncClient",
             mock_cls,
@@ -443,13 +448,7 @@ class TestBlobReadErrors:
         resolver = _make_resolver("http://localhost:8080")
         tool = BlobReadTool(_make_coordinator(resolver))
 
-        mock_client = AsyncMock()
-        mock_client.get = AsyncMock(side_effect=RuntimeError("Unexpected boom"))
-        mock_ctx = AsyncMock()
-        mock_ctx.__aenter__ = AsyncMock(return_value=mock_client)
-        mock_ctx.__aexit__ = AsyncMock(return_value=None)
-        mock_cls = MagicMock(return_value=mock_ctx)
-
+        mock_cls = _make_error_client(RuntimeError("Unexpected boom"))
         with patch(
             "amplifier_module_tool_blob_read.blob_read_tool.httpx.AsyncClient",
             mock_cls,
