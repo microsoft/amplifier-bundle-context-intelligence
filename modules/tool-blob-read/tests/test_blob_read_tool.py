@@ -271,7 +271,7 @@ class TestPathSanitization:
 
         assert result.success is True
         assert result.output is not None
-        output = str(result.output)
+        output = str(result.output["path"])
         assert output.startswith("/tmp/ci-blobs/")
         assert ".." not in output
 
@@ -291,7 +291,7 @@ class TestPathSanitization:
 
         assert result.success is True
         assert result.output is not None
-        output = str(result.output)
+        output = str(result.output["path"])
         assert output.startswith("/tmp/ci-blobs/")
 
     async def test_path_traversal_neutralized(self) -> None:
@@ -309,7 +309,8 @@ class TestPathSanitization:
             result = await tool.execute({"uri": "ci-blob://my-session/../../etc/passwd"})
 
         assert result.success is True
-        output = str(result.output)
+        assert result.output is not None
+        output = str(result.output["path"])
         # Resolved path must be strictly under /tmp/ci-blobs/
         assert output.startswith("/tmp/ci-blobs/")
         # Must not have escaped to /etc/
@@ -341,7 +342,7 @@ class TestBlobReadSuccess:
 
         assert result.success is True
         assert result.output is not None
-        written = pathlib.Path(result.output)
+        written = pathlib.Path(result.output["path"])
         assert written.exists()
         assert written.read_text() == content
 
@@ -361,7 +362,7 @@ class TestBlobReadSuccess:
 
         assert result.success is True
         assert result.output is not None
-        p = pathlib.Path(result.output)
+        p = pathlib.Path(result.output["path"])
         assert p.parent.name == "my-session"
         assert p.name == "my-key.json"
 

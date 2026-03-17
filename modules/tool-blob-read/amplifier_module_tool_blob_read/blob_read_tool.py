@@ -139,4 +139,4 @@ class BlobReadTool:
         dest.write_text(resp.text)
 
         # (7) Return success with path
-        return ToolResult(success=True, output=str(dest))
+        return ToolResult(success=True, output={"path": str(dest)})
