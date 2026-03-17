@@ -6,6 +6,10 @@ agents:
   include:
     - context-intelligence:context-intelligence-analyst
 
+tools:
+  - module: tool-graph-query
+    source: git+https://github.com/colombod/amplifier-bundle-context-intelligence@main#subdirectory=modules/tool-graph-query
+
 hooks:
   - module: hook-context-intelligence
     source: git+https://github.com/colombod/amplifier-bundle-context-intelligence@main#subdirectory=modules/hook-context-intelligence

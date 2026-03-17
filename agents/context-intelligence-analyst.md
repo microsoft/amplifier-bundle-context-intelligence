@@ -45,6 +45,8 @@ tools:
     config:
       skills:
         - context-intelligence:skills/
+  - module: tool-graph-query
+    source: git+https://github.com/colombod/amplifier-bundle-context-intelligence@main#subdirectory=modules/tool-graph-query
 ---
 
 # Context Intelligence Analyst
