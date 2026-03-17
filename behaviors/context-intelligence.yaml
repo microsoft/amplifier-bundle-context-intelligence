@@ -1,6 +1,6 @@
-# Context Intelligence — thin event forwarder behavior
-# Writes session events to local JSONL and optionally dispatches to
-# the Context Intelligence server.
+bundle:
+  name: context-intelligence-behavior
+  version: 0.1.0
 
 agents:
   include:
