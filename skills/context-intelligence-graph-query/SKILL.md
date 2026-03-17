@@ -28,7 +28,7 @@ Choose the right approach based on what you need to find:
 | Relationship traversal (parent-child, SPAWNED, SUBSESSION_OF) | `graph_query` | "Find all child sessions" |
 | Session statistics and aggregations | `graph_query` | "Count tool executions by tool name" |
 | Prompt text keyword search | `bash`+`grep` or `graph_query` | "Find prompts containing 'authentication'" |
-| Large payload inspection (messages, results) | `bash`+`jq` after `blob_dump` | "Read tool result JSON" |
+| Large payload inspection (messages, results) | `bash`+`jq` after `blob_read` | "Read tool result JSON" |
 | Event log text search across sessions | `bash`+`grep` on events.jsonl | "Find all sessions with a specific error" |
 
 **Fallback guidance:** If `graph_query` returns no results, fall back to
@@ -150,7 +150,7 @@ Example blob reference value stored on a node property:
 
 ```json
 {
-  "$blob_ref": "blob://abc123",
+  "$blob_ref": "ci-blob://session_id/blob_key",
   "field": "raw",
   "node_id": "6afb3613-7041-4735-9c0f-c2171452ed18__tool_post__1741270343000",
   "size_bytes": 42000
@@ -168,12 +168,11 @@ Known blob fields:
 | `context_snapshot` | Context snapshot at execution boundary |
 | `debug` | Debug diagnostic data |
 
-Two tools are available to work with blob references:
+The `blob_read` tool resolves a `ci-blob://` URI and writes the blob content
+to a local file, returning the file path:
 
-- **`blob_list(session_id)`** — returns a list of blob metadata records for a
-  session: `[{uri, field, node_id, size_bytes}]`
-- **`blob_dump(uri)`** — resolves a blob URI and returns the **file path** to
-  the blob content on disk
+- **`blob_read(uri)`** — resolves a `ci-blob://session_id/blob_key` URI and
+  returns the **file path** to the blob content on disk
 
 ### Agent workflow
 
@@ -181,25 +180,24 @@ When working with event data or blob references in the graph, follow this
 5-step process:
 
 1. **Call `graph_query`** with a Cypher query to find the node(s) of interest
-   and retrieve their `data` or `data_<event_name>` property. Alternatively,
-   call `blob_list(session_id)` to enumerate all blobs for a session without
-   a prior graph query.
+   and retrieve their `data` or `data_<event_name>` property.
 2. **Parse the `data` property** (a JSON string) to inspect the event payload
    and identify any `$blob_ref` pointers within the property values.
-3. **Call `blob_dump(uri)`** for each `$blob_ref` URI encountered to resolve
+3. **Call `blob_read(uri)`** for each `ci-blob://` URI encountered to resolve
    the blob URI and obtain the local file path to the blob content.
-4. **Use `read_file` or `bash` + `jq`** to read and filter specific fields
-   from the blob file at the path returned by `blob_dump`.
-5. **Never** load blob content directly into the agent context — always use
-   file path tools (`read_file`, `bash`, `jq`) to access specific fields or
-   slices of the blob, as blobs can be extremely large.
+4. **Check file size** before reading — blobs from `llm:request` /
+   `llm:response` events can exceed 100 k tokens and will overflow agent
+   context if read in full.
+5. **Use `bash` + `jq`** to read and filter specific fields from the blob file
+   at the path returned by `blob_read`. Never load blob content directly into
+   the agent context — always use targeted `jq` selectors or `head`/`tail` to
+   access specific fields or slices.
 
 ## Relationship Properties
 
 | Property | Present On | Notes |
 |----------|-----------|-------|
 | `workspace` | All relationships | Workspace partition key; always written on flush |
-| `seq` | Ordering relationships | Integer sequence number for `HAS_RUN`, `HAS_STEP`, `NEXT` |
 | `occurred_at` | Most relationships | ISO-8601 timestamp string |
 
 ---
@@ -658,6 +656,65 @@ parts = node_id.split("__")
 Relationships have no stored ID property. Identity is composite:
 `(source.node_id, target.node_id, type(r))`. To locate a specific
 relationship, match by endpoint `node_id` values and relationship type.
+
+---
+
+## Critical Gotchas
+
+### 1. `metadata` is a JSON string, not a map
+
+Node `metadata` properties are stored as JSON-encoded strings. You cannot
+filter on nested fields directly in Cypher. Parse them in application code
+after retrieving:
+
+```cypher
+// Correct — retrieve and parse in code
+MATCH (s:Session {workspace: $workspace})
+RETURN s.node_id, s.metadata
+```
+
+Do **not** attempt `s.metadata.some_key` — Cypher will return `null`.
+
+### 2. Silently dropped events
+
+Events written during the same millisecond with identical `node_id` values
+are silently deduplicated on `MERGE`. If two events share `session_id`,
+`event_name`, and `timestamp_ms`, only the first is stored. Use
+`tool_call_id` (present on `ToolExecution` nodes) to disambiguate parallel
+tool calls.
+
+### 3. No `seq` ordering on edges
+
+`HAS_RUN`, `HAS_STEP`, and `NEXT` relationships do **not** carry a `seq`
+property. To order steps within a run, sort by `occurred_at` on the node:
+
+```cypher
+MATCH (run:OrchestratorRun {workspace: $workspace})-[:HAS_STEP]->(step:Step)
+RETURN step.node_id, step.occurred_at
+ORDER BY step.occurred_at ASC
+```
+
+### 4. Workspace scoping is manual
+
+`graph_query` injects `$workspace` automatically, but only if you reference
+`$workspace` in your query. Omitting the filter from a MATCH clause silently
+returns data from **all** workspaces. Always include `{workspace: $workspace}`
+on the anchor node of every query.
+
+### 5. `HAS_EVENT` target rules
+
+`HAS_EVENT` attaches to the **current active `OrchestratorRun`** when one is
+open (`cursors.current_run_id` is set); otherwise it falls back to the
+`Session` node. This means lifecycle events emitted outside an orchestrator
+run (e.g., session-level hooks) are attached directly to the Session, not to
+a Run.
+
+### 6. Node `MERGE` key is `{node_id, workspace}`
+
+All nodes are upserted using `MERGE (n {node_id: $node_id, workspace: $workspace})`.
+Querying by `node_id` alone (without `workspace`) may match nodes from
+other workspaces in a shared database. Always include `workspace` in
+identity lookups.
 
 ---
 
