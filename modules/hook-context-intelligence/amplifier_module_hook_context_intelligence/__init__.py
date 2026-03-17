@@ -9,7 +9,7 @@ Configuration keys
 context_intelligence_server_url : str, optional
     Base URL of the Context Intelligence server, e.g.
     ``http://localhost:8000``.  When set, every event is POSTed
-    to ``{url}/events`` and ``blob_list``/``blob_dump``/``graph_query``
+    to ``{url}/events`` and ``blob_list``/``blob_dump``
     agent tools are registered.
 workspace : str, optional
     Workspace identifier used to scope graph data on the server.
@@ -57,17 +57,18 @@ async def _discover_events(coordinator: Any) -> set[str]:
 async def mount(coordinator: Any, config: dict[str, Any]):  # noqa: ANN202
     """Mount the context-intelligence hook.
 
-    Always mounts:
+    Always:
+    - Registers ConfigResolver as ``context_intelligence.config_resolver`` capability
     - LoggingHandler  — writes events.jsonl + dispatches to CI server
 
     When ``context_intelligence_server_url`` is configured:
     - BlobTool        — registers blob_list / blob_dump as agent tools
-    - GraphQueryTool  — registers graph_query as an agent tool
     """
     from .config_resolver import ConfigResolver
     from .handlers.logging_handler import LoggingHandler
 
     resolver = ConfigResolver(config, coordinator)
+    coordinator.register_capability("context_intelligence.config_resolver", resolver)
     events = await _discover_events(coordinator)
 
     exclude = resolver.exclude_events
@@ -83,7 +84,6 @@ async def mount(coordinator: Any, config: dict[str, Any]):  # noqa: ANN202
 
     if resolver.context_intelligence_server_url:
         # BlobTool predates the Tool protocol; it uses the legacy tools.register() API.
-        # GraphQueryTool follows the Tool protocol and registers via coordinator.mount().
         try:
             from .blob_tool import BlobTool
 
@@ -103,22 +103,12 @@ async def mount(coordinator: Any, config: dict[str, Any]):  # noqa: ANN202
         except Exception:
             log.exception("Failed to register BlobTool — continuing without blob tools")
 
-        try:
-            from .graph_query_tool import GraphQueryTool
-
-            graph_tool = GraphQueryTool(
-                server_url=resolver.context_intelligence_server_url,
-                workspace=resolver.workspace,
-            )
-            await coordinator.mount("tools", graph_tool, name=graph_tool.name)
-        except Exception:
-            log.exception("Failed to register GraphQueryTool — continuing without graph tools")
-
     def cleanup() -> None:
         for unreg in unregister_fns:
             try:
                 unreg()
             except Exception:
                 pass
+        coordinator.register_capability("context_intelligence.config_resolver", None)
 
     return cleanup

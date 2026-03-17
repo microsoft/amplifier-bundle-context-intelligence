@@ -1,8 +1,9 @@
 """Tests for the mount() dispatcher in __init__.py.
 
 Validates the thin-forwarder architecture:
-  [ALWAYS]       LoggingHandler  (flat JSONL + optional server dispatch)
-  [CONDITIONAL]  BlobTool        (registered when context_intelligence_server_url set)
+  [ALWAYS]       config_resolver capability (registered for tool-graph-query)
+  [ALWAYS]       LoggingHandler             (flat JSONL + optional server dispatch)
+  [CONDITIONAL]  BlobTool                   (registered when context_intelligence_server_url set)
 """
 
 from __future__ import annotations
@@ -320,83 +321,38 @@ class TestBlobToolRegistration:
 
 
 # ---------------------------------------------------------------------------
-# TestGraphQueryToolRegistration
+# TestCapabilityRegistration
 # ---------------------------------------------------------------------------
-class TestGraphQueryToolRegistration:
-    """GraphQueryTool is mounted via coordinator.mount only when context_intelligence_server_url is configured."""
+class TestCapabilityRegistration:
+    """Hook registers ConfigResolver as a coordinator capability."""
 
-    async def test_graph_query_not_mounted_without_server_url(self) -> None:
-        """When config has no context_intelligence_server_url, coordinator.mount should not be called with graph_query."""
+    async def test_capability_registered_on_mount(self) -> None:
+        """mount() registers the config_resolver capability with a ConfigResolver instance."""
         from amplifier_module_hook_context_intelligence import mount
+        from amplifier_module_hook_context_intelligence.config_resolver import ConfigResolver
 
         coordinator = _make_coordinator()
-        coordinator.tools = MagicMock()
-
         await mount(coordinator, config={})
 
-        # coordinator.mount should not have been called with a tool named graph_query
-        for call in coordinator.mount.call_args_list:
-            # If mount was called at all, the second positional arg would be the tool
-            args = call.args
-            if len(args) >= 2 and hasattr(args[1], "name"):
-                assert args[1].name != "graph_query"
+        reg_calls = coordinator.register_capability.call_args_list
+        cap_calls = [c for c in reg_calls if c.args[0] == "context_intelligence.config_resolver"]
+        assert len(cap_calls) == 1, (
+            "register_capability should be called once with 'context_intelligence.config_resolver'"
+        )
+        assert isinstance(cap_calls[0].args[1], ConfigResolver)
 
-    async def test_graph_query_mounted_with_server_url(self) -> None:
-        """When context_intelligence_server_url is configured, coordinator.mount is called with a Tool-compliant object."""
+    async def test_cleanup_vacates_capability(self) -> None:
+        """Cleanup callable vacates the capability by registering None."""
         from amplifier_module_hook_context_intelligence import mount
 
         coordinator = _make_coordinator()
-        coordinator.tools = MagicMock()
+        cleanup = await mount(coordinator, config={})
+        coordinator.register_capability.reset_mock()
 
-        await mount(
-            coordinator,
-            config={"context_intelligence_server_url": "http://localhost:8000"},
+        cleanup()
+
+        coordinator.register_capability.assert_called_once_with(
+            "context_intelligence.config_resolver", None
         )
 
-        # coordinator.mount should have been called
-        assert coordinator.mount.called, "coordinator.mount should have been called"
 
-        # Find the call where a tool named 'graph_query' was mounted
-        graph_tool_calls = [
-            call
-            for call in coordinator.mount.call_args_list
-            if call.kwargs.get("name") == "graph_query"
-        ]
-        assert len(graph_tool_calls) == 1, (
-            "coordinator.mount should be called once with name='graph_query'"
-        )
-
-        # Verify it was called as: coordinator.mount("tools", tool, name=tool.name)
-        graph_call = graph_tool_calls[0]
-        assert graph_call.args[0] == "tools", "First arg to mount should be 'tools'"
-        tool_obj = graph_call.args[1]
-
-        # Tool must be Protocol-compliant: name, description, execute
-        assert hasattr(tool_obj, "name"), "Tool must have name property"
-        assert hasattr(tool_obj, "description"), "Tool must have description property"
-        assert hasattr(tool_obj, "execute"), "Tool must have execute method"
-        assert tool_obj.name == "graph_query"
-        assert isinstance(tool_obj.description, str)
-        assert len(tool_obj.description) > 0
-
-    async def test_blob_tools_survive_graph_query_tool_import_failure(self) -> None:
-        """If GraphQueryTool import fails, blob_list and blob_dump are still registered."""
-        from unittest.mock import patch
-
-        from amplifier_module_hook_context_intelligence import mount
-
-        coordinator = _make_coordinator()
-        coordinator.tools = MagicMock()
-
-        with patch(
-            "amplifier_module_hook_context_intelligence.graph_query_tool.GraphQueryTool",
-            side_effect=ImportError("simulated import failure"),
-        ):
-            await mount(
-                coordinator,
-                config={"context_intelligence_server_url": "http://localhost:8000"},
-            )
-
-        registered_names = [call.args[0] for call in coordinator.tools.register.call_args_list]
-        assert "blob_list" in registered_names
-        assert "blob_dump" in registered_names
