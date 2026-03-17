@@ -58,21 +58,6 @@ digraph LoggingHandlerFlow {
             color="#6A1B9A"
         ];
 
-        node [shape=diamond, style=filled, penwidth=1.5];
-        mount_check_server [
-            label="server_url\nconfigured?",
-            fillcolor="#FFEBEE",
-            color="#C62828",
-            fontcolor="#C62828"
-        ];
-
-        node [shape=box, style="rounded,filled", penwidth=1.5];
-        mount_blob_tool [
-            label="Register BlobTool\n───────────────────\ncoordinator.tools.register(\n  'blob_list', 'blob_dump'\n)\nHTTP client → CI server /blobs/*",
-            fillcolor="#E0F7FA",
-            color="#00838F"
-        ];
-
         mount_done [
             label="return cleanup()\n───────────────────\nCleanup unregisters\nall hook handlers",
             fillcolor="#ECEFF1",
@@ -82,10 +67,7 @@ digraph LoggingHandlerFlow {
         mount_start -> mount_resolver;
         mount_resolver -> mount_discover;
         mount_discover -> mount_register;
-        mount_register -> mount_check_server;
-        mount_check_server -> mount_blob_tool [label="  YES  ", color="#2E7D32", fontcolor="#2E7D32"];
-        mount_check_server -> mount_done [label="  NO  ", color="#757575", fontcolor="#757575"];
-        mount_blob_tool -> mount_done;
+        mount_register -> mount_done;
     }
 
     // ═══════════════════════════════════════════════════════════════════
