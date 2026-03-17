@@ -30,6 +30,10 @@ _SCAN_DIRS = [
     / "modules"
     / "hook-context-intelligence"
     / "amplifier_module_hook_context_intelligence",
+    BUNDLE_ROOT
+    / "modules"
+    / "tool-graph-query"
+    / "amplifier_module_tool_graph_query",
 ]
 
 _SKIP_NAMES = {"config_resolver.py", "test_no_neo4j_leakage.py"}
