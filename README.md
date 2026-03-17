@@ -80,7 +80,7 @@ If `context_intelligence_server_url` is configured, check the server dashboard a
 ## Configuration reference
 
 All config keys are read from the `overrides.hook-context-intelligence.config` block
-in `settings.yaml`, or from environment variables via the behavior YAML.
+in `settings.yaml`, or from environment variables set in the shell or CI environment.
 
 | Key | Env var | Default | Description |
 |-----|---------|---------|-------------|

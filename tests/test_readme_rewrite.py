@@ -16,6 +16,9 @@ import pytest
 BUNDLE_ROOT = Path(__file__).resolve().parent.parent
 README = BUNDLE_ROOT / "README.md"
 
+# Chars extracted per section window — enough for any single section.
+SECTION_WINDOW = 2000
+
 
 @pytest.fixture(scope="session")
 def readme() -> str:
@@ -76,6 +79,13 @@ class TestProhibitedContent:
 class TestAgentsSection:
     """README must describe both agents: graph-analyst and navigator."""
 
+    @pytest.fixture
+    def agents_section(self, readme: str) -> str:
+        """Extract the Agents section content."""
+        agents_pos = readme.find("## Agents")
+        assert agents_pos != -1, "README must contain an '## Agents' section"
+        return readme[agents_pos : agents_pos + SECTION_WINDOW]
+
     def test_agents_section_present(self, readme: str) -> None:
         """README must contain an '## Agents' section."""
         assert "## Agents" in readme, "README must contain an '## Agents' section"
@@ -92,13 +102,12 @@ class TestAgentsSection:
             "README must describe the context-intelligence-navigator agent"
         )
 
-    def test_graph_analyst_is_primary_entry_point(self, readme: str) -> None:
+    def test_graph_analyst_is_primary_entry_point(self, agents_section: str) -> None:
         """README must describe graph-analyst as the primary entry point."""
-        # Find the agents section and verify graph-analyst is described as primary
-        agents_pos = readme.find("## Agents")
-        assert agents_pos != -1, "README must contain an '## Agents' section"
-        agents_section = readme[agents_pos:agents_pos + 2000]
-        assert "primary" in agents_section.lower() or "entry point" in agents_section.lower(), (
+        assert (
+            "primary" in agents_section.lower()
+            or "entry point" in agents_section.lower()
+        ), (
             "README must describe graph-analyst as the primary entry point in the Agents section"
         )
 
@@ -108,11 +117,8 @@ class TestAgentsSection:
             "README must describe navigator as the local fallback agent"
         )
 
-    def test_agents_table_present(self, readme: str) -> None:
+    def test_agents_table_present(self, agents_section: str) -> None:
         """README Agents section must include a table of agents and their tools."""
-        agents_pos = readme.find("## Agents")
-        assert agents_pos != -1
-        agents_section = readme[agents_pos:agents_pos + 2000]
         # Check for table formatting (markdown table has | separators)
         assert "|" in agents_section, (
             "README Agents section must contain a table listing agents and their tools"
@@ -133,71 +139,59 @@ class TestAgentsSection:
 class TestRepositoryStructure:
     """README must have an accurate repository structure tree."""
 
+    @pytest.fixture
+    def structure_section(self, readme: str) -> str:
+        """Extract the Repository structure section content."""
+        structure_pos = readme.find("## Repository structure")
+        assert structure_pos != -1, (
+            "README must contain a '## Repository structure' section"
+        )
+        return readme[structure_pos : structure_pos + SECTION_WINDOW]
+
     def test_repository_structure_section_present(self, readme: str) -> None:
         """README must contain a 'Repository structure' section."""
         assert "## Repository structure" in readme, (
             "README must contain a '## Repository structure' section"
         )
 
-    def test_tree_has_agents_directory(self, readme: str) -> None:
+    def test_tree_has_agents_directory(self, structure_section: str) -> None:
         """Repo structure must show agents/ directory."""
-        structure_pos = readme.find("## Repository structure")
-        assert structure_pos != -1
-        structure_section = readme[structure_pos:structure_pos + 2000]
         assert "agents/" in structure_section, (
             "README repo structure must show agents/ directory"
         )
 
-    def test_tree_has_graph_analyst_in_agents(self, readme: str) -> None:
+    def test_tree_has_graph_analyst_in_agents(self, structure_section: str) -> None:
         """Repo structure must show graph-analyst in agents/."""
-        structure_pos = readme.find("## Repository structure")
-        assert structure_pos != -1
-        structure_section = readme[structure_pos:structure_pos + 2000]
         assert "graph-analyst" in structure_section, (
             "README repo structure must show context-intelligence-graph-analyst.md in agents/"
         )
 
-    def test_tree_has_navigator_in_agents(self, readme: str) -> None:
+    def test_tree_has_navigator_in_agents(self, structure_section: str) -> None:
         """Repo structure must show navigator in agents/."""
-        structure_pos = readme.find("## Repository structure")
-        assert structure_pos != -1
-        structure_section = readme[structure_pos:structure_pos + 2000]
         assert "navigator" in structure_section, (
             "README repo structure must show context-intelligence-navigator.md in agents/"
         )
 
-    def test_tree_has_delegation_strategy_dot(self, readme: str) -> None:
+    def test_tree_has_delegation_strategy_dot(self, structure_section: str) -> None:
         """Repo structure must show context/delegation-strategy.dot."""
-        structure_pos = readme.find("## Repository structure")
-        assert structure_pos != -1
-        structure_section = readme[structure_pos:structure_pos + 2000]
         assert "delegation-strategy.dot" in structure_section, (
             "README repo structure must show context/delegation-strategy.dot"
         )
 
-    def test_tree_has_tool_graph_query_module(self, readme: str) -> None:
+    def test_tree_has_tool_graph_query_module(self, structure_section: str) -> None:
         """Repo structure must show modules/tool-graph-query."""
-        structure_pos = readme.find("## Repository structure")
-        assert structure_pos != -1
-        structure_section = readme[structure_pos:structure_pos + 2000]
         assert "tool-graph-query" in structure_section, (
             "README repo structure must show modules/tool-graph-query"
         )
 
-    def test_tree_has_tool_blob_read_module(self, readme: str) -> None:
+    def test_tree_has_tool_blob_read_module(self, structure_section: str) -> None:
         """Repo structure must show modules/tool-blob-read."""
-        structure_pos = readme.find("## Repository structure")
-        assert structure_pos != -1
-        structure_section = readme[structure_pos:structure_pos + 2000]
         assert "tool-blob-read" in structure_section, (
             "README repo structure must show modules/tool-blob-read"
         )
 
-    def test_tree_has_two_skills_directories(self, readme: str) -> None:
+    def test_tree_has_two_skills_directories(self, structure_section: str) -> None:
         """Repo structure must show 2 skill directories."""
-        structure_pos = readme.find("## Repository structure")
-        assert structure_pos != -1
-        structure_section = readme[structure_pos:structure_pos + 2000]
         # Check that skills/ is mentioned
         assert "skills/" in structure_section, (
             "README repo structure must show skills/ directory"
@@ -210,11 +204,8 @@ class TestRepositoryStructure:
             "README repo structure must show context-intelligence-session-navigation skill"
         )
 
-    def test_tree_has_docs_directory(self, readme: str) -> None:
+    def test_tree_has_docs_directory(self, structure_section: str) -> None:
         """Repo structure must show docs/ directory."""
-        structure_pos = readme.find("## Repository structure")
-        assert structure_pos != -1
-        structure_section = readme[structure_pos:structure_pos + 2000]
         assert "docs/" in structure_section, (
             "README repo structure must show docs/ directory"
         )
@@ -233,7 +224,8 @@ class TestDispatchTimeoutDefault:
         # This is the spec acceptance criteria pattern
         lines = readme.splitlines()
         matching_lines = [
-            line for line in lines
+            line
+            for line in lines
             if "dispatch_timeout" in line
             and "AMPLIFIER_CONTEXT_INTELLIGENCE_DISPATCH_TIMEOUT" in line
             and "30" in line
@@ -292,11 +284,15 @@ class TestSectionOrdering:
 class TestWhatGetsStored:
     """What gets stored must show context-intelligence/ subdirectory."""
 
-    def test_context_intelligence_subdir_in_path(self, readme: str) -> None:
-        """What gets stored must show context-intelligence/ as subdirectory in path."""
+    @pytest.fixture
+    def stored_section(self, readme: str) -> str:
+        """Extract the What gets stored section content."""
         stored_pos = readme.find("## What gets stored")
-        assert stored_pos != -1
-        stored_section = readme[stored_pos:stored_pos + 2000]
+        assert stored_pos != -1, "README must contain a '## What gets stored' section"
+        return readme[stored_pos : stored_pos + SECTION_WINDOW]
+
+    def test_context_intelligence_subdir_in_path(self, stored_section: str) -> None:
+        """What gets stored must show context-intelligence/ as subdirectory in path."""
         assert "context-intelligence/" in stored_section, (
             "README 'What gets stored' must show context-intelligence/ subdirectory in path"
         )
