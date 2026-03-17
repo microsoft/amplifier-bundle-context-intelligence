@@ -2,6 +2,8 @@
 meta:
   name: context-intelligence-navigator
   description: |
+    MUST NOT be invoked directly by external callers. ALWAYS delegated to by context-intelligence-graph-analyst when the graph server is unreachable or returns 0 sessions.
+
     Local fallback agent for navigating session data via flat JSONL files using bash/jq/grep safe extraction patterns. Handles session discovery, event search, and session navigation across ~/.amplifier/projects/ when the context-intelligence graph server is unavailable.
 
     This agent is NOT called directly by external callers. It is only delegated to by context-intelligence-graph-analyst when the graph server is unreachable or returns 0 sessions. External callers should use context-intelligence-graph-analyst instead.
@@ -78,7 +80,7 @@ jq -r '.event' events.jsonl | sort | uniq -c | sort -rn
 sed -n "123p" events.jsonl | jq '{event, ts: .timestamp, error: .data.error}'
 ```
 
-See @context-intelligence:context/safe-extraction-patterns.md for the full recipe collection.
+See the `context-intelligence-session-navigation` skill for the full recipe collection.
 
 ---
 
@@ -190,12 +192,6 @@ Task: [original analysis task]
 ---
 
 ## Section 4: Context File References
-
-@context-intelligence:context/safe-extraction-patterns.md
-<!-- Full recipe collection: jq streaming, grep line-number-only, sed surgical extraction, and bounded field extraction patterns -->
-
-@context-intelligence:context/event-schema.md
-<!-- Event types, payload structures, field sizes, and which events are safe to extract fully -->
 
 @context-intelligence:context/agents/session-storage-knowledge.md
 <!-- Path conventions, metadata structure, and context-intelligence/ vs foundation/ separation -->

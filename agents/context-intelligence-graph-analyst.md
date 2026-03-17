@@ -2,6 +2,8 @@
 meta:
   name: context-intelligence-graph-analyst
   description: |
+    MUST be used for all context-intelligence session analysis, delegation chain tracing, and ci-blob:// URI resolution. ALWAYS delegate to this agent first — it checks server availability automatically and falls back to context-intelligence-navigator when needed.
+
     Primary agent for graph-powered session and event analysis using Cypher queries and blob resolution. Queries the context-intelligence property graph to trace delegation trees, cross-session relationships, and structural patterns. Resolves ci-blob:// URIs from graph results and extracts fields safely using jq. Automatically delegates to context-intelligence-navigator when the graph server is unreachable or returns 0 sessions.
 
     Use this agent when:
@@ -210,6 +212,9 @@ Task: [original analysis task]
 
 @context-intelligence:context/event-schema.md
 <!-- Event types, payload structures, field sizes, and which events are safe to extract fully -->
+
+@context-intelligence:context/config-resolution.dot
+<!-- ConfigResolver fallback chain: how context_intelligence_server_url, workspace, and log_level are resolved from env vars and settings -->
 
 @context-intelligence:context/delegation-strategy.dot
 <!-- Delegation chain diagram: graph-analyst → navigator → foundation:session-analyst -->

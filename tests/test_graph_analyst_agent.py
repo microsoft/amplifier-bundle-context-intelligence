@@ -425,12 +425,20 @@ class TestBodyContent:
             "Body must reference @context-intelligence:context/delegation-strategy.dot"
         )
 
-    def test_three_context_file_references_total(self) -> None:
-        """Body must contain all 3 required context file references."""
+    def test_context_reference_config_resolution(self) -> None:
+        """Section 4 must reference config-resolution.dot."""
+        body = self._body()
+        assert "config-resolution.dot" in body, (
+            "graph-analyst Section 4 must reference context/config-resolution.dot"
+        )
+
+    def test_four_context_file_references_total(self) -> None:
+        """Body must contain all four required context file references."""
         body = self._body()
         refs = [
             "@context-intelligence:context/graph-model-reference.md",
             "@context-intelligence:context/event-schema.md",
+            "@context-intelligence:context/config-resolution.dot",
             "@context-intelligence:context/delegation-strategy.dot",
         ]
         for ref in refs:
