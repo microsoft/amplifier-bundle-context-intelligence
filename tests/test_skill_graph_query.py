@@ -15,7 +15,7 @@ Acceptance Criteria:
   AC-7:  8 relationship types present
   AC-8:  Node properties include workspace/node_id/session_id
   AC-9:  Event data preservation with 9 enrichment mappings
-  AC-10: Blob references with 6 fields, blob_list/blob_dump documented
+  AC-10: Blob references with 6 fields, blob_read and ci-blob:// documented
   AC-11: Agent workflow section with 5+ steps referencing graph_query
   AC-12: Workspace scoping explains auto-injection with $workspace
   AC-13: 12 query patterns, 12+ cypher code blocks, all using $workspace
