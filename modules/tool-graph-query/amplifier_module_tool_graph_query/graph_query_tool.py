@@ -17,7 +17,7 @@ from amplifier_core.models import ToolResult
 class GraphQueryTool:
     """Execute Cypher queries against the context-intelligence server.
 
-    Implements the Amplifier Tool protocol (name, description, get_schema,
+    Implements the Amplifier Tool protocol (name, description, input_schema,
     execute).  Configuration is resolved lazily at execute() time via the
     coordinator's ``context_intelligence.config_resolver`` capability.
     """
@@ -39,7 +39,8 @@ class GraphQueryTool:
             "to scope results to the current session namespace."
         )
 
-    def get_schema(self) -> dict[str, Any]:
+    @property
+    def input_schema(self) -> dict[str, Any]:
         return {
             "type": "object",
             "properties": {

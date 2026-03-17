@@ -12,7 +12,7 @@ from typing import Any
 __amplifier_module_type__ = "tool"
 
 
-async def mount(coordinator: Any, config: dict[str, Any]) -> None:  # noqa: ARG001
+async def mount(coordinator: Any, config: dict[str, Any]) -> dict[str, Any]:  # noqa: ARG001
     """Mount the graph_query tool.
 
     Captures a coordinator reference for lazy capability resolution.
@@ -23,3 +23,4 @@ async def mount(coordinator: Any, config: dict[str, Any]) -> None:  # noqa: ARG0
 
     tool = GraphQueryTool(coordinator=coordinator)
     await coordinator.mount("tools", tool, name=tool.name)
+    return {"tool": tool.name, "status": "mounted"}

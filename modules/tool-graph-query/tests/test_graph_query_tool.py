@@ -19,7 +19,9 @@ def _make_coordinator(resolver: Any = None) -> MagicMock:
     return coordinator
 
 
-def _make_resolver(server_url: str | None = "http://localhost:8080", workspace: str = "test-workspace") -> MagicMock:
+def _make_resolver(
+    server_url: str | None = "http://localhost:8080", workspace: str = "test-workspace"
+) -> MagicMock:
     resolver = MagicMock()
     resolver.context_intelligence_server_url = server_url
     resolver.workspace = workspace
@@ -41,46 +43,50 @@ def _make_mock_client(json_return=None):
 # TestGraphQueryToolProtocol
 # ---------------------------------------------------------------------------
 
+
 class TestGraphQueryToolProtocol:
     """Tool protocol surface tests."""
 
     def test_name_is_graph_query(self) -> None:
         from amplifier_module_tool_graph_query.graph_query_tool import GraphQueryTool
+
         tool = GraphQueryTool(coordinator=_make_coordinator())
         assert tool.name == "graph_query"
 
     def test_description_mentions_cypher(self) -> None:
         from amplifier_module_tool_graph_query.graph_query_tool import GraphQueryTool
+
         tool = GraphQueryTool(coordinator=_make_coordinator())
         assert "Cypher" in tool.description
 
     def test_description_mentions_context_intelligence(self) -> None:
         from amplifier_module_tool_graph_query.graph_query_tool import GraphQueryTool
+
         tool = GraphQueryTool(coordinator=_make_coordinator())
         assert "context-intelligence" in tool.description
 
-    def test_get_schema_returns_object_type(self) -> None:
+    def test_input_schema_returns_object_type(self) -> None:
         from amplifier_module_tool_graph_query.graph_query_tool import GraphQueryTool
-        tool = GraphQueryTool(coordinator=_make_coordinator())
-        schema = tool.get_schema()
-        assert schema["type"] == "object"
 
-    def test_get_schema_has_query_as_required(self) -> None:
-        from amplifier_module_tool_graph_query.graph_query_tool import GraphQueryTool
         tool = GraphQueryTool(coordinator=_make_coordinator())
-        schema = tool.get_schema()
-        assert "query" in schema["required"]
+        assert tool.input_schema["type"] == "object"
 
-    def test_get_schema_has_optional_params_and_workspace(self) -> None:
+    def test_input_schema_has_query_as_required(self) -> None:
         from amplifier_module_tool_graph_query.graph_query_tool import GraphQueryTool
+
         tool = GraphQueryTool(coordinator=_make_coordinator())
-        schema = tool.get_schema()
-        props = schema["properties"]
+        assert "query" in tool.input_schema["required"]
+
+    def test_input_schema_has_optional_params_and_workspace(self) -> None:
+        from amplifier_module_tool_graph_query.graph_query_tool import GraphQueryTool
+
+        tool = GraphQueryTool(coordinator=_make_coordinator())
+        props = tool.input_schema["properties"]
         assert "params" in props
         assert "workspace" in props
         # They should not be in 'required'
-        assert "params" not in schema["required"]
-        assert "workspace" not in schema["required"]
+        assert "params" not in tool.input_schema["required"]
+        assert "workspace" not in tool.input_schema["required"]
 
     async def test_execute_returns_tool_result(self) -> None:
         from amplifier_module_tool_graph_query.graph_query_tool import GraphQueryTool
@@ -100,6 +106,7 @@ class TestGraphQueryToolProtocol:
 # ---------------------------------------------------------------------------
 # TestLazyCapabilityResolution
 # ---------------------------------------------------------------------------
+
 
 class TestLazyCapabilityResolution:
     """Lazy resolver lookup and caching behaviour."""
@@ -171,14 +178,13 @@ class TestLazyCapabilityResolution:
             await tool.execute({"query": "MATCH (n) RETURN n LIMIT 2"})
 
         # get_capability should only be called once (on first execute)
-        coordinator.get_capability.assert_called_once_with(
-            "context_intelligence.config_resolver"
-        )
+        coordinator.get_capability.assert_called_once_with("context_intelligence.config_resolver")
 
 
 # ---------------------------------------------------------------------------
 # TestGraphQuery
 # ---------------------------------------------------------------------------
+
 
 class TestGraphQuery:
     """HTTP request construction tests."""
@@ -220,7 +226,9 @@ class TestGraphQuery:
 
         mock_client, mock_cls = _make_mock_client()
         with patch("httpx.AsyncClient", mock_cls):
-            await tool.execute({"query": "MATCH (n) WHERE n.id = $id RETURN n", "params": {"id": "abc-123"}})
+            await tool.execute(
+                {"query": "MATCH (n) WHERE n.id = $id RETURN n", "params": {"id": "abc-123"}}
+            )
 
         body = mock_client.post.call_args.kwargs["json"]
         assert body["params"] == {"id": "abc-123"}
@@ -258,6 +266,7 @@ class TestGraphQuery:
 # ---------------------------------------------------------------------------
 # TestGraphQueryErrors
 # ---------------------------------------------------------------------------
+
 
 class TestGraphQueryErrors:
     """Error path tests."""
@@ -297,9 +306,7 @@ class TestGraphQueryErrors:
         tool = GraphQueryTool(coordinator=coordinator)
 
         mock_client = AsyncMock()
-        mock_client.post = AsyncMock(
-            side_effect=httpx.TransportError("connection refused")
-        )
+        mock_client.post = AsyncMock(side_effect=httpx.TransportError("connection refused"))
         mock_cls = MagicMock()
         mock_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
         mock_cls.return_value.__aexit__ = AsyncMock(return_value=None)
@@ -314,6 +321,7 @@ class TestGraphQueryErrors:
 # ---------------------------------------------------------------------------
 # TestGraphQueryWorkspaceOverride
 # ---------------------------------------------------------------------------
+
 
 class TestGraphQueryWorkspaceOverride:
     """Per-call workspace override behaviour."""
