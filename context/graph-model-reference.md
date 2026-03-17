@@ -1,6 +1,9 @@
 # Graph Model Reference
 
-> **Provenance:** Derived from the context-intelligence property graph schema used to store Amplifier session data in Neo4j. This document is the authoritative reference for agents constructing Cypher queries or reasoning about graph topology.
+> **Provenance:** Derived from the Context Intelligence server implementation —
+> `utils.py` (`make_node_id`), `neo4j_store.py` (flush/MERGE/workspace logic), and
+> the handler modules (`handlers/session.py`, `handlers/orchestrator_run.py`,
+> `handlers/step.py`, `handlers/tool_execution.py`, `handlers/default.py`).
 
 ---
 
@@ -10,269 +13,199 @@ Five node types capture the full lifecycle of an Amplifier session.
 
 ### Session
 
-Represents an Amplifier conversation session — either a root session initiated by the user, a child session spawned by a `delegate` tool call, or a logical subsession grouping.
+**node_id:** raw session UUID (e.g. `f881e0a0-c055-4ee4-84ed-ff44703150ea`).
 
 | Property | Type | Description |
 |---|---|---|
-| `session_id` | string | Primary identifier — unique across the forest. |
-| `parent_id` | string \| null | Parent session ID for child/subsession nodes; null for root. |
-| `graph_forest_name` | string | Workspace scope key — all nodes in a workspace share this value. |
-| `created_at` | string | ISO 8601 creation timestamp. |
-| `status` | string | `active` \| `complete` \| `error` |
-| `bundle` | string | Bundle name active for this session (if known). |
-| `model` | string | Model identifier used (if known). |
+| `node_id` | string | Raw UUID — MERGE key with `workspace`. |
+| `workspace` | string | Workspace scope — auto-injected by `neo4j_store.flush()`. |
+| `status` | string | `running` \| `completed` \| `error` |
+| `started_at` | string | ISO 8601 (set on `session:start`). |
+| `ended_at` | string \| null | ISO 8601 (set on `session:end`). |
+| `metadata` | string | JSON string — raw metadata dict serialized by the store. |
+| `data` | string | Full `session:start` payload as JSON string. |
 
-**Sub-labels:** Nodes carry one or more additional labels:
-- `:Root` — top-level session (no parent).
-- `:Child` — session spawned by a `delegate` tool call from a parent.
-- `:Subsession` — logical grouping subsession (e.g. recipe stage).
-
----
+**Sub-labels:** `:Root` (no parent), `:Subsession` (has `parent_id`),
+`:ForkedSession` (from `session:fork`; also carries `:Subsession`).
 
 ### OrchestratorRun
 
-Represents a single invocation of the Amplifier orchestrator loop within a session. One session may have multiple orchestrator runs (e.g. after a tool result is processed).
+One prompt→response cycle. **node_id:** `make_node_id(session_id, "execution:start", ts)`
 
 | Property | Type | Description |
 |---|---|---|
-| `run_id` | string | Unique run identifier (node ID format). |
-| `session_id` | string | Owning session. |
-| `graph_forest_name` | string | Workspace scope key. |
-| `started_at` | string | ISO 8601 start timestamp. |
-| `finished_at` | string \| null | ISO 8601 finish timestamp; null if still active. |
-| `status` | string | `running` \| `complete` \| `error` |
-| `step_count` | integer | Number of steps executed in this run. |
-
----
+| `node_id` | string | `{session_id}__execution_start__{epoch_ms}` |
+| `workspace` | string | Workspace scope. |
+| `session_id` | string | Owning session UUID. |
+| `started_at` | string | ISO 8601 from `execution:start`. |
+| `ended_at` | string \| null | ISO 8601 from `orchestrator:complete`. |
+| `execution_ended_at` | string \| null | ISO 8601 from `execution:end`. |
+| `status` | string | `in_progress` \| `complete` \| `cancelled` \| `error` |
+| `prompt_preview` | string | First 200 chars of the submitted prompt. |
+| `response_preview` | string \| null | First 200 chars of the response. |
+| `turn_count` | integer \| null | From `orchestrator:complete`. |
 
 ### Step
 
-Represents one logical step within an orchestrator run: either a prompt submission, an assistant response, or a recipe execution.
+One LLM interaction. **node_id:** `make_node_id(session_id, "prompt:submit"|"provider:request", ts)`
+
+Sub-labels: `:PromptStep` (`iteration`=0, created on `prompt:submit`);
+`:AssistantStep` (`iteration`≥1, created on `provider:request`).
 
 | Property | Type | Description |
 |---|---|---|
-| `step_id` | string | Unique step identifier (node ID format). |
-| `session_id` | string | Owning session. |
-| `run_id` | string | Owning orchestrator run. |
-| `graph_forest_name` | string | Workspace scope key. |
-| `sequence` | integer | Monotonically increasing position within the run. |
-| `timestamp` | string | ISO 8601 timestamp. |
-| `content_blob_ref` | string \| null | Blob storage reference for large text payloads (see Constraints). |
-
-**Sub-labels:**
-- `:PromptStep` — a user or system prompt submitted to the model.
-- `:AssistantStep` — an assistant response (may include tool calls).
-- `:RecipeStep` — a recipe execution step with `recipe_id` and `stage` properties.
-
----
+| `node_id` | string | Composite ID — see Node ID Format. |
+| `workspace` | string | Workspace scope. |
+| `session_id` | string | Owning session UUID. |
+| `iteration` | integer \| null | 0 = PromptStep; 1+ = AssistantStep. |
+| `provider` | string \| null | Provider identifier (from `provider:request`). |
+| `model` | string \| null | Model identifier (from `llm:request`). |
+| `request_at` | string \| null | ISO 8601 of the provider request. |
+| `response_at` | string \| null | ISO 8601 of the LLM response. |
+| `input_tokens` | integer \| null | Provider input tokens (NOT message count). |
+| `output_tokens` | integer \| null | Provider output tokens. |
+| `cached_tokens` | integer \| null | Cache-read tokens. |
+| `cache_write_tokens` | integer \| null | Cache-write tokens. |
+| `reasoning_tokens` | integer \| null | Reasoning tokens. |
+| `message_count` | integer \| null | Orchestrator message count (from `usage.input`). |
+| `finish_reason` | string \| null | LLM finish/stop reason. |
+| `prompt_text` | string \| null | Full prompt text (PromptStep only). |
+| `prompt_preview` | string \| null | First 200 chars of prompt (PromptStep only). |
 
 ### ToolExecution
 
-Represents a single tool call and its result within an assistant step.
+One tool call and result. **node_id:** `make_node_id(session_id, "tool:pre", ts, disambiguator=tool_call_id)`
+
+Sub-label: `:Delegation` added on `delegate:agent_spawned`; adds `child_session_id` and `child_agent`.
 
 | Property | Type | Description |
 |---|---|---|
-| `execution_id` | string | Unique execution identifier (node ID format). |
-| `session_id` | string | Owning session. |
-| `step_id` | string | Owning assistant step. |
-| `graph_forest_name` | string | Workspace scope key. |
-| `tool_name` | string | Name of the tool invoked (e.g. `delegate`, `bash`, `read_file`). |
-| `tool_call_id` | string | Provider-assigned call ID from the transcript. |
-| `started_at` | string | ISO 8601 start timestamp. |
-| `finished_at` | string \| null | ISO 8601 finish timestamp. |
-| `duration_ms` | integer \| null | Execution duration in milliseconds. |
-| `status` | string | `success` \| `error` \| `pending` |
-| `input_blob_ref` | string \| null | Blob reference for tool input payload. |
-| `output_blob_ref` | string \| null | Blob reference for tool output payload. |
-
-**Sub-label:**
-- `:Delegation` — specifically a `delegate` tool call that spawned a child session. Carries additional properties:
-  - `child_session_id` — ID of the spawned child session.
-  - `agent` — agent identifier passed to the delegate call.
-
----
+| `node_id` | string | `{session_id}__tool_pre__{epoch_ms}__{tool_call_id}` |
+| `workspace` | string | Workspace scope. |
+| `session_id` | string | Owning session UUID. |
+| `tool_call_id` | string | Provider-assigned tool call ID. |
+| `tool_name` | string | Name of the tool (e.g. `delegate`, `bash`). |
+| `parallel_group_id` | string | Parallel group ID (empty if not parallel). |
+| `started_at` | string | ISO 8601 from `tool:pre`. |
+| `ended_at` | string \| null | ISO 8601 from `tool:post` or `tool:error`. |
+| `status` | string | `executing` \| `complete` \| `error` |
+| `result_preview` | string \| null | First 500 chars of result. |
+| `tool_input_preview` | string \| null | First 500 chars of input. |
+| `child_session_id` | string \| null | Child UUID (`:Delegation` only). |
+| `child_agent` | string \| null | Agent identifier (`:Delegation` only). |
 
 ### Event
 
-Represents a raw Amplifier event recorded in `context-intelligence/events.jsonl`. Events are the ground truth from which all other nodes are derived.
+Catch-all for events not handled by entity handlers. **node_id:** `make_node_id(session_id, event_name, ts)`
+
+Sub-labels: derived via `DefaultHandler.derive_label()` — split on `:` and `_`, PascalCase joined.
+Example: `session:resume` → `:Event:SessionResume`.
 
 | Property | Type | Description |
 |---|---|---|
-| `event_id` | string | Unique event identifier (node ID format). |
-| `session_id` | string | Owning session. |
-| `graph_forest_name` | string | Workspace scope key. |
-| `event_type` | string | Event name (e.g. `session:start`, `tool:pre`, `tool:post`). |
-| `timestamp` | string | ISO 8601 timestamp from the event. |
-| `data_blob_ref` | string \| null | Blob reference for the full `data` payload when it exceeds inline size limits. |
+| `node_id` | string | Composite ID. |
+| `workspace` | string | Workspace scope. |
+| `event_name` | string | Raw event name (e.g. `session:resume`). |
+| `occurred_at` | string | ISO 8601 event timestamp. |
+| `data` | string | Full event payload as JSON string. |
 
 ---
 
 ## Edge Types
 
-Eight directed edge types describe relationships between nodes.
-
 | Edge | From → To | Description |
 |---|---|---|
-| `HAS_RUN` | `Session` → `OrchestratorRun` | Links a session to each orchestrator run it contains. |
-| `HAS_STEP` | `OrchestratorRun` → `Step` | Links an orchestrator run to each step it contains. |
-| `NEXT` | `Step` → `Step` | Sequential ordering within a run; `sequence` property on both nodes provides ordering. |
-| `TRIGGERED` | `Step` → `ToolExecution` | Links an assistant step to each tool execution it triggered. |
-| `PARALLEL_WITH` | `ToolExecution` → `ToolExecution` | Links concurrent tool executions within the same assistant step. Symmetric in intent but stored as directed. |
-| `SPAWNED` | `ToolExecution:Delegation` → `Session:Child` | Links a delegation tool execution to the child session it created. |
-| `SUBSESSION_OF` | `Session:Subsession` → `Session` | Links a subsession node to its logical parent session. |
-| `HAS_EVENT` | `Session` → `Event` | Links a session to every raw event recorded for it. |
+| `SUBSESSION_OF` | `:Session` → `:Session` | Child/forked session → parent. On `session:start`/`session:fork` with `parent_id`. |
+| `HAS_RUN` | `:Session` → `:OrchestratorRun` | Session owns each run. On `execution:start`. |
+| `HAS_STEP` | `:OrchestratorRun` → `:Step` | Run owns each step (both `:PromptStep` and `:AssistantStep`). |
+| `NEXT` | `:Step` → `:Step` | Links consecutive steps. The NEXT chain is the only ordering — no `seq` on edges. |
+| `TRIGGERED` | `:Step` → `:ToolExecution` | AssistantStep triggered this tool call. On `tool:pre`. |
+| `PARALLEL_WITH` | `:ToolExecution` → `:ToolExecution` | Same `parallel_group_id`. Directed but symmetric in intent. |
+| `SPAWNED` | `:ToolExecution:Delegation` → `:Session` | Delegation spawned this child session. On `delegate:agent_spawned`. |
+| `HAS_EVENT` | `:OrchestratorRun` \| `:Session` → `:Event` | Active run (or session if no run) → Event. Never attaches to `:Step`. |
 
 ---
 
 ## Node ID Format
 
-All node identifiers use a canonical encoded format to guarantee uniqueness across the forest:
-
-```
-<session_id>:<event_type>:<timestamp_ms>:<tool_call_id>
-```
-
-| Segment | Description |
+| Node Type | Format |
 |---|---|
-| `session_id` | Full Amplifier session ID (e.g. `f881e0a0-c055-4ee4-84ed-ff44703150ea`). |
-| `event_type` | Event name with `:` replaced by `_` (e.g. `tool_pre`). |
-| `timestamp_ms` | Unix epoch milliseconds derived from the ISO 8601 event timestamp. |
-| `tool_call_id` | Provider tool call ID when applicable; `_` (underscore) for non-tool events. |
+| `Session` | Raw UUID — `f881e0a0-c055-4ee4-84ed-ff44703150ea` |
+| All others | `{session_id}__{safe_event}__{epoch_ms}` |
+| `ToolExecution` | `{session_id}__{safe_event}__{epoch_ms}__{tool_call_id}` |
 
-**Examples:**
+`safe_event` = event name with `:` → `_` (e.g. `execution:start` → `execution_start`).
+`epoch_ms` = Unix epoch ms from the ISO 8601 timestamp. Separator is `__` (double underscore) — never `:`.
 
 ```
-# Session node
-f881e0a0-c055-4ee4-84ed-ff44703150ea:session_start:1742018532000:_
+# OrchestratorRun
+f881e0a0-c055-4ee4-84ed-ff44703150ea__execution_start__1742018532000
 
-# ToolExecution node
-f881e0a0-c055-4ee4-84ed-ff44703150ea:tool_pre:1742018545123:call_abc123
+# ToolExecution (with tool_call_id disambiguator)
+f881e0a0-c055-4ee4-84ed-ff44703150ea__tool_pre__1742018545123__call_abc123
 ```
 
 ---
 
 ## Workspace Scoping
 
-All nodes carry a `graph_forest_name` property. This property is the **primary workspace boundary** — every query MUST filter by `graph_forest_name` unless explicitly doing cross-workspace analysis.
-
-The `graph_forest_name` is derived from the workspace root directory path (normalised and slugified). Two sessions sharing the same working directory belong to the same forest.
-
-**Always scope queries:**
+All nodes carry `workspace` injected by `neo4j_store.flush()`. MERGE key is `{node_id, workspace}`.
+The `graph_query` tool auto-injects `$workspace`. Reference it in every MATCH:
 
 ```cypher
-MATCH (s:Session {graph_forest_name: $forest})
-...
-```
-
----
-
-## Common Cypher Query Patterns
-
-### 1. Session Overview
-
-Returns all sessions in the forest with their status and step counts.
-
-```cypher
-MATCH (s:Session {graph_forest_name: $forest})
-OPTIONAL MATCH (s)-[:HAS_RUN]->(r:OrchestratorRun)-[:HAS_STEP]->(step:Step)
-RETURN
-  s.session_id   AS session_id,
-  labels(s)      AS labels,
-  s.status       AS status,
-  s.created_at   AS created_at,
-  s.bundle       AS bundle,
-  count(step)    AS total_steps
-ORDER BY s.created_at DESC
-LIMIT 200
-```
-
----
-
-### 2. Delegation Tree
-
-Returns the full parent→child delegation hierarchy rooted at a given session, up to 5 levels deep.
-
-```cypher
-MATCH path = (root:Session {session_id: $root_session_id, graph_forest_name: $forest})
-             -[:HAS_RUN]->(:OrchestratorRun)
-             -[:HAS_STEP]->(:Step)
-             -[:TRIGGERED]->(d:ToolExecution:Delegation)
-             -[:SPAWNED]->(child:Session)
-WITH root, child, d, length(path) AS depth
-WHERE depth <= 5
-RETURN
-  root.session_id   AS parent_session,
-  child.session_id  AS child_session,
-  d.agent           AS agent,
-  d.started_at      AS spawned_at,
-  child.status      AS child_status
-ORDER BY d.started_at
-```
-
----
-
-### 3. Tool Usage Distribution
-
-Returns a count of each tool used across all sessions in the forest.
-
-```cypher
-MATCH (s:Session {graph_forest_name: $forest})
-      -[:HAS_RUN]->(:OrchestratorRun)
-      -[:HAS_STEP]->(:Step)
-      -[:TRIGGERED]->(t:ToolExecution)
-RETURN
-  t.tool_name   AS tool,
-  count(t)      AS invocations,
-  avg(t.duration_ms) AS avg_duration_ms
-ORDER BY invocations DESC
+MATCH (s:Session {workspace: $workspace})
+RETURN s.node_id, s.status, s.started_at
+ORDER BY s.started_at DESC
 LIMIT 50
 ```
 
 ---
 
-### 4. Session Timeline
+## Critical Gotchas
 
-Returns an ordered sequence of steps and tool executions for a single session, suitable for rendering as a timeseries or swim-lane chart.
+1. **`metadata` is a JSON string.** The `metadata` dict on Session nodes is serialized
+   to a JSON string by `neo4j_store._sanitize_properties`. Parse it in application code
+   or via `apoc.convert.fromJsonMap()` — it is not a native Neo4j map property.
 
-```cypher
-MATCH (s:Session {session_id: $session_id, graph_forest_name: $forest})
-      -[:HAS_RUN]->(r:OrchestratorRun)
-      -[:HAS_STEP]->(step:Step)
-OPTIONAL MATCH (step)-[:TRIGGERED]->(t:ToolExecution)
-RETURN
-  r.run_id        AS run_id,
-  step.step_id    AS step_id,
-  step.sequence   AS sequence,
-  labels(step)    AS step_labels,
-  step.timestamp  AS step_timestamp,
-  t.tool_name     AS tool_name,
-  t.started_at    AS tool_started_at,
-  t.finished_at   AS tool_finished_at,
-  t.duration_ms   AS duration_ms,
-  t.status        AS tool_status
-ORDER BY r.started_at, step.sequence, t.started_at
-```
+2. **Three events are silently dropped.** `context:compaction`, `cancel:requested`, and
+   `cancel:completed` are claimed by `SystemEventHandler` and produce no graph nodes.
+   These events never appear in Event queries.
+
+3. **No `seq` ordering on edges.** NEXT edges carry no sequence number. Step ordering
+   is encoded only in the NEXT chain topology — traverse `[:NEXT*]` to reconstruct
+   order; do not rely on edge properties for sequence.
+
+4. **Workspace scoping is manual.** `$workspace` is injected by the `graph_query` tool
+   but only filters if you write `{workspace: $workspace}` in your MATCH patterns.
+   Omitting it silently returns data from all workspaces.
+
+5. **`HAS_EVENT` never attaches to `:Step`.** The `DefaultHandler` attaches Event nodes
+   to the active `OrchestratorRun` (if one exists) or directly to `Session`. Step nodes
+   are never the source of a `HAS_EVENT` edge.
+
+6. **MERGE key is `{node_id, workspace}`.** Session nodes use the raw UUID as `node_id`;
+   others use the `__`-separated composite. Querying by `node_id` alone without
+   `workspace` may match nodes from other workspaces.
 
 ---
 
-## Constraints
+## Blob References
 
-### Node Limit
+Large payloads (tool results, prompts, LLM responses) are stored in blob storage, not
+inline in the graph. Nodes carry preview properties; full content lives at a `ci-blob://` URI.
 
-Queries MUST include `LIMIT 200` when returning unbounded node sets. The context-intelligence agent will refuse to render graphs with more than **200 nodes** in a single NetworkGraph component. Use aggregation or filtering to stay within this limit.
+**URI scheme:** `ci-blob://{session_id}/{key}`
 
-### Forest Scoping
+Use the `blob_read` tool to retrieve content — it writes to a local file and returns the path:
 
-Every query MUST include `{graph_forest_name: $forest}` on the anchor node unless cross-forest analysis is explicitly requested. Unscoped queries will return data from all workspaces and are not permitted in agent-facing tools.
+```
+blob_read(uri="ci-blob://f881e0a0-c055-4ee4-84ed-ff44703150ea/events.jsonl")
+```
 
-### Blob References
+**⚠️ Warning:** Blob files can contain lines with 100k+ tokens. Never open them with
+`read_file`. Extract via shell tools only:
 
-Large text payloads (step content, tool inputs/outputs, event data) are not stored inline in the graph. Nodes carry a `*_blob_ref` property pointing into the blob storage layer. To retrieve the full payload, use the `blob_reader` tool with the reference string. **Do not** attempt to reconstruct blob content from graph properties alone.
-
-### Timestamp Format
-
-All timestamps stored in the graph are **ISO 8601 strings** (e.g. `2026-03-15T06:22:12.000+00:00`). The node ID format uses Unix epoch milliseconds for compactness, but graph properties always use the human-readable ISO 8601 form. Use `datetime()` in Cypher for range comparisons:
-
-```cypher
-WHERE datetime(s.created_at) >= datetime($since)
+```bash
+jq '.data.prompt' /path/to/blob.jsonl | head -20
+head -5 /path/to/blob.jsonl
 ```
