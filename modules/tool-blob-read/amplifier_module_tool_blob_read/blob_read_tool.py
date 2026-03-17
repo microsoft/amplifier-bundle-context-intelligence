@@ -37,7 +37,8 @@ class BlobReadTool:
             "Returns the file path. Use bash+jq to inspect the file as the content would be likely large."
         )
 
-    def get_schema(self) -> dict[str, Any]:
+    @property
+    def input_schema(self) -> dict[str, Any]:
         return {
             "type": "object",
             "properties": {

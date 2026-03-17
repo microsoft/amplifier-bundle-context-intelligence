@@ -57,7 +57,17 @@ class TestMountBehavior:
         tool = coordinator.mount.call_args.args[1]
         assert hasattr(tool, "name")
         assert hasattr(tool, "description")
-        assert hasattr(tool, "get_schema")
+        assert hasattr(tool, "input_schema")
         assert hasattr(tool, "execute")
-        assert callable(tool.get_schema)
+        assert isinstance(tool.input_schema, dict)
         assert inspect.iscoroutinefunction(tool.execute)
+
+    async def test_mount_returns_metadata_dict(self) -> None:
+        from amplifier_module_tool_blob_read import mount
+
+        coordinator = MagicMock()
+        coordinator.mount = AsyncMock()
+        result = await mount(coordinator, config={})
+        assert isinstance(result, dict)
+        assert "tool" in result
+        assert "status" in result

@@ -130,19 +130,19 @@ class TestBlobReadToolProtocol:
         from amplifier_module_tool_blob_read.blob_read_tool import BlobReadTool
 
         tool = BlobReadTool(_make_coordinator(None))
-        assert tool.get_schema()["type"] == "object"
+        assert tool.input_schema["type"] == "object"
 
     def test_schema_has_uri_required(self) -> None:
         from amplifier_module_tool_blob_read.blob_read_tool import BlobReadTool
 
         tool = BlobReadTool(_make_coordinator(None))
-        assert "uri" in tool.get_schema()["required"]
+        assert "uri" in tool.input_schema["required"]
 
     def test_schema_uri_is_string(self) -> None:
         from amplifier_module_tool_blob_read.blob_read_tool import BlobReadTool
 
         tool = BlobReadTool(_make_coordinator(None))
-        assert tool.get_schema()["properties"]["uri"]["type"] == "string"
+        assert tool.input_schema["properties"]["uri"]["type"] == "string"
 
     async def test_execute_returns_tool_result(self) -> None:
         from amplifier_module_tool_blob_read.blob_read_tool import BlobReadTool
