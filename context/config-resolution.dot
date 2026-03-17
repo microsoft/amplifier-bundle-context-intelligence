@@ -84,7 +84,7 @@ digraph ConfigResolver {
         color="#9c27b0";
 
         server_url [label="context_intelligence_server_url\nNone if empty"];
-        log_level [label="log_level\ndefault: WARNING"];
+        log_level [label="log_level\ndefault: INFO"];
         exclude [label="exclude_events\ndefault: frozenset()"];
     }
 
