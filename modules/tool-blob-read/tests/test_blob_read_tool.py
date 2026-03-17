@@ -360,6 +360,7 @@ class TestBlobReadSuccess:
             result = await tool.execute({"uri": "ci-blob://my-session/my-key"})
 
         assert result.success is True
+        assert result.output is not None
         p = pathlib.Path(result.output)
         assert p.parent.name == "my-session"
         assert p.name == "my-key.json"
