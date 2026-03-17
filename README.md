@@ -153,7 +153,7 @@ The graph model is documented in [`context/graph-model-reference.md`](context/gr
 | Agent | Tools | Role |
 |-------|-------|------|
 | `context-intelligence-graph-analyst` | `graph_query`, `blob_read`, `tool-filesystem`, `tool-bash`, `tool-skills` | Primary entry point — graph-powered analysis via Cypher, blob resolution |
-| `context-intelligence-navigator` | `tool-filesystem`, `tool-search`, `tool-bash` | Local fallback — safe JSONL navigation via bash/jq/grep |
+| `context-intelligence-navigator` | `tool-filesystem`, `tool-search`, `tool-bash`, `tool-skills` | Local fallback — safe JSONL navigation via bash/jq/grep |
 
 **Delegation chain:** External callers always invoke `context-intelligence-graph-analyst`. Before each analysis run, `graph-analyst` checks server availability. If the server is unreachable or the workspace contains 0 sessions, it delegates to `context-intelligence-navigator`, which navigates local JSONL files using safe extraction patterns. Navigator is never invoked directly by external callers.
 

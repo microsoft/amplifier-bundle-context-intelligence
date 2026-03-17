@@ -4,7 +4,7 @@ meta:
   description: |
     Local fallback agent for navigating session data via flat JSONL files using bash/jq/grep safe extraction patterns. Handles session discovery, event search, and session navigation across ~/.amplifier/projects/ when the context-intelligence graph server is unavailable.
 
-    This agent is NOT called directly by external callers. It is only delegated to by context-intelligence-graph-analyst when the graph server is unreachable or returns 0 sessions. External callers should use context-intelligence-analyst or context-intelligence-graph-analyst instead.
+    This agent is NOT called directly by external callers. It is only delegated to by context-intelligence-graph-analyst when the graph server is unreachable or returns 0 sessions. External callers should use context-intelligence-graph-analyst instead.
 
     All operations use safe bash/jq/grep patterns that avoid loading 100k+ token events.jsonl lines into context. Never uses graph_query or blob_read — operates entirely on local filesystem files.
 

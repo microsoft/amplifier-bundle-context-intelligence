@@ -13,7 +13,7 @@ import yaml
 
 BUNDLE_DIR = Path(__file__).parent.parent
 BEHAVIOR_YAML = BUNDLE_DIR / "behaviors" / "context-intelligence.yaml"
-AGENT_MD = BUNDLE_DIR / "agents" / "context-intelligence-analyst.md"
+AGENT_MD = BUNDLE_DIR / "agents" / "context-intelligence-graph-analyst.md"
 
 TOOL_GRAPH_QUERY_SOURCE = (
     "git+https://github.com/colombod/amplifier-bundle-context-intelligence"
@@ -103,9 +103,15 @@ class TestBehaviorYamlToolsSection:
         agents_pos = behavior_raw.find("\nagents:")
         tools_pos = behavior_raw.find("\ntools:")
         hooks_pos = behavior_raw.find("\nhooks:")
-        assert agents_pos != -1, "behaviors/context-intelligence.yaml must have 'agents:' section"
-        assert tools_pos != -1, "behaviors/context-intelligence.yaml must have 'tools:' section"
-        assert hooks_pos != -1, "behaviors/context-intelligence.yaml must have 'hooks:' section"
+        assert agents_pos != -1, (
+            "behaviors/context-intelligence.yaml must have 'agents:' section"
+        )
+        assert tools_pos != -1, (
+            "behaviors/context-intelligence.yaml must have 'tools:' section"
+        )
+        assert hooks_pos != -1, (
+            "behaviors/context-intelligence.yaml must have 'hooks:' section"
+        )
         assert agents_pos < tools_pos, "'agents:' must appear before 'tools:'"
         assert tools_pos < hooks_pos, "'tools:' must appear before 'hooks:'"
 
@@ -117,24 +123,24 @@ class TestBehaviorYamlToolsSection:
 
 
 # ---------------------------------------------------------------------------
-# agents/context-intelligence-analyst.md — frontmatter tools: section tests
+# agents/context-intelligence-graph-analyst.md — frontmatter tools: section tests
 # ---------------------------------------------------------------------------
 
 
 class TestAgentFrontmatterTools:
-    """agents/context-intelligence-analyst.md frontmatter must list 5 tools including tool-graph-query."""
+    """agents/context-intelligence-graph-analyst.md frontmatter must list 5 tools including tool-graph-query."""
 
     def test_frontmatter_has_tools_section(self, agent_frontmatter):
         """Frontmatter must have a tools: section."""
         assert "tools" in agent_frontmatter, (
-            "agents/context-intelligence-analyst.md frontmatter must have a 'tools:' section"
+            "agents/context-intelligence-graph-analyst.md frontmatter must have a 'tools:' section"
         )
 
     def test_frontmatter_tools_has_five_entries(self, agent_frontmatter):
         """tools: section must list exactly 5 modules."""
         tools = agent_frontmatter["tools"]
         assert len(tools) == 5, (
-            f"agents/context-intelligence-analyst.md frontmatter 'tools:' must list 5 modules, "
+            f"agents/context-intelligence-graph-analyst.md frontmatter 'tools:' must list 5 modules, "
             f"got {len(tools)}: {[t.get('module') for t in tools]}"
         )
 
@@ -143,7 +149,7 @@ class TestAgentFrontmatterTools:
         tools = agent_frontmatter["tools"]
         modules = [t.get("module") for t in tools if isinstance(t, dict)]
         assert "tool-graph-query" in modules, (
-            "agents/context-intelligence-analyst.md frontmatter 'tools:' must contain 'tool-graph-query'"
+            "agents/context-intelligence-graph-analyst.md frontmatter 'tools:' must contain 'tool-graph-query'"
         )
 
     def test_frontmatter_tool_graph_query_has_correct_source(self, agent_frontmatter):
@@ -156,26 +162,26 @@ class TestAgentFrontmatterTools:
                     f"got '{tool.get('source')}'"
                 )
                 return
-        pytest.fail("tool-graph-query entry not found in agent frontmatter tools: section")
+        pytest.fail(
+            "tool-graph-query entry not found in agent frontmatter tools: section"
+        )
 
-    def test_frontmatter_existing_tools_preserved(self, agent_frontmatter):
-        """All existing 4 tools must still be present after adding tool-graph-query."""
+    def test_frontmatter_companion_tools_present(self, agent_frontmatter):
+        """All 4 companion tools must be present alongside tool-graph-query."""
         tools = agent_frontmatter["tools"]
         modules = [t.get("module") for t in tools if isinstance(t, dict)]
-        expected = {"tool-filesystem", "tool-search", "tool-bash", "tool-skills"}
+        expected = {"tool-blob-read", "tool-filesystem", "tool-bash", "tool-skills"}
         for mod in expected:
             assert mod in modules, (
-                f"Existing tool '{mod}' must be preserved in agent frontmatter tools: section"
+                f"Companion tool '{mod}' must be present in graph-analyst frontmatter tools: section"
             )
 
-    def test_tool_graph_query_after_tool_skills(self, agent_frontmatter):
-        """tool-graph-query must appear after tool-skills in the tools: list."""
+    def test_tool_graph_query_is_first_tool(self, agent_frontmatter):
+        """tool-graph-query must be the first tool in the list (primary graph capability)."""
         tools = agent_frontmatter["tools"]
         modules = [t.get("module") for t in tools if isinstance(t, dict)]
-        assert "tool-skills" in modules, "tool-skills must be in tools list"
-        assert "tool-graph-query" in modules, "tool-graph-query must be in tools list"
-        skills_idx = modules.index("tool-skills")
-        graph_query_idx = modules.index("tool-graph-query")
-        assert skills_idx < graph_query_idx, (
-            "tool-graph-query must appear after tool-skills in the tools: list"
+        assert modules, "tools list must not be empty"
+        assert modules[0] == "tool-graph-query", (
+            f"tool-graph-query must be the first tool in graph-analyst frontmatter, "
+            f"got '{modules[0]}' first"
         )
