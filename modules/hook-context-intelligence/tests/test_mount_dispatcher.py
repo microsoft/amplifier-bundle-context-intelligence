@@ -3,7 +3,6 @@
 Validates the thin-forwarder architecture:
   [ALWAYS]       config_resolver capability (enables downstream graph tool lookup)
   [ALWAYS]       LoggingHandler             (flat JSONL + optional server dispatch)
-  [CONDITIONAL]  BlobTool                   (registered when context_intelligence_server_url set)
 """
 
 from __future__ import annotations
@@ -123,7 +122,7 @@ class TestCleanup:
         )
         cleanup = await mount(coordinator, config={})
         assert cleanup is not None
-        cleanup()
+        await cleanup()
 
         # All unregister functions should have been called
         for unreg in coordinator._unregister_fns:
@@ -283,44 +282,6 @@ class TestModuleContract:
 
 
 # ---------------------------------------------------------------------------
-# TestBlobToolRegistration
-# ---------------------------------------------------------------------------
-class TestBlobToolRegistration:
-    """BlobTool is registered with coordinator.tools only when context_intelligence_server_url is configured."""
-
-    async def test_blob_tool_not_registered_without_server_url(self) -> None:
-        """When config has no context_intelligence_server_url, no blob tools should be registered."""
-        from amplifier_module_hook_context_intelligence import mount
-
-        coordinator = _make_coordinator()
-        coordinator.tools = MagicMock()
-
-        await mount(coordinator, config={})
-
-        # No blob tool registrations should have been made
-        registered_names = [call.args[0] for call in coordinator.tools.register.call_args_list]
-        assert "blob_list" not in registered_names
-        assert "blob_dump" not in registered_names
-
-    async def test_blob_tool_registered_with_server_url(self) -> None:
-        """When context_intelligence_server_url is configured, blob_list and blob_dump are registered."""
-        from amplifier_module_hook_context_intelligence import mount
-
-        coordinator = _make_coordinator()
-        coordinator.tools = MagicMock()
-
-        await mount(
-            coordinator,
-            config={"context_intelligence_server_url": "http://localhost:8000"},
-        )
-
-        # Both blob tools should have been registered
-        registered_names = [call.args[0] for call in coordinator.tools.register.call_args_list]
-        assert "blob_list" in registered_names
-        assert "blob_dump" in registered_names
-
-
-# ---------------------------------------------------------------------------
 # TestCapabilityRegistration
 # ---------------------------------------------------------------------------
 class TestCapabilityRegistration:
@@ -349,7 +310,7 @@ class TestCapabilityRegistration:
         cleanup = await mount(coordinator, config={})
         coordinator.register_capability.reset_mock()
 
-        cleanup()
+        await cleanup()
 
         coordinator.register_capability.assert_called_once_with(
             "context_intelligence.config_resolver", None

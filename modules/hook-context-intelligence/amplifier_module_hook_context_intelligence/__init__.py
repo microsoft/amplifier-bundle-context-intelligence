@@ -9,8 +9,7 @@ Configuration keys
 context_intelligence_server_url : str, optional
     Base URL of the Context Intelligence server, e.g.
     ``http://localhost:8000``.  When set, every event is POSTed
-    to ``{url}/events`` and ``blob_list``/``blob_dump``
-    agent tools are registered.
+    to ``{url}/events``.
 workspace : str, optional
     Workspace identifier used to scope graph data on the server.
     Resolved automatically from the coordinator when not set
@@ -60,9 +59,6 @@ async def mount(coordinator: Any, config: dict[str, Any]):  # noqa: ANN202
     Always:
     - Registers ConfigResolver as ``context_intelligence.config_resolver`` capability
     - LoggingHandler  — writes events.jsonl + dispatches to CI server
-
-    When ``context_intelligence_server_url`` is configured:
-    - BlobTool        — registers blob_list / blob_dump as agent tools
     """
     from .config_resolver import ConfigResolver
     from .handlers.logging_handler import LoggingHandler
@@ -82,28 +78,14 @@ async def mount(coordinator: Any, config: dict[str, Any]):  # noqa: ANN202
         )
         unregister_fns.append(unreg)
 
-    if resolver.context_intelligence_server_url:
-        # BlobTool predates the Tool protocol; it uses the legacy tools.register() API.
+    async def cleanup() -> None:
+        # Drain pending dispatch tasks and close the HTTP client *before*
+        # unregistering hooks — this gives in-flight POSTs a chance to land.
         try:
-            from .blob_tool import BlobTool
-
-            blob_tool = BlobTool(server_url=resolver.context_intelligence_server_url)
-            tools = getattr(coordinator, "tools", None)
-            if tools is not None and hasattr(tools, "register"):
-                tools.register(
-                    "blob_list",
-                    blob_tool.blob_list,
-                    description="List all blob URIs stored for a session on the CI server.",
-                )
-                tools.register(
-                    "blob_dump",
-                    blob_tool.blob_dump,
-                    description="Retrieve a blob from the CI server by URI and write to a local file.",
-                )
+            await logging_handler.close()
         except Exception:
-            log.exception("Failed to register BlobTool — continuing without blob tools")
+            log.exception("LoggingHandler.close() failed during cleanup")
 
-    def cleanup() -> None:
         for unreg in unregister_fns:
             try:
                 unreg()
