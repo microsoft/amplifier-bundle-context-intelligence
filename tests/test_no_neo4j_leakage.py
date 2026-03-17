@@ -6,6 +6,7 @@ Scans:
   - agents/
   - skills/
   - modules/hook-context-intelligence/amplifier_module_hook_context_intelligence/
+  - modules/tool-graph-query/amplifier_module_tool_graph_query/
 
 Skip patterns (files / directories excluded from scanning):
   - config_resolver.py  (backward-compat neo4j_config property)
@@ -30,10 +31,7 @@ _SCAN_DIRS = [
     / "modules"
     / "hook-context-intelligence"
     / "amplifier_module_hook_context_intelligence",
-    BUNDLE_ROOT
-    / "modules"
-    / "tool-graph-query"
-    / "amplifier_module_tool_graph_query",
+    BUNDLE_ROOT / "modules" / "tool-graph-query" / "amplifier_module_tool_graph_query",
 ]
 
 _SKIP_NAMES = {"config_resolver.py", "test_no_neo4j_leakage.py"}
