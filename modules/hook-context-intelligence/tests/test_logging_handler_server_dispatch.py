@@ -145,10 +145,11 @@ class TestServerDispatchEnabled:
 # TestServerDispatchFailure
 # ---------------------------------------------------------------------------
 class TestServerDispatchFailure:
-    """HTTP failures in _dispatch_to_server are caught and logged as warnings with exc_info."""
+    """HTTP failures in _dispatch_to_server are caught and logged cleanly."""
 
-    async def test_http_failure_logs_warning_with_exc_info(self, tmp_path: Path) -> None:
-        """An exception during dispatch is logged as a warning with exc_info=True."""
+    async def test_http_failure_logs_warning_without_traceback(self, tmp_path: Path) -> None:
+        """An exception during dispatch is logged as a warning without exc_info (no traceback
+        on the user's terminal) and as a debug message with exc_info for developers."""
         handler = LoggingHandler(
             _FakeResolver(
                 tmp_path,
@@ -164,14 +165,23 @@ class TestServerDispatchFailure:
         handler._client = mock_client
 
         logger_name = "amplifier_module_hook_context_intelligence.handlers.logging_handler"
-        with patch.object(logging.getLogger(logger_name), "warning") as mock_warning:
+        with (
+            patch.object(logging.getLogger(logger_name), "warning") as mock_warning,
+            patch.object(logging.getLogger(logger_name), "debug") as mock_debug,
+        ):
             await handler._dispatch_to_server(
                 "session:start", {"session_id": "s1", "timestamp": "t0"}
             )
 
+        # Warning must NOT carry exc_info — no raw tracebacks on the user's terminal
         mock_warning.assert_called_once()
-        call_kwargs = mock_warning.call_args[1]
-        assert call_kwargs.get("exc_info") is True
+        warning_kwargs = mock_warning.call_args[1]
+        assert warning_kwargs.get("exc_info") is not True
+
+        # Debug call MUST carry exc_info so developers can diagnose with verbose logging
+        mock_debug.assert_called_once()
+        debug_kwargs = mock_debug.call_args[1]
+        assert debug_kwargs.get("exc_info") is True
 
 
 class TestIdempotencyKey:

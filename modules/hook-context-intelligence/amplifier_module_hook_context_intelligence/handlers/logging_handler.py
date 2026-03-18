@@ -231,7 +231,9 @@ class LoggingHandler:
         worker = self._dispatch_worker_task
         if worker is not None:
             try:
-                await asyncio.wait_for(self._dispatch_queue.join(), timeout=self._close_drain_timeout)
+                await asyncio.wait_for(
+                    self._dispatch_queue.join(), timeout=self._close_drain_timeout
+                )
             except asyncio.TimeoutError:
                 logger.warning(
                     "server_dispatch_drain_timeout: queued events discarded during shutdown url=%s",
@@ -323,6 +325,13 @@ class LoggingHandler:
             self._consecutive_failures += 1
             logger.warning(
                 "server_dispatch_failed: attempt %d/%d event=%s url=%s",
+                self._consecutive_failures,
+                self._failure_threshold,
+                event,
+                self._server_url,
+            )
+            logger.debug(
+                "server_dispatch_failed traceback: attempt %d/%d event=%s url=%s",
                 self._consecutive_failures,
                 self._failure_threshold,
                 event,
