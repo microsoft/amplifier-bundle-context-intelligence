@@ -1,0 +1,35 @@
+bundle:
+  name: context-intelligence-behavior
+  version: 0.1.0
+  description: >
+    Context intelligence capability: graph-powered session analysis
+    and event-driven telemetry capture for Amplifier sessions.
+
+agents:
+  include:
+    - context-intelligence:context-intelligence-graph-analyst
+    - context-intelligence:context-intelligence-navigator
+
+tools:
+  - module: tool-graph-query
+    source: git+https://github.com/colombod/amplifier-bundle-context-intelligence@main#subdirectory=modules/tool-graph-query
+  - module: tool-blob-read
+    source: git+https://github.com/colombod/amplifier-bundle-context-intelligence@main#subdirectory=modules/tool-blob-read
+
+hooks:
+  - module: hook-context-intelligence
+    source: git+https://github.com/colombod/amplifier-bundle-context-intelligence@main#subdirectory=modules/hook-context-intelligence
+    config:
+      context_intelligence_server_url: "${AMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_URL:}"
+      # workspace: auto-resolved from coordinator project_slug → config → env var fallback
+      workspace: "${AMPLIFIER_CONTEXT_INTELLIGENCE_WORKSPACE:}"
+      log_level: "${AMPLIFIER_CONTEXT_INTELLIGENCE_LOG_LEVEL:INFO}"
+      dispatch_timeout: "${AMPLIFIER_CONTEXT_INTELLIGENCE_DISPATCH_TIMEOUT:30}"
+      dispatch_failure_threshold: "${AMPLIFIER_CONTEXT_INTELLIGENCE_DISPATCH_FAILURE_THRESHOLD:3}"
+      # base_path: ~/.amplifier/projects  (auto-resolved; uncomment to override)
+      # project_slug: (auto-resolved from working directory; uncomment to override)
+      # exclude_events: []  (optional fnmatch patterns; uncomment and list events to suppress)
+
+context:
+  include:
+    - context-intelligence:context/context-intelligence-awareness.md

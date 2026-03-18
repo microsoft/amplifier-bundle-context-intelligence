@@ -221,3 +221,7 @@ Task: [original analysis task]
 
 @context-intelligence:context/delegation-strategy.dot
 <!-- Delegation chain diagram: graph-analyst → navigator → foundation:session-analyst -->
+
+---
+
+@foundation:context/shared/common-agent-base.md
