@@ -38,6 +38,7 @@ class _FakeResolver:
         dispatch_failure_threshold: int = 3,
         dispatch_queue_capacity: int = 256,
         close_drain_timeout: float = 0.5,
+        context_intelligence_api_key: str | None = None,
     ) -> None:
         self.base_path = base_path
         self.project_slug = project_slug
@@ -47,6 +48,7 @@ class _FakeResolver:
         self.dispatch_failure_threshold = dispatch_failure_threshold
         self.dispatch_queue_capacity = dispatch_queue_capacity
         self.close_drain_timeout = close_drain_timeout
+        self.context_intelligence_api_key = context_intelligence_api_key
 
     def session_dir(self, session_id: str) -> Path:
         return self.base_path / self.project_slug / "sessions" / session_id / "context-intelligence"
@@ -90,7 +92,7 @@ class TestServerDispatchDisabled:
 # TestServerDispatchEnabled
 # ---------------------------------------------------------------------------
 class TestServerDispatchEnabled:
-    """With context_intelligence_server_url set, asyncio.create_task is called for HTTP dispatch."""
+    """With context_intelligence_server_url and context_intelligence_api_key both set, asyncio.create_task is called for HTTP dispatch."""
 
     async def test_dispatch_creates_task(self, tmp_path: Path) -> None:
         """asyncio.create_task is called once when context_intelligence_server_url is configured."""
@@ -100,6 +102,7 @@ class TestServerDispatchEnabled:
                 "proj",
                 context_intelligence_server_url="http://localhost:8080",
                 workspace="myws",
+                context_intelligence_api_key="test-api-key",
             )
         )
 
@@ -116,13 +119,14 @@ class TestServerDispatchEnabled:
         mock_create_task.assert_called_once()
 
     async def test_jsonl_still_written_with_server_url(self, tmp_path: Path) -> None:
-        """JSONL is written even when context_intelligence_server_url dispatch is active."""
+        """JSONL is written even when context_intelligence_server_url dispatch and api_key are both active."""
         handler = LoggingHandler(
             _FakeResolver(
                 tmp_path,
                 "proj",
                 context_intelligence_server_url="http://localhost:8080",
                 workspace="myws",
+                context_intelligence_api_key="test-api-key",
             )
         )
 
@@ -156,6 +160,7 @@ class TestServerDispatchFailure:
                 "proj",
                 context_intelligence_server_url="http://localhost:8080",
                 workspace="myws",
+                context_intelligence_api_key="test-api-key",
             )
         )
 
@@ -229,6 +234,7 @@ class TestCircuitBreaker:
                 "proj",
                 context_intelligence_server_url="http://localhost:8080",
                 dispatch_failure_threshold=3,
+                context_intelligence_api_key="test-api-key",
             )
         )
 
@@ -251,6 +257,7 @@ class TestCircuitBreaker:
                 "proj",
                 context_intelligence_server_url="http://localhost:8080",
                 dispatch_failure_threshold=3,
+                context_intelligence_api_key="test-api-key",
             )
         )
 
@@ -281,6 +288,7 @@ class TestCircuitBreaker:
                 "proj",
                 context_intelligence_server_url="http://localhost:8080",
                 dispatch_failure_threshold=3,
+                context_intelligence_api_key="test-api-key",
             )
         )
 
@@ -314,6 +322,7 @@ class TestCircuitBreaker:
                 "proj",
                 context_intelligence_server_url="http://localhost:8080",
                 dispatch_failure_threshold=3,
+                context_intelligence_api_key="test-api-key",
             )
         )
 
@@ -339,6 +348,7 @@ class TestCircuitBreaker:
                 "proj",
                 context_intelligence_server_url="http://localhost:8080",
                 dispatch_failure_threshold=5,
+                context_intelligence_api_key="test-api-key",
             )
         )
 
@@ -365,6 +375,7 @@ class TestCircuitBreaker:
                 "proj",
                 context_intelligence_server_url="http://localhost:8080",
                 dispatch_failure_threshold=3,
+                context_intelligence_api_key="test-api-key",
             )
         )
 
@@ -414,6 +425,7 @@ class TestPersistentClient:
                 tmp_path,
                 "proj",
                 context_intelligence_server_url="http://localhost:8080",
+                context_intelligence_api_key="test-api-key",
             )
         )
 
@@ -435,6 +447,7 @@ class TestPersistentClient:
                 tmp_path,
                 "proj",
                 context_intelligence_server_url="http://localhost:8080",
+                context_intelligence_api_key="test-api-key",
             )
         )
 
@@ -460,6 +473,7 @@ class TestPersistentClient:
                 "proj",
                 context_intelligence_server_url="http://localhost:8080",
                 dispatch_timeout=45.0,
+                context_intelligence_api_key="test-api-key",
             )
         )
 
@@ -488,6 +502,7 @@ class TestPersistentClient:
                 "proj",
                 context_intelligence_server_url="http://localhost:8080",
                 workspace="ws",
+                context_intelligence_api_key="test-api-key",
             )
         )
 
@@ -515,6 +530,7 @@ class TestPersistentClient:
                 tmp_path,
                 "proj",
                 context_intelligence_server_url="http://localhost:8080",
+                context_intelligence_api_key="test-api-key",
             )
         )
 
@@ -576,6 +592,7 @@ class TestDispatchQueue:
                 "proj",
                 context_intelligence_server_url="http://localhost:8080",
                 workspace="ws",
+                context_intelligence_api_key="test-api-key",
             )
         )
 
@@ -692,6 +709,7 @@ class TestClose:
                 "proj",
                 context_intelligence_server_url="http://localhost:8080",
                 workspace="ws",
+                context_intelligence_api_key="test-api-key",
             )
         )
 
@@ -732,6 +750,7 @@ class TestClose:
                 context_intelligence_server_url="http://localhost:8080",
                 workspace="ws",
                 close_drain_timeout=0.01,
+                context_intelligence_api_key="test-api-key",
             )
         )
 
@@ -754,3 +773,170 @@ class TestClose:
         await handler.close()
 
         assert handler._dispatch_worker_task is None
+
+
+# ---------------------------------------------------------------------------
+# TestFakeResolverApiKey
+# ---------------------------------------------------------------------------
+class TestFakeResolverApiKey:
+    """_FakeResolver supports context_intelligence_api_key parameter."""
+
+    def test_api_key_defaults_to_none(self, tmp_path: Path) -> None:
+        """context_intelligence_api_key defaults to None (backward-compatible)."""
+        resolver = _FakeResolver(tmp_path, "proj")
+        assert resolver.context_intelligence_api_key is None
+
+    def test_api_key_can_be_set(self, tmp_path: Path) -> None:
+        """context_intelligence_api_key can be passed as a keyword argument."""
+        resolver = _FakeResolver(tmp_path, "proj", context_intelligence_api_key="secret-key")
+        assert resolver.context_intelligence_api_key == "secret-key"
+
+    def test_api_key_after_close_drain_timeout(self, tmp_path: Path) -> None:
+        """context_intelligence_api_key is the last param (after close_drain_timeout)."""
+        resolver = _FakeResolver(
+            tmp_path,
+            "proj",
+            close_drain_timeout=1.0,
+            context_intelligence_api_key="my-api-key",
+        )
+        assert resolver.close_drain_timeout == 1.0
+        assert resolver.context_intelligence_api_key == "my-api-key"
+
+
+# ---------------------------------------------------------------------------
+# TestAuthHeader
+# ---------------------------------------------------------------------------
+class TestAuthHeader:
+    """httpx.AsyncClient includes Authorization: Bearer header when api_key is set."""
+
+    async def test_client_created_with_auth_header_when_api_key_set(self, tmp_path: Path) -> None:
+        """httpx.AsyncClient is constructed with headers={'Authorization': 'Bearer my-secret-token'}."""
+        handler = LoggingHandler(
+            _FakeResolver(
+                tmp_path,
+                "proj",
+                context_intelligence_server_url="http://localhost:8080",
+                context_intelligence_api_key="my-secret-token",
+            )
+        )
+
+        mock_client = AsyncMock()
+        mock_client.post.return_value = MagicMock(raise_for_status=MagicMock(return_value=None))
+
+        with patch(
+            "amplifier_module_hook_context_intelligence.handlers.logging_handler.httpx.AsyncClient",
+            return_value=mock_client,
+        ) as mock_ctor:
+            await handler._dispatch_to_server("session:start", {"session_id": "s1"})
+
+        call_kwargs = mock_ctor.call_args[1]
+        assert "headers" in call_kwargs
+        assert call_kwargs["headers"]["Authorization"] == "Bearer my-secret-token"
+
+    async def test_no_client_created_when_api_key_absent(self, tmp_path: Path) -> None:
+        """httpx.AsyncClient is never constructed when api_key is None (dispatch disabled at init)."""
+        handler = LoggingHandler(
+            _FakeResolver(
+                tmp_path,
+                "proj",
+                context_intelligence_server_url="http://localhost:8080",
+                # no api_key — dispatch is disabled in __init__
+            )
+        )
+
+        assert handler._dispatch_enabled is False
+
+        with patch(
+            "amplifier_module_hook_context_intelligence.handlers.logging_handler.httpx.AsyncClient",
+        ) as mock_ctor:
+            await handler._dispatch_to_server("session:start", {"session_id": "s1"})
+
+        mock_ctor.assert_not_called()
+
+    async def test_dispatch_works_with_api_key(self, tmp_path: Path) -> None:
+        """Full dispatch cycle with api_key set: post() is called and consecutive_failures == 0."""
+        handler = LoggingHandler(
+            _FakeResolver(
+                tmp_path,
+                "proj",
+                context_intelligence_server_url="http://localhost:8080",
+                context_intelligence_api_key="my-secret-token",
+            )
+        )
+
+        mock_response = MagicMock()
+        mock_response.raise_for_status.return_value = None
+        mock_client = AsyncMock()
+        mock_client.is_closed = False
+        mock_client.post.return_value = mock_response
+        handler._client = mock_client
+
+        await handler._dispatch_to_server("session:start", {"session_id": "s1"})
+
+        assert handler._consecutive_failures == 0
+        mock_client.post.assert_awaited_once()
+
+
+# ---------------------------------------------------------------------------
+# TestMissingApiKey
+# ---------------------------------------------------------------------------
+class TestMissingApiKey:
+    """When server URL is configured but api_key is missing, dispatch is disabled with a single warning."""
+
+    def test_server_url_set_api_key_none_disables_dispatch(self, tmp_path: Path) -> None:
+        """_dispatch_enabled is False and warning logged once when server_url set but api_key is None."""
+        with patch.object(logging.getLogger(_LOGGER_NAME), "warning") as mock_warning:
+            handler = LoggingHandler(
+                _FakeResolver(
+                    tmp_path,
+                    "proj",
+                    context_intelligence_server_url="http://localhost:8080",
+                    context_intelligence_api_key=None,
+                )
+            )
+        assert handler._dispatch_enabled is False
+        mock_warning.assert_called_once()
+        assert "api_key is missing" in str(mock_warning.call_args)
+
+    def test_server_url_set_api_key_empty_string_disables_dispatch(self, tmp_path: Path) -> None:
+        """_dispatch_enabled is False and warning logged once when server_url set but api_key is empty string."""
+        with patch.object(logging.getLogger(_LOGGER_NAME), "warning") as mock_warning:
+            handler = LoggingHandler(
+                _FakeResolver(
+                    tmp_path,
+                    "proj",
+                    context_intelligence_server_url="http://localhost:8080",
+                    context_intelligence_api_key="",
+                )
+            )
+        assert handler._dispatch_enabled is False
+        mock_warning.assert_called_once()
+        assert "api_key is missing" in str(mock_warning.call_args)
+
+    def test_server_url_set_api_key_valid_enables_dispatch(self, tmp_path: Path) -> None:
+        """_dispatch_enabled is True and no warning when server_url and api_key are both set."""
+        with patch.object(logging.getLogger(_LOGGER_NAME), "warning") as mock_warning:
+            handler = LoggingHandler(
+                _FakeResolver(
+                    tmp_path,
+                    "proj",
+                    context_intelligence_server_url="http://localhost:8080",
+                    context_intelligence_api_key="valid-key",
+                )
+            )
+        assert handler._dispatch_enabled is True
+        mock_warning.assert_not_called()
+
+    def test_no_server_url_no_api_key_dispatch_enabled_no_warning(self, tmp_path: Path) -> None:
+        """_dispatch_enabled is True and no warning when server_url is None (existing 'no server' path)."""
+        with patch.object(logging.getLogger(_LOGGER_NAME), "warning") as mock_warning:
+            handler = LoggingHandler(
+                _FakeResolver(
+                    tmp_path,
+                    "proj",
+                    # no server_url
+                    context_intelligence_api_key=None,
+                )
+            )
+        assert handler._dispatch_enabled is True
+        mock_warning.assert_not_called()

@@ -238,6 +238,16 @@ class ConfigResolver:
         return str(value) if value else None
 
     @property
+    def context_intelligence_api_key(self) -> str | None:
+        """API key for the context-intelligence server, or None if not configured.
+
+        Reads directly from config['context_intelligence_api_key'].
+        No coordinator fallback.
+        """
+        value = self._config.get("context_intelligence_api_key")
+        return str(value) if value else None
+
+    @property
     def neo4j_config(self) -> dict[str, Any] | None:
         """Extracted Neo4j connection parameters, or None if unavailable.
 

@@ -41,14 +41,28 @@ To also push events to the server for graph storage and querying, start the serv
 ```bash
 git clone https://github.com/colombod/amplifier-context-intelligence
 cd amplifier-context-intelligence
-docker compose up -d
+./start.sh
 # Server ready at http://localhost:8000
+```
+
+The `start.sh` script generates credentials on first run. Retrieve your API key:
+
+```bash
+grep api_key ~/amplifier-context-intelligence-server-data-store/credentials.yaml
+```
+
+Copy this key to your bundle config as `context_intelligence_api_key`.
+
+For subsequent restarts, use:
+```bash
+docker compose up -d
 ```
 
 **Configure the hook** via environment variables:
 
 ```bash
 export AMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_URL=http://localhost:8000
+export AMPLIFIER_CONTEXT_INTELLIGENCE_API_KEY=<your-api-key>  # from credentials.yaml
 export AMPLIFIER_CONTEXT_INTELLIGENCE_WORKSPACE=my-project    # optional, auto-resolved from project slug
 export AMPLIFIER_CONTEXT_INTELLIGENCE_LOG_LEVEL=INFO          # optional, default: INFO
 ```
@@ -61,8 +75,12 @@ overrides:
   hook-context-intelligence:
     config:
       context_intelligence_server_url: "http://localhost:8000"
+      context_intelligence_api_key: "<your-api-key>"   # from credentials.yaml or server-init output
       workspace: "my-project"   # optional
 ```
+
+> **Docker deployments** always generate an API key. Retrieve it with:
+> `grep api_key ~/amplifier-context-intelligence-server-data-store/credentials.yaml`
 
 ### 3. Verify it's working
 
@@ -73,7 +91,7 @@ ls ~/.amplifier/projects/<project_slug>/sessions/*/context-intelligence/
 # You should see: events.jsonl  metadata.json
 ```
 
-If `context_intelligence_server_url` is configured, check the server dashboard at `http://localhost:8000` — you should see the session under Active or Completed Sessions.
+If `context_intelligence_server_url` is configured, open `http://localhost:8000/dashboard` — you will be prompted for your API key if auth is enabled. Enter the key from `credentials.yaml`. Once authenticated, you should see your session under Active or Completed Sessions. The Neo4j status chip will show Connected when Neo4j is reachable.
 
 ---
 
@@ -85,6 +103,7 @@ in `settings.yaml`, or from environment variables set in the shell or CI environ
 | Key | Env var | Default | Description |
 |-----|---------|---------|-------------|
 | `context_intelligence_server_url` | `AMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_URL` | *(empty)* | Base URL of the CI server. Events are only forwarded when this is set. |
+| `context_intelligence_api_key` | `AMPLIFIER_CONTEXT_INTELLIGENCE_API_KEY` | *(empty)* | Bearer token matching the server's `api_key`. Required when the server is configured with auth. The hook adds `Authorization: Bearer <value>` to all HTTP dispatches. If set on hook but missing on server (or vice versa), dispatch will fail. |
 | `workspace` | `AMPLIFIER_CONTEXT_INTELLIGENCE_WORKSPACE` | *(auto)* | Scopes graph data on the server. Resolved from `coordinator.config['workspace']`, then `project_slug`, then working directory slug. |
 | `log_level` | `AMPLIFIER_CONTEXT_INTELLIGENCE_LOG_LEVEL` | `INFO` | Hook logging level. |
 | `base_path` | — | `~/.amplifier/projects` | Root directory for local JSONL output. |

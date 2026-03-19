@@ -21,6 +21,7 @@ hooks:
     source: git+https://github.com/colombod/amplifier-bundle-context-intelligence@main#subdirectory=modules/hook-context-intelligence
     config:
       context_intelligence_server_url: "${AMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_URL:}"
+      context_intelligence_api_key: "${AMPLIFIER_CONTEXT_INTELLIGENCE_API_KEY:}"
       # workspace: auto-resolved from coordinator project_slug → config → env var fallback
       workspace: "${AMPLIFIER_CONTEXT_INTELLIGENCE_WORKSPACE:}"
       log_level: "${AMPLIFIER_CONTEXT_INTELLIGENCE_LOG_LEVEL:INFO}"

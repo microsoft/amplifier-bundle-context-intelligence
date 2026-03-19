@@ -95,11 +95,18 @@ class LoggingHandler:
         self._server_url: str | None = (
             getattr(resolver, "context_intelligence_server_url", None) or None
         )
+        self._api_key: str | None = getattr(resolver, "context_intelligence_api_key", None) or None
         self._workspace: str | None = getattr(resolver, "workspace", None) or None
         self._client: httpx.AsyncClient | None = None
         self._dispatch_timeout: float = getattr(resolver, "dispatch_timeout", 10.0)
         self._consecutive_failures: int = 0
         self._dispatch_enabled: bool = True
+        if self._server_url and not self._api_key:
+            self._dispatch_enabled = False
+            logger.warning(
+                "context_intelligence: server URL is configured but api_key is missing — "
+                "HTTP dispatch disabled. Set context_intelligence_api_key in your bundle config."
+            )
         self._failure_threshold: int = getattr(resolver, "dispatch_failure_threshold", 3)
         self._dispatch_queue_capacity: int = getattr(
             resolver, "dispatch_queue_capacity", _DEFAULT_DISPATCH_QUEUE_CAPACITY
@@ -292,15 +299,18 @@ class LoggingHandler:
 
         # Lazy client creation (or recreation if a prior close left it stale)
         if self._client is None or self._client.is_closed:
-            client = httpx.AsyncClient(
-                timeout=httpx.Timeout(
+            client_kwargs: dict[str, Any] = {
+                "timeout": httpx.Timeout(
                     connect=_CONNECT_TIMEOUT,
                     write=self._dispatch_timeout,
                     read=_READ_TIMEOUT,
                     pool=_POOL_TIMEOUT,
                 ),
-                limits=httpx.Limits(max_connections=1, max_keepalive_connections=1),
-            )
+                "limits": httpx.Limits(max_connections=1, max_keepalive_connections=1),
+            }
+            if self._api_key:
+                client_kwargs["headers"] = {"Authorization": f"Bearer {self._api_key}"}
+            client = httpx.AsyncClient(**client_kwargs)
             self._client = client
         else:
             client = self._client

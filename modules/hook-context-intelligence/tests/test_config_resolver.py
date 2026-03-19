@@ -336,6 +336,44 @@ class TestBlobStoreRoot:
         assert result == expected
 
 
+class TestContextIntelligenceApiKey:
+    """context_intelligence_api_key property."""
+
+    def test_returns_none_when_not_configured(self) -> None:
+        """Returns None when context_intelligence_api_key not in config."""
+        resolver = ConfigResolver(config={}, coordinator=_make_coordinator(config={}))
+
+        assert resolver.context_intelligence_api_key is None
+
+    def test_returns_string_when_configured(self) -> None:
+        """Returns the API key string when configured."""
+        resolver = ConfigResolver(
+            config={"context_intelligence_api_key": "my-secret-key"},
+            coordinator=_make_coordinator(config={}),
+        )
+
+        assert resolver.context_intelligence_api_key == "my-secret-key"
+
+    def test_returns_none_for_empty_string(self) -> None:
+        """Returns None when value is an empty string (falsy)."""
+        resolver = ConfigResolver(
+            config={"context_intelligence_api_key": ""},
+            coordinator=_make_coordinator(config={}),
+        )
+
+        assert resolver.context_intelligence_api_key is None
+
+    def test_coerces_non_string_to_string(self) -> None:
+        """Coerces non-string values to str."""
+        resolver = ConfigResolver(
+            config={"context_intelligence_api_key": 12345},
+            coordinator=_make_coordinator(config={}),
+        )
+
+        assert resolver.context_intelligence_api_key == "12345"
+        assert isinstance(resolver.context_intelligence_api_key, str)
+
+
 class TestDispatchTimeout:
     def test_defaults_to_10(self) -> None:
         """dispatch_timeout returns 10.0 when not configured."""
