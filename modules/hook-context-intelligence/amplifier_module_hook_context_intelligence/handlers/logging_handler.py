@@ -103,7 +103,7 @@ class LoggingHandler:
         self._dispatch_enabled: bool = True
         if self._server_url and not self._api_key:
             self._dispatch_enabled = False
-            logger.warning(
+            logger.debug(
                 "context_intelligence: server URL is configured but api_key is missing — "
                 "HTTP dispatch disabled. Set context_intelligence_api_key in your bundle config."
             )
@@ -242,7 +242,7 @@ class LoggingHandler:
                     self._dispatch_queue.join(), timeout=self._close_drain_timeout
                 )
             except asyncio.TimeoutError:
-                logger.warning(
+                logger.debug(
                     "server_dispatch_drain_timeout: queued events discarded during shutdown url=%s",
                     self._server_url,
                 )
@@ -269,7 +269,7 @@ class LoggingHandler:
             self._dispatch_queue.put_nowait((event, data))
         except asyncio.QueueFull:
             self._dispatch_enabled = False
-            logger.warning(
+            logger.debug(
                 "server_dispatch_queue_full: capacity=%d event=%s url=%s dispatch disabled;"
                 " local JSONL capture continues.",
                 self._dispatch_queue_capacity,
@@ -291,7 +291,8 @@ class LoggingHandler:
 
         JSONL writing is the durable record. HTTP dispatch is best-effort and
         runs behind a single worker so server slowness never blocks the hook.
-        Failures are caught and logged as warnings without affecting the caller.
+        Failures are caught and logged at DEBUG level only — the remote server
+        is optional, so failures must not pollute the user's terminal.
         Uses a persistent client (lazy-created) with a circuit breaker.
         """
         if not self._dispatch_enabled:
@@ -333,7 +334,7 @@ class LoggingHandler:
             raise
         except Exception:
             self._consecutive_failures += 1
-            logger.warning(
+            logger.debug(
                 "server_dispatch_failed: attempt %d/%d event=%s url=%s",
                 self._consecutive_failures,
                 self._failure_threshold,
@@ -350,7 +351,7 @@ class LoggingHandler:
             )
             if self._consecutive_failures >= self._failure_threshold:
                 self._dispatch_enabled = False
-                logger.warning(
+                logger.debug(
                     "Context intelligence server unreachable after %d attempts"
                     " — dispatch disabled for this session. Local JSONL capture continues.",
                     self._consecutive_failures,

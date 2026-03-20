@@ -4,7 +4,7 @@ Covers server-dispatch behavior added in the feat/server-dispatch branch:
 - No dispatch when context_intelligence_server_url is absent
 - asyncio.create_task is called when context_intelligence_server_url is present
 - JSONL writing is unaffected in both cases
-- HTTP failures are caught and logged as warnings
+- HTTP failures are caught and logged as debug messages (not warnings — remote server is optional)
 """
 
 from __future__ import annotations
@@ -151,9 +151,13 @@ class TestServerDispatchEnabled:
 class TestServerDispatchFailure:
     """HTTP failures in _dispatch_to_server are caught and logged cleanly."""
 
-    async def test_http_failure_logs_warning_without_traceback(self, tmp_path: Path) -> None:
-        """An exception during dispatch is logged as a warning without exc_info (no traceback
-        on the user's terminal) and as a debug message with exc_info for developers."""
+    async def test_http_failure_logs_debug_not_warning(self, tmp_path: Path) -> None:
+        """An exception during dispatch is logged at DEBUG level only — no WARNING emitted.
+
+        Since the remote server is optional, failures are intentionally silent at WARNING
+        level to avoid polluting the user's terminal. Two debug calls are made:
+        one without exc_info (brief summary) and one with exc_info (full traceback for devs).
+        """
         handler = LoggingHandler(
             _FakeResolver(
                 tmp_path,
@@ -178,15 +182,15 @@ class TestServerDispatchFailure:
                 "session:start", {"session_id": "s1", "timestamp": "t0"}
             )
 
-        # Warning must NOT carry exc_info — no raw tracebacks on the user's terminal
-        mock_warning.assert_called_once()
-        warning_kwargs = mock_warning.call_args[1]
-        assert warning_kwargs.get("exc_info") is not True
+        # No WARNING emitted — remote server is optional, failures must not pollute user output
+        mock_warning.assert_not_called()
 
-        # Debug call MUST carry exc_info so developers can diagnose with verbose logging
-        mock_debug.assert_called_once()
-        debug_kwargs = mock_debug.call_args[1]
-        assert debug_kwargs.get("exc_info") is True
+        # Two DEBUG calls: brief summary (no exc_info) + full traceback (exc_info=True)
+        assert mock_debug.call_count == 2
+        first_debug_kwargs = mock_debug.call_args_list[0][1]
+        assert first_debug_kwargs.get("exc_info") is not True
+        second_debug_kwargs = mock_debug.call_args_list[1][1]
+        assert second_debug_kwargs.get("exc_info") is True
 
 
 class TestIdempotencyKey:
@@ -242,7 +246,7 @@ class TestCircuitBreaker:
         mock_client.post.side_effect = Exception("conn refused")
         handler._client = mock_client
 
-        with patch.object(logging.getLogger(_LOGGER_NAME), "warning"):
+        with patch.object(logging.getLogger(_LOGGER_NAME), "debug"):
             for _ in range(3):
                 await handler._dispatch_to_server("session:start", {"session_id": "s1"})
 
@@ -273,7 +277,7 @@ class TestCircuitBreaker:
         ]
         handler._client = mock_client
 
-        with patch.object(logging.getLogger(_LOGGER_NAME), "warning"):
+        with patch.object(logging.getLogger(_LOGGER_NAME), "debug"):
             for _ in range(3):
                 await handler._dispatch_to_server("session:start", {"session_id": "s1"})
 
@@ -281,7 +285,7 @@ class TestCircuitBreaker:
         assert handler._dispatch_enabled is True
 
     async def test_disabled_dispatch_is_silent(self, tmp_path: Path) -> None:
-        """After the circuit trips, subsequent calls make no HTTP requests and log no warnings."""
+        """After the circuit trips, subsequent calls make no HTTP requests and log no debug messages."""
         handler = LoggingHandler(
             _FakeResolver(
                 tmp_path,
@@ -297,7 +301,7 @@ class TestCircuitBreaker:
         handler._client = mock_client
 
         # Trip the circuit breaker
-        with patch.object(logging.getLogger(_LOGGER_NAME), "warning"):
+        with patch.object(logging.getLogger(_LOGGER_NAME), "debug"):
             for _ in range(3):
                 await handler._dispatch_to_server("session:start", {"session_id": "s1"})
 
@@ -307,15 +311,15 @@ class TestCircuitBreaker:
         mock_client.post.reset_mock()
         mock_client.post.side_effect = None
 
-        # After tripping, subsequent calls should be silent
-        with patch.object(logging.getLogger(_LOGGER_NAME), "warning") as mock_warning:
+        # After tripping, subsequent calls should be fully silent
+        with patch.object(logging.getLogger(_LOGGER_NAME), "debug") as mock_debug:
             await handler._dispatch_to_server("session:start", {"session_id": "s1"})
 
         mock_client.post.assert_not_called()
-        mock_warning.assert_not_called()
+        mock_debug.assert_not_called()
 
-    async def test_trip_emits_final_warning(self, tmp_path: Path) -> None:
-        """Exactly 1 warning containing 'dispatch disabled' is emitted when circuit trips."""
+    async def test_trip_emits_final_debug(self, tmp_path: Path) -> None:
+        """Exactly 1 debug message containing 'dispatch disabled' is emitted when circuit trips."""
         handler = LoggingHandler(
             _FakeResolver(
                 tmp_path,
@@ -330,15 +334,15 @@ class TestCircuitBreaker:
         mock_client.post.side_effect = Exception("conn refused")
         handler._client = mock_client
 
-        with patch.object(logging.getLogger(_LOGGER_NAME), "warning") as mock_warning:
+        with patch.object(logging.getLogger(_LOGGER_NAME), "debug") as mock_debug:
             for _ in range(3):
                 await handler._dispatch_to_server("session:start", {"session_id": "s1"})
 
-        # Count warnings containing "dispatch disabled"
-        disabled_warnings = [
-            call for call in mock_warning.call_args_list if "dispatch disabled" in str(call)
+        # Count debug calls containing "dispatch disabled" (the circuit-trip message)
+        disabled_msgs = [
+            call for call in mock_debug.call_args_list if "dispatch disabled" in str(call)
         ]
-        assert len(disabled_warnings) == 1
+        assert len(disabled_msgs) == 1
 
     async def test_configurable_threshold(self, tmp_path: Path) -> None:
         """threshold=5: 4 failures leaves dispatch enabled, 5th failure trips it."""
@@ -356,13 +360,13 @@ class TestCircuitBreaker:
         mock_client.post.side_effect = Exception("conn refused")
         handler._client = mock_client
 
-        with patch.object(logging.getLogger(_LOGGER_NAME), "warning"):
+        with patch.object(logging.getLogger(_LOGGER_NAME), "debug"):
             for _ in range(4):
                 await handler._dispatch_to_server("session:start", {"session_id": "s1"})
 
         assert handler._dispatch_enabled is True  # 4 failures, threshold not reached
 
-        with patch.object(logging.getLogger(_LOGGER_NAME), "warning"):
+        with patch.object(logging.getLogger(_LOGGER_NAME), "debug"):
             await handler._dispatch_to_server("session:start", {"session_id": "s1"})
 
         assert handler._dispatch_enabled is False  # 5th failure trips it
@@ -395,7 +399,7 @@ class TestCircuitBreaker:
         mock_client.post.return_value = mock_response
         handler._client = mock_client
 
-        with patch.object(logging.getLogger(_LOGGER_NAME), "warning"):
+        with patch.object(logging.getLogger(_LOGGER_NAME), "debug"):
             await handler._dispatch_to_server("session:start", {"session_id": "s1"})
 
         assert handler._consecutive_failures == 1
@@ -881,11 +885,11 @@ class TestAuthHeader:
 # TestMissingApiKey
 # ---------------------------------------------------------------------------
 class TestMissingApiKey:
-    """When server URL is configured but api_key is missing, dispatch is disabled with a single warning."""
+    """When server URL is configured but api_key is missing, dispatch is disabled with a single debug log."""
 
     def test_server_url_set_api_key_none_disables_dispatch(self, tmp_path: Path) -> None:
-        """_dispatch_enabled is False and warning logged once when server_url set but api_key is None."""
-        with patch.object(logging.getLogger(_LOGGER_NAME), "warning") as mock_warning:
+        """_dispatch_enabled is False and debug logged once when server_url set but api_key is None."""
+        with patch.object(logging.getLogger(_LOGGER_NAME), "debug") as mock_debug:
             handler = LoggingHandler(
                 _FakeResolver(
                     tmp_path,
@@ -895,12 +899,12 @@ class TestMissingApiKey:
                 )
             )
         assert handler._dispatch_enabled is False
-        mock_warning.assert_called_once()
-        assert "api_key is missing" in str(mock_warning.call_args)
+        mock_debug.assert_called_once()
+        assert "api_key is missing" in str(mock_debug.call_args)
 
     def test_server_url_set_api_key_empty_string_disables_dispatch(self, tmp_path: Path) -> None:
-        """_dispatch_enabled is False and warning logged once when server_url set but api_key is empty string."""
-        with patch.object(logging.getLogger(_LOGGER_NAME), "warning") as mock_warning:
+        """_dispatch_enabled is False and debug logged once when server_url set but api_key is empty string."""
+        with patch.object(logging.getLogger(_LOGGER_NAME), "debug") as mock_debug:
             handler = LoggingHandler(
                 _FakeResolver(
                     tmp_path,
@@ -910,8 +914,8 @@ class TestMissingApiKey:
                 )
             )
         assert handler._dispatch_enabled is False
-        mock_warning.assert_called_once()
-        assert "api_key is missing" in str(mock_warning.call_args)
+        mock_debug.assert_called_once()
+        assert "api_key is missing" in str(mock_debug.call_args)
 
     def test_server_url_set_api_key_valid_enables_dispatch(self, tmp_path: Path) -> None:
         """_dispatch_enabled is True and no warning when server_url and api_key are both set."""
