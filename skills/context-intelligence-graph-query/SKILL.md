@@ -78,6 +78,9 @@ sub-type discriminator labels are applied at write time.
 | `ToolExecution` | One `tool:pre` to `tool:post` pair; a single tool invocation |
 | `Delegation` | A `ToolExecution` that spawned a child session via the delegate tool (subtype of `ToolExecution`) |
 | `Event` | Any lifecycle or custom event not part of the core structural chain |
+| `RecipeRun` | Recipe execution wrapper node; one per recipe invocation (linked via `HAS_RECIPE_RUN`) |
+| `RecipeLoopIteration` | Subtype of `RecipeStep`; one per while-loop iteration (adds `step_id`, `max_iterations`, `iteration`) |
+| `RecipeApproval` | Subtype of `RecipeStep`; approval gate within a staged recipe (adds `stage_name`, `current_step`, `approval_prompt`) |
 
 Event sub-labels are derived using `derive_label()`: split on `:` and `_`,
 PascalCase join. Examples: `ContextCompaction`, `SkillLoaded`, `OrchestrationStarted`.
@@ -96,6 +99,8 @@ PascalCase join. Examples: `ContextCompaction`, `SkillLoaded`, `OrchestrationSta
 | `SPAWNED` | `ToolExecution` | `Session` | Delegation created a child session |
 | `SUBSESSION_OF` | `Session` | `Session` | Child session to parent lineage |
 | `HAS_EVENT` | `OrchestratorRun` (when active) / `Session` (fallback) | `Event` | Attaches lifecycle/custom events to their scope. DefaultHandler checks `cursors.current_run_id` — if an active run exists, the event attaches to the run; otherwise it falls back to the Session. |
+| `HAS_RECIPE_RUN` | `Session` | `RecipeRun` | Written once on first `recipe:*` event |
+| `SPANS_RUN` | `RecipeRun` | `OrchestratorRun` | Non-owning reference, deduplicated across approval-gate turns |
 
 ---
 
@@ -272,10 +277,9 @@ ORDER BY s.occurred_at DESC
 ```cypher
 MATCH (s:Session {workspace: $workspace, node_id: $session_id})
       -[:HAS_RUN]->(r:OrchestratorRun)
-RETURN r.node_id    AS run_id,
-       r.occurred_at AS started_at,
-       r.seq         AS sequence
-ORDER BY r.seq
+RETURN r.node_id AS run_id,
+       r.occurred_at AS started_at
+ORDER BY r.started_at
 ```
 
 ### Pattern 3: Trace a Session's Step Sequence
@@ -292,7 +296,7 @@ RETURN r.node_id              AS run_id,
        step.node_id           AS step_id,
        labels(step)           AS step_labels,
        step.occurred_at       AS occurred_at
-ORDER BY r.seq, step.occurred_at
+ORDER BY r.started_at, step.occurred_at
 ```
 
 Simpler alternative — fetch all steps without ordering by NEXT chain:
@@ -462,17 +466,18 @@ ORDER BY e.occurred_at
 > not the Session. Use the "Events across all scopes" query below to find
 > events attached to either.
 
-Events across all scopes (session, run, step) for a given session:
+Events across all scopes (session and run) for a given session:
 
 ```cypher
 MATCH (s:Session {workspace: $workspace, node_id: $session_id})
 OPTIONAL MATCH (s)-[:HAS_EVENT]->(se:Event)
 OPTIONAL MATCH (s)-[:HAS_RUN]->(r:OrchestratorRun)-[:HAS_EVENT]->(re:Event)
-OPTIONAL MATCH (s)-[:HAS_RUN]->()-[:HAS_STEP]->(step:Step)-[:HAS_EVENT]->(ste:Event)
-RETURN
-    coalesce(se.node_id, re.node_id, ste.node_id) AS event_id,
-    labels(coalesce(se, re, ste))                  AS event_labels,
-    coalesce(se.occurred_at, re.occurred_at, ste.occurred_at) AS occurred_at
+WITH s, collect(se) + collect(re) AS all_events
+UNWIND all_events AS e
+RETURN DISTINCT
+    e.node_id    AS event_id,
+    labels(e)    AS event_labels,
+    e.occurred_at AS occurred_at
 ORDER BY occurred_at
 ```
 
