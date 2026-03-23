@@ -13,8 +13,6 @@ includes:
 
 # Context Intelligence
 
-@context-intelligence:context/context-intelligence-awareness.md
-
 ---
 
 @foundation:context/shared/common-system-base.md

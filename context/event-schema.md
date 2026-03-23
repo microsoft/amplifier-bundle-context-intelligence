@@ -1,5 +1,8 @@
 # Event Schema Reference
 
+<!-- Loaded on-demand by agents via skills — not composed into bundles via @-reference or context.include.
+     Place in context/ for agent discoverability; do NOT add to bundle.md or behavior YAML. -->
+
 > **Provenance:** Content synthesized from the `amplifier-event-and-data-model-for-context-intelligence` research corpus (2025-07-17), which analyzed `amplifier-core` source code (`crates/amplifier-core/src/events.rs`) and 8,616 sessions of empirical data. Cross-validated against current `amplifier-core/events.rs` on 2026-03-11: all 41 canonical events confirmed present in both source and schema; no discrepancies found.
 
 ---
