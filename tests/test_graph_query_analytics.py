@@ -202,3 +202,74 @@ class TestSkillSchemaAndBugs:
         rels_pos = text.find("## Relationship Types")
         rels_section = text[rels_pos : rels_pos + 2000]
         assert "SPANS_RUN" in rels_section
+
+
+# ---------------------------------------------------------------------------
+# SKILL.md — analytics sections A–E
+# ---------------------------------------------------------------------------
+
+
+class TestSkillAnalyticsSections:
+    """Verify SKILL.md contains the five new analytics sections."""
+
+    # Section A — Foundational traversal primitive
+    def test_wildcard_traversal_pattern_present(self):
+        """Multi-relationship wildcard must be documented."""
+        text = _read(SKILL_FILE)
+        assert "HAS_RUN|HAS_STEP|TRIGGERED|SPAWNED" in text
+
+    def test_parallel_group_empty_string_note(self):
+        """Must warn that parallel_group_id is '' not null."""
+        text = _read(SKILL_FILE)
+        assert 'parallel_group_id <> ""' in text
+
+    # Section B — Time-activity queries
+    def test_point_in_time_query_present(self):
+        text = _read(SKILL_FILE)
+        assert "$point_in_time" in text
+
+    def test_time_range_query_present(self):
+        text = _read(SKILL_FILE)
+        assert "$t1" in text
+        assert "$t2" in text
+
+    # Section C — Recipe analytics
+    def test_recipe_analytics_query_present(self):
+        """Recipe analytics section must contain HAS_RECIPE_RUN in a query."""
+        text = _read(SKILL_FILE)
+        # HAS_RECIPE_RUN already appears 2× in schema tables (Node Labels + Relationship Types).
+        # The analytics section adds ≥1 more occurrence in a Cypher query, so require ≥3.
+        count = text.count("HAS_RECIPE_RUN")
+        assert count >= 3, (
+            f"HAS_RECIPE_RUN appears {count} time(s), need ≥3 (2 tables + analytics query)"
+        )
+
+    def test_recipe_step_fallback_documented(self):
+        """Recipe duration query must use coalesce for stub fallback."""
+        text = _read(SKILL_FILE)
+        assert "coalesce(rr.started_at" in text or "coalesce(rr.ended_at" in text
+
+    # Section D — Parallelism degree
+    def test_parallelism_query_present(self):
+        text = _read(SKILL_FILE)
+        assert "parallel_degree" in text
+
+    def test_peak_parallelism_query_present(self):
+        text = _read(SKILL_FILE)
+        assert "peak_parallelism" in text
+
+    # Section E — Token efficiency
+    def test_cache_hit_pct_present(self):
+        text = _read(SKILL_FILE)
+        assert "cache_hit_pct" in text
+
+    def test_token_distinction_documented(self):
+        """Must document the input_tokens vs message_count distinction."""
+        text = _read(SKILL_FILE)
+        assert "message_count" in text
+        assert "input_tokens" in text
+
+    def test_coalesce_null_tokens_note(self):
+        """Must use coalesce for nullable token properties."""
+        text = _read(SKILL_FILE)
+        assert "coalesce(a.cached_tokens" in text
