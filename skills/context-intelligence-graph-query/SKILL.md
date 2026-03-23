@@ -873,6 +873,9 @@ RETURN rr.node_id AS recipe_run_id,
        max(step.occurred_at) AS last_step
 ```
 
+> **Note:** Cypher implicitly groups by the non-aggregated columns `rr.node_id` and
+> `rr.recipe_name` — no explicit `GROUP BY` clause is needed.
+
 **Loop count and depth per recipe:**
 
 ```cypher
