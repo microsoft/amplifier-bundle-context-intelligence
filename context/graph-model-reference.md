@@ -9,7 +9,7 @@
 
 ## Node Types
 
-Five node types capture the full lifecycle of an Amplifier session.
+The following node types capture the full lifecycle of an Amplifier session.
 
 ### Session
 
@@ -50,7 +50,12 @@ One prompt→response cycle. **node_id:** `make_node_id(session_id, "execution:s
 One LLM interaction. **node_id:** `make_node_id(session_id, "prompt:submit"|"provider:request", ts)`
 
 Sub-labels: `:PromptStep` (`iteration`=0, created on `prompt:submit`);
-`:AssistantStep` (`iteration`≥1, created on `provider:request`).
+`:AssistantStep` (`iteration`≥1, created on `provider:request`);
+`:RecipeStep` (from `recipe:step`, `recipe:loop_iteration`, `recipe:approval`).
+
+`:RecipeStep` nodes carry additional sub-labels based on the event type:
+- `:RecipeStep:RecipeLoopIteration` — from `recipe:loop_iteration`; adds `step_id`, `max_iterations`, `iteration`.
+- `:RecipeStep:RecipeApproval` — from `recipe:approval`; adds `stage_name`, `current_step`, `approval_prompt`.
 
 | Property | Type | Description |
 |---|---|---|
@@ -109,6 +114,24 @@ Example: `session:resume` → `:Event:SessionResume`.
 | `occurred_at` | string | ISO 8601 event timestamp. |
 | `data` | string | Full event payload as JSON string. |
 
+### RecipeRun
+
+One recipe execution. Stubbed on the first `recipe:*` event; enriched on `recipe:complete`.
+
+**node_id:** `{session_id}__recipe_run__{epoch_ms}`
+
+| Property | Type | Description |
+|---|---|---|
+| `node_id` | string | `{session_id}__recipe_run__{epoch_ms}` |
+| `workspace` | string | Workspace scope. |
+| `session_id` | string | Owning session UUID. |
+| `status` | string | `running` \| `complete` \| `failed` |
+| `started_at` | string | ISO 8601 from first `recipe:*` event. |
+| `ended_at` | string \| null | ISO 8601 from `recipe:complete` (null until complete). |
+| `recipe_name` | string \| null | Recipe name (null until `recipe:complete`). |
+| `total_steps` | integer \| null | Total step count (null until `recipe:complete`). |
+| `success` | boolean \| null | Whether recipe succeeded (null until `recipe:complete`). |
+
 ---
 
 ## Edge Types
@@ -117,12 +140,14 @@ Example: `session:resume` → `:Event:SessionResume`.
 |---|---|---|
 | `SUBSESSION_OF` | `:Session` → `:Session` | Child/forked session → parent. On `session:start`/`session:fork` with `parent_id`. |
 | `HAS_RUN` | `:Session` → `:OrchestratorRun` | Session owns each run. On `execution:start`. |
-| `HAS_STEP` | `:OrchestratorRun` → `:Step` | Run owns each step (both `:PromptStep` and `:AssistantStep`). |
+| `HAS_STEP` | `:OrchestratorRun` → `:Step` | Run owns each step (`:PromptStep, :AssistantStep, and :RecipeStep variants`). |
 | `NEXT` | `:Step` → `:Step` | Links consecutive steps. The NEXT chain is the only ordering — no `seq` on edges. |
 | `TRIGGERED` | `:Step` → `:ToolExecution` | AssistantStep triggered this tool call. On `tool:pre`. |
 | `PARALLEL_WITH` | `:ToolExecution` → `:ToolExecution` | Same `parallel_group_id`. Directed but symmetric in intent. |
 | `SPAWNED` | `:ToolExecution:Delegation` → `:Session` | Delegation spawned this child session. On `delegate:agent_spawned`. |
 | `HAS_EVENT` | `:OrchestratorRun` \| `:Session` → `:Event` | Active run (or session if no run) → Event. Never attaches to `:Step`. |
+| `HAS_RECIPE_RUN` | `:Session` → `:RecipeRun` | Session owns each recipe run. Written once on first `recipe:*` event. |
+| `SPANS_RUN` | `:RecipeRun` → `:OrchestratorRun` | Non-owning reference linking a recipe run to the orchestrator runs it spans. Deduplicated. |
 
 ---
 
@@ -186,6 +211,12 @@ LIMIT 50
 6. **MERGE key is `{node_id, workspace}`.** Session nodes use the raw UUID as `node_id`;
    others use the `__`-separated composite. Querying by `node_id` alone without
    `workspace` may match nodes from other workspaces.
+
+7. **RecipeRun stub properties are null until `recipe:complete`.** `ended_at`,
+   `recipe_name`, `total_steps`, and `success` are only set when `recipe:complete` fires.
+   If a session ends before the recipe completes, the RecipeRun node has `status="running"`
+   with all four properties as null. Use `RecipeStep.occurred_at` min/max as a duration
+   fallback when `ended_at` is null.
 
 ---
 
