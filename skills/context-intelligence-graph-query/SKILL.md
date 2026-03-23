@@ -777,3 +777,194 @@ RETURN s.node_id, run.node_id
 relationships buffered via `upsert_node`/`upsert_edge` but not yet flushed
 will **not** appear in Cypher query results. Always flush before running
 analysis queries when you need up-to-date results.
+
+---
+
+## Foundational Traversal Primitive
+
+The multi-relationship wildcard reaches any descendant node type in one
+Cypher pattern, naturally crossing sub-session boundaries via SPAWNED.
+Add a depth cap to prevent runaway traversal on deep delegation chains.
+
+```cypher
+-- All ToolExecutions under a session (including sub-sessions, any depth)
+MATCH (root:Session {node_id: $session_id, workspace: $workspace})
+      -[:HAS_RUN|HAS_STEP|TRIGGERED|SPAWNED*1..20]->(te:ToolExecution)
+RETURN te.tool_name, count(te) AS calls
+ORDER BY calls DESC
+```
+
+Replace `ToolExecution` with any terminal node type: `AssistantStep`,
+`RecipeStep`, `Event`, etc.
+
+**Note:** `parallel_group_id` is an empty string `""` (not null) when a tool
+runs alone. Use `te.parallel_group_id <> ""` to isolate parallel groups — not
+`IS NOT NULL`.
+
+---
+
+## Time-Activity Queries
+
+**Why `started_at <= T`:** For a run to be active at instant T, it must have
+started at or before T. `started_at >= T` would find runs that hadn't started
+yet — the opposite of what you want.
+
+**Point-in-time** — root sessions with an active run at instant T:
+
+```cypher
+MATCH (r:OrchestratorRun {workspace: $workspace})
+WHERE r.started_at <= $point_in_time
+  AND (r.ended_at IS NULL OR r.ended_at >= $point_in_time)
+MATCH (s:Session)-[:HAS_RUN]->(r)
+OPTIONAL MATCH (s)-[:SUBSESSION_OF*1..]->(root:Session:Root {workspace: $workspace})
+RETURN DISTINCT
+  coalesce(root.node_id, s.node_id)       AS root_session_id,
+  coalesce(root.started_at, s.started_at) AS root_started
+ORDER BY root_started DESC
+```
+
+**Time-range** — root sessions with any run that started within [t1, t2]:
+
+```cypher
+MATCH (r:OrchestratorRun {workspace: $workspace})
+WHERE r.started_at >= $t1 AND r.started_at <= $t2
+MATCH (s:Session)-[:HAS_RUN]->(r)
+OPTIONAL MATCH (s)-[:SUBSESSION_OF*1..]->(root:Session:Root {workspace: $workspace})
+RETURN DISTINCT
+  coalesce(root.node_id, s.node_id)       AS root_session_id,
+  coalesce(root.started_at, s.started_at) AS root_started,
+  count(DISTINCT r)                        AS runs_in_window
+ORDER BY root_started DESC
+```
+
+Use the time-range variant to find sessions resumed after a long gap: each
+resume creates a new OrchestratorRun with a fresh `started_at`.
+
+`OPTIONAL MATCH + coalesce`: when the owning session is already a root
+(no SUBSESSION_OF exists), `root` is null and coalesce falls back to `s`.
+
+---
+
+## Recipe Analytics
+
+**Find all sessions that ran a recipe:**
+
+```cypher
+MATCH (s:Session:Root {workspace: $workspace})-[:HAS_RECIPE_RUN]->(rr:RecipeRun)
+RETURN s.node_id AS session_id, s.started_at,
+       rr.node_id AS recipe_run_id, rr.recipe_name,
+       rr.status, rr.started_at AS recipe_started, rr.ended_at AS recipe_ended
+ORDER BY rr.started_at DESC
+```
+
+**Recipe execution duration** (uses RecipeStep timestamps as fallback when
+`ended_at` is null):
+
+```cypher
+MATCH (s:Session {node_id: $session_id, workspace: $workspace})
+      -[:HAS_RECIPE_RUN]->(rr:RecipeRun)
+MATCH (s2:Session)-[:SUBSESSION_OF*0..]->(s)
+MATCH (s2)-[:HAS_RUN]->(:OrchestratorRun)-[:HAS_STEP]->(step:RecipeStep)
+RETURN rr.node_id AS recipe_run_id,
+       rr.recipe_name,
+       coalesce(rr.started_at, min(step.occurred_at)) AS effective_start,
+       coalesce(rr.ended_at,   max(step.occurred_at)) AS effective_end,
+       min(step.occurred_at) AS first_step,
+       max(step.occurred_at) AS last_step
+```
+
+**Loop count and depth per recipe:**
+
+```cypher
+MATCH (s:Session {node_id: $session_id, workspace: $workspace})
+      -[:HAS_RECIPE_RUN]->(rr:RecipeRun)
+MATCH (s2:Session)-[:SUBSESSION_OF*0..]->(s)
+MATCH (s2)-[:HAS_RUN]->()-[:HAS_STEP]->(li:RecipeLoopIteration)
+RETURN rr.recipe_name,
+       li.step_id                  AS loop_name,
+       count(li)                   AS iterations,
+       max(li.iteration)           AS max_iteration_reached
+ORDER BY iterations DESC
+```
+
+**Note:** `RecipeRun.ended_at` and `recipe_name` are only set when
+`recipe:complete` fires. Use coalesce to fall back to step timestamps
+when the run node is still a stub.
+
+---
+
+## Parallelism Degree
+
+**Parallel groups per session (any depth via wildcard):**
+
+```cypher
+MATCH (root:Session {node_id: $session_id, workspace: $workspace})
+      -[:HAS_RUN|HAS_STEP|TRIGGERED|SPAWNED*1..20]->(te:ToolExecution)
+WHERE te.parallel_group_id <> ""
+RETURN te.parallel_group_id,
+       collect(te.tool_name) AS tools,
+       count(te)             AS parallel_degree
+ORDER BY parallel_degree DESC
+```
+
+**Sessions with the highest peak parallelism across the workspace:**
+
+```cypher
+MATCH (s:Session:Root {workspace: $workspace})
+      -[:HAS_RUN|HAS_STEP|TRIGGERED|SPAWNED*1..20]->(te:ToolExecution)
+WHERE te.parallel_group_id <> ""
+WITH s.node_id AS session_id, te.parallel_group_id AS grp, count(te) AS grp_size
+RETURN session_id,
+       max(grp_size)          AS peak_parallelism,
+       count(DISTINCT grp)    AS parallel_groups
+ORDER BY peak_parallelism DESC LIMIT 20
+```
+
+**Note:** `parallel_group_id` is `""` (empty string, not null) for
+non-parallel tools. Always use `<> ""` to filter, never `IS NOT NULL`.
+
+---
+
+## Token Efficiency
+
+**Property distinction — never confuse these:**
+- `input_tokens` — provider's actual token count (from `usage.input_tokens`). Use for cost analysis.
+- `message_count` — orchestrator's message count (from `usage.input`). Use for context window analysis.
+Do not sum `input_tokens` and `message_count` together — they measure different things.
+
+`cached_tokens` and `cache_write_tokens` can be null on older sessions.
+Always use `coalesce(property, 0)` in aggregations.
+
+**Token usage aggregated per orchestrator run:**
+
+```cypher
+MATCH (s:Session {node_id: $session_id, workspace: $workspace})
+      -[:HAS_RUN]->(r:OrchestratorRun)
+      -[:HAS_STEP]->(a:AssistantStep)
+RETURN r.node_id                                AS run_id,
+       r.started_at,
+       sum(a.input_tokens)                      AS total_input,
+       sum(a.output_tokens)                     AS total_output,
+       sum(coalesce(a.cached_tokens, 0))        AS total_cached,
+       sum(coalesce(a.cache_write_tokens, 0))   AS total_cache_written,
+       sum(coalesce(a.reasoning_tokens, 0))     AS total_reasoning,
+       count(a)                                 AS llm_turns
+ORDER BY r.started_at
+```
+
+**Cache efficiency — sessions with the best prompt cache utilisation:**
+
+```cypher
+MATCH (s:Session:Root {workspace: $workspace})
+      -[:HAS_RUN|HAS_STEP|SPAWNED*1..20]->(a:AssistantStep)
+WHERE a.input_tokens IS NOT NULL
+WITH s.node_id AS session_id,
+     sum(a.input_tokens)                    AS raw_input,
+     sum(coalesce(a.cached_tokens, 0))      AS cached
+WHERE raw_input + cached > 0
+RETURN session_id,
+       raw_input + cached                                     AS total_input_tokens,
+       cached                                                 AS cache_hits,
+       round(100.0 * cached / (raw_input + cached), 1)       AS cache_hit_pct
+ORDER BY cache_hit_pct DESC LIMIT 20
+```
