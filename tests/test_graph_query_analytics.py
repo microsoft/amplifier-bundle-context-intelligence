@@ -87,10 +87,13 @@ class TestGraphModelReference:
 
     def test_recipe_run_properties_documented(self):
         """RecipeRun section must document key properties."""
+        # Scan the 2000 chars following the first RecipeRun occurrence to
+        # cover its full properties table without crossing into the next section.
+        _RECIPE_RUN_SCAN_WINDOW = 2000
         text = _read(GRAPH_MODEL_FILE)
         pos = text.find("RecipeRun")
         assert pos != -1
-        section = text[pos : pos + 2000]
+        section = text[pos : pos + _RECIPE_RUN_SCAN_WINDOW]
         assert "recipe_name" in section
         assert "started_at" in section
         assert "ended_at" in section
@@ -101,10 +104,12 @@ class TestGraphModelReference:
         assert "RecipeStep" in text
 
     def test_recipe_loop_iteration_present(self):
+        """RecipeLoopIteration node type must be documented for foreach tracking."""
         text = _read(GRAPH_MODEL_FILE)
         assert "RecipeLoopIteration" in text
 
     def test_recipe_approval_present(self):
+        """RecipeApproval node type must be documented for approval-gate tracking."""
         text = _read(GRAPH_MODEL_FILE)
         assert "RecipeApproval" in text
 
@@ -121,10 +126,12 @@ class TestGraphModelReference:
     def test_has_step_mentions_recipe_step(self):
         """HAS_STEP description must include RecipeStep alongside PromptStep/AssistantStep."""
         text = _read(GRAPH_MODEL_FILE)
-        # Find the HAS_STEP row in the edge table
+        # Find the HAS_STEP row in the edge table; scan next ~300 chars to
+        # cover the rest of that table row without spilling into the next entry.
+        _HAS_STEP_ROW_WINDOW = 300
         has_step_pos = text.find("HAS_STEP")
         assert has_step_pos != -1
-        has_step_line = text[has_step_pos : has_step_pos + 300]
+        has_step_line = text[has_step_pos : has_step_pos + _HAS_STEP_ROW_WINDOW]
         assert "RecipeStep" in has_step_line
 
     def test_recipe_run_stub_gotcha_present(self):
@@ -134,4 +141,6 @@ class TestGraphModelReference:
         gotchas_pos = text.find("Critical Gotchas")
         assert gotchas_pos != -1
         gotchas_section = text[gotchas_pos:]
-        assert "recipe_name" in gotchas_section.lower() or "RecipeRun" in gotchas_section
+        assert (
+            "recipe_name" in gotchas_section.lower() or "RecipeRun" in gotchas_section
+        )
