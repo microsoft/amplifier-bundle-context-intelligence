@@ -25,9 +25,17 @@ Two agents are included for querying session data:
 
 ### 1. Install the bundle
 
+**Standalone** — creates a dedicated session configuration using the full root bundle (includes foundation):
+
+```bash
+amplifier bundle add git+https://github.com/colombod/amplifier-bundle-context-intelligence@main
+amplifier bundle use context-intelligence
+```
+
+**Into an existing app** — composes into your current app bundle using the behavior layer only (does not force foundation re-inclusion):
+
 ```bash
 amplifier bundle add git+https://github.com/colombod/amplifier-bundle-context-intelligence@main#subdirectory=behaviors/context-intelligence.yaml --app
-amplifier bundle use context-intelligence
 ```
 
 At this point the bundle is active. Every Amplifier session will write events to local JSONL files automatically — no server required.
