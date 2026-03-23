@@ -65,3 +65,73 @@ class TestAgentInlineExamples:
         assert "HAS_STEP" in text
         assert "TRIGGERED" in text
         assert "ToolExecution" in text
+
+
+# ---------------------------------------------------------------------------
+# graph-model-reference.md — schema completeness
+# ---------------------------------------------------------------------------
+
+
+class TestGraphModelReference:
+    """Verify graph-model-reference.md reflects Phase 1 additions."""
+
+    def test_five_node_types_claim_removed(self):
+        """The stale 'Five node types' line must be updated."""
+        text = _read(GRAPH_MODEL_FILE)
+        assert "Five node types" not in text
+
+    def test_recipe_run_node_type_present(self):
+        """RecipeRun must appear as a documented node type."""
+        text = _read(GRAPH_MODEL_FILE)
+        assert "RecipeRun" in text
+
+    def test_recipe_run_properties_documented(self):
+        """RecipeRun section must document key properties."""
+        text = _read(GRAPH_MODEL_FILE)
+        pos = text.find("RecipeRun")
+        assert pos != -1
+        section = text[pos : pos + 2000]
+        assert "recipe_name" in section
+        assert "started_at" in section
+        assert "ended_at" in section
+
+    def test_recipe_step_in_step_section(self):
+        """Step section must mention RecipeStep as a sub-label variant."""
+        text = _read(GRAPH_MODEL_FILE)
+        assert "RecipeStep" in text
+
+    def test_recipe_loop_iteration_present(self):
+        text = _read(GRAPH_MODEL_FILE)
+        assert "RecipeLoopIteration" in text
+
+    def test_recipe_approval_present(self):
+        text = _read(GRAPH_MODEL_FILE)
+        assert "RecipeApproval" in text
+
+    def test_has_recipe_run_edge_present(self):
+        """HAS_RECIPE_RUN edge must be in the Edge Types table."""
+        text = _read(GRAPH_MODEL_FILE)
+        assert "HAS_RECIPE_RUN" in text
+
+    def test_spans_run_edge_present(self):
+        """SPANS_RUN edge must be in the Edge Types table."""
+        text = _read(GRAPH_MODEL_FILE)
+        assert "SPANS_RUN" in text
+
+    def test_has_step_mentions_recipe_step(self):
+        """HAS_STEP description must include RecipeStep alongside PromptStep/AssistantStep."""
+        text = _read(GRAPH_MODEL_FILE)
+        # Find the HAS_STEP row in the edge table
+        has_step_pos = text.find("HAS_STEP")
+        assert has_step_pos != -1
+        has_step_line = text[has_step_pos : has_step_pos + 300]
+        assert "RecipeStep" in has_step_line
+
+    def test_recipe_run_stub_gotcha_present(self):
+        """Gotcha about RecipeRun stub behaviour must be documented."""
+        text = _read(GRAPH_MODEL_FILE)
+        # Should warn about ended_at being null when recipe:complete hasn't fired
+        gotchas_pos = text.find("Critical Gotchas")
+        assert gotchas_pos != -1
+        gotchas_section = text[gotchas_pos:]
+        assert "recipe_name" in gotchas_section.lower() or "RecipeRun" in gotchas_section
