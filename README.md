@@ -16,8 +16,8 @@ The bundle writes every session event to a local JSONL log and — when configur
 
 Two agents are included for querying session data:
 
-- **`context-intelligence-graph-analyst`** — primary entry point. Queries the context-intelligence property graph using Cypher, resolves `ci-blob://` URIs, and automatically delegates to `context-intelligence-navigator` when the graph server is unreachable or returns 0 sessions.
-- **`context-intelligence-navigator`** — local fallback agent. Navigates session data via flat JSONL files using safe `bash`/`jq`/`grep` extraction patterns when the server is unavailable. Invoked only by `graph-analyst` via the delegation chain — external callers should use `graph-analyst` as the entry point.
+- **`graph-analyst`** — primary entry point. Queries the context-intelligence property graph using Cypher, resolves `ci-blob://` URIs, and automatically delegates to `session-navigator` when the graph server is unreachable or returns 0 sessions.
+- **`session-navigator`** — local fallback agent. Navigates session data via flat JSONL files using safe `bash`/`jq`/`grep` extraction patterns when the server is unavailable. Invoked only by `graph-analyst` via the delegation chain — external callers should use `graph-analyst` as the entry point.
 
 ---
 
@@ -26,7 +26,7 @@ Two agents are included for querying session data:
 ### 1. Install the bundle
 
 ```bash
-amplifier bundle add git+https://github.com/colombod/amplifier-bundle-context-intelligence@main --app
+amplifier bundle add git+https://github.com/colombod/amplifier-bundle-context-intelligence@main#subdirectory=behaviors/context-intelligence.yaml --app
 amplifier bundle use context-intelligence
 ```
 
@@ -171,12 +171,12 @@ The graph model is documented in [`context/graph-model-reference.md`](context/gr
 
 | Agent | Tools | Role |
 |-------|-------|------|
-| `context-intelligence-graph-analyst` | `graph_query`, `blob_read`, `tool-filesystem`, `tool-bash`, `tool-skills` | Primary entry point — graph-powered analysis via Cypher, blob resolution |
-| `context-intelligence-navigator` | `tool-filesystem`, `tool-search`, `tool-bash`, `tool-skills` | Local fallback — safe JSONL navigation via bash/jq/grep |
+| `graph-analyst` | `graph_query`, `blob_read`, `tool-filesystem`, `tool-bash`, `tool-skills` | Primary entry point — graph-powered analysis via Cypher, blob resolution |
+| `session-navigator` | `tool-filesystem`, `tool-search`, `tool-bash`, `tool-skills` | Local fallback — safe JSONL navigation via bash/jq/grep |
 
-**Delegation chain:** External callers always invoke `context-intelligence-graph-analyst`. Before each analysis run, `graph-analyst` checks server availability. If the server is unreachable or the workspace contains 0 sessions, it delegates to `context-intelligence-navigator`, which navigates local JSONL files using safe extraction patterns. Navigator is never invoked directly by external callers.
+**Delegation chain:** External callers always invoke `graph-analyst`. Before each analysis run, `graph-analyst` checks server availability. If the server is unreachable or the workspace contains 0 sessions, it delegates to `session-navigator`, which navigates local JSONL files using safe extraction patterns. `session-navigator` is never invoked directly by external callers.
 
-**Safe JSONL navigation** — navigator knows about large-file pitfalls and uses streaming extraction patterns. See [`context/safe-extraction-patterns.md`](context/safe-extraction-patterns.md).
+**Safe JSONL navigation** — `session-navigator` knows about large-file pitfalls and uses streaming extraction patterns. See [`context/safe-extraction-patterns.md`](context/safe-extraction-patterns.md).
 
 ---
 
@@ -186,15 +186,15 @@ The graph model is documented in [`context/graph-model-reference.md`](context/gr
 amplifier-bundle-context-intelligence/
 ├── bundle.md                           ← root bundle definition
 ├── agents/
-│   ├── context-intelligence-graph-analyst.md  ← primary entry point agent
-│   └── context-intelligence-navigator.md      ← local fallback agent
+│   ├── graph-analyst.md  ← primary entry point agent
+│   └── session-navigator.md      ← local fallback agent
 ├── context/
 │   ├── event-schema.md                 ← all 51+ Amplifier events
 │   ├── graph-model-reference.md        ← Neo4j graph model for Cypher queries
 │   ├── safe-extraction-patterns.md     ← JSONL navigation patterns
 │   ├── config-resolution.dot           ← ConfigResolver fallback chain diagram
 │   ├── session-disk-layout.dot         ← on-disk session directory structure
-│   ├── delegation-strategy.dot         ← graph-analyst → navigator delegation logic
+│   ├── delegation-strategy.dot         ← graph-analyst → session-navigator delegation logic
 │   └── agents/
 │       └── session-storage-knowledge.md
 ├── modules/

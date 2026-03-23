@@ -10,7 +10,7 @@ from pathlib import Path
 import yaml
 
 BUNDLE_ROOT = Path(__file__).resolve().parent.parent
-AGENT_FILE = BUNDLE_ROOT / "agents" / "context-intelligence-navigator.md"
+AGENT_FILE = BUNDLE_ROOT / "agents" / "session-navigator.md"
 
 
 # ---------------------------------------------------------------------------
@@ -65,11 +65,11 @@ class TestFrontmatter:
         assert meta is not None
 
     def test_meta_name_correct(self) -> None:
-        """meta.name must be 'context-intelligence-navigator'."""
+        """meta.name must be 'session-navigator'."""
         text = _agent_text()
         meta, _ = _parse_frontmatter(text)
-        assert meta["meta"]["name"] == "context-intelligence-navigator", (
-            f"Expected meta.name='context-intelligence-navigator', "
+        assert meta["meta"]["name"] == "session-navigator", (
+            f"Expected meta.name='session-navigator', "
             f"got: {meta.get('meta', {}).get('name')}"
         )
 
@@ -523,7 +523,7 @@ class TestBodyContent:
         )
 
     def test_section_3_never_self_delegate(self) -> None:
-        """Section 3 must warn never to delegate to self (context-intelligence-navigator)."""
+        """Section 3 must warn never to delegate to self (session-navigator)."""
         body = self._body()
         idx = body.index("Section 3")
         next_section = body.find("Section 4", idx)

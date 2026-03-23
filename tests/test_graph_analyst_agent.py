@@ -10,7 +10,7 @@ from pathlib import Path
 import yaml
 
 BUNDLE_ROOT = Path(__file__).resolve().parent.parent
-AGENT_FILE = BUNDLE_ROOT / "agents" / "context-intelligence-graph-analyst.md"
+AGENT_FILE = BUNDLE_ROOT / "agents" / "graph-analyst.md"
 
 
 # ---------------------------------------------------------------------------
@@ -65,11 +65,11 @@ class TestFrontmatter:
         assert meta is not None
 
     def test_meta_name_correct(self) -> None:
-        """meta.name must be 'context-intelligence-graph-analyst'."""
+        """meta.name must be 'graph-analyst'."""
         text = _agent_text()
         meta, _ = _parse_frontmatter(text)
-        assert meta["meta"]["name"] == "context-intelligence-graph-analyst", (
-            f"Expected meta.name='context-intelligence-graph-analyst', "
+        assert meta["meta"]["name"] == "graph-analyst", (
+            f"Expected meta.name='graph-analyst', "
             f"got: {meta.get('meta', {}).get('name')}"
         )
 

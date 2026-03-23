@@ -1,7 +1,7 @@
 // Delegation Strategy — Agent Delegation Chain
 // Context-Intelligence Bundle
 //
-// Shows the delegation flow: graph-analyst → navigator → foundation:session-analyst
+// Shows the delegation flow: graph-analyst → session-navigator → foundation:session-analyst
 //
 // Render: dot -Tsvg delegation-strategy.dot -o delegation-strategy.svg
 
@@ -27,7 +27,7 @@ digraph delegation_strategy {
     ];
 
     graph_analyst [
-        label="context-intelligence-graph-analyst\ntools: graph_query / blob_read / bash / skills",
+        label="graph-analyst\ntools: graph_query / blob_read / bash / skills",
         shape=box,
         style=filled,
         fillcolor="#4A90D9",
@@ -37,7 +37,7 @@ digraph delegation_strategy {
     ];
 
     navigator [
-        label="context-intelligence-navigator\ntools: filesystem / search / bash / skills",
+        label="session-navigator\ntools: filesystem / search / bash / skills",
         shape=box,
         style=filled,
         fillcolor="#7AB648",

@@ -10,7 +10,7 @@ Acceptance criteria:
 import pathlib
 
 _BUNDLE_DIR = pathlib.Path(__file__).resolve().parent.parent
-AGENT_FILE = _BUNDLE_DIR / "agents" / "context-intelligence-graph-analyst.md"
+AGENT_FILE = _BUNDLE_DIR / "agents" / "graph-analyst.md"
 GRAPH_MODEL_FILE = _BUNDLE_DIR / "context" / "graph-model-reference.md"
 SKILL_FILE = _BUNDLE_DIR / "skills" / "context-intelligence-graph-query" / "SKILL.md"
 

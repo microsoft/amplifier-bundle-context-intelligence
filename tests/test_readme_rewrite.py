@@ -40,8 +40,8 @@ class TestProhibitedContent:
         matches = re.findall(r"\bcontext-intelligence-analyst\b", readme)
         assert len(matches) == 0, (
             f"README must not reference old agent name 'context-intelligence-analyst', "
-            f"found {len(matches)} occurrence(s). Use 'context-intelligence-graph-analyst' "
-            f"and 'context-intelligence-navigator' instead."
+            f"found {len(matches)} occurrence(s). Use 'graph-analyst' "
+            f"and 'session-navigator' instead."
         )
 
     def test_no_blob_list_tool(self, readme: str) -> None:
@@ -91,16 +91,12 @@ class TestAgentsSection:
         assert "## Agents" in readme, "README must contain an '## Agents' section"
 
     def test_graph_analyst_agent_mentioned(self, readme: str) -> None:
-        """README must mention context-intelligence-graph-analyst."""
-        assert "graph-analyst" in readme, (
-            "README must describe the context-intelligence-graph-analyst agent"
-        )
+        """README must mention graph-analyst."""
+        assert "graph-analyst" in readme, "README must describe the graph-analyst agent"
 
     def test_navigator_agent_mentioned(self, readme: str) -> None:
-        """README must mention context-intelligence-navigator."""
-        assert "navigator" in readme, (
-            "README must describe the context-intelligence-navigator agent"
-        )
+        """README must mention session-navigator."""
+        assert "navigator" in readme, "README must describe the session-navigator agent"
 
     def test_graph_analyst_is_primary_entry_point(self, agents_section: str) -> None:
         """README must describe graph-analyst as the primary entry point."""
@@ -163,13 +159,13 @@ class TestRepositoryStructure:
     def test_tree_has_graph_analyst_in_agents(self, structure_section: str) -> None:
         """Repo structure must show graph-analyst in agents/."""
         assert "graph-analyst" in structure_section, (
-            "README repo structure must show context-intelligence-graph-analyst.md in agents/"
+            "README repo structure must show graph-analyst.md in agents/"
         )
 
     def test_tree_has_navigator_in_agents(self, structure_section: str) -> None:
         """Repo structure must show navigator in agents/."""
         assert "navigator" in structure_section, (
-            "README repo structure must show context-intelligence-navigator.md in agents/"
+            "README repo structure must show session-navigator.md in agents/"
         )
 
     def test_tree_has_delegation_strategy_dot(self, structure_section: str) -> None:

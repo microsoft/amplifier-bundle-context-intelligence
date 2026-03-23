@@ -13,7 +13,7 @@ import yaml
 
 BUNDLE_DIR = Path(__file__).parent.parent
 BEHAVIOR_YAML = BUNDLE_DIR / "behaviors" / "context-intelligence.yaml"
-AGENT_MD = BUNDLE_DIR / "agents" / "context-intelligence-graph-analyst.md"
+AGENT_MD = BUNDLE_DIR / "agents" / "graph-analyst.md"
 
 TOOL_GRAPH_QUERY_SOURCE = (
     "git+https://github.com/colombod/amplifier-bundle-context-intelligence"
@@ -123,24 +123,24 @@ class TestBehaviorYamlToolsSection:
 
 
 # ---------------------------------------------------------------------------
-# agents/context-intelligence-graph-analyst.md — frontmatter tools: section tests
+# agents/graph-analyst.md — frontmatter tools: section tests
 # ---------------------------------------------------------------------------
 
 
 class TestAgentFrontmatterTools:
-    """agents/context-intelligence-graph-analyst.md frontmatter must list 5 tools including tool-graph-query."""
+    """agents/graph-analyst.md frontmatter must list 5 tools including tool-graph-query."""
 
     def test_frontmatter_has_tools_section(self, agent_frontmatter):
         """Frontmatter must have a tools: section."""
         assert "tools" in agent_frontmatter, (
-            "agents/context-intelligence-graph-analyst.md frontmatter must have a 'tools:' section"
+            "agents/graph-analyst.md frontmatter must have a 'tools:' section"
         )
 
     def test_frontmatter_tools_has_five_entries(self, agent_frontmatter):
         """tools: section must list exactly 5 modules."""
         tools = agent_frontmatter["tools"]
         assert len(tools) == 5, (
-            f"agents/context-intelligence-graph-analyst.md frontmatter 'tools:' must list 5 modules, "
+            f"agents/graph-analyst.md frontmatter 'tools:' must list 5 modules, "
             f"got {len(tools)}: {[t.get('module') for t in tools]}"
         )
 
@@ -149,7 +149,7 @@ class TestAgentFrontmatterTools:
         tools = agent_frontmatter["tools"]
         modules = [t.get("module") for t in tools if isinstance(t, dict)]
         assert "tool-graph-query" in modules, (
-            "agents/context-intelligence-graph-analyst.md frontmatter 'tools:' must contain 'tool-graph-query'"
+            "agents/graph-analyst.md frontmatter 'tools:' must contain 'tool-graph-query'"
         )
 
     def test_frontmatter_tool_graph_query_has_correct_source(self, agent_frontmatter):

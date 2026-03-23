@@ -24,11 +24,11 @@ Always delegate session analysis to the specialist agents:
 
 | Agent | Purpose |
 |-------|---------|
-| `context-intelligence:context-intelligence-graph-analyst` | Graph queries, delegation tree tracing, blob resolution — **always use this first** |
-| `context-intelligence:context-intelligence-navigator` | Internal fallback only — invoked by graph-analyst when server is unreachable |
+| `context-intelligence:graph-analyst` | Graph queries, delegation tree tracing, blob resolution — **always use this first** |
+| `context-intelligence:session-navigator` | Internal fallback only — invoked by graph-analyst when server is unreachable |
 
-The graph-analyst checks server availability automatically and falls back to the
-navigator when the server is unreachable or returns 0 sessions.
+The graph-analyst checks server availability automatically and falls back to
+`session-navigator` when the server is unreachable or returns 0 sessions.
 
 ## Configuration
 
