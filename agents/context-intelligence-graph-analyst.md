@@ -140,26 +140,36 @@ Load skill: context-intelligence-session-navigation
 The `graph_query` tool auto-injects the `$workspace` parameter scoping results to the current workspace. You only need to provide the Cypher query:
 
 ```cypher
--- Find recent sessions with errors
-MATCH (s:Session)-[:HAS_EVENT]->(e:Event {type: "tool:error"})
-WHERE s.workspace = $workspace
-RETURN s.session_id, s.agent_name, e.timestamp, e.data
-ORDER BY e.timestamp DESC
-LIMIT 20
+-- Tool errors in a session (direct session only)
+MATCH (s:Session {node_id: $session_id, workspace: $workspace})
+      -[:HAS_RUN]->()-[:HAS_STEP]->()-[:TRIGGERED]->(te:ToolExecution {status: "error"})
+RETURN s.node_id, te.tool_name, te.occurred_at, te.data
+ORDER BY te.occurred_at DESC LIMIT 20
+
+-- Tool errors — full delegation tree (includes sub-sessions)
+MATCH (s:Session)-[:SUBSESSION_OF*0..]->(root:Session {node_id: $session_id, workspace: $workspace})
+MATCH (s)-[:HAS_RUN]->()-[:HAS_STEP]->()-[:TRIGGERED]->(te:ToolExecution {status: "error"})
+RETURN s.node_id AS session, te.tool_name, te.occurred_at
+ORDER BY te.occurred_at DESC LIMIT 20
 ```
 
 ### Common Graph Queries
 
 ```cypher
--- Delegation tree from a root session
-MATCH path = (root:Session {session_id: $session_id})-[:SPAWNED*]->(child:Session)
+-- Delegation tree from a session (correct traversal)
+MATCH path = (root:Session {node_id: $session_id, workspace: $workspace})
+             -[:HAS_RUN]->()-[:HAS_STEP]->()-[:TRIGGERED]->
+             (d:Delegation)-[:SPAWNED*1..]->(child:Session)
 RETURN path
 
--- Cross-session tool usage summary
-MATCH (s:Session)-[:HAS_EVENT]->(e:Event)
-WHERE s.workspace = $workspace AND e.type STARTS WITH "tool:"
-RETURN e.type, count(e) AS usage_count
-ORDER BY usage_count DESC
+-- Tool usage by name across a session
+MATCH (s:Session {node_id: $session_id, workspace: $workspace})
+      -[:HAS_RUN]->()-[:HAS_STEP]->()-[:TRIGGERED]->(te:ToolExecution)
+RETURN te.tool_name,
+       count(te)                                                  AS total_calls,
+       sum(CASE te.status WHEN 'error' THEN 1 ELSE 0 END)        AS errors,
+       sum(CASE te.status WHEN 'complete' THEN 1 ELSE 0 END)     AS successes
+ORDER BY total_calls DESC
 ```
 
 ---
