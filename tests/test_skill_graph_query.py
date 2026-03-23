@@ -450,7 +450,7 @@ def test_ac6_all_12_labels_present() -> None:
     assert not missing, f"Node Labels section missing labels: {missing}"
 
 
-def test_ac6_label_count_is_12() -> None:
+def test_ac6_label_count_is_15() -> None:
     """The Node Labels table must document exactly 15 labels (12 original + 3 recipe labels)."""
     label_rows = [
         line
