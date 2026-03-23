@@ -450,8 +450,8 @@ def test_ac6_all_12_labels_present() -> None:
     assert not missing, f"Node Labels section missing labels: {missing}"
 
 
-def test_ac6_label_count_is_12() -> None:
-    """The Node Labels table must document exactly 12 labels."""
+def test_ac6_label_count_is_15() -> None:
+    """The Node Labels table must document exactly 15 labels (12 original + 3 recipe labels)."""
     label_rows = [
         line
         for line in _LABELS_SECTION.strip().splitlines()
@@ -460,7 +460,7 @@ def test_ac6_label_count_is_12() -> None:
         and "Label" not in line
         and "---" not in line
     ]
-    assert len(label_rows) == 12, f"Expected 12 label rows, got {len(label_rows)}"
+    assert len(label_rows) == 15, f"Expected 15 label rows, got {len(label_rows)}"
 
 
 # ===========================================================================
