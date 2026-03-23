@@ -830,7 +830,7 @@ MATCH (r:OrchestratorRun {workspace: $workspace})
 WHERE r.started_at >= $t1 AND r.started_at <= $t2
 MATCH (s:Session)-[:HAS_RUN]->(r)
 OPTIONAL MATCH (s)-[:SUBSESSION_OF*1..]->(root:Session:Root {workspace: $workspace})
-RETURN DISTINCT
+RETURN
   coalesce(root.node_id, s.node_id)       AS root_session_id,
   coalesce(root.started_at, s.started_at) AS root_started,
   count(DISTINCT r)                        AS runs_in_window
@@ -956,6 +956,7 @@ ORDER BY r.started_at
 
 ```cypher
 MATCH (s:Session:Root {workspace: $workspace})
+      -- AssistantStep reached via HAS_STEP only; TRIGGERED goes to ToolExecution
       -[:HAS_RUN|HAS_STEP|SPAWNED*1..20]->(a:AssistantStep)
 WHERE a.input_tokens IS NOT NULL
 WITH s.node_id AS session_id,
@@ -968,3 +969,4 @@ RETURN session_id,
        round(100.0 * cached / (raw_input + cached), 1)       AS cache_hit_pct
 ORDER BY cache_hit_pct DESC LIMIT 20
 ```
+
