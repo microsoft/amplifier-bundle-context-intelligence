@@ -154,6 +154,9 @@ class TestGraphModelReference:
 class TestSkillSchemaAndBugs:
     """Verify SKILL.md schema tables are complete and Pattern 2 + 11 bugs are fixed."""
 
+    _LABELS_SCAN_WINDOW = 2000
+    _RELS_SCAN_WINDOW = 2000
+
     def test_r_seq_bug_fixed(self):
         """Pattern 2 must not reference r.seq — that property does not exist."""
         text = _read(SKILL_FILE)
@@ -171,36 +174,39 @@ class TestSkillSchemaAndBugs:
         labels_pos = text.find("## Node Labels")
         assert labels_pos != -1
         # Check within the table (before next ## section)
-        labels_section = text[labels_pos : labels_pos + 2000]
+        labels_section = text[labels_pos : labels_pos + self._LABELS_SCAN_WINDOW]
         assert "RecipeRun" in labels_section
 
     def test_recipe_loop_iteration_label_present(self):
         """RecipeLoopIteration must appear in the Node Labels table."""
         text = _read(SKILL_FILE)
         labels_pos = text.find("## Node Labels")
-        labels_section = text[labels_pos : labels_pos + 2000]
+        assert labels_pos != -1, "## Node Labels section missing"
+        labels_section = text[labels_pos : labels_pos + self._LABELS_SCAN_WINDOW]
         assert "RecipeLoopIteration" in labels_section
 
     def test_recipe_approval_label_present(self):
         """RecipeApproval must appear in the Node Labels table."""
         text = _read(SKILL_FILE)
         labels_pos = text.find("## Node Labels")
-        labels_section = text[labels_pos : labels_pos + 2000]
+        assert labels_pos != -1, "## Node Labels section missing"
+        labels_section = text[labels_pos : labels_pos + self._LABELS_SCAN_WINDOW]
         assert "RecipeApproval" in labels_section
 
     def test_has_recipe_run_in_relationships(self):
         """HAS_RECIPE_RUN must appear in the Relationship Types table."""
         text = _read(SKILL_FILE)
         rels_pos = text.find("## Relationship Types")
-        assert rels_pos != -1
-        rels_section = text[rels_pos : rels_pos + 2000]
+        assert rels_pos != -1, "## Relationship Types section missing"
+        rels_section = text[rels_pos : rels_pos + self._RELS_SCAN_WINDOW]
         assert "HAS_RECIPE_RUN" in rels_section
 
     def test_spans_run_in_relationships(self):
         """SPANS_RUN must appear in the Relationship Types table."""
         text = _read(SKILL_FILE)
         rels_pos = text.find("## Relationship Types")
-        rels_section = text[rels_pos : rels_pos + 2000]
+        assert rels_pos != -1, "## Relationship Types section missing"
+        rels_section = text[rels_pos : rels_pos + self._RELS_SCAN_WINDOW]
         assert "SPANS_RUN" in rels_section
 
 
