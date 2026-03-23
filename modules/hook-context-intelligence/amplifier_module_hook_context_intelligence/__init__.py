@@ -87,7 +87,7 @@ async def mount(
         try:
             await logging_handler.close()
         except Exception:
-            log.exception("LoggingHandler.close() failed during cleanup")
+            log.debug("LoggingHandler.close() failed during cleanup")
 
         for unreg in unregister_fns:
             try:

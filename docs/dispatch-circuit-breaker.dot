@@ -44,7 +44,7 @@ digraph DispatchCircuitBreaker {
         ];
 
         queue_full [
-            label="queue full\n─────────────────────\n_dispatch_enabled = False\nlogger.warning(\n  \"server_dispatch_queue_full\"\n)\nlocal JSONL capture continues",
+            label="queue full\n─────────────────────\n_dispatch_enabled = False\nlogger.debug(\n  \"server_dispatch_queue_full\"\n)\nlocal JSONL capture continues",
             fillcolor="#FFF3E0",
             color="#E65100"
         ];
@@ -113,7 +113,7 @@ digraph DispatchCircuitBreaker {
         ];
 
         on_failure [
-            label="on_failure\n─────────────────────\n_consecutive_failures += 1\nlogger.warning(\n  \"server_dispatch_failed:\n  attempt N/threshold\n  event=... url=...\"\n)",
+            label="on_failure\n─────────────────────\n_consecutive_failures += 1\nlogger.debug(\n  \"server_dispatch_failed:\n  attempt N/threshold\n  event=... url=...\"\n)",
             fillcolor="#FFF3E0",
             color="#E65100"
         ];
@@ -130,7 +130,7 @@ digraph DispatchCircuitBreaker {
         node [shape=box, style="rounded,filled", penwidth=2];
 
         trip [
-            label="TRIP circuit breaker\n─────────────────────\n_dispatch_enabled = False\nlogger.warning(\n  \"server unreachable after\n  N attempts — dispatch\n  disabled for session\"\n)",
+            label="TRIP circuit breaker\n─────────────────────\n_dispatch_enabled = False\nlogger.debug(\n  \"server unreachable after\n  N attempts — dispatch\n  disabled for session\"\n)",
             fillcolor="#FFEBEE",
             color="#C62828"
         ];

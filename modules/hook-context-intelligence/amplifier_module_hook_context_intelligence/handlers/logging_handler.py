@@ -101,7 +101,9 @@ class LoggingHandler:
         self._dispatch_timeout: float = getattr(resolver, "dispatch_timeout", 10.0)
         self._consecutive_failures: int = 0
         self._dispatch_enabled: bool = True
-        if self._server_url and not self._api_key:
+        if not self._server_url:
+            self._dispatch_enabled = False
+        elif not self._api_key:
             self._dispatch_enabled = False
             logger.debug(
                 "context_intelligence: server URL is configured but api_key is missing — "
@@ -145,7 +147,7 @@ class LoggingHandler:
 
             self._append_event(session_dir, event, sanitized_data)
         except Exception:
-            logger.exception("LoggingHandler error processing %s", event)
+            logger.warning("LoggingHandler disk write error processing %s", event)
 
         if self._server_url and self._dispatch_enabled:
             self._enqueue_dispatch(event, sanitized_data)

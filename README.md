@@ -135,7 +135,7 @@ The worker uses lazy creation: it creates an `httpx.AsyncClient` on the first di
 
 1. Every failed dispatch (network error or non-2xx response) increments the consecutive failure counter.
 2. Once the counter reaches `dispatch_failure_threshold`, dispatch is permanently disabled for the session.
-3. One clear warning is emitted:
+3. One debug message is emitted (only visible when log level is set to DEBUG):
    > `Context intelligence server unreachable after N attempts — dispatch disabled for this session. Local JSONL capture continues.`
 4. Subsequent events are silently skipped (no further log noise); local JSONL capture continues unaffected.
 

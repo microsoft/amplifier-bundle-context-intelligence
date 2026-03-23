@@ -932,7 +932,7 @@ class TestMissingApiKey:
         mock_warning.assert_not_called()
 
     def test_no_server_url_no_api_key_dispatch_enabled_no_warning(self, tmp_path: Path) -> None:
-        """_dispatch_enabled is True and no warning when server_url is None (existing 'no server' path)."""
+        """_dispatch_enabled is False and no warning when server_url is None (no server configured)."""
         with patch.object(logging.getLogger(_LOGGER_NAME), "warning") as mock_warning:
             handler = LoggingHandler(
                 _FakeResolver(
@@ -942,5 +942,5 @@ class TestMissingApiKey:
                     context_intelligence_api_key=None,
                 )
             )
-        assert handler._dispatch_enabled is True
+        assert handler._dispatch_enabled is False
         mock_warning.assert_not_called()

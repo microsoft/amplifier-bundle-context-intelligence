@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from typing import Any
+from unittest.mock import patch
 
 from amplifier_core.models import HookResult
 
@@ -422,6 +423,34 @@ class TestErrorHandling:
         assert result.action == "continue"
         sessions_dir = tmp_path / "proj" / "sessions"
         assert not sessions_dir.exists()
+
+    async def test_disk_write_error_logs_warning_not_exception(self, tmp_path: Path) -> None:
+        """When _append_event raises, handler uses logger.warning (not logger.exception)."""
+        from amplifier_module_hook_context_intelligence.handlers import logging_handler
+        from amplifier_module_hook_context_intelligence.handlers.logging_handler import (
+            LoggingHandler,
+        )
+
+        handler = LoggingHandler(_FakeResolver(tmp_path, "proj"))
+        with (
+            patch.object(handler, "_append_event", side_effect=OSError("disk full")),
+            patch.object(logging_handler.logger, "warning") as mock_warning,
+            patch.object(logging_handler.logger, "exception") as mock_exception,
+        ):
+            result = await handler(
+                "tool:call",
+                {"session_id": "s1", "timestamp": "2026-01-15T10:00:00Z"},
+            )
+
+        # Should still return continue
+        assert isinstance(result, HookResult)
+        assert result.action == "continue"
+        # logger.warning must be called with the new message
+        mock_warning.assert_called_once()
+        call_args = mock_warning.call_args
+        assert call_args[0][0] == "LoggingHandler disk write error processing %s"
+        # logger.exception must NOT be called
+        mock_exception.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
