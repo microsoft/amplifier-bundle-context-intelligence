@@ -173,13 +173,13 @@ class TestToolDeclarations:
         )
 
     def test_tool_graph_query_source(self) -> None:
-        """tool-graph-query must reference the microsoft context-intelligence bundle."""
+        """tool-graph-query must reference the colombod context-intelligence bundle."""
         tools = self._get_tools()
         tool = next((t for t in tools if t.get("module") == "tool-graph-query"), None)
         assert tool is not None, "tool-graph-query not found"
         source = tool.get("source", "")
-        assert "microsoft/amplifier-bundle-context-intelligence" in source, (
-            f"tool-graph-query source must reference microsoft bundle, got: {source}"
+        assert "colombod/amplifier-bundle-context-intelligence" in source, (
+            f"tool-graph-query source must reference colombod bundle, got: {source}"
         )
         assert "tool-graph-query" in source, (
             f"tool-graph-query source must include subdirectory=modules/tool-graph-query, got: {source}"
@@ -193,13 +193,13 @@ class TestToolDeclarations:
         )
 
     def test_tool_blob_read_source(self) -> None:
-        """tool-blob-read must reference the microsoft context-intelligence bundle."""
+        """tool-blob-read must reference the colombod context-intelligence bundle."""
         tools = self._get_tools()
         tool = next((t for t in tools if t.get("module") == "tool-blob-read"), None)
         assert tool is not None, "tool-blob-read not found"
         source = tool.get("source", "")
-        assert "microsoft/amplifier-bundle-context-intelligence" in source, (
-            f"tool-blob-read source must reference microsoft bundle, got: {source}"
+        assert "colombod/amplifier-bundle-context-intelligence" in source, (
+            f"tool-blob-read source must reference colombod bundle, got: {source}"
         )
         assert "tool-blob-read" in source, (
             f"tool-blob-read source must include subdirectory=modules/tool-blob-read, got: {source}"

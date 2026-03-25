@@ -2,7 +2,7 @@
 
 An [Amplifier](https://github.com/microsoft/amplifier) bundle that captures session events as structured data for analysis and querying.
 
-The bundle writes every session event to a local JSONL log and — when configured with a server URL — forwards events to the [Context Intelligence Server](https://github.com/microsoft/amplifier-context-intelligence) for graph storage and blob management.
+The bundle writes every session event to a local JSONL log and — when configured with a server URL — forwards events to the [Context Intelligence Server](https://github.com/colombod/amplifier-context-intelligence) for graph storage and blob management.
 
 ---
 
@@ -63,13 +63,13 @@ The hook resolves `workspace` using the same `config → coordinator → default
 **Add to an existing app** (recommended) — layers the behavior on top of your active bundle without pulling in foundation as a dependency:
 
 ```bash
-amplifier bundle add git+https://github.com/microsoft/amplifier-bundle-context-intelligence@main#subdirectory=behaviors/context-intelligence.yaml --app
+amplifier bundle add git+https://github.com/colombod/amplifier-bundle-context-intelligence@main#subdirectory=behaviors/context-intelligence.yaml --app
 ```
 
 **Standalone** — creates a dedicated session configuration using the full root bundle (includes foundation):
 
 ```bash
-amplifier bundle add git+https://github.com/microsoft/amplifier-bundle-context-intelligence@main
+amplifier bundle add git+https://github.com/colombod/amplifier-bundle-context-intelligence@main
 amplifier bundle use context-intelligence
 ```
 
@@ -77,7 +77,7 @@ Every Amplifier session will now write events to local JSONL files automatically
 
 ### 2. (Optional) Enable server forwarding
 
-To push events to the [Context Intelligence Server](https://github.com/microsoft/amplifier-context-intelligence) for graph storage and querying, you need a running server instance and its API key. See the [server repository](https://github.com/microsoft/amplifier-context-intelligence) for setup instructions.
+To push events to the [Context Intelligence Server](https://github.com/colombod/amplifier-context-intelligence) for graph storage and querying, you need a running server instance and its API key. See the [server repository](https://github.com/colombod/amplifier-context-intelligence) for setup instructions.
 
 Once the server is running, point the hook at it with the server URL and API key:
 
@@ -351,6 +351,6 @@ uv run pytest ../../tests/ -q
 
 ## Related
 
-- [amplifier-context-intelligence](https://github.com/microsoft/amplifier-context-intelligence) — the CI server (Neo4j + blob storage + dashboard)
+- [amplifier-context-intelligence](https://github.com/colombod/amplifier-context-intelligence) — the CI server (Neo4j + blob storage + dashboard)
 - [amplifier-app-cli](https://github.com/microsoft/amplifier-app-cli) — CLI that sends `project_slug` used for workspace resolution
 - [amplifier](https://github.com/microsoft/amplifier) — the Amplifier framework

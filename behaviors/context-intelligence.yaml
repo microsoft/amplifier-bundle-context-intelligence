@@ -12,13 +12,13 @@ agents:
 
 tools:
   - module: tool-graph-query
-    source: git+https://github.com/microsoft/amplifier-bundle-context-intelligence@main#subdirectory=modules/tool-graph-query
+    source: git+https://github.com/colombod/amplifier-bundle-context-intelligence@main#subdirectory=modules/tool-graph-query
   - module: tool-blob-read
-    source: git+https://github.com/microsoft/amplifier-bundle-context-intelligence@main#subdirectory=modules/tool-blob-read
+    source: git+https://github.com/colombod/amplifier-bundle-context-intelligence@main#subdirectory=modules/tool-blob-read
 
 hooks:
   - module: hook-context-intelligence
-    source: git+https://github.com/microsoft/amplifier-bundle-context-intelligence@main#subdirectory=modules/hook-context-intelligence
+    source: git+https://github.com/colombod/amplifier-bundle-context-intelligence@main#subdirectory=modules/hook-context-intelligence
     config:
       context_intelligence_server_url: "${AMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_URL:}"
       context_intelligence_api_key: "${AMPLIFIER_CONTEXT_INTELLIGENCE_API_KEY:}"
