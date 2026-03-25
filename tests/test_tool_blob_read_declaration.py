@@ -15,7 +15,7 @@ BUNDLE_DIR = Path(__file__).parent.parent
 BEHAVIOR_YAML = BUNDLE_DIR / "behaviors" / "context-intelligence.yaml"
 
 TOOL_BLOB_READ_SOURCE = (
-    "git+https://github.com/colombod/amplifier-bundle-context-intelligence"
+    "git+https://github.com/microsoft/amplifier-bundle-context-intelligence"
     "@main#subdirectory=modules/tool-blob-read"
 )
 
