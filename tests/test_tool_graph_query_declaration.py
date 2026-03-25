@@ -16,7 +16,7 @@ BEHAVIOR_YAML = BUNDLE_DIR / "behaviors" / "context-intelligence.yaml"
 AGENT_MD = BUNDLE_DIR / "agents" / "graph-analyst.md"
 
 TOOL_GRAPH_QUERY_SOURCE = (
-    "git+https://github.com/colombod/amplifier-bundle-context-intelligence"
+    "git+https://github.com/microsoft/amplifier-bundle-context-intelligence"
     "@main#subdirectory=modules/tool-graph-query"
 )
 
