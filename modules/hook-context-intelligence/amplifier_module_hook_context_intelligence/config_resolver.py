@@ -2,11 +2,27 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Any
 
 _DEFAULT_BASE_PATH = "~/.amplifier/projects"
 _DEFAULT_PROJECT_SLUG = "default"
+
+# Environment variable prefix for all hook configuration.
+# AMPLIFIER_CONTEXT_INTELLIGENCE_WORKSPACE  → workspace
+# AMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_URL → context_intelligence_server_url
+# etc.
+_ENV_PREFIX = "AMPLIFIER_CONTEXT_INTELLIGENCE_"
+
+
+def _env(suffix: str) -> str | None:
+    """Read ``AMPLIFIER_CONTEXT_INTELLIGENCE_<SUFFIX>`` from the environment.
+
+    Returns the value as a string if set and non-empty, otherwise ``None``.
+    """
+    value = os.environ.get(_ENV_PREFIX + suffix)
+    return value if value else None
 
 
 def _slugify_path(path_str: str) -> str:
@@ -32,7 +48,7 @@ class ConfigResolver:
 
     - project_slug: config → coordinator.config → session.working_dir capability → 'default'
     - base_path:    config → coordinator.config → default
-    - workspace:    coordinator.config['workspace'] → config['workspace'] → project_slug
+    - workspace:    config['workspace'] → coordinator.config['workspace'] → project_slug
 
     Resolved values are cached after first access.
 
@@ -45,6 +61,7 @@ class ConfigResolver:
         self._coordinator = coordinator
         self._base_path: Path | None = None
         self._project_slug: str | None = None
+        self._workspace: str | None = None
         self._exclude_events: frozenset[str] | None = None
 
     # ------------------------------------------------------------------
@@ -127,24 +144,21 @@ class ConfigResolver:
         """Workspace identifier for this session.
 
         Priority (first truthy value wins):
-        1. coordinator.config[\"workspace\"]  — set by integrations at coordinator level
-        2. config[\"workspace\"]              — explicit hook config
-        3. project_slug / project chain     — from CLI or working dir
+        1. config[\"workspace\"]              — explicit hook config / settings.yaml / env var (highest)
+        2. coordinator.config[\"workspace\"]  — set by the application at coordinator level
+        3. project_slug / project chain     — auto-resolved from CLI or working dir
+
+        Follows the same config → coordinator → default pattern as all other properties.
         """
-        # 1. Coordinator-level workspace (highest — set by integrations)
-        if self._coordinator is not None:
-            coord_config = getattr(self._coordinator, "config", {}) or {}
-            ws = coord_config.get("workspace")
-            if ws:
-                return str(ws)
+        if self._workspace is None:
+            raw = (
+                self._config.get("workspace")
+                or self._coordinator_config_get("workspace")
+                or self.project_slug
+            )
+            self._workspace = str(raw)
 
-        # 2. Explicit workspace in hook config
-        ws = self._config.get("workspace")
-        if ws:
-            return str(ws)
-
-        # 3. Fall through project_slug / project / working_dir / 'default'
-        return self.project_slug
+        return self._workspace
 
     @property
     def exclude_events(self) -> frozenset[str]:

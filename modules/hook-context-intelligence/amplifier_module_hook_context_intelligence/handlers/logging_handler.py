@@ -145,7 +145,7 @@ class LoggingHandler:
             elif event in ("session:end", "execution:end"):
                 self._finalize_metadata(session_dir, sanitized_data)
 
-            self._append_event(session_dir, event, sanitized_data)
+            self._append_event(session_dir, event, sanitized_data, self._workspace)
         except Exception:
             logger.warning("LoggingHandler disk write error processing %s", event)
 
@@ -170,6 +170,7 @@ class LoggingHandler:
             "format": _METADATA_FORMAT,
             "version": _METADATA_VERSION,
             "session_id": session_id,
+            "workspace": self._workspace or "",
             "parent_id": data.get("parent_id") or data.get("parent") or "",
             "started_at": data.get("timestamp", ""),
             "status": "running",
@@ -361,9 +362,12 @@ class LoggingHandler:
 
     # -- shared JSONL appender ----------------------------------------------
     @staticmethod
-    def _append_event(session_dir: Path, event: str, data: dict[str, Any]) -> None:
+    def _append_event(
+        session_dir: Path, event: str, data: dict[str, Any], workspace: str | None
+    ) -> None:
         record = {
             "event": event,
+            "workspace": workspace or "",
             "timestamp": data.get("timestamp", ""),
             "data": data,
         }

@@ -10,7 +10,7 @@ The bundle writes every session event to a local JSONL log and — when configur
 
 | Always active | When `context_intelligence_server_url` is set |
 |---------------|-----------------------------------------------|
-| Writes `events.jsonl` + `metadata.json` per session | POSTs every event to the CI server |
+| Writes `events.jsonl` + `metadata.json` per session, both tagged with `workspace` | POSTs every event to the CI server |
 | | Enables graph-powered Cypher queries via `graph_query` tool |
 | | Enables `blob_read` tool for resolving `ci-blob://` URIs |
 
@@ -21,9 +21,50 @@ Two agents are included for querying session data:
 
 ---
 
+## Understanding workspace
+
+**Workspace** is the primary isolation boundary for event data. It is written into every local file and every server POST — sessions in different workspaces are completely independent whether queried locally or via the graph. Typical uses: separate projects (`my-api`, `frontend`), separate environments (`dev`, `staging`, `prod`), or separate teams on a shared server.
+
+### How workspace appears in data
+
+`workspace` is a top-level field in all three places data is written:
+
+**`events.jsonl`** — every line:
+```json
+{"event":"session:start","workspace":"my-project","timestamp":"2026-01-15T10:23:44.123Z","data":{"session_id":"abc-123","working_dir":"/home/user/myapp",...}}
+```
+
+**`metadata.json`** — session-level record:
+```json
+{"format":"context-intelligence","version":"1.0.0","session_id":"abc-123","workspace":"my-project","parent_id":"","started_at":"2026-01-15T10:23:44.123Z","status":"completed","ended_at":"2026-01-15T10:24:01.456Z","working_dir":"/home/user/myapp"}
+```
+
+**Server POST** (`POST /events`) — forwarded to the CI server:
+```json
+{"event":"session:start","workspace":"my-project","idempotency_key":"aci-event-v1:<sha256>","data":{...}}
+```
+
+### Resolution priority
+
+The hook resolves `workspace` using the same `config → coordinator → default` pattern as all other properties:
+
+| Priority | Source | Notes |
+|----------|--------|-------|
+| **1 (highest)** | `config["workspace"]` | From `settings.yaml` or env var — see [Configuration reference](#configuration-reference) |
+| **2** | `coordinator.config["workspace"]` | Set programmatically before the session starts — see [Embedding](#embedding-in-an-amplifier-application) |
+| **3 (lowest)** | `project_slug` derived from working directory | Automatic — `/home/user/my-api` becomes `-home-user-my-api` |
+
+---
+
 ## Quick Start
 
-### 1. Install the bundle
+### 1. Install
+
+**Add to an existing app** (recommended) — layers the behavior on top of your active bundle without pulling in foundation as a dependency:
+
+```bash
+amplifier bundle add git+https://github.com/colombod/amplifier-bundle-context-intelligence@main#subdirectory=behaviors/context-intelligence.yaml --app
+```
 
 **Standalone** — creates a dedicated session configuration using the full root bundle (includes foundation):
 
@@ -32,50 +73,27 @@ amplifier bundle add git+https://github.com/colombod/amplifier-bundle-context-in
 amplifier bundle use context-intelligence
 ```
 
-**Into an existing app** — composes into your current app bundle using the behavior layer only (does not force foundation re-inclusion):
+Every Amplifier session will now write events to local JSONL files automatically — no server required.
 
-```bash
-amplifier bundle add git+https://github.com/colombod/amplifier-bundle-context-intelligence@main#subdirectory=behaviors/context-intelligence.yaml --app
-```
+### 2. (Optional) Enable server forwarding
 
-At this point the bundle is active. Every Amplifier session will write events to local JSONL files automatically — no server required.
-
-### 2. (Optional) Enable forwarding to the Context Intelligence Server
-
-To also push events to the server for graph storage and querying, start the server and configure the bundle to point at it.
+To push events to the CI server for graph storage and querying:
 
 **Start the server:**
 
 ```bash
 git clone https://github.com/colombod/amplifier-context-intelligence
 cd amplifier-context-intelligence
-./start.sh
-# Server ready at http://localhost:8000
+./start.sh        # generates credentials on first run
+docker compose up -d  # for subsequent restarts
 ```
 
-The `start.sh` script generates credentials on first run. Retrieve your API key:
-
+Retrieve your API key:
 ```bash
 grep api_key ~/amplifier-context-intelligence-server-data-store/credentials.yaml
 ```
 
-Copy this key to your bundle config as `context_intelligence_api_key`.
-
-For subsequent restarts, use:
-```bash
-docker compose up -d
-```
-
-**Configure the hook** via environment variables:
-
-```bash
-export AMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_URL=http://localhost:8000
-export AMPLIFIER_CONTEXT_INTELLIGENCE_API_KEY=<your-api-key>  # from credentials.yaml
-export AMPLIFIER_CONTEXT_INTELLIGENCE_WORKSPACE=my-project    # optional, auto-resolved from project slug
-export AMPLIFIER_CONTEXT_INTELLIGENCE_LOG_LEVEL=INFO          # optional, default: INFO
-```
-
-Or via `settings.yaml` overrides:
+**Configure** via `settings.yaml`:
 
 ```yaml
 # ~/.amplifier/settings.yaml  (or project .amplifier/settings.yaml)
@@ -83,36 +101,123 @@ overrides:
   hook-context-intelligence:
     config:
       context_intelligence_server_url: "http://localhost:8000"
-      context_intelligence_api_key: "<your-api-key>"   # from credentials.yaml or server-init output
-      workspace: "my-project"   # optional
+      context_intelligence_api_key: "<your-api-key>"
+      workspace: "my-project"    # optional — auto-resolved if omitted
 ```
 
-> **Docker deployments** always generate an API key. Retrieve it with:
-> `grep api_key ~/amplifier-context-intelligence-server-data-store/credentials.yaml`
+Or via environment variables:
 
-### 3. Verify it's working
+```bash
+export AMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_URL=http://localhost:8000
+export AMPLIFIER_CONTEXT_INTELLIGENCE_API_KEY=<your-api-key>
+export AMPLIFIER_CONTEXT_INTELLIGENCE_WORKSPACE=my-project   # optional
+```
 
-After running an Amplifier session, check for the JSONL file:
+### 3. Verify
+
+After running a session:
 
 ```bash
 ls ~/.amplifier/projects/<project_slug>/sessions/*/context-intelligence/
-# You should see: events.jsonl  metadata.json
+# events.jsonl  metadata.json
+
+head -1 ~/.amplifier/projects/<project_slug>/sessions/*/context-intelligence/events.jsonl | jq .workspace
+cat ~/.amplifier/projects/<project_slug>/sessions/*/context-intelligence/metadata.json | jq .workspace
 ```
 
-If `context_intelligence_server_url` is configured, open `http://localhost:8000/dashboard` — you will be prompted for your API key if auth is enabled. Enter the key from `credentials.yaml`. Once authenticated, you should see your session under Active or Completed Sessions. The Neo4j status chip will show Connected when Neo4j is reachable.
+If the server is configured, open `http://localhost:8000/dashboard` — your session will appear once authenticated.
+
+---
+
+## Embedding in an Amplifier application
+
+When integrating this hook from Python rather than through the bundle CLI, call `mount()` directly.
+
+```python
+from amplifier_module_hook_context_intelligence import mount
+```
+
+Signature:
+
+```python
+async def mount(coordinator, config: dict) -> cleanup_fn
+```
+
+`mount()` returns an async cleanup coroutine that **must** be awaited when the session ends — it drains in-flight HTTP dispatches and closes the persistent HTTP client.
+
+### Minimal — JSONL only
+
+```python
+cleanup = await mount(coordinator, config={})
+# ... session runs ...
+await cleanup()
+```
+
+With an empty config dict the hook resolves everything from `coordinator.config` and the working-directory slug.
+
+### Full config dict
+
+All keys are optional. Omitted keys fall through to `coordinator.config` then to built-in defaults:
+
+```python
+config = {
+    # Server forwarding — omit entirely to disable
+    "context_intelligence_server_url": "http://localhost:8000",
+    "context_intelligence_api_key": "your-api-key",
+
+    # Workspace — written into every events.jsonl record and metadata.json
+    # Omit to fall back to coordinator.config["workspace"], then project_slug
+    "workspace": "my-project",
+
+    # Storage (default: ~/.amplifier/projects)
+    "base_path": "/var/data/amplifier/projects",
+
+    # Tuning — all optional
+    "log_level": "WARNING",
+    "exclude_events": ["context:compaction"],
+    "dispatch_timeout": 30,
+    "dispatch_failure_threshold": 3,
+}
+
+cleanup = await mount(coordinator, config=config)
+await cleanup()
+```
+
+### Workspace via coordinator.config
+
+When workspace varies at runtime (e.g., multi-tenant apps), omit `workspace` from the config dict and set it on the coordinator instead. It is consulted as the middle fallback:
+
+```python
+coordinator.config["workspace"] = tenant_id   # priority 2 — used when config["workspace"] is absent
+
+cleanup = await mount(coordinator, config={
+    "context_intelligence_server_url": "http://localhost:8000",
+    "context_intelligence_api_key": "your-api-key",
+})
+```
+
+### Accessing resolved values
+
+`mount()` registers a `ConfigResolver` as the `context_intelligence.config_resolver` capability:
+
+```python
+resolver = coordinator.get_capability("context_intelligence.config_resolver")
+resolver.workspace                  # resolved workspace string
+resolver.base_path                  # resolved Path object
+resolver.session_dir("abc-123")     # Path to a session's CI directory
+```
 
 ---
 
 ## Configuration reference
 
-All config keys are read from the `overrides.hook-context-intelligence.config` block
-in `settings.yaml`, or from environment variables set in the shell or CI environment.
+The `config` dict passed to `mount()` uses the same keys as the `overrides.hook-context-intelligence.config` block in `settings.yaml`. The Amplifier framework maps `AMPLIFIER_CONTEXT_INTELLIGENCE_<KEY>` environment variables into the config dict before `mount()` is called, so env vars and `settings.yaml` entries share the same priority level.
 
 | Key | Env var | Default | Description |
 |-----|---------|---------|-------------|
-| `context_intelligence_server_url` | `AMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_URL` | *(empty)* | Base URL of the CI server. Events are only forwarded when this is set. |
-| `context_intelligence_api_key` | `AMPLIFIER_CONTEXT_INTELLIGENCE_API_KEY` | *(empty)* | Bearer token matching the server's `api_key`. Required when the server is configured with auth. The hook adds `Authorization: Bearer <value>` to all HTTP dispatches. If set on hook but missing on server (or vice versa), dispatch will fail. |
-| `workspace` | `AMPLIFIER_CONTEXT_INTELLIGENCE_WORKSPACE` | *(auto)* | Scopes graph data on the server. Resolved from `coordinator.config['workspace']`, then `project_slug`, then working directory slug. |
+| `context_intelligence_server_url` | `AMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_URL` | *(empty)* | Base URL of the CI server. Events are forwarded only when this is set. |
+| `context_intelligence_api_key` | `AMPLIFIER_CONTEXT_INTELLIGENCE_API_KEY` | *(empty)* | Bearer token matching the server's `api_key`. Added as `Authorization: Bearer <value>` on every HTTP dispatch. |
+| `workspace` | `AMPLIFIER_CONTEXT_INTELLIGENCE_WORKSPACE` | *(auto)* | Written into every `events.jsonl` record and `metadata.json`. Resolution: `config["workspace"]` → `coordinator.config["workspace"]` → `project_slug`. |
 | `log_level` | `AMPLIFIER_CONTEXT_INTELLIGENCE_LOG_LEVEL` | `INFO` | Hook logging level. |
 | `base_path` | — | `~/.amplifier/projects` | Root directory for local JSONL output. |
 | `exclude_events` | — | `[]` | fnmatch patterns for events to suppress. |
@@ -127,31 +232,29 @@ in `settings.yaml`, or from environment variables set in the shell or CI environ
 
 ### Dispatch isolation
 
-The hook isolates server traffic behind a single bounded background worker per session. The event callback only appends local JSONL and enqueues best-effort HTTP work; it never waits for a server round trip. The worker lazily creates a persistent `httpx.AsyncClient`, reuses one keep-alive connection, and serializes POSTs to avoid unbounded task growth when the server is slow or unavailable.
+The hook isolates server traffic behind a single bounded background worker per session. The event callback only appends local JSONL and enqueues best-effort HTTP work — it never waits for a server round trip. The worker lazily creates a persistent `httpx.AsyncClient`, reuses one keep-alive connection, and serializes POSTs to avoid unbounded task growth when the server is slow or unavailable.
 
-HTTP timeouts are phase-specific rather than one blanket timeout: short `connect`/`pool` fail-fast bounds, a moderate `read` timeout, and `dispatch_timeout` applied to the `write` phase so larger payload uploads do not fail prematurely.
+HTTP timeouts are phase-specific: short `connect`/`pool` fail-fast bounds, a moderate `read` timeout, and `dispatch_timeout` applied to the `write` phase so larger payload uploads do not fail prematurely.
 
-Each live POST also carries a deterministic top-level `idempotency_key` derived from the sanitized event envelope. The server may use that key to suppress duplicate live submissions while still allowing explicit replay mode from local `events.jsonl`.
+Each live POST carries a deterministic `idempotency_key` derived from the sanitized event envelope. The server may use it to suppress duplicate live submissions while still allowing explicit replay from local `events.jsonl`.
 
-If the dispatch queue fills, dispatch is disabled for the rest of the session and local JSONL capture continues. This prevents stalled network I/O from feeding back into hook latency or memory growth.
+If the dispatch queue fills, dispatch is disabled for the rest of the session and local JSONL capture continues.
 
 ### Connection reuse
 
-The worker uses lazy creation: it creates an `httpx.AsyncClient` on the first dispatch request and keeps it alive for the entire session lifetime. This lazy init avoids opening a connection before any events are dispatched. The shared client provides TCP connection pooling — a single keep-alive TCP connection is reused for all POSTs rather than opening a new connection per event. The client is closed via `aclose()` during session finalization.
+The worker uses lazy creation: it creates an `httpx.AsyncClient` on the first dispatch request and keeps it alive for the entire session lifetime. This avoids opening a connection before any events arrive. TCP connection pooling means a single keep-alive connection is reused for all POSTs rather than opening a new one per event. The client is closed via `aclose()` during session finalization.
 
 ### Circuit breaker
 
-1. Every failed dispatch (network error or non-2xx response) increments the consecutive failure counter.
+1. Every failed dispatch increments the consecutive failure counter.
 2. Once the counter reaches `dispatch_failure_threshold`, dispatch is permanently disabled for the session.
-3. One debug message is emitted (only visible when log level is set to DEBUG):
+3. One debug message is emitted (visible only at DEBUG log level):
    > `Context intelligence server unreachable after N attempts — dispatch disabled for this session. Local JSONL capture continues.`
-4. Subsequent events are silently skipped (no further log noise); local JSONL capture continues unaffected.
+4. Subsequent events are silently skipped; local JSONL capture continues unaffected.
 
 ### Recovery
 
-Restart the Amplifier session once the server is back. There is no mid-session auto-recovery — once the circuit opens or the dispatch queue saturates, dispatch stays disabled for that session. The JSONL files contain a complete record of all events and can be replayed into the server after it recovers.
-
-### Architecture diagram
+Restart the session once the server is back. There is no mid-session auto-recovery. The JSONL files contain a complete record and can be replayed into the server after it recovers.
 
 See [`docs/dispatch-circuit-breaker.dot`](docs/dispatch-circuit-breaker.dot) for the full dispatch flow and circuit breaker state machine.
 
@@ -159,19 +262,43 @@ See [`docs/dispatch-circuit-breaker.dot`](docs/dispatch-circuit-breaker.dot) for
 
 ## What gets stored
 
-### Local JSONL (always)
+### Local files (always)
 
-Every session writes to:
 ```
 <base_path>/<project_slug>/sessions/<session_id>/context-intelligence/
-├── events.jsonl    ← one JSON line per event
-└── metadata.json   ← format, version, session lifecycle metadata
+├── events.jsonl    ← one JSON line per event, each tagged with workspace
+└── metadata.json   ← session lifecycle record, also tagged with workspace
 ```
+
+`events.jsonl` record schema — fields in order:
+
+```
+event      string   — event name, e.g. "session:start", "tool:call"
+workspace  string   — isolation scope (empty string if not configured)
+timestamp  string   — ISO 8601 timestamp from event data
+data       object   — full sanitized event payload
+```
+
+`metadata.json` schema:
+
+```
+format      string   — always "context-intelligence"
+version     string   — always "1.0.0"
+session_id  string
+workspace   string   — same value as in events.jsonl
+parent_id   string   — empty if root session
+started_at  string
+status      string   — "running" → "completed" / "failed"
+ended_at    string   — set on finalisation
+working_dir string
+```
+
+Optional fields (present only when set): `agent_name`, `parallel_group_id`, `recipe_name`, `recipe_step`.
 
 ### Server-side graph (when server configured)
 
 All graph building, Neo4j writes, and blob management happen in the CI server.
-The graph model is documented in [`context/graph-model-reference.md`](context/graph-model-reference.md).
+See [`context/graph-model-reference.md`](context/graph-model-reference.md) for the Neo4j graph model.
 
 ---
 
@@ -182,9 +309,9 @@ The graph model is documented in [`context/graph-model-reference.md`](context/gr
 | `graph-analyst` | `graph_query`, `blob_read`, `tool-filesystem`, `tool-bash`, `tool-skills` | Primary entry point — graph-powered analysis via Cypher, blob resolution |
 | `session-navigator` | `tool-filesystem`, `tool-search`, `tool-bash`, `tool-skills` | Local fallback — safe JSONL navigation via bash/jq/grep |
 
-**Delegation chain:** External callers always invoke `graph-analyst`. Before each analysis run, `graph-analyst` checks server availability. If the server is unreachable or the workspace contains 0 sessions, it delegates to `session-navigator`, which navigates local JSONL files using safe extraction patterns. `session-navigator` is never invoked directly by external callers.
+**Delegation chain:** External callers always invoke `graph-analyst`. If the server is unreachable or the workspace contains 0 sessions, it delegates to `session-navigator`, which navigates local JSONL files using safe extraction patterns. `session-navigator` is never invoked directly.
 
-**Safe JSONL navigation** — `session-navigator` knows about large-file pitfalls and uses streaming extraction patterns. See [`context/safe-extraction-patterns.md`](context/safe-extraction-patterns.md).
+See [`context/safe-extraction-patterns.md`](context/safe-extraction-patterns.md) for JSONL navigation patterns.
 
 ---
 
@@ -222,18 +349,13 @@ amplifier-bundle-context-intelligence/
 
 ## Development
 
-### Run module tests
-
 ```bash
+# Module tests
 cd modules/hook-context-intelligence
 uv sync
 uv run pytest tests/ -q
-```
 
-### Run bundle-level tests
-
-```bash
-cd modules/hook-context-intelligence
+# Bundle-level tests
 uv run pytest ../../tests/ -q
 ```
 
@@ -242,5 +364,5 @@ uv run pytest ../../tests/ -q
 ## Related
 
 - [amplifier-context-intelligence](https://github.com/colombod/amplifier-context-intelligence) — the CI server (Neo4j + blob storage + dashboard)
-- [amplifier-app-cli](https://github.com/microsoft/amplifier-app-cli) — CLI that sends `project_slug` used for `workspace` resolution
+- [amplifier-app-cli](https://github.com/microsoft/amplifier-app-cli) — CLI that sends `project_slug` used for workspace resolution
 - [amplifier](https://github.com/microsoft/amplifier) — the Amplifier framework

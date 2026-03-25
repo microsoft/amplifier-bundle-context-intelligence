@@ -212,8 +212,8 @@ class TestStorageFileContent:
 
         for i, line in enumerate(lines):
             record = json.loads(line)
-            assert set(record.keys()) == {"event", "timestamp", "data"}, (
-                f"Line {i}: record keys must be exactly {{event, timestamp, data}}, "
+            assert set(record.keys()) == {"event", "workspace", "timestamp", "data"}, (
+                f"Line {i}: record keys must be exactly {{event, workspace, timestamp, data}}, "
                 f"got {set(record.keys())}"
             )
         await cleanup()
@@ -237,6 +237,7 @@ class TestStorageFileContent:
         assert meta["format"] == "context-intelligence"
         assert meta["version"] == "1.0.0"
         assert meta["session_id"] == "sess-meta"
+        assert "workspace" in meta
         assert meta["status"] == "completed"
         assert "started_at" in meta
         assert "ended_at" in meta

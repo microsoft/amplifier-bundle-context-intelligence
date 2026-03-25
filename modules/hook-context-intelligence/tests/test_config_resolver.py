@@ -130,12 +130,24 @@ class TestProjectSlugResolution:
 
 
 class TestWorkspaceResolution:
-    """workspace property — coordinator.config > config > project_slug."""
+    """workspace property — config > coordinator.config > project_slug.
 
-    def test_coordinator_config_wins_over_hook_config(self) -> None:
-        """coordinator.config['workspace'] has highest priority."""
+    Follows the same pattern as base_path and project_slug: explicit hook
+    config wins, coordinator.config is the middle fallback, project_slug
+    (auto-derived) is the last resort.
+    """
+
+    def test_hook_config_wins_over_coordinator_config(self) -> None:
+        """config['workspace'] has highest priority — overrides coordinator.config."""
         coordinator = _make_coordinator(config={"workspace": "from-coordinator"})
         resolver = ConfigResolver(config={"workspace": "from-hook"}, coordinator=coordinator)
+
+        assert resolver.workspace == "from-hook"
+
+    def test_coordinator_config_fallback_when_hook_config_absent(self) -> None:
+        """coordinator.config['workspace'] is used when config has no workspace."""
+        coordinator = _make_coordinator(config={"workspace": "from-coordinator"})
+        resolver = ConfigResolver(config={}, coordinator=coordinator)
 
         assert resolver.workspace == "from-coordinator"
 

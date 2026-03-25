@@ -127,7 +127,7 @@ def test_frontmatter_description() -> None:
 
 
 def test_frontmatter_version() -> None:
-    assert _FRONTMATTER.get("version") == "0.1.0"
+    assert _FRONTMATTER.get("version") == "0.2.0"
 
 
 def test_frontmatter_license() -> None:

@@ -19,9 +19,10 @@ from amplifier_core.models import HookResult
 class _FakeResolver:
     """Minimal resolver adapter for testing LoggingHandler in isolation."""
 
-    def __init__(self, base_path: Path, project_slug: str) -> None:
+    def __init__(self, base_path: Path, project_slug: str, workspace: str = "test-workspace") -> None:
         self.base_path = base_path
         self.project_slug = project_slug
+        self.workspace = workspace
 
     def session_dir(self, session_id: str) -> Path:
         return self.base_path / self.project_slug / "sessions" / session_id / "context-intelligence"
@@ -88,7 +89,7 @@ class TestSessionStart:
             LoggingHandler,
         )
 
-        handler = LoggingHandler(_FakeResolver(tmp_path, "proj"))
+        handler = LoggingHandler(_FakeResolver(tmp_path, "proj", workspace="my-project"))
         await handler(
             "session:start",
             {
@@ -104,6 +105,7 @@ class TestSessionStart:
         assert meta["format"] == "context-intelligence"
         assert meta["version"] == "1.0.0"
         assert meta["session_id"] == "s1"
+        assert meta["workspace"] == "my-project"
         assert meta["parent_id"] == "p1"
         assert meta["started_at"] == "2026-01-15T10:00:00Z"
         assert meta["status"] == "running"
@@ -528,14 +530,14 @@ class TestSanitizeForJson:
 # TestRecordFormat
 # ---------------------------------------------------------------------------
 class TestRecordFormat:
-    """Each JSONL line has exactly {event, timestamp, data}."""
+    """Each JSONL line has exactly {event, workspace, timestamp, data}."""
 
-    async def test_record_has_exactly_three_keys(self, tmp_path: Path) -> None:
+    async def test_record_has_exactly_four_keys(self, tmp_path: Path) -> None:
         from amplifier_module_hook_context_intelligence.handlers.logging_handler import (
             LoggingHandler,
         )
 
-        handler = LoggingHandler(_FakeResolver(tmp_path, "proj"))
+        handler = LoggingHandler(_FakeResolver(tmp_path, "proj", workspace="my-ws"))
         await handler(
             "tool:call",
             {
@@ -547,7 +549,19 @@ class TestRecordFormat:
         jsonl_path = tmp_path / "proj" / "sessions" / "s1" / "context-intelligence" / "events.jsonl"
         line = jsonl_path.read_text().strip()
         record = json.loads(line)
-        assert set(record.keys()) == {"event", "timestamp", "data"}
+        assert set(record.keys()) == {"event", "workspace", "timestamp", "data"}
         assert record["event"] == "tool:call"
+        assert record["workspace"] == "my-ws"
         assert record["timestamp"] == "2026-01-15T10:00:01Z"
         assert isinstance(record["data"], dict)
+
+    async def test_record_workspace_empty_string_when_none(self, tmp_path: Path) -> None:
+        from amplifier_module_hook_context_intelligence.handlers.logging_handler import (
+            LoggingHandler,
+        )
+
+        handler = LoggingHandler(_FakeResolver(tmp_path, "proj", workspace=""))
+        await handler("tool:call", {"session_id": "s1", "timestamp": "t1"})
+        jsonl_path = tmp_path / "proj" / "sessions" / "s1" / "context-intelligence" / "events.jsonl"
+        record = json.loads(jsonl_path.read_text().strip())
+        assert record["workspace"] == ""
