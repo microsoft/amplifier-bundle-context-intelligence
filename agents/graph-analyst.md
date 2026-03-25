@@ -1,4 +1,8 @@
 ---
+bundle:
+  name: graph-analyst
+  description: Graph-powered session and event analysis agent using Cypher queries and blob resolution for context-intelligence.
+
 meta:
   name: graph-analyst
   description: |
@@ -29,9 +33,7 @@ meta:
     <commentary>Delegation tree tracing across many sessions benefits from graph traversal rather than scanning JSONL files.</commentary>
     </example>
 
-model_role:
-  - reasoning
-  - general
+model_role: reasoning
 
 tools:
   - module: tool-graph-query

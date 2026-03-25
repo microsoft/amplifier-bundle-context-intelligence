@@ -1,4 +1,8 @@
 ---
+bundle:
+  name: session-navigator
+  description: Local JSONL fallback agent for session navigation when the context-intelligence graph server is unreachable.
+
 meta:
   name: session-navigator
   description: |
