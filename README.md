@@ -77,21 +77,9 @@ Every Amplifier session will now write events to local JSONL files automatically
 
 ### 2. (Optional) Enable server forwarding
 
-To push events to the CI server for graph storage and querying:
+To push events to the [Context Intelligence Server](https://github.com/colombod/amplifier-context-intelligence) for graph storage and querying, you need a running server instance and its API key. See the [server repository](https://github.com/colombod/amplifier-context-intelligence) for setup instructions.
 
-**Start the server:**
-
-```bash
-git clone https://github.com/colombod/amplifier-context-intelligence
-cd amplifier-context-intelligence
-./start.sh        # generates credentials on first run
-docker compose up -d  # for subsequent restarts
-```
-
-Retrieve your API key:
-```bash
-grep api_key ~/amplifier-context-intelligence-server-data-store/credentials.yaml
-```
+Once the server is running, point the hook at it with the server URL and API key:
 
 **Configure** via `settings.yaml`:
 
