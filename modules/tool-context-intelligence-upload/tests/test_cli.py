@@ -44,6 +44,15 @@ class TestCompactHelp:
 class TestDetailedHelp:
     """The --help flag must print detailed help to stdout and exit 0."""
 
+    @pytest.fixture
+    def detailed_help_output(self, capsys) -> str:
+        """Capture and return the full --help output once per test."""
+        from amplifier_module_tool_context_intelligence_upload.cli import _build_parser
+
+        with pytest.raises(SystemExit):
+            _build_parser().parse_args(["--help"])
+        return capsys.readouterr().out
+
     def test_double_dash_help_exits_zero(self, capsys):
         from amplifier_module_tool_context_intelligence_upload.cli import _build_parser
 
@@ -51,50 +60,27 @@ class TestDetailedHelp:
             _build_parser().parse_args(["--help"])
         assert exc_info.value.code == 0
 
-    def test_double_dash_help_contains_examples(self, capsys):
-        from amplifier_module_tool_context_intelligence_upload.cli import _build_parser
+    def test_double_dash_help_contains_examples(self, detailed_help_output):
+        assert "Replay a single session directory" in detailed_help_output
+        assert "Replay an entire project tree" in detailed_help_output
+        assert "Target a recovery server" in detailed_help_output
 
-        with pytest.raises(SystemExit):
-            _build_parser().parse_args(["--help"])
-        captured = capsys.readouterr()
-        assert "Replay a single session directory" in captured.out
-        assert "Replay an entire project tree" in captured.out
-        assert "Target a recovery server" in captured.out
-
-    def test_double_dash_help_contains_progress_schema_fields(self, capsys):
+    def test_double_dash_help_contains_progress_schema_fields(self, detailed_help_output):
         """Progress schema section must contain 'failed_at' and 'sessions_total' fields."""
-        from amplifier_module_tool_context_intelligence_upload.cli import _build_parser
+        assert "failed_at" in detailed_help_output
+        assert "sessions_total" in detailed_help_output
 
-        with pytest.raises(SystemExit):
-            _build_parser().parse_args(["--help"])
-        captured = capsys.readouterr()
-        assert "failed_at" in captured.out
-        assert "sessions_total" in captured.out
+    def test_double_dash_help_contains_exit_codes(self, detailed_help_output):
+        assert "EXIT CODES" in detailed_help_output
 
-    def test_double_dash_help_contains_exit_codes(self, capsys):
-        from amplifier_module_tool_context_intelligence_upload.cli import _build_parser
+    def test_double_dash_help_contains_idempotency(self, detailed_help_output):
+        assert "IDEMPOTENCY" in detailed_help_output
 
-        with pytest.raises(SystemExit):
-            _build_parser().parse_args(["--help"])
-        captured = capsys.readouterr()
-        assert "EXIT CODES" in captured.out
-
-    def test_double_dash_help_contains_idempotency(self, capsys):
-        from amplifier_module_tool_context_intelligence_upload.cli import _build_parser
-
-        with pytest.raises(SystemExit):
-            _build_parser().parse_args(["--help"])
-        captured = capsys.readouterr()
-        assert "IDEMPOTENCY" in captured.out
-
-    def test_double_dash_help_contains_workspace_and_metadata_validation(self, capsys):
-        from amplifier_module_tool_context_intelligence_upload.cli import _build_parser
-
-        with pytest.raises(SystemExit):
-            _build_parser().parse_args(["--help"])
-        captured = capsys.readouterr()
-        assert "WORKSPACE" in captured.out
-        assert "METADATA VALIDATION" in captured.out
+    def test_double_dash_help_contains_workspace_and_metadata_validation(
+        self, detailed_help_output
+    ):
+        assert "WORKSPACE" in detailed_help_output
+        assert "METADATA VALIDATION" in detailed_help_output
 
 
 # ---------------------------------------------------------------------------

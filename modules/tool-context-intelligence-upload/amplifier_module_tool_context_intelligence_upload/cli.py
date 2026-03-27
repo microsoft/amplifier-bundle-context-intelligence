@@ -179,62 +179,40 @@ Target a recovery server with a custom job ID:
 # ---------------------------------------------------------------------------
 
 
-class _CompactHelpAction(argparse.Action):
-    """Print compact (one-screen) help to stdout and exit 0."""
+def _make_help_action(text: str) -> type[argparse.Action]:
+    """Return a custom argparse.Action that writes *text* to stdout and exits 0."""
 
-    def __init__(
-        self,
-        option_strings: list[str],
-        dest: str = argparse.SUPPRESS,
-        default: str = argparse.SUPPRESS,
-        help: str | None = None,  # noqa: A002
-    ) -> None:
-        super().__init__(
-            option_strings=option_strings,
-            dest=dest,
-            default=default,
-            nargs=0,
-            help=help,
-        )
+    class _Action(argparse.Action):
+        def __init__(
+            self,
+            option_strings: list[str],
+            dest: str = argparse.SUPPRESS,
+            default: str = argparse.SUPPRESS,
+            help: str | None = None,  # noqa: A002
+        ) -> None:
+            super().__init__(
+                option_strings=option_strings,
+                dest=dest,
+                default=default,
+                nargs=0,
+                help=help,
+            )
 
-    def __call__(
-        self,
-        parser: argparse.ArgumentParser,
-        namespace: argparse.Namespace,
-        values: object,
-        option_string: str | None = None,
-    ) -> None:
-        sys.stdout.write(_COMPACT_HELP)
-        parser.exit(0)
+        def __call__(
+            self,
+            parser: argparse.ArgumentParser,
+            namespace: argparse.Namespace,
+            values: object,
+            option_string: str | None = None,
+        ) -> None:
+            sys.stdout.write(text)
+            parser.exit(0)
+
+    return _Action
 
 
-class _DetailedHelpAction(argparse.Action):
-    """Print full documentation to stdout and exit 0."""
-
-    def __init__(
-        self,
-        option_strings: list[str],
-        dest: str = argparse.SUPPRESS,
-        default: str = argparse.SUPPRESS,
-        help: str | None = None,  # noqa: A002
-    ) -> None:
-        super().__init__(
-            option_strings=option_strings,
-            dest=dest,
-            default=default,
-            nargs=0,
-            help=help,
-        )
-
-    def __call__(
-        self,
-        parser: argparse.ArgumentParser,
-        namespace: argparse.Namespace,
-        values: object,
-        option_string: str | None = None,
-    ) -> None:
-        sys.stdout.write(_DETAILED_HELP)
-        parser.exit(0)
+_CompactHelpAction = _make_help_action(_COMPACT_HELP)
+_DetailedHelpAction = _make_help_action(_DETAILED_HELP)
 
 
 # ---------------------------------------------------------------------------
