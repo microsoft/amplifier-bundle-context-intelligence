@@ -176,6 +176,8 @@ class LoggingHandler:
         if meta_path.exists():
             meta = json.loads(meta_path.read_text())
         else:
+            # defensive: should already exist from _ensure_metadata; this branch
+            # is unreachable in normal flow but guards against unexpected race conditions.
             meta = {
                 "format": _METADATA_FORMAT,
                 "version": _METADATA_VERSION,
@@ -204,6 +206,8 @@ class LoggingHandler:
         if meta_path.exists():
             meta = json.loads(meta_path.read_text())
         else:
+            # defensive: should already exist from _ensure_metadata; this branch
+            # is unreachable in normal flow but guards against unexpected race conditions.
             meta = {
                 "format": _METADATA_FORMAT,
                 "version": _METADATA_VERSION,
@@ -321,13 +325,6 @@ class LoggingHandler:
             self._consecutive_failures += 1
             logger.debug(
                 "server_dispatch_failed: attempt %d/%d event=%s url=%s",
-                self._consecutive_failures,
-                self._failure_threshold,
-                event,
-                self._server_url,
-            )
-            logger.debug(
-                "server_dispatch_failed traceback: attempt %d/%d event=%s url=%s",
                 self._consecutive_failures,
                 self._failure_threshold,
                 event,

@@ -2,6 +2,9 @@
 
 Provides UploadResult, _count_lines, and run_upload for replaying
 session events.jsonl files to the Context Intelligence ingestion endpoint.
+
+CLI context: this module runs as a CLI tool, so user-facing warnings are written
+to stderr via ``print(..., file=sys.stderr)`` rather than the ``logging`` module.
 """
 
 from __future__ import annotations

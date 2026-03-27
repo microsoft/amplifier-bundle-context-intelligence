@@ -2,6 +2,9 @@
 
 Provides two functions for discovering Amplifier session metadata files and
 ordering them in BFS topological order for upload processing.
+
+CLI context: this module runs as a CLI tool, so user-facing warnings are written
+to stderr via ``print(..., file=sys.stderr)`` rather than the ``logging`` module.
 """
 
 from __future__ import annotations
