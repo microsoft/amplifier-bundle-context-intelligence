@@ -71,7 +71,7 @@ class TestDiscoverSessions:
         results = _discover_sessions(tmp_path)
         assert len(results) == 0
         captured = capsys.readouterr()
-        # Warning must contain "missing 'session_id'" (actual message: "missing 'session_id', skipping")
+        # substring match — tolerates future rephrasing of the suffix
         assert "missing 'session_id'" in captured.err
 
     def test_missing_parent_id_treated_as_root(self, tmp_path):
