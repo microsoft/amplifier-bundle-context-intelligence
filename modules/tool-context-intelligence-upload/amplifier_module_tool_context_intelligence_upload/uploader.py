@@ -28,11 +28,13 @@ class UploadResult:
         sessions_uploaded: int,
         events_uploaded: int,
         error: str | None = None,
+        failed_at: dict[str, Any] | None = None,
     ) -> None:
         self.success = success
         self.sessions_uploaded = sessions_uploaded
         self.events_uploaded = events_uploaded
         self.error = error
+        self.failed_at = failed_at
 
     def to_dict(self) -> dict[str, Any]:
         """Return a dict representation of this result.
@@ -154,6 +156,11 @@ def run_upload(
                             sessions_uploaded=total_sessions_uploaded,
                             events_uploaded=total_events_uploaded,
                             error=str(exc),
+                            failed_at={
+                                "session_id": session_id,
+                                "event_index": event_index,
+                                "http_status": 0,
+                            },
                         )
 
                     if response.status_code < 200 or response.status_code >= 300:
@@ -169,6 +176,11 @@ def run_upload(
                             sessions_uploaded=total_sessions_uploaded,
                             events_uploaded=total_events_uploaded,
                             error=error_msg,
+                            failed_at={
+                                "session_id": session_id,
+                                "event_index": event_index,
+                                "http_status": response.status_code,
+                            },
                         )
 
                     tracker.event_sent()
