@@ -39,8 +39,6 @@ tools:
     config:
       skills:
         - context-intelligence:skills/
-  - module: tool-context-intelligence-upload
-    source: git+https://github.com/microsoft/amplifier-bundle-context-intelligence@main#subdirectory=modules/tool-context-intelligence-upload
 ---
 
 # Session Navigator
@@ -210,37 +208,23 @@ jq '.' metadata.json
 
 ## Section 2.5: Upload Capability
 
-Two upload tools are available to upload local session data to the context-intelligence graph server: `context_intelligence_upload_start` and `context_intelligence_upload_status`.
+Use the `context-intelligence-upload` CLI via the bash tool to replay session events
+to a server. Useful for recovery scenarios when the server was previously unreachable.
 
-**IMPORTANT DIFFERENCE from graph-analyst:** Because session-navigator is active when the graph server is unreachable or not configured, `server_url` and `api_key` will **not be resolved automatically** from the bundle configuration. The user **must provide them explicitly** when calling `context_intelligence_upload_start`.
+Since session-navigator is active when no server is configured, you must locate
+`server_url` and `api_key` explicitly before invoking:
 
-### Parameters
+1. Check environment variables: `$AMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_URL` and `$AMPLIFIER_CONTEXT_INTELLIGENCE_API_KEY`
+2. Or read from bundle config YAML under `hook-context-intelligence.config`: `context_intelligence_server_url` and `context_intelligence_api_key`
 
-- **`path`** (required) — Path to the session directory or events.jsonl file to upload.
-- **`server_url`** (required for session-navigator) — URL of the context-intelligence graph server. Must be provided explicitly; it will not be auto-resolved.
-- **`api_key`** (required for session-navigator) — API key for authenticating with the server. Must be provided explicitly; it will not be auto-resolved.
-
-### Example Invocation
-
-```
-context_intelligence_upload_start(
-    path="~/.amplifier/projects/my-project/sessions/abc123",
-    server_url="https://my-ci-server.example.com",
-    api_key="my-api-key-here"
-)
+```bash
+context-intelligence-upload \
+  --path ~/.amplifier/projects/my-project \
+  --server-url "https://your-server.example.com" \
+  --api-key "your-api-key"
 ```
 
-This returns a `job_id`. Poll for completion using `context_intelligence_upload_status`:
-
-```
-context_intelligence_upload_status(job_id="<job_id from upload_start>")
-```
-
-Keep polling until the status indicates completion or failure.
-
-### Workspace Behavior
-
-Workspace is **never a parameter** to either upload tool. The workspace is read automatically from the session's `events.jsonl` records — it does not need to be (and cannot be) passed explicitly.
+Run `context-intelligence-upload --help` for full options including progress monitoring.
 
 ---
 
