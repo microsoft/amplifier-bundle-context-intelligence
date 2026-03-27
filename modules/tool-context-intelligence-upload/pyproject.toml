@@ -9,9 +9,6 @@ dependencies = [
     "amplifier-module-hook-context-intelligence",
 ]
 
-[project.entry-points."amplifier.modules"]
-tool-context-intelligence-upload = "amplifier_module_tool_context_intelligence_upload:mount"
-
 [project.scripts]
 context-intelligence-upload = "amplifier_module_tool_context_intelligence_upload.cli:main"
 
@@ -27,7 +24,6 @@ packages = ["amplifier_module_tool_context_intelligence_upload"]
 
 [dependency-groups]
 dev = [
-    "amplifier-core",
     "pytest>=8.0",
     "pytest-asyncio>=0.24",
     "pyright>=1.1",
@@ -35,7 +31,6 @@ dev = [
 ]
 
 [tool.uv.sources]
-amplifier-core = { git = "https://github.com/microsoft/amplifier-core", branch = "main" }
 amplifier-module-hook-context-intelligence = { path = "../hook-context-intelligence", editable = true }
 
 [tool.pytest.ini_options]
