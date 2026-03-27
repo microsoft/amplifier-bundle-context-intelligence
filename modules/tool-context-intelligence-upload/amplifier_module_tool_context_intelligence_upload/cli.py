@@ -150,28 +150,27 @@ EXIT CODES
 
 EXAMPLES
 --------
-Upload all sessions under a project directory:
+Replay a single session directory:
+
+  context-intelligence-upload \\
+      --path ~/.amplifier/projects/my-project/sessions/abc123/context-intelligence \\
+      --server-url https://ci.example.com \\
+      --api-key $CI_API_KEY
+
+Replay an entire project tree:
 
   context-intelligence-upload \\
       --path ~/.amplifier/projects/my-project \\
       --server-url https://ci.example.com \\
       --api-key $CI_API_KEY
 
-Upload a single session metadata file with a custom job ID:
-
-  context-intelligence-upload \\
-      --path ~/.amplifier/projects/my-project/sessions/abc123/context-intelligence/metadata.json \\
-      --server-url https://ci.example.com \\
-      --api-key $CI_API_KEY \\
-      --job-id my-retry-job-001
-
-Write progress to a custom location:
+Target a recovery server with a custom job ID:
 
   context-intelligence-upload \\
       --path /data/sessions \\
-      --server-url https://ci.example.com \\
+      --server-url https://recovery.example.com \\
       --api-key $CI_API_KEY \\
-      --progress /var/log/ci-upload-progress.json
+      --job-id my-retry-job-001
 """
 
 
@@ -313,7 +312,8 @@ def main() -> None:
     job_id: str = args.job_id
     if job_id is None:
         job_id = str(uuid.uuid4())
-        print(f"job_id: {job_id}", file=sys.stderr)
+        prog_default = f"/tmp/context-intelligence-upload-{job_id}.json"
+        print(f"job_id: {job_id}  progress={prog_default}", file=sys.stderr)
 
     # 2. Validate path exists
     target_path = Path(args.path)
@@ -330,7 +330,7 @@ def main() -> None:
     # 4. Handle no sessions found
     if not sessions:
         print(
-            "No context-intelligence sessions found — nothing to upload.",
+            "No sessions found under the given path — nothing to upload.",
             file=sys.stderr,
         )
         result = {
