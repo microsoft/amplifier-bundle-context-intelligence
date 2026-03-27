@@ -45,14 +45,15 @@ class TestProjectSection:
         assert any("amplifier-module-hook-context-intelligence" in d for d in deps)
 
 
-class TestEntryPoints:
-    """Validate entry points."""
+class TestNoAmplifierEntryPoints:
+    """Validate that amplifier.modules entry points have been removed."""
 
-    def test_amplifier_modules_entry_point(self):
+    def test_no_amplifier_modules_entry_point(self):
+        """[project.entry-points.'amplifier.modules'] must NOT exist after wrapper removal."""
         data = _load()
-        entry_points = data["project"]["entry-points"]["amplifier.modules"]
-        assert entry_points["tool-context-intelligence-upload"] == (
-            "amplifier_module_tool_context_intelligence_upload:mount"
+        entry_points = data.get("project", {}).get("entry-points", {})
+        assert "amplifier.modules" not in entry_points, (
+            "amplifier.modules entry-point must be removed — CLI is the single code path"
         )
 
 
@@ -95,10 +96,13 @@ class TestUVConfig:
 class TestDependencyGroups:
     """Validate [dependency-groups] dev dependencies."""
 
-    def test_dev_includes_amplifier_core(self):
+    def test_dev_does_not_include_amplifier_core(self):
+        """amplifier-core must NOT be in dev deps after wrapper removal."""
         data = _load()
         dev = data["dependency-groups"]["dev"]
-        assert any("amplifier-core" in d for d in dev)
+        assert not any("amplifier-core" in d for d in dev), (
+            "amplifier-core must be removed from dev deps — no longer needed"
+        )
 
     def test_dev_includes_pytest(self):
         data = _load()
@@ -124,11 +128,13 @@ class TestDependencyGroups:
 class TestUVSources:
     """Validate [tool.uv.sources] configuration."""
 
-    def test_amplifier_core_source_is_git_main(self):
+    def test_no_amplifier_core_in_uv_sources(self):
+        """amplifier-core must NOT be in [tool.uv.sources] after wrapper removal."""
         data = _load()
-        source = data["tool"]["uv"]["sources"]["amplifier-core"]
-        assert source.get("git") == "https://github.com/microsoft/amplifier-core"
-        assert source.get("branch") == "main"
+        sources = data.get("tool", {}).get("uv", {}).get("sources", {})
+        assert "amplifier-core" not in sources, (
+            "amplifier-core must be removed from uv sources — no longer a dependency"
+        )
 
     def test_hook_module_source_is_editable_local(self):
         data = _load()
