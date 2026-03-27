@@ -108,9 +108,11 @@ before their children:
 
 IDEMPOTENCY GUARANTEE
 ---------------------
-The tool has NO built-in deduplication.  Re-running with the same PATH will
-re-upload all sessions.  Idempotency must be provided by the server (e.g. by
-using session_id + event index as a natural key).
+The tool has NO built-in deduplication -- re-running will re-upload all sessions.
+Idempotency is provided by the server using the ``idempotency_key`` field in every
+POST payload.  This key is a SHA-256 hash of the canonical event JSON, so the server
+can safely skip already-ingested events by treating ``idempotency_key`` as a natural
+key.  This means it is safe to re-upload the same PATH multiple times.
 
 WORKSPACE BEHAVIOUR
 -------------------

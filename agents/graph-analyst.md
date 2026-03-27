@@ -265,7 +265,7 @@ Poll with `context_intelligence_upload_status` using the `job_id` returned by `c
 }
 ```
 
-Poll until the status is `complete` or `error`.
+Poll until the status is `completed` or `failed`.
 
 ---
 
