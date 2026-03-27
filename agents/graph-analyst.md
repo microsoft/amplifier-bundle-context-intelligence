@@ -53,6 +53,8 @@ tools:
     config:
       skills:
         - context-intelligence:skills/
+  - module: tool-context-intelligence-upload
+    source: git+https://github.com/microsoft/amplifier-bundle-context-intelligence@main#subdirectory=modules/tool-context-intelligence-upload
 ---
 
 # Graph Analyst
@@ -220,6 +222,50 @@ Task: [original analysis task]
 - **Never read local JSONL files yourself** — You do not have safe JSONL extraction patterns. The session-navigator agent specializes in safe JSONL extraction. Attempting to grep or cat events.jsonl directly risks a session crash.
 - **Never delegate to yourself** — Do not delegate to `graph-analyst`. That is a self-delegation loop. Use `session-navigator` for JSONL-based fallback analysis.
 - **Never escalate to foundation:session-analyst directly** — session-navigator handles escalation if needed. Your fallback path is always session-navigator first.
+
+---
+
+## Section 3.5: Upload Capability
+
+The `context_intelligence_upload_start` and `context_intelligence_upload_status` tools are available to you for uploading local session data to the context-intelligence server.
+
+### Configuration
+
+Configuration is resolved automatically. Because graph-analyst runs inside Amplifier with the context-intelligence bundle loaded, the server URL, API key, and workspace are all resolved from the bundle configuration without any manual input. You only need to provide `path`.
+
+### Workspace
+
+Workspace is never a parameter for the upload tools. It is read automatically from the session's `events.jsonl` file.
+
+### Starting an Upload
+
+Use `context_intelligence_upload_start` with the `path` to the session directory or JSONL file:
+
+```json
+{
+  "tool": "context_intelligence_upload_start",
+  "params": {
+    "path": "~/.amplifier/projects/my-project/sessions/abc123"
+  }
+}
+```
+
+The tool returns a `job_id` for the background upload operation.
+
+### Polling for Status
+
+Poll with `context_intelligence_upload_status` using the `job_id` returned by `context_intelligence_upload_start`:
+
+```json
+{
+  "tool": "context_intelligence_upload_status",
+  "params": {
+    "job_id": "<job_id from upload_start>"
+  }
+}
+```
+
+Poll until the status is `complete` or `error`.
 
 ---
 
