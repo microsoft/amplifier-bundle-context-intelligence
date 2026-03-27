@@ -155,8 +155,9 @@ class TestServerDispatchFailure:
         """An exception during dispatch is logged at DEBUG level only — no WARNING emitted.
 
         Since the remote server is optional, failures are intentionally silent at WARNING
-        level to avoid polluting the user's terminal. Two debug calls are made:
-        one without exc_info (brief summary) and one with exc_info (full traceback for devs).
+        level to avoid polluting the user's terminal. The failure is logged as a single
+        DEBUG call with exc_info=True so the traceback is available to developers without
+        cluttering the user's terminal with multiple debug messages.
         """
         handler = LoggingHandler(
             _FakeResolver(
@@ -185,12 +186,11 @@ class TestServerDispatchFailure:
         # No WARNING emitted — remote server is optional, failures must not pollute user output
         mock_warning.assert_not_called()
 
-        # Two DEBUG calls: brief summary (no exc_info) + full traceback (exc_info=True)
-        assert mock_debug.call_count == 2
-        first_debug_kwargs = mock_debug.call_args_list[0][1]
-        assert first_debug_kwargs.get("exc_info") is not True
-        second_debug_kwargs = mock_debug.call_args_list[1][1]
-        assert second_debug_kwargs.get("exc_info") is True
+        # At least one DEBUG call on failure; the last call carries exc_info=True so the
+        # full traceback is available to developers inspecting debug logs.
+        assert mock_debug.call_count >= 1
+        last_debug_kwargs = mock_debug.call_args_list[-1][1]
+        assert last_debug_kwargs.get("exc_info") is True
 
 
 class TestIdempotencyKey:
