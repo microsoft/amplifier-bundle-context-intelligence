@@ -15,8 +15,6 @@ tools:
     source: git+https://github.com/microsoft/amplifier-bundle-context-intelligence@main#subdirectory=modules/tool-graph-query
   - module: tool-blob-read
     source: git+https://github.com/microsoft/amplifier-bundle-context-intelligence@main#subdirectory=modules/tool-blob-read
-  - module: tool-context-intelligence-upload
-    source: git+https://github.com/microsoft/amplifier-bundle-context-intelligence@main#subdirectory=modules/tool-context-intelligence-upload
 
 hooks:
   - module: hook-context-intelligence
