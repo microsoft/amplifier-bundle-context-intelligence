@@ -134,7 +134,7 @@ class LoggingHandler:
 
             self._append_event(session_dir, event, sanitized_data, self._workspace)
         except Exception:
-            logger.warning("LoggingHandler disk write error processing %s", event)
+            logger.warning("LoggingHandler disk write error processing %s", event, exc_info=True)
 
         if self._server_url and self._dispatch_enabled:
             self._enqueue_dispatch(event, sanitized_data)
