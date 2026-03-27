@@ -32,7 +32,10 @@ class TestCliEntryPoint:
     def test_cli_entry_point_value_is_correct(self):
         """CLI entry point value must point to amplifier_module_tool_context_intelligence_upload.cli:main."""
         eps = importlib.metadata.entry_points(group="console_scripts")
-        ep = next(ep for ep in eps if ep.name == "context-intelligence-upload")
+        ep = next((ep for ep in eps if ep.name == "context-intelligence-upload"), None)
+        assert ep is not None, (
+            "Entry point 'context-intelligence-upload' not found in console_scripts"
+        )
         assert ep.value == "amplifier_module_tool_context_intelligence_upload.cli:main"
 
 
