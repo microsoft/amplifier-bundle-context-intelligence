@@ -527,6 +527,34 @@ class TestPersistentClient:
         payload = mock_client.post.await_args.kwargs["json"]
         assert payload["idempotency_key"] == _compute_idempotency_key("tool:pre", "ws", data)
 
+    async def test_dispatch_payload_workspace_none_normalized_to_empty_string(
+        self, tmp_path: Path
+    ) -> None:
+        """When workspace is None, the HTTP payload workspace field must be '' not None."""
+        handler = LoggingHandler(
+            _FakeResolver(
+                tmp_path,
+                "proj",
+                context_intelligence_server_url="http://localhost:8080",
+                workspace=None,  # no workspace configured
+                context_intelligence_api_key="test-api-key",
+            )
+        )
+
+        mock_response = MagicMock()
+        mock_response.raise_for_status.return_value = None
+        mock_client = AsyncMock()
+        mock_client.is_closed = False
+        mock_client.post.return_value = mock_response
+        handler._client = mock_client
+
+        await handler._dispatch_to_server("tool:pre", {"session_id": "s1"})
+
+        payload = mock_client.post.await_args.kwargs["json"]
+        assert payload["workspace"] == "", (
+            "workspace must be normalized to '' when resolver has no workspace, not None"
+        )
+
     async def test_closed_client_silently_skips(self, tmp_path: Path) -> None:
         """A RuntimeError about a closed client is silently skipped, not counted as failure."""
         handler = LoggingHandler(

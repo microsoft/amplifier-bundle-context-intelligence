@@ -16,7 +16,8 @@ import httpx
 
 from amplifier_module_hook_context_intelligence.upload import (
     _canonical_json,
-    _compute_idempotency_key,
+    _compute_idempotency_key,  # noqa: F401 — re-exported for test imports
+    build_payload,
 )
 
 from amplifier_core.models import HookResult
@@ -306,12 +307,7 @@ class LoggingHandler:
             client = self._client
 
         try:
-            payload = {
-                "event": event,
-                "workspace": self._workspace,
-                "idempotency_key": _compute_idempotency_key(event, self._workspace, data),
-                "data": data,
-            }
+            payload = build_payload(event, self._workspace, data)
             response = await client.post(f"{self._server_url}/events", json=payload)
             response.raise_for_status()
             self._consecutive_failures = 0
