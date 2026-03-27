@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Any
 
 from amplifier_module_tool_context_intelligence_upload.session_graph import (
     _discover_sessions,
@@ -16,7 +17,7 @@ from amplifier_module_tool_context_intelligence_upload.session_graph import (
 # ---------------------------------------------------------------------------
 
 
-def _write_metadata(tmp_path: Path, sid: str, data: dict) -> Path:
+def _write_metadata(tmp_path: Path, sid: str, data: dict[str, Any]) -> Path:
     """Write metadata.json under tmp_path/sessions/{sid}/context-intelligence/."""
     directory = tmp_path / "sessions" / sid / "context-intelligence"
     directory.mkdir(parents=True, exist_ok=True)
