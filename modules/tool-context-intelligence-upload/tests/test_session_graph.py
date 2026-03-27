@@ -101,12 +101,14 @@ class TestDiscoverSessions:
         _, meta = results[0]
         assert meta["parent_id"] == ""
 
-    def test_invalid_json_skipped(self, tmp_path):
+    def test_invalid_json_skipped(self, tmp_path, capsys):
         bad_dir = tmp_path / "sessions" / "bad-sess" / "context-intelligence"
         bad_dir.mkdir(parents=True)
         (bad_dir / "metadata.json").write_text("{invalid json}")
         results = _discover_sessions(tmp_path)
         assert len(results) == 0
+        captured = capsys.readouterr()
+        assert captured.err == ""
 
     def test_multiple_sessions_discovered(self, tmp_path):
         for i in range(3):
@@ -229,3 +231,18 @@ class TestDiscoverAndSort:
         assert "root-a" in ids
         assert "child-of-a" in ids
         assert ids.index("root-a") < ids.index("child-of-a")
+
+    def test_empty_parent_id_treated_as_root(self, tmp_path):
+        """Empty parent_id must be treated as root (appears in output, not lost)."""
+        _write_metadata(
+            tmp_path,
+            "sess-1",
+            {
+                "format": "context-intelligence",
+                "session_id": "sess-1",
+                "parent_id": "",
+            },
+        )
+        results = discover_and_sort(tmp_path)
+        ids = [meta["session_id"] for _, meta in results]
+        assert "sess-1" in ids
