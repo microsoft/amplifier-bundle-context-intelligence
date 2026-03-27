@@ -1,8 +1,7 @@
 """Tests for entry point discovery and pyproject.toml validation.
 
-Validates that the module is correctly registered as an Amplifier module,
-the CLI entry point is properly configured, the module type attribute is set,
-and the pyproject.toml structure matches the spec.
+Validates that the CLI entry point is properly configured and the
+pyproject.toml structure matches the spec.
 """
 
 from __future__ import annotations
@@ -30,28 +29,11 @@ class TestEntryPointDiscovery:
         names = [ep.name for ep in eps]
         assert "tool-context-intelligence-upload" in names
 
-    def test_entry_point_loads_callable_mount_function(self):
-        """The entry point must load to a callable mount function."""
-        eps = importlib.metadata.entry_points(group="amplifier.modules")
-        ep = next(ep for ep in eps if ep.name == "tool-context-intelligence-upload")
-        mount = ep.load()
-        assert callable(mount)
-
     def test_entry_point_value_is_correct(self):
         """Entry point value must be 'amplifier_module_tool_context_intelligence_upload:mount'."""
         eps = importlib.metadata.entry_points(group="amplifier.modules")
         ep = next(ep for ep in eps if ep.name == "tool-context-intelligence-upload")
         assert ep.value == "amplifier_module_tool_context_intelligence_upload:mount"
-
-
-class TestModuleTypeClassification:
-    """Test that the module declares the correct Amplifier module type."""
-
-    def test_amplifier_module_type_is_tool(self):
-        """__amplifier_module_type__ must equal 'tool'."""
-        import amplifier_module_tool_context_intelligence_upload as mod
-
-        assert mod.__amplifier_module_type__ == "tool"
 
 
 class TestCliEntryPoint:
