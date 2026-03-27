@@ -345,6 +345,17 @@ uv run pytest tests/ -q
 
 # Bundle-level tests
 uv run pytest ../../tests/ -q
+
+# YAML validation — requires pyyaml (not installed by default in the bundle virtualenv)
+# Install pyyaml first if the command fails with "No module named 'yaml'":
+#   pip install pyyaml   OR   uv pip install pyyaml
+uv run python -c "
+import yaml; from pathlib import Path
+data = yaml.safe_load(Path('behaviors/context-intelligence.yaml').read_text())
+[print(f'  - {t[\"module\"]}') for t in data.get('tools', [])]
+[print(f'  - {h[\"module\"]}') for h in data.get('hooks', [])]
+print('YAML validates OK')
+"
 ```
 
 ---
