@@ -180,6 +180,14 @@ class TestCompactHelp:
         captured = capsys.readouterr()
         assert captured.err == ""
 
+    def test_minus_h_contains_command_name(self, capsys):
+        from amplifier_module_tool_context_intelligence_upload.cli import _build_parser
+
+        with pytest.raises(SystemExit):
+            _build_parser().parse_args(["-h"])
+        captured = capsys.readouterr()
+        assert "context-intelligence-upload" in captured.out
+
 
 # ---------------------------------------------------------------------------
 # --help detailed help
@@ -259,6 +267,16 @@ class TestDetailedHelp:
             _build_parser().parse_args(["--help"])
         captured = capsys.readouterr()
         assert "PROGRESS FILE" in captured.out
+
+    def test_double_dash_help_contains_progress_schema_fields(self, capsys):
+        """Progress schema section must contain 'failed_at' and 'sessions_total' fields."""
+        from amplifier_module_tool_context_intelligence_upload.cli import _build_parser
+
+        with pytest.raises(SystemExit):
+            _build_parser().parse_args(["--help"])
+        captured = capsys.readouterr()
+        assert "failed_at" in captured.out
+        assert "sessions_total" in captured.out
 
     def test_double_dash_help_contains_exit_codes(self, capsys):
         from amplifier_module_tool_context_intelligence_upload.cli import _build_parser
