@@ -3,42 +3,12 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-
-def run_cli(*args: str) -> tuple[int, str, str]:
-    """Run the CLI with *args and capture stdout, stderr, and exit code.
-
-    Returns (exit_code, stdout, stderr).
-    """
-    from amplifier_module_tool_context_intelligence_upload import cli
-
-    with (
-        patch("sys.argv", ["context-intelligence-upload", *args]),
-        patch("sys.stdout") as mock_stdout,
-        patch("sys.stderr") as mock_stderr,
-    ):
-        stdout_buf: list[str] = []
-        stderr_buf: list[str] = []
-        mock_stdout.write = lambda s: stdout_buf.append(s)
-        mock_stderr.write = lambda s: stderr_buf.append(s)
-
-        try:
-            cli.main()
-            exit_code = 0
-        except SystemExit as exc:
-            exit_code = int(exc.code) if exc.code is not None else 0
-
-        return exit_code, "".join(stdout_buf), "".join(stderr_buf)
-
 
 # ---------------------------------------------------------------------------
 # Module structure
@@ -457,8 +427,6 @@ class TestMainAutoJobId:
         # A UUID4 should have appeared on stderr
         assert len(captured.err) > 0
         # Check that a UUID-like string (with dashes) is in stderr
-        import re
-
         uuid_pattern = r"[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}"
         assert re.search(uuid_pattern, captured.err, re.IGNORECASE), (
             f"No UUID4 found in stderr: {captured.err!r}"
