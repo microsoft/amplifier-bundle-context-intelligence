@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import json
 import subprocess
+import sys
+import uuid
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -235,12 +237,9 @@ class TestUploadStartConfigFallback:
 class TestUploadStartSubprocess:
     """Verify subprocess spawning behavior."""
 
-    def _make_configured_coordinator(self) -> MagicMock:
-        return _make_coordinator(server_url="http://ci.example.com", api_key="test-key")
-
     @pytest.mark.asyncio
     async def test_spawns_subprocess_with_devnull_stdout(self):
-        coordinator = self._make_configured_coordinator()
+        coordinator = _make_coordinator(server_url="http://ci.example.com", api_key="test-key")
         tool = ContextIntelligenceUploadStart(coordinator)
         with patch("subprocess.Popen") as mock_popen:
             mock_popen.return_value = MagicMock()
@@ -250,7 +249,7 @@ class TestUploadStartSubprocess:
 
     @pytest.mark.asyncio
     async def test_spawns_subprocess_with_devnull_stderr(self):
-        coordinator = self._make_configured_coordinator()
+        coordinator = _make_coordinator(server_url="http://ci.example.com", api_key="test-key")
         tool = ContextIntelligenceUploadStart(coordinator)
         with patch("subprocess.Popen") as mock_popen:
             mock_popen.return_value = MagicMock()
@@ -260,7 +259,7 @@ class TestUploadStartSubprocess:
 
     @pytest.mark.asyncio
     async def test_spawns_subprocess_with_start_new_session(self):
-        coordinator = self._make_configured_coordinator()
+        coordinator = _make_coordinator(server_url="http://ci.example.com", api_key="test-key")
         tool = ContextIntelligenceUploadStart(coordinator)
         with patch("subprocess.Popen") as mock_popen:
             mock_popen.return_value = MagicMock()
@@ -270,7 +269,7 @@ class TestUploadStartSubprocess:
 
     @pytest.mark.asyncio
     async def test_subprocess_command_includes_path(self):
-        coordinator = self._make_configured_coordinator()
+        coordinator = _make_coordinator(server_url="http://ci.example.com", api_key="test-key")
         tool = ContextIntelligenceUploadStart(coordinator)
         with patch("subprocess.Popen") as mock_popen:
             mock_popen.return_value = MagicMock()
@@ -280,7 +279,7 @@ class TestUploadStartSubprocess:
 
     @pytest.mark.asyncio
     async def test_subprocess_command_includes_server_url(self):
-        coordinator = self._make_configured_coordinator()
+        coordinator = _make_coordinator(server_url="http://ci.example.com", api_key="test-key")
         tool = ContextIntelligenceUploadStart(coordinator)
         with patch("subprocess.Popen") as mock_popen:
             mock_popen.return_value = MagicMock()
@@ -290,7 +289,7 @@ class TestUploadStartSubprocess:
 
     @pytest.mark.asyncio
     async def test_subprocess_command_includes_api_key(self):
-        coordinator = self._make_configured_coordinator()
+        coordinator = _make_coordinator(server_url="http://ci.example.com", api_key="test-key")
         tool = ContextIntelligenceUploadStart(coordinator)
         with patch("subprocess.Popen") as mock_popen:
             mock_popen.return_value = MagicMock()
@@ -300,9 +299,7 @@ class TestUploadStartSubprocess:
 
     @pytest.mark.asyncio
     async def test_subprocess_command_uses_sys_executable(self):
-        import sys
-
-        coordinator = self._make_configured_coordinator()
+        coordinator = _make_coordinator(server_url="http://ci.example.com", api_key="test-key")
         tool = ContextIntelligenceUploadStart(coordinator)
         with patch("subprocess.Popen") as mock_popen:
             mock_popen.return_value = MagicMock()
@@ -312,7 +309,7 @@ class TestUploadStartSubprocess:
 
     @pytest.mark.asyncio
     async def test_subprocess_command_uses_module_flag(self):
-        coordinator = self._make_configured_coordinator()
+        coordinator = _make_coordinator(server_url="http://ci.example.com", api_key="test-key")
         tool = ContextIntelligenceUploadStart(coordinator)
         with patch("subprocess.Popen") as mock_popen:
             mock_popen.return_value = MagicMock()
@@ -330,12 +327,9 @@ class TestUploadStartSubprocess:
 class TestUploadStartReturnValue:
     """Verify the ToolResult returned on successful spawn."""
 
-    def _make_configured_coordinator(self) -> MagicMock:
-        return _make_coordinator(server_url="http://ci.example.com", api_key="test-key")
-
     @pytest.mark.asyncio
     async def test_returns_tool_result_success_true(self):
-        coordinator = self._make_configured_coordinator()
+        coordinator = _make_coordinator(server_url="http://ci.example.com", api_key="test-key")
         tool = ContextIntelligenceUploadStart(coordinator)
         with patch("subprocess.Popen") as mock_popen:
             mock_popen.return_value = MagicMock()
@@ -345,7 +339,7 @@ class TestUploadStartReturnValue:
 
     @pytest.mark.asyncio
     async def test_output_contains_job_id(self):
-        coordinator = self._make_configured_coordinator()
+        coordinator = _make_coordinator(server_url="http://ci.example.com", api_key="test-key")
         tool = ContextIntelligenceUploadStart(coordinator)
         with patch("subprocess.Popen") as mock_popen:
             mock_popen.return_value = MagicMock()
@@ -357,7 +351,7 @@ class TestUploadStartReturnValue:
 
     @pytest.mark.asyncio
     async def test_output_contains_progress_file(self):
-        coordinator = self._make_configured_coordinator()
+        coordinator = _make_coordinator(server_url="http://ci.example.com", api_key="test-key")
         tool = ContextIntelligenceUploadStart(coordinator)
         with patch("subprocess.Popen") as mock_popen:
             mock_popen.return_value = MagicMock()
@@ -368,7 +362,7 @@ class TestUploadStartReturnValue:
 
     @pytest.mark.asyncio
     async def test_output_contains_message(self):
-        coordinator = self._make_configured_coordinator()
+        coordinator = _make_coordinator(server_url="http://ci.example.com", api_key="test-key")
         tool = ContextIntelligenceUploadStart(coordinator)
         with patch("subprocess.Popen") as mock_popen:
             mock_popen.return_value = MagicMock()
@@ -379,9 +373,7 @@ class TestUploadStartReturnValue:
 
     @pytest.mark.asyncio
     async def test_job_id_is_uuid4_format(self):
-        import uuid
-
-        coordinator = self._make_configured_coordinator()
+        coordinator = _make_coordinator(server_url="http://ci.example.com", api_key="test-key")
         tool = ContextIntelligenceUploadStart(coordinator)
         with patch("subprocess.Popen") as mock_popen:
             mock_popen.return_value = MagicMock()
@@ -394,7 +386,7 @@ class TestUploadStartReturnValue:
 
     @pytest.mark.asyncio
     async def test_job_id_matches_progress_file(self):
-        coordinator = self._make_configured_coordinator()
+        coordinator = _make_coordinator(server_url="http://ci.example.com", api_key="test-key")
         tool = ContextIntelligenceUploadStart(coordinator)
         with patch("subprocess.Popen") as mock_popen:
             mock_popen.return_value = MagicMock()
@@ -405,7 +397,7 @@ class TestUploadStartReturnValue:
 
     @pytest.mark.asyncio
     async def test_subprocess_command_includes_job_id(self):
-        coordinator = self._make_configured_coordinator()
+        coordinator = _make_coordinator(server_url="http://ci.example.com", api_key="test-key")
         tool = ContextIntelligenceUploadStart(coordinator)
         with patch("subprocess.Popen") as mock_popen:
             mock_popen.return_value = MagicMock()
@@ -417,7 +409,7 @@ class TestUploadStartReturnValue:
 
     @pytest.mark.asyncio
     async def test_subprocess_command_includes_progress_file(self):
-        coordinator = self._make_configured_coordinator()
+        coordinator = _make_coordinator(server_url="http://ci.example.com", api_key="test-key")
         tool = ContextIntelligenceUploadStart(coordinator)
         with patch("subprocess.Popen") as mock_popen:
             mock_popen.return_value = MagicMock()
