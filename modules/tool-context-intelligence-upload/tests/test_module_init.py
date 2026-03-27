@@ -1,4 +1,4 @@
-"""Tests for the amplifier_module_tool_context_intelligence_upload package skeleton."""
+"""Tests for the amplifier_module_tool_context_intelligence_upload package."""
 
 from __future__ import annotations
 
@@ -7,8 +7,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 import amplifier_module_tool_context_intelligence_upload as module
 from amplifier_module_tool_context_intelligence_upload import (
-    _ContextIntelligenceUploadStartPlaceholder,
-    _ContextIntelligenceUploadStatusPlaceholder,
+    ContextIntelligenceUploadStart,
+    ContextIntelligenceUploadStatus,
     mount,
 )
 
@@ -26,11 +26,13 @@ class TestModuleAttributes:
         assert len(module.__doc__.strip()) > 0
 
 
-class TestUploadStartPlaceholder:
-    """Verify the start tool placeholder class."""
+class TestUploadStart:
+    """Verify the start tool class satisfies the Tool protocol."""
 
     def setup_method(self):
-        self.tool = _ContextIntelligenceUploadStartPlaceholder()
+        coordinator = MagicMock()
+        coordinator.get_capability.return_value = None
+        self.tool = ContextIntelligenceUploadStart(coordinator)
 
     def test_name(self):
         assert self.tool.name == "context_intelligence_upload_start"
@@ -57,22 +59,12 @@ class TestUploadStartPlaceholder:
         assert "api_key" in schema.get("properties", {})
         assert "api_key" not in schema.get("required", [])
 
-    @pytest.mark.asyncio
-    async def test_execute_returns_not_implemented(self):
-        from amplifier_core import ToolResult
 
-        result = await self.tool.execute({"path": "/tmp/test"})
-        assert isinstance(result, ToolResult)
-        assert result.success is False
-        assert result.output is not None
-        assert "not yet implemented" in result.output.lower()
-
-
-class TestUploadStatusPlaceholder:
-    """Verify the status tool placeholder class."""
+class TestUploadStatus:
+    """Verify the status tool class satisfies the Tool protocol."""
 
     def setup_method(self):
-        self.tool = _ContextIntelligenceUploadStatusPlaceholder()
+        self.tool = ContextIntelligenceUploadStatus()
 
     def test_name(self):
         assert self.tool.name == "context_intelligence_upload_status"
@@ -89,16 +81,6 @@ class TestUploadStatusPlaceholder:
         assert "job_id" in schema.get("properties", {})
         assert "job_id" in schema.get("required", [])
 
-    @pytest.mark.asyncio
-    async def test_execute_returns_not_implemented(self):
-        from amplifier_core import ToolResult
-
-        result = await self.tool.execute({"job_id": "abc123"})
-        assert isinstance(result, ToolResult)
-        assert result.success is False
-        assert result.output is not None
-        assert "not yet implemented" in result.output.lower()
-
 
 class TestMount:
     """Verify mount() registers both tools correctly."""
@@ -107,6 +89,7 @@ class TestMount:
     async def test_mount_returns_dict(self):
         coordinator = MagicMock()
         coordinator.mount = AsyncMock()
+        coordinator.get_capability.return_value = None
         result = await mount(coordinator)
         assert isinstance(result, dict)
 
@@ -114,6 +97,7 @@ class TestMount:
     async def test_mount_returns_name(self):
         coordinator = MagicMock()
         coordinator.mount = AsyncMock()
+        coordinator.get_capability.return_value = None
         result = await mount(coordinator)
         assert "name" in result
         assert isinstance(result["name"], str)
@@ -122,6 +106,7 @@ class TestMount:
     async def test_mount_returns_version(self):
         coordinator = MagicMock()
         coordinator.mount = AsyncMock()
+        coordinator.get_capability.return_value = None
         result = await mount(coordinator)
         assert "version" in result
         assert result["version"] == "0.1.0"
@@ -130,6 +115,7 @@ class TestMount:
     async def test_mount_returns_provides_list(self):
         coordinator = MagicMock()
         coordinator.mount = AsyncMock()
+        coordinator.get_capability.return_value = None
         result = await mount(coordinator)
         assert "provides" in result
         assert isinstance(result["provides"], list)
@@ -139,6 +125,7 @@ class TestMount:
     async def test_mount_calls_coordinator_mount_twice(self):
         coordinator = MagicMock()
         coordinator.mount = AsyncMock()
+        coordinator.get_capability.return_value = None
         await mount(coordinator)
         assert coordinator.mount.call_count == 2
 
@@ -146,6 +133,7 @@ class TestMount:
     async def test_mount_registers_start_tool(self):
         coordinator = MagicMock()
         coordinator.mount = AsyncMock()
+        coordinator.get_capability.return_value = None
         await mount(coordinator)
         calls = coordinator.mount.call_args_list
         tool_names = [call[1].get("name") or call[0][1].name for call in calls]
@@ -155,6 +143,7 @@ class TestMount:
     async def test_mount_registers_status_tool(self):
         coordinator = MagicMock()
         coordinator.mount = AsyncMock()
+        coordinator.get_capability.return_value = None
         await mount(coordinator)
         calls = coordinator.mount.call_args_list
         tool_names = [call[1].get("name") or call[0][1].name for call in calls]
@@ -164,6 +153,7 @@ class TestMount:
     async def test_mount_first_arg_is_tools(self):
         coordinator = MagicMock()
         coordinator.mount = AsyncMock()
+        coordinator.get_capability.return_value = None
         await mount(coordinator)
         for call in coordinator.mount.call_args_list:
             assert call[0][0] == "tools"
@@ -172,6 +162,7 @@ class TestMount:
     async def test_mount_provides_contains_both_tool_names(self):
         coordinator = MagicMock()
         coordinator.mount = AsyncMock()
+        coordinator.get_capability.return_value = None
         result = await mount(coordinator)
         assert "context_intelligence_upload_start" in result["provides"]
         assert "context_intelligence_upload_status" in result["provides"]
