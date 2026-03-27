@@ -88,8 +88,10 @@ class TestDetailedHelp:
 
     def test_finding_server_url_section_appears_before_examples(self, detailed_help_output):
         """FINDING SERVER_URL AND API_KEY section must appear before the EXAMPLES section."""
-        finding_pos = detailed_help_output.index("FINDING SERVER_URL AND API_KEY")
-        examples_pos = detailed_help_output.index("EXAMPLES")
+        finding_pos = detailed_help_output.find("FINDING SERVER_URL AND API_KEY")
+        assert finding_pos != -1, "FINDING SERVER_URL AND API_KEY not found in help output"
+        examples_pos = detailed_help_output.find("EXAMPLES")
+        assert examples_pos != -1, "EXAMPLES not found in help output"
         assert finding_pos < examples_pos, (
             "FINDING SERVER_URL AND API_KEY must appear before EXAMPLES"
         )
