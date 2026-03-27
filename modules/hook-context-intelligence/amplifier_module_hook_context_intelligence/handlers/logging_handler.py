@@ -7,13 +7,17 @@ Writes per-session events.jsonl and metadata.json files.
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import json
 import logging
 from pathlib import Path
 from typing import Any
 
 import httpx
+
+from amplifier_module_hook_context_intelligence.upload import (
+    _canonical_json,
+    _compute_idempotency_key,
+)
 
 from amplifier_core.models import HookResult
 
@@ -56,24 +60,6 @@ def _sanitize_value(value: Any) -> Any:
 def _sanitize_for_json(data: dict[str, Any]) -> dict[str, Any]:
     """Recursively sanitize a dict for JSON serialization. Never raises."""
     return {k: _sanitize_value(v) for k, v in data.items()}
-
-
-def _canonical_json(data: dict[str, Any]) -> str:
-    """Serialize *data* to a stable compact JSON string."""
-    return json.dumps(data, sort_keys=True, separators=(",", ":"))
-
-
-def _compute_idempotency_key(event: str, workspace: str | None, data: dict[str, Any]) -> str:
-    """Build a deterministic request id from the sanitized event envelope."""
-    canonical = _canonical_json(
-        {
-            "event": event,
-            "workspace": workspace or "",
-            "data": data,
-        }
-    )
-    digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
-    return f"aci-event-v1:{digest}"
 
 
 # ---------------------------------------------------------------------------
