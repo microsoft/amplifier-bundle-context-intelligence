@@ -47,6 +47,9 @@ class UploadResult:
                 "events_uploaded": int,
                 "error": str,   # only present when error is not None
             }
+
+        Note: ``failed_at`` is not included in the serialized output —
+        inspect ``result.failed_at`` directly.
         """
         d: dict[str, Any] = {
             "status": "completed" if self.success else "failed",
