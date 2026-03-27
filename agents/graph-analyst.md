@@ -53,8 +53,6 @@ tools:
     config:
       skills:
         - context-intelligence:skills/
-  - module: tool-context-intelligence-upload
-    source: git+https://github.com/microsoft/amplifier-bundle-context-intelligence@main#subdirectory=modules/tool-context-intelligence-upload
 ---
 
 # Graph Analyst
@@ -227,45 +225,23 @@ Task: [original analysis task]
 
 ## Section 3.5: Upload Capability
 
-The `context_intelligence_upload_start` and `context_intelligence_upload_status` tools are available to you for uploading local session data to the context-intelligence server.
+Use the `context-intelligence-upload` CLI via the bash tool to replay session events
+to the server. Useful for recovery after connectivity failures.
 
-### Configuration
+Connection parameters are typically available in the session environment:
 
-Configuration is resolved automatically. Because graph-analyst runs inside Amplifier with the context-intelligence bundle loaded, the server URL, API key, and workspace are all resolved from the bundle configuration without any manual input. You only need to provide `path`.
-
-### Workspace
-
-Workspace is never a parameter for the upload tools. It is read automatically from the session's `events.jsonl` file.
-
-### Starting an Upload
-
-Use `context_intelligence_upload_start` with the `path` to the session directory or JSONL file:
-
-```json
-{
-  "tool": "context_intelligence_upload_start",
-  "params": {
-    "path": "~/.amplifier/projects/my-project/sessions/abc123"
-  }
-}
+```bash
+context-intelligence-upload \
+  --path ~/.amplifier/projects/my-project \
+  --server-url "${AMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_URL}" \
+  --api-key "${AMPLIFIER_CONTEXT_INTELLIGENCE_API_KEY}"
 ```
 
-The tool returns a `job_id` for the background upload operation.
+If environment variables are not set, find `context_intelligence_server_url` and
+`context_intelligence_api_key` in the Amplifier bundle config YAML under
+`hook-context-intelligence.config` and pass them explicitly.
 
-### Polling for Status
-
-Poll with `context_intelligence_upload_status` using the `job_id` returned by `context_intelligence_upload_start`:
-
-```json
-{
-  "tool": "context_intelligence_upload_status",
-  "params": {
-    "job_id": "<job_id from upload_start>"
-  }
-}
-```
-
-Poll until the status is `completed` or `failed`.
+Run `context-intelligence-upload --help` for full options.
 
 ---
 
