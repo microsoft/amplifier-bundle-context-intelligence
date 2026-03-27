@@ -86,7 +86,7 @@ class TestDiscoverSessions:
         # parent_id absent in metadata — must be None (not empty string)
         assert meta.get("parent_id") is None
 
-    def test_empty_parent_id_treated_as_root(self, tmp_path):
+    def test_empty_parent_id_preserved_in_metadata(self, tmp_path):
         _write_metadata(
             tmp_path,
             "sess-1",
@@ -117,6 +117,7 @@ class TestDiscoverSessions:
             )
         results = _discover_sessions(tmp_path)
         assert len(results) == 3
+        assert {meta["session_id"] for _, meta in results} == {"sess-0", "sess-1", "sess-2"}
 
 
 # ---------------------------------------------------------------------------
