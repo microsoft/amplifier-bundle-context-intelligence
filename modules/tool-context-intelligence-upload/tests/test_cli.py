@@ -82,6 +82,34 @@ class TestDetailedHelp:
         assert "WORKSPACE" in detailed_help_output
         assert "METADATA VALIDATION" in detailed_help_output
 
+    def test_double_dash_help_contains_finding_server_url_section(self, detailed_help_output):
+        """FINDING SERVER_URL AND API_KEY section must be present in detailed help."""
+        assert "FINDING SERVER_URL AND API_KEY" in detailed_help_output
+
+    def test_finding_server_url_section_appears_before_examples(self, detailed_help_output):
+        """FINDING SERVER_URL AND API_KEY section must appear before the EXAMPLES section."""
+        finding_pos = detailed_help_output.index("FINDING SERVER_URL AND API_KEY")
+        examples_pos = detailed_help_output.index("EXAMPLES")
+        assert finding_pos < examples_pos, (
+            "FINDING SERVER_URL AND API_KEY must appear before EXAMPLES"
+        )
+
+    def test_no_abbreviated_ci_example_com(self, detailed_help_output):
+        """ci.example.com must not appear; use context-intelligence.example.com."""
+        assert "ci.example.com" not in detailed_help_output
+
+    def test_no_abbreviated_ci_api_key(self, detailed_help_output):
+        """$CI_API_KEY must not appear; use $AMPLIFIER_CONTEXT_INTELLIGENCE_API_KEY."""
+        assert "$CI_API_KEY" not in detailed_help_output
+
+    def test_context_intelligence_example_com_present(self, detailed_help_output):
+        """context-intelligence.example.com must appear in detailed help."""
+        assert "context-intelligence.example.com" in detailed_help_output
+
+    def test_amplifier_context_intelligence_api_key_present(self, detailed_help_output):
+        """$AMPLIFIER_CONTEXT_INTELLIGENCE_API_KEY must appear in detailed help."""
+        assert "$AMPLIFIER_CONTEXT_INTELLIGENCE_API_KEY" in detailed_help_output
+
 
 # ---------------------------------------------------------------------------
 # Missing required arguments → exit 2

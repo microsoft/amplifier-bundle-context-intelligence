@@ -66,7 +66,7 @@ PARAMETERS
 
   --server-url URL
       Base URL of the Context Intelligence ingestion server
-      (e.g. https://ci.example.com).  The endpoint /events is appended
+      (e.g. https://context-intelligence.example.com).  The endpoint /events is appended
       automatically.
 
   --api-key KEY
@@ -150,28 +150,62 @@ EXIT CODES
   1   Failure — at least one HTTP error occurred during upload.
   2   Invalid invocation — missing required argument or PATH does not exist.
 
+FINDING SERVER_URL AND API_KEY
+------------------------------
+These values come from your context-intelligence bundle configuration.
+
+Check environment variables first:
+
+  $ echo $AMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_URL
+  $ echo $AMPLIFIER_CONTEXT_INTELLIGENCE_API_KEY
+
+If not set as environment variables, find them in your Amplifier bundle
+configuration YAML (typically ~/.amplifier/settings.yaml) under the
+hook-context-intelligence module config section:
+
+  hooks:
+    - module: hook-context-intelligence
+      config:
+        context_intelligence_server_url: "https://your-server.example.com"
+        context_intelligence_api_key:    "your-api-key"
+
+When invoking from an Amplifier session via the bash tool, use shell
+variable substitution to pass the values directly:
+
+  context-intelligence-upload \\
+    --path ~/.amplifier/projects/my-project \\
+    --server-url "${AMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_URL}" \\
+    --api-key    "${AMPLIFIER_CONTEXT_INTELLIGENCE_API_KEY}"
+
+Or read them from the YAML config file and pass explicitly:
+
+  context-intelligence-upload \\
+    --path ~/.amplifier/projects/my-project \\
+    --server-url https://your-server.example.com \\
+    --api-key    your-api-key
+
 EXAMPLES
 --------
 Replay a single session directory:
 
   context-intelligence-upload \\
       --path ~/.amplifier/projects/my-project/sessions/abc123/context-intelligence \\
-      --server-url https://ci.example.com \\
-      --api-key $CI_API_KEY
+      --server-url https://context-intelligence.example.com \\
+      --api-key $AMPLIFIER_CONTEXT_INTELLIGENCE_API_KEY
 
 Replay an entire project tree:
 
   context-intelligence-upload \\
       --path ~/.amplifier/projects/my-project \\
-      --server-url https://ci.example.com \\
-      --api-key $CI_API_KEY
+      --server-url https://context-intelligence.example.com \\
+      --api-key $AMPLIFIER_CONTEXT_INTELLIGENCE_API_KEY
 
 Target a recovery server with a custom job ID:
 
   context-intelligence-upload \\
       --path /data/sessions \\
       --server-url https://recovery.example.com \\
-      --api-key $CI_API_KEY \\
+      --api-key $AMPLIFIER_CONTEXT_INTELLIGENCE_API_KEY \\
       --job-id my-retry-job-001
 """
 
