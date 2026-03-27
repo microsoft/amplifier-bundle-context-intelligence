@@ -19,7 +19,9 @@ from amplifier_core.models import HookResult
 class _FakeResolver:
     """Minimal resolver adapter for testing LoggingHandler in isolation."""
 
-    def __init__(self, base_path: Path, project_slug: str, workspace: str = "test-workspace") -> None:
+    def __init__(
+        self, base_path: Path, project_slug: str, workspace: str = "test-workspace"
+    ) -> None:
         self.base_path = base_path
         self.project_slug = project_slug
         self.workspace = workspace

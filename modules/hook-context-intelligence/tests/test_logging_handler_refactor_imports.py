@@ -35,8 +35,7 @@ class TestImportRefactoring:
         import amplifier_module_hook_context_intelligence.handlers.logging_handler as lh
 
         assert "hashlib" not in lh.__dict__, (
-            "hashlib must be removed from logging_handler imports "
-            "(it is only needed in upload.py)"
+            "hashlib must be removed from logging_handler imports (it is only needed in upload.py)"
         )
 
     def test_canonical_json_still_works(self) -> None:
