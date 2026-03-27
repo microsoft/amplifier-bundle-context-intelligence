@@ -10,6 +10,15 @@ import amplifier_module_tool_context_intelligence_upload as module
 from amplifier_module_tool_context_intelligence_upload import mount
 
 
+@pytest.fixture
+async def mounted_coordinator():
+    """Set up a coordinator mock, call mount(), and return (coordinator, result)."""
+    coordinator = MagicMock()
+    coordinator.mount = AsyncMock()
+    result = await mount(coordinator)
+    return coordinator, result
+
+
 class TestModuleContract:
     """Verify module-level contract: type marker, mount coroutine, and signature."""
 
@@ -34,43 +43,39 @@ class TestMountBehavior:
     """Verify mount() runtime behavior: call counts, namespaces, metadata, and tool protocol."""
 
     @pytest.mark.asyncio
-    async def test_mount_calls_coordinator_mount_exactly_twice(self):
+    async def test_mount_calls_coordinator_mount_exactly_twice(self, mounted_coordinator):
         """mount() must call coordinator.mount exactly twice (once per tool)."""
-        coordinator = MagicMock()
-        coordinator.mount = AsyncMock()
-        await mount(coordinator)
+        coordinator, _ = mounted_coordinator
         assert coordinator.mount.call_count == 2
 
     @pytest.mark.asyncio
-    async def test_first_tool_registered_is_upload_start_in_tools_namespace(self):
+    async def test_first_tool_registered_is_upload_start_in_tools_namespace(
+        self, mounted_coordinator
+    ):
         """First coordinator.mount call must register 'context_intelligence_upload_start' in 'tools'."""
-        coordinator = MagicMock()
-        coordinator.mount = AsyncMock()
-        await mount(coordinator)
+        coordinator, _ = mounted_coordinator
         first_call = coordinator.mount.call_args_list[0]
-        namespace = first_call[0][0]
-        first_tool = first_call[0][1]
+        namespace = first_call.args[0]
+        first_tool = first_call.args[1]
         assert namespace == "tools"
         assert first_tool.name == "context_intelligence_upload_start"
 
     @pytest.mark.asyncio
-    async def test_second_tool_registered_is_upload_status_in_tools_namespace(self):
+    async def test_second_tool_registered_is_upload_status_in_tools_namespace(
+        self, mounted_coordinator
+    ):
         """Second coordinator.mount call must register 'context_intelligence_upload_status' in 'tools'."""
-        coordinator = MagicMock()
-        coordinator.mount = AsyncMock()
-        await mount(coordinator)
+        coordinator, _ = mounted_coordinator
         second_call = coordinator.mount.call_args_list[1]
-        namespace = second_call[0][0]
-        second_tool = second_call[0][1]
+        namespace = second_call.args[0]
+        second_tool = second_call.args[1]
         assert namespace == "tools"
         assert second_tool.name == "context_intelligence_upload_status"
 
     @pytest.mark.asyncio
-    async def test_mount_returns_metadata_with_name_and_provides(self):
+    async def test_mount_returns_metadata_with_name_and_provides(self, mounted_coordinator):
         """mount() must return a dict with name='tool-context-intelligence-upload' and provides containing both tool names."""
-        coordinator = MagicMock()
-        coordinator.mount = AsyncMock()
-        result = await mount(coordinator)
+        _, result = mounted_coordinator
         assert isinstance(result, dict)
         assert result.get("name") == "tool-context-intelligence-upload"
         provides = result.get("provides")
@@ -79,13 +84,11 @@ class TestMountBehavior:
         assert "context_intelligence_upload_status" in provides
 
     @pytest.mark.asyncio
-    async def test_registered_tools_satisfy_tool_protocol(self):
+    async def test_registered_tools_satisfy_tool_protocol(self, mounted_coordinator):
         """Both registered tools must have name (str), description (str), input_schema (dict), execute (coroutine)."""
-        coordinator = MagicMock()
-        coordinator.mount = AsyncMock()
-        await mount(coordinator)
+        coordinator, _ = mounted_coordinator
         for call in coordinator.mount.call_args_list:
-            tool = call[0][1]
+            tool = call.args[1]
             # name: non-empty str
             assert isinstance(tool.name, str)
             assert len(tool.name) > 0
