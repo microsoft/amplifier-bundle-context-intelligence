@@ -746,6 +746,120 @@ ORDER BY errors DESC
 
 ---
 
+## New Patterns — Data Layer 1 Capabilities
+
+The following patterns leverage Data Layer 1 graph nodes (`Session`, `Event`,
+`ToolCall`, `HAS_FORK`, `HAS_EVENT`) and promoted event labels added by
+PromptLifter, RecipeLifter, and other DL1 modules.
+
+---
+
+### N1: Delegation Tree
+
+Traverse the full delegation chain from a root session to all its forked
+descendants. Uses variable-length `HAS_FORK` traversal to build a complete
+tree in one query.
+
+```cypher
+MATCH path = (root:Session {workspace: $workspace, node_id: $session_id})-[:HAS_FORK*1..]->(child:Session)
+RETURN [n IN nodes(path) | n.node_id]  AS session_chain,
+       [n IN nodes(path) | labels(n)]  AS label_chain,
+       length(path)                    AS depth
+ORDER BY depth, child.started_at
+```
+
+**Acceptance check** — count paths per delegation depth (no `$session_id`
+needed; walk the whole workspace):
+
+```cypher
+MATCH path = (root:Session {workspace: $workspace})-[:HAS_FORK*1..]->(child:Session)
+RETURN length(path) AS depth, count(*) AS paths_at_depth
+ORDER BY depth
+```
+
+---
+
+### N2: LLM Usage Per Session
+
+#### (a) Per-model call counts
+
+```cypher
+MATCH (s:Session {workspace: $workspace})-[:HAS_EVENT]->(e:LlmResponseEvent)
+RETURN e.model, e.provider, count(e) AS llm_calls
+ORDER BY llm_calls DESC
+```
+
+#### (b) Session-level token summary
+
+Token totals are surfaced by `OrchestratorCompleteEvent`, which fires once
+at the end of each session.
+
+```cypher
+MATCH (s:Session {workspace: $workspace, node_id: $session_id})-[:HAS_EVENT]->(e:OrchestratorCompleteEvent)
+RETURN e.total_input_tokens, e.total_output_tokens, e.turn_count, e.occurred_at
+```
+
+> **Discovery note:** token property names may differ across versions. Run
+> `MATCH (e:OrchestratorCompleteEvent) RETURN keys(e) LIMIT 1` to confirm
+> the exact property names available on your graph.
+
+---
+
+### N3: Recipe Progress
+
+#### (a) Step-level iteration tracking
+
+```cypher
+MATCH (s:Session {workspace: $workspace})-[:HAS_EVENT]->(e:RecipeLoopIterationEvent)
+RETURN e.recipe_name, e.step_id, e.iteration, e.occurred_at
+ORDER BY e.occurred_at
+```
+
+#### (b) Recipe completion events
+
+```cypher
+MATCH (s:Session {workspace: $workspace})-[:HAS_EVENT]->(e:RecipeLoopCompleteEvent)
+RETURN e.recipe_name, e.occurred_at, s.node_id AS session_id
+ORDER BY e.occurred_at DESC
+```
+
+---
+
+### N4: ToolCall Lifecycle
+
+Retrieve all events attached to a specific `ToolCall` node in chronological
+order.  Each tool invocation gets its own `:ToolCall` node with `HAS_EVENT`
+edges to `tool:pre`, `tool:post`, or `tool:error` events.
+
+```cypher
+MATCH (tc:ToolCall {workspace: $workspace, node_id: $tool_call_node_id})-[:HAS_EVENT]->(e:Event)
+RETURN e.event_name, e.occurred_at
+ORDER BY e.occurred_at
+```
+
+**Acceptance check** — browse tool events without a specific node ID:
+
+```cypher
+MATCH (tc:ToolCall {workspace: $workspace})-[:HAS_EVENT]->(e:Event)
+RETURN tc.tool_name, e.event_name, e.occurred_at
+LIMIT 5
+```
+
+---
+
+### N5: Event-Type Distribution
+
+Count every distinct event type across all sessions to understand what
+activities are most frequent in the workspace.
+
+```cypher
+MATCH (s:Session {workspace: $workspace})-[:HAS_EVENT]->(e:Event)
+RETURN e.event_name, count(*) AS n
+ORDER BY n DESC
+```
+
+---
+
 ## Graph Algorithm Examples
 
 ### Shortest Path Between Two Nodes
