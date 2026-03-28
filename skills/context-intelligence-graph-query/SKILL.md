@@ -635,30 +635,27 @@ LIMIT 20
 > **Note:** `parallel_group_id` is an empty string `""` (not null) when a tool runs
 > alone. Use `tc.parallel_group_id <> ''` to filter parallel groups — not `IS NOT NULL`.
 
-### Pattern 8: Search Prompt Text (Full-Text Property Filter)
+### Pattern 8: Search Prompt Text
 
-Find `PromptStep` nodes whose prompt text contains a keyword:
+`PromptSubmitEvent` nodes carry the `prompt` property (promoted by `PromptLifter`). Use
+`PromptSubmitEvent` for submitted prompts and `PromptCompleteEvent` for completed ones.
+
+**Basic search:**
 
 ```cypher
-MATCH (step:PromptStep {workspace: $workspace})
-WHERE step.prompt_text CONTAINS $search_term
-RETURN step.node_id     AS step_id,
-       step.prompt_text  AS prompt_text,
-       step.occurred_at  AS occurred_at,
-       step.session_id   AS session_id
-ORDER BY step.occurred_at DESC
+MATCH (e:PromptSubmitEvent {workspace: $workspace})
+WHERE e.prompt CONTAINS $search_term
+RETURN e.session_id, e.prompt, e.occurred_at
+ORDER BY e.occurred_at DESC
 ```
 
-Case-insensitive search using `toLower()`:
+**Case-insensitive search using `toLower()`:**
 
 ```cypher
-MATCH (step:PromptStep {workspace: $workspace})
-WHERE toLower(step.prompt_text) CONTAINS toLower($search_term)
-RETURN step.node_id     AS step_id,
-       step.prompt_text  AS prompt_text,
-       step.session_id   AS session_id,
-       step.occurred_at  AS occurred_at
-ORDER BY step.occurred_at DESC
+MATCH (e:PromptSubmitEvent {workspace: $workspace})
+WHERE toLower(e.prompt) CONTAINS toLower($search_term)
+RETURN e.session_id, e.prompt, e.occurred_at
+ORDER BY e.occurred_at DESC
 ```
 
 ### Pattern 9: Count Nodes by Label
@@ -723,16 +720,28 @@ RETURN tc.tool_name AS tool_name,
 ORDER BY e.occurred_at
 ```
 
-### Pattern 12: Tool Execution Success/Failure Stats per Session
+### Pattern 12: Tool Activity Stats
+
+`:ToolCall` nodes have no `status` property — derive success/failure from event types:
+`tool:pre` = initiated, `tool:post` = completed, `tool:error` = failed.
+
+**Per-tool event counts:**
 
 ```cypher
-MATCH (s:Session {workspace: $workspace})
-      -[:HAS_RUN]->()-[:HAS_STEP]->()-[:TRIGGERED]->(te:ToolExecution)
-RETURN s.node_id        AS session_id,
-       te.tool_name     AS tool_name,
-       te.status        AS status,
-       count(te)        AS invocation_count
-ORDER BY session_id, tool_name, status
+MATCH (s:Session {workspace: $workspace})-[:HAS_EVENT]->(e:ToolEvent)
+RETURN e.tool_name, e.event_name, count(e) AS n
+ORDER BY e.tool_name, e.event_name
+```
+
+**Tool error rate:**
+
+```cypher
+MATCH (s:Session {workspace: $workspace})-[:HAS_EVENT]->(e:ToolEvent)
+WHERE e.event_name IN ['tool:post', 'tool:error']
+RETURN e.tool_name,
+       sum(CASE WHEN e.event_name = 'tool:error' THEN 1 ELSE 0 END) AS errors,
+       sum(CASE WHEN e.event_name = 'tool:post' THEN 1 ELSE 0 END) AS successes
+ORDER BY errors DESC
 ```
 
 ---
