@@ -714,8 +714,8 @@ RETURN [n IN nodes(path)         | n.node_id]  AS node_chain,
 
 ```cypher
 MATCH (s:Session {node_id: $session_id, workspace: $workspace}),
-      (te:ToolExecution {node_id: $tool_exec_id, workspace: $workspace}),
-      path = (s)-[*]->(te)
+      (tc:ToolCall {node_id: $tool_call_id, workspace: $workspace}),
+      path = (s)-[*]->(tc)
 RETURN [n IN nodes(path) | n.node_id]          AS path_nodes,
        [r IN relationships(path) | type(r)]    AS rel_types,
        length(path)                            AS depth
@@ -729,7 +729,7 @@ Walk up to 6 hops outward from a session to find all reachable nodes:
 
 ```cypher
 MATCH (s:Session {node_id: $session_id, workspace: $workspace})
-      -[:HAS_RUN | HAS_STEP | TRIGGERED | SPAWNED*1..6]->(descendant)
+      -[:HAS_EVENT | HAS_TOOL_CALL | HAS_FORK*1..6]->(descendant)
 RETURN descendant.node_id AS node_id,
        labels(descendant)  AS node_labels,
        descendant.occurred_at AS occurred_at
@@ -739,12 +739,10 @@ ORDER BY descendant.occurred_at
 Walk the delegation lineage (any depth):
 
 ```cypher
-MATCH path = (root:Session {workspace: $workspace})
-             -[:HAS_RUN*0..1]->()-[:HAS_STEP*0..1]->()
-             -[:TRIGGERED*0..1]->(d:Delegation)
-             -[:SPAWNED*0..1]->(child:Session)
-             -[:SUBSESSION_OF*0..]->(root)
-RETURN path
+MATCH path = (root:Session {workspace: $workspace})-[:HAS_FORK*1..]->(descendant:Session)
+RETURN [n IN nodes(path) | n.node_id] AS session_chain,
+       length(path)                   AS depth
+ORDER BY depth
 LIMIT 50
 ```
 
@@ -948,11 +946,11 @@ Nodes carry both a base label and a sub-type label. Both can be used in MATCH:
 MATCH (s:Session {workspace: $workspace}) ...
 
 // Matches only root sessions (both labels present)
-MATCH (s:Session:Root {workspace: $workspace}) ...
+MATCH (s:Session:RootSession {workspace: $workspace}) ...
 
 // Equivalent WHERE form
 MATCH (s:Session {workspace: $workspace})
-WHERE s:Root ...
+WHERE s:RootSession ...
 ```
 
 ### Workspace property on relationships
