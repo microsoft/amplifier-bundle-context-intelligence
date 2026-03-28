@@ -16,7 +16,7 @@ INIT_PY = (
 
 EXPECTED_CONTENT = (
     '"""context-intelligence-upload'
-    " \u2014 replay context-intelligence session events to a server.\"\"\"\n"
+    ' \u2014 replay context-intelligence session events to a server."""\n'
 )
 
 
