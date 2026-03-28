@@ -564,47 +564,76 @@ RETURN child.node_id    AS child_session_id,
 ORDER BY child.started_at
 ```
 
-### Pattern 6: Full Execution Tree (Session → Runs → Steps → Tools)
+### Pattern 6: Session Overview
 
-```cypher
-MATCH (s:Session {workspace: $workspace, node_id: $session_id})
-OPTIONAL MATCH (s)-[:HAS_RUN]->(r:OrchestratorRun)
-OPTIONAL MATCH (r)-[:HAS_STEP]->(step:Step)
-OPTIONAL MATCH (step)-[:TRIGGERED]->(te:ToolExecution)
-RETURN s.node_id    AS session_id,
-       r.node_id    AS run_id,
-       step.node_id AS step_id,
-       labels(step) AS step_labels,
-       te.node_id   AS tool_exec_id,
-       te.tool_name AS tool_name,
-       te.status    AS tool_status
-ORDER BY r.occurred_at, step.occurred_at, te.occurred_at
-```
-
-### Pattern 7: Find Parallel Tool Executions
+**Variant 1 — Flat summary (counts per session):**
 
 ```cypher
 MATCH (s:Session {workspace: $workspace})
-      -[:HAS_RUN]->()-[:HAS_STEP]->()-[:TRIGGERED]->
-      (te1:ToolExecution)-[:PARALLEL_WITH]->(te2:ToolExecution)
-RETURN te1.node_id  AS tool_a,
-       te1.tool_name AS tool_a_name,
-       te2.node_id  AS tool_b,
-       te2.tool_name AS tool_b_name
+OPTIONAL MATCH (s)-[:HAS_EVENT]->(e:Event)
+OPTIONAL MATCH (s)-[:HAS_TOOL_CALL]->(tc:ToolCall)
+OPTIONAL MATCH (s)-[:HAS_FORK]->(child:Session)
+RETURN s.node_id,
+       s.started_at,
+       s.status,
+       count(DISTINCT e)     AS event_count,
+       count(DISTINCT tc)    AS tool_call_count,
+       count(DISTINCT child) AS child_session_count
+ORDER BY s.started_at DESC
 ```
 
-To avoid duplicate pairs (A→B and B→A), use `id(te1) < id(te2)`:
+**Variant 2 — Breakdown by event category:**
 
 ```cypher
-MATCH (s:Session {workspace: $workspace})
-      -[:HAS_RUN]->()-[:HAS_STEP]->()-[:TRIGGERED]->
-      (te1:ToolExecution)-[:PARALLEL_WITH]->(te2:ToolExecution)
-WHERE id(te1) < id(te2)
-RETURN te1.node_id   AS tool_a,
-       te2.node_id   AS tool_b,
-       te1.tool_name AS tool_a_name,
-       te2.tool_name AS tool_b_name
+MATCH (s:Session {workspace: $workspace, node_id: $session_id})-[:HAS_EVENT]->(e:Event)
+WITH e, [lbl IN labels(e) WHERE lbl ENDS WITH 'Event' AND lbl <> 'Event'] AS sub_labels
+WHERE size(sub_labels) > 0
+RETURN sub_labels[0] AS event_category,
+       count(e)       AS event_count
+ORDER BY event_count DESC
 ```
+
+### Pattern 7: Parallel Tool Call Groups
+
+**Variant 1 — Via ToolCall (structured path):**
+
+```cypher
+MATCH (s:Session {workspace: $workspace})-[:HAS_TOOL_CALL]->(tc:ToolCall)
+WHERE tc.parallel_group_id <> ''
+RETURN tc.parallel_group_id  AS parallel_group_id,
+       collect(tc.tool_name) AS tool_names,
+       count(tc)             AS group_size
+ORDER BY group_size DESC
+```
+
+**Variant 2 — Via ToolPreEvent (flexible path):**
+
+```cypher
+MATCH (s:Session {workspace: $workspace})-[:HAS_EVENT]->(e:ToolPreEvent)
+WHERE e.parallel_group_id <> ''
+RETURN e.parallel_group_id  AS parallel_group_id,
+       collect(e.tool_name) AS tool_names,
+       count(e)             AS group_size
+ORDER BY group_size DESC
+```
+
+**Variant 3 — Peak parallelism across workspace:**
+
+```cypher
+MATCH (s:Session:RootSession {workspace: $workspace})-[:HAS_TOOL_CALL]->(tc:ToolCall)
+WHERE tc.parallel_group_id <> ''
+WITH s.node_id AS session_id,
+     tc.parallel_group_id AS grp,
+     count(tc) AS grp_size
+RETURN session_id,
+       max(grp_size)       AS peak_parallelism,
+       count(DISTINCT grp) AS parallel_group_count
+ORDER BY peak_parallelism DESC
+LIMIT 20
+```
+
+> **Note:** `parallel_group_id` is an empty string `""` (not null) when a tool runs
+> alone. Use `tc.parallel_group_id <> ''` to filter parallel groups — not `IS NOT NULL`.
 
 ### Pattern 8: Search Prompt Text (Full-Text Property Filter)
 
