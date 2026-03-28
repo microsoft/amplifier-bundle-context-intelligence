@@ -63,8 +63,6 @@ documents but are **not present** in the graph:
 - `SUBSESSION_OF`
 - `PARALLEL_WITH`
 - `NEXT`
-- `HAS_RECIPE_RUN`
-- `SPANS_RUN`
 
 **Do not write queries using any of these relationship types.** They will match
 nothing and silently produce empty result sets with no error.
