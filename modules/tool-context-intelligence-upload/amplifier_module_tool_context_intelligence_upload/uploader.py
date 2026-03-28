@@ -165,7 +165,11 @@ def run_upload(
                         continue
 
                     event = record.get("event", "")
-                    workspace = record.get("workspace") or _workspace_from_path(session_dir)
+                    workspace = (
+                        record.get("workspace")
+                        or metadata.get("workspace")
+                        or _workspace_from_path(session_dir)
+                    )
                     data: dict[str, Any] = record.get("data", {})
 
                     payload = build_payload(event, workspace, data)

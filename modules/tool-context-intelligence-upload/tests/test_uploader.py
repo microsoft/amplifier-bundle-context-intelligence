@@ -454,6 +454,42 @@ class TestWorkspaceFromPath:
         session_dir = tmp_path / "sessions" / "abc123" / "context-intelligence"
         assert _workspace_from_path(session_dir) == ""
 
+    def test_metadata_workspace_used_before_path_fallback(self, tmp_path: Path) -> None:
+        """metadata.json workspace is used before folder-path derivation."""
+        session_dir = (
+            tmp_path / "projects" / "path-slug" / "sessions" / "s1" / "context-intelligence"
+        )
+        session_dir.mkdir(parents=True)
+        # metadata has workspace — takes priority over path-derived slug
+        metadata = {
+            "session_id": "s1",
+            "format": "context-intelligence",
+            "workspace": "workspace-from-metadata",
+        }
+        event = json.dumps({"event": "session:start", "data": {}})
+        (session_dir / "events.jsonl").write_text(event + "\n", encoding="utf-8")
+
+        sessions = [(session_dir, metadata)]
+        tracker = MagicMock()
+        captured_payloads: list[Any] = []
+
+        with patch("httpx.Client") as mock_client_cls:
+            mock_client = MagicMock()
+            mock_client_cls.return_value.__enter__.return_value = mock_client
+            mock_response = MagicMock()
+            mock_response.status_code = 200
+
+            def capture(url: str, json: Any = None, **kwargs: Any) -> MagicMock:
+                captured_payloads.append(json)
+                return mock_response
+
+            mock_client.post.side_effect = capture
+            run_upload(sessions, "https://server", "api-key", tracker)
+
+        assert len(captured_payloads) == 1
+        # metadata workspace wins over path-derived "path-slug"
+        assert captured_payloads[0]["workspace"] == "workspace-from-metadata"
+
     def test_workspace_fallback_used_when_record_missing_workspace(self, tmp_path: Path) -> None:
         """When events.jsonl record has no 'workspace' key, project slug is used."""
         # Build path structure that embeds project slug
