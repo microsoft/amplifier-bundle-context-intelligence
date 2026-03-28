@@ -2,7 +2,7 @@
 
 Acceptance criteria:
 - Agent inline examples use correct property names and traversal paths
-- graph-model-reference.md includes RecipeRun, RecipeStep, new edges
+- graph-model-reference.md reflects DL1-only schema (3 nodes, 3 edges; DL2 concepts in warning section)
 - SKILL.md schema tables include new labels/edges, Pattern 2 + 11 bugs fixed
 - SKILL.md has analytics sections A–E (wildcard, time-activity, recipe, parallelism, token)
 """
@@ -107,7 +107,7 @@ class TestGraphModelReference:
         text = _read(GRAPH_MODEL_FILE)
         assert "RecipeLoopIteration" in text
 
-    def test_recipe_approval_present(self):
+    def test_recipe_approval_absent_from_dl1_node_types(self):
         """RecipeApproval is a DL2 concept — must NOT appear in the DL1 Node Types table."""
         text = _read(GRAPH_MODEL_FILE)
         # The DL1 Node Types section contains exactly 3 nodes; RecipeApproval is
@@ -121,7 +121,7 @@ class TestGraphModelReference:
             "RecipeApproval is a DL2 concept and must not appear in the DL1 Node Types table"
         )
 
-    def test_has_recipe_run_edge_present(self):
+    def test_has_recipe_run_absent_from_dl1_edge_types(self):
         """HAS_RECIPE_RUN must NOT appear in the DL1 Edge Types table."""
         text = _read(GRAPH_MODEL_FILE)
         # The DL1 Edge Types section contains exactly 3 edge types; HAS_RECIPE_RUN
@@ -135,7 +135,7 @@ class TestGraphModelReference:
             "HAS_RECIPE_RUN is a DL2 concept and must not appear in the DL1 Edge Types table"
         )
 
-    def test_spans_run_edge_present(self):
+    def test_spans_run_absent_from_dl1_edge_types(self):
         """SPANS_RUN must NOT appear in the DL1 Edge Types table."""
         text = _read(GRAPH_MODEL_FILE)
         # The DL1 Edge Types section contains exactly 3 edge types; SPANS_RUN
