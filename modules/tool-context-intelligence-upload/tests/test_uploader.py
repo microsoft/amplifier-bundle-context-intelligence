@@ -424,3 +424,118 @@ class TestUploadEdgeCases:
         assert result.failed_at is not None
         assert result.failed_at["http_status"] == 0
         assert result.failed_at["session_id"] == "net-fail-session"
+
+
+class TestWorkspaceFromPath:
+    """Tests for _workspace_from_path — project-slug fallback for old sessions."""
+
+    def test_extracts_project_slug_from_standard_path(self, tmp_path: Path) -> None:
+        """Standard .amplifier/projects/{slug}/sessions/{id}/context-intelligence/ path."""
+        from amplifier_module_tool_context_intelligence_upload.uploader import (
+            _workspace_from_path,
+        )
+
+        session_dir = (
+            tmp_path
+            / "projects"
+            / "my-project-slug"
+            / "sessions"
+            / "abc123"
+            / "context-intelligence"
+        )
+        assert _workspace_from_path(session_dir) == "my-project-slug"
+
+    def test_returns_empty_string_when_projects_not_in_path(self, tmp_path: Path) -> None:
+        """When 'projects' segment absent, returns empty string gracefully."""
+        from amplifier_module_tool_context_intelligence_upload.uploader import (
+            _workspace_from_path,
+        )
+
+        session_dir = tmp_path / "sessions" / "abc123" / "context-intelligence"
+        assert _workspace_from_path(session_dir) == ""
+
+    def test_workspace_fallback_used_when_record_missing_workspace(self, tmp_path: Path) -> None:
+        """When events.jsonl record has no 'workspace' key, project slug is used."""
+        # Build path structure that embeds project slug
+        project_slug = "-home-dicolomb-my-project"
+        session_dir = (
+            tmp_path / "projects" / project_slug / "sessions" / "s1" / "context-intelligence"
+        )
+        session_dir.mkdir(parents=True)
+        metadata = {"session_id": "s1", "format": "context-intelligence"}
+
+        # Event record without 'workspace' key (old format)
+        event = json.dumps(
+            {"event": "session:start", "data": {"timestamp": "2026-03-18T00:00:00Z"}}
+        )
+        (session_dir / "events.jsonl").write_text(event + "\n", encoding="utf-8")
+
+        sessions = [(session_dir, metadata)]
+        tracker = MagicMock()
+        captured_payloads: list[Any] = []
+
+        with patch("httpx.Client") as mock_client_cls:
+            mock_client = MagicMock()
+            mock_client_cls.return_value.__enter__.return_value = mock_client
+            mock_response = MagicMock()
+            mock_response.status_code = 200
+            mock_client.post.return_value = mock_response
+
+            def capture(url: str, json: Any = None, **kwargs: Any) -> MagicMock:
+                captured_payloads.append(json)
+                return mock_response
+
+            mock_client.post.side_effect = capture
+            run_upload(sessions, "https://server", "api-key", tracker)
+
+        assert len(captured_payloads) == 1
+        # Workspace in payload must be the project slug, not empty string
+        assert captured_payloads[0]["workspace"] == project_slug
+
+
+class TestErrorMessageIncludesServerBody:
+    """Error messages from non-2xx responses must include the server response body."""
+
+    def test_422_error_message_includes_server_body(self, tmp_path: Path) -> None:
+        """HTTP 422 error message includes the server's response body."""
+        session_dir, metadata = _write_session(tmp_path, "s1", _make_events(1))
+        sessions = [(session_dir, metadata)]
+        tracker = MagicMock()
+
+        server_body = '{"detail": "workspace must not be empty"}'
+
+        with patch("httpx.Client") as mock_client_cls:
+            mock_client = MagicMock()
+            mock_client_cls.return_value.__enter__.return_value = mock_client
+            mock_response = MagicMock()
+            mock_response.status_code = 422
+            mock_response.text = server_body
+            mock_client.post.return_value = mock_response
+
+            result = run_upload(sessions, "https://server/", "key", tracker)
+
+        assert result.success is False
+        assert result.error is not None
+        assert "422" in result.error
+        assert "workspace must not be empty" in result.error
+
+    def test_500_error_message_includes_server_body(self, tmp_path: Path) -> None:
+        """HTTP 500 error message includes truncated server response body."""
+        session_dir, metadata = _write_session(tmp_path, "s1", _make_events(1))
+        sessions = [(session_dir, metadata)]
+        tracker = MagicMock()
+
+        with patch("httpx.Client") as mock_client_cls:
+            mock_client = MagicMock()
+            mock_client_cls.return_value.__enter__.return_value = mock_client
+            mock_response = MagicMock()
+            mock_response.status_code = 500
+            mock_response.text = "Internal Server Error"
+            mock_client.post.return_value = mock_response
+
+            result = run_upload(sessions, "https://server/", "key", tracker)
+
+        assert result.success is False
+        assert result.error is not None
+        assert "500" in result.error
+        assert "Internal Server Error" in result.error

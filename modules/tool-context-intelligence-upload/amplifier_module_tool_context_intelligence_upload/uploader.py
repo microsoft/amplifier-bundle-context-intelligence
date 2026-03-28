@@ -64,6 +64,28 @@ class UploadResult:
         return d
 
 
+def _workspace_from_path(session_dir: Path) -> str:
+    """Derive workspace from the project slug in the session directory path.
+
+    Used as a fallback when an ``events.jsonl`` record does not carry a
+    ``workspace`` field.  Sessions captured before workspace was added to the
+    on-disk format lack the field entirely; the project slug is the value
+    ``ConfigResolver`` would have resolved at live-capture time.
+
+    Path structure:
+        .../.amplifier/projects/{project_slug}/sessions/{id}/context-intelligence/
+
+    Walks the path parts looking for the ``projects`` segment and returns the
+    immediately following part as the workspace.  Returns an empty string when
+    the structure cannot be determined.
+    """
+    parts = session_dir.parts
+    for i, part in enumerate(parts):
+        if part == "projects" and i + 1 < len(parts):
+            return parts[i + 1]
+    return ""
+
+
 def _count_lines(file_path: Path) -> int:
     """Count the number of lines in *file_path*."""
     count = 0
@@ -143,7 +165,7 @@ def run_upload(
                         continue
 
                     event = record.get("event", "")
-                    workspace = record.get("workspace")
+                    workspace = record.get("workspace") or _workspace_from_path(session_dir)
                     data: dict[str, Any] = record.get("data", {})
 
                     payload = build_payload(event, workspace, data)
@@ -170,7 +192,10 @@ def run_upload(
                         )
 
                     if response.status_code < 200 or response.status_code >= 300:
-                        error_msg = f"HTTP {response.status_code} from {endpoint}"
+                        body = response.text[:200].strip() if response.text else ""
+                        error_msg = f"HTTP {response.status_code} from {endpoint}" + (
+                            f": {body}" if body else ""
+                        )
                         tracker.mark_failed(
                             session_id=session_id,
                             event_index=event_index,
