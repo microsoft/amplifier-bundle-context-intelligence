@@ -633,24 +633,17 @@ RETURN e.node_id    AS event_id,
 ORDER BY e.occurred_at
 ```
 
-> **Note:** Since the DefaultHandler run-awareness fix, `HAS_EVENT` edges for
-> events that fire during an active run come from the `OrchestratorRun` node,
-> not the Session. Use the "Events across all scopes" query below to find
-> events attached to either.
+> **Note:** In Data Layer 1, all HAS_EVENT edges attach directly to the Session (not to OrchestratorRun). ToolCall nodes also carry HAS_EVENT edges for their tool:pre and tool:post events.
 
-Events across all scopes (session and run) for a given session:
+Via ToolCall:
 
 ```cypher
-MATCH (s:Session {workspace: $workspace, node_id: $session_id})
-OPTIONAL MATCH (s)-[:HAS_EVENT]->(se:Event)
-OPTIONAL MATCH (s)-[:HAS_RUN]->(r:OrchestratorRun)-[:HAS_EVENT]->(re:Event)
-WITH s, collect(se) + collect(re) AS all_events
-UNWIND all_events AS e
-RETURN DISTINCT
-    e.node_id    AS event_id,
-    labels(e)    AS event_labels,
-    e.occurred_at AS occurred_at
-ORDER BY occurred_at
+MATCH (s:Session {workspace: $workspace, node_id: $session_id})-[:HAS_TOOL_CALL]->(tc:ToolCall)-[:HAS_EVENT]->(e:Event)
+RETURN tc.tool_name AS tool_name,
+       tc.tool_call_id AS tool_call_id,
+       e.event_name AS event_name,
+       e.occurred_at AS occurred_at
+ORDER BY e.occurred_at
 ```
 
 ### Pattern 12: Tool Execution Success/Failure Stats per Session
