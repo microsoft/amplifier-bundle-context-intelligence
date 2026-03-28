@@ -927,12 +927,12 @@ Labels are separate from properties. You can filter on both:
 
 ```cypher
 // Filter by label AND property
-MATCH (step:PromptStep {workspace: $workspace})
-RETURN step.node_id
+MATCH (s:RootSession {workspace: $workspace})
+RETURN s.node_id
 
 // Filter by property only (scans more nodes)
 MATCH (n {workspace: $workspace})
-WHERE 'PromptStep' IN labels(n)
+WHERE 'RootSession' IN labels(n)
 RETURN n.node_id
 ```
 
@@ -1084,7 +1084,7 @@ ORDER BY root_started DESC
 ## Recipe Analytics
 
 > **DL1 Note:** In Data Layer 1, recipe data is captured as `RecipeLoopIterationEvent`
-> and `RecipeLoopCompleteEvent` nodes. There is no `RecipeRun` node in DL1.
+> and `RecipeLoopCompleteEvent` nodes. There is no dedicated recipe wrapper node.
 
 **1. Sessions That Ran a Recipe** (via `RecipeLoopIterationEvent`):
 
