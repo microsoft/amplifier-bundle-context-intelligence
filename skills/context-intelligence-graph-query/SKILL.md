@@ -1177,43 +1177,74 @@ runs alone. Use `te.parallel_group_id <> ""` to isolate parallel groups — not
 
 ## Time-Activity Queries
 
-**Why `started_at <= T`:** For a run to be active at instant T, it must have
-started at or before T. `started_at >= T` would find runs that hadn't started
-yet — the opposite of what you want.
+> All queries below use **Data Layer 1** constructs only: `Session:RootSession`,
+> `HAS_EVENT`, `ExecutionStartEvent`, and `ExecutionEndEvent`.
+> See [Data Layer 2 Warning](#data-layer-2-warning) for labels and relationship
+> types that have no edges in the live graph and will return zero results.
 
-**Point-in-time** — root sessions with an active run at instant T:
+**Why `started_at <= T`:** For a session to be active at instant T, it must
+have started at or before T and not yet ended.
+
+### 1. Session-Level: Active Sessions at a Point in Time
+
+Root sessions that were active at a specific instant. Uses `started_at` and
+`ended_at` properties on the `Session` node (populated by `session:start` and
+`session:end` events).
 
 ```cypher
-MATCH (r:OrchestratorRun {workspace: $workspace})
-WHERE r.started_at <= $point_in_time
-  AND (r.ended_at IS NULL OR r.ended_at >= $point_in_time)
-MATCH (s:Session)-[:HAS_RUN]->(r)
-OPTIONAL MATCH (s)-[:SUBSESSION_OF*1..]->(root:Session:Root {workspace: $workspace})
+MATCH (s:Session:RootSession {workspace: $workspace})
+WHERE s.started_at <= $point_in_time
+  AND (s.ended_at IS NULL OR s.ended_at >= $point_in_time)
+RETURN s.node_id    AS root_session_id,
+       s.started_at AS root_started,
+       s.ended_at   AS root_ended
+ORDER BY s.started_at DESC
+```
+
+### 2. Session-Level: Sessions in a Time Range
+
+Root sessions that started within a time window [t1, t2]:
+
+```cypher
+MATCH (s:Session:RootSession {workspace: $workspace})
+WHERE s.started_at >= $t1 AND s.started_at <= $t2
+RETURN s.node_id    AS root_session_id,
+       s.started_at AS root_started,
+       s.ended_at   AS root_ended
+ORDER BY s.started_at DESC
+```
+
+### 3. Turn-Level: Execution Brackets Within a Session
+
+Each user turn produces an `ExecutionStartEvent` and (when complete) an
+`ExecutionEndEvent`. Use these to find turn boundaries within a specific
+session:
+
+```cypher
+MATCH (s:Session {workspace: $workspace, node_id: $session_id})-[:HAS_EVENT]->(start:ExecutionStartEvent)
+OPTIONAL MATCH (s)-[:HAS_EVENT]->(end:ExecutionEndEvent)
+WHERE end.occurred_at > start.occurred_at
+WITH start, min(end.occurred_at) AS turn_ended
+RETURN start.node_id      AS bracket_id,
+       start.occurred_at  AS turn_started,
+       turn_ended,
+       duration.between(datetime(start.occurred_at), datetime(turn_ended)) AS duration
+ORDER BY start.occurred_at
+```
+
+### 4. Sessions with Any Turn in a Time Window
+
+Find root sessions that had at least one execution turn start within [t1, t2]:
+
+```cypher
+MATCH (s:Session:RootSession {workspace: $workspace})-[:HAS_EVENT]->(e:ExecutionStartEvent)
+WHERE e.occurred_at >= $t1 AND e.occurred_at <= $t2
 RETURN DISTINCT
-  coalesce(root.node_id, s.node_id)       AS root_session_id,
-  coalesce(root.started_at, s.started_at) AS root_started
+  s.node_id    AS root_session_id,
+  s.started_at AS root_started,
+  count(e)     AS turns_in_window
 ORDER BY root_started DESC
 ```
-
-**Time-range** — root sessions with any run that started within [t1, t2]:
-
-```cypher
-MATCH (r:OrchestratorRun {workspace: $workspace})
-WHERE r.started_at >= $t1 AND r.started_at <= $t2
-MATCH (s:Session)-[:HAS_RUN]->(r)
-OPTIONAL MATCH (s)-[:SUBSESSION_OF*1..]->(root:Session:Root {workspace: $workspace})
-RETURN
-  coalesce(root.node_id, s.node_id)       AS root_session_id,
-  coalesce(root.started_at, s.started_at) AS root_started,
-  count(DISTINCT r)                        AS runs_in_window
-ORDER BY root_started DESC
-```
-
-Use the time-range variant to find sessions resumed after a long gap: each
-resume creates a new OrchestratorRun with a fresh `started_at`.
-
-`OPTIONAL MATCH + coalesce`: when the owning session is already a root
-(no SUBSESSION_OF exists), `root` is null and coalesce falls back to `s`.
 
 ---
 
