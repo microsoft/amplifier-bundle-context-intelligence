@@ -1057,15 +1057,15 @@ are silently deduplicated on `MERGE`. If two events share `session_id`,
 `tool_call_id` (present on `ToolExecution` nodes) to disambiguate parallel
 tool calls.
 
-### 3. No `seq` ordering on edges
+### 3. No ordering guarantee on HAS_EVENT edges
 
-`HAS_RUN`, `HAS_STEP`, and `NEXT` relationships do **not** carry a `seq`
-property. To order steps within a run, sort by `occurred_at` on the node:
+`HAS_EVENT` edges carry no sequence number. When retrieving events for a session,
+always use `ORDER BY e.occurred_at` to get chronological order:
 
 ```cypher
-MATCH (run:OrchestratorRun {workspace: $workspace})-[:HAS_STEP]->(step:Step)
-RETURN step.node_id, step.occurred_at
-ORDER BY step.occurred_at ASC
+MATCH (s:Session {workspace: $workspace, node_id: $session_id})-[:HAS_EVENT]->(e:Event)
+RETURN e.node_id, e.event_name, e.occurred_at
+ORDER BY e.occurred_at ASC
 ```
 
 ### 4. Workspace scoping is manual
@@ -1075,13 +1075,11 @@ ORDER BY step.occurred_at ASC
 returns data from **all** workspaces. Always include `{workspace: $workspace}`
 on the anchor node of every query.
 
-### 5. `HAS_EVENT` target rules
+### 5. `HAS_EVENT` attaches directly to Session in DL1
 
-`HAS_EVENT` attaches to the **current active `OrchestratorRun`** when one is
-open (`cursors.current_run_id` is set); otherwise it falls back to the
-`Session` node. This means lifecycle events emitted outside an orchestrator
-run (e.g., session-level hooks) are attached directly to the Session, not to
-a Run.
+All `HAS_EVENT` edges go directly from `Session` to `Event` — there is no
+intermediate run-level node. `ToolCall` nodes also carry `HAS_EVENT` edges
+to events scoped to that tool call. There is no run-level event routing in DL1.
 
 ### 6. Node `MERGE` key is `{node_id, workspace}`
 
