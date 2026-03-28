@@ -1250,11 +1250,8 @@ ORDER BY root_started DESC
 
 ## Recipe Analytics
 
-> **DL1 Note:** In Data Layer 1, recipe data is captured as event nodes attached
-> directly to the `Session` via `HAS_EVENT` edges. Use `RecipeLoopIterationEvent`
-> (one per loop-iteration step) and `RecipeLoopCompleteEvent` (fired when the
-> recipe finishes). There is **no** `RecipeRun` wrapper node, `HAS_RECIPE_RUN`
-> relationship, or `SUBSESSION_OF` hierarchy in DL1 — query events directly.
+> **DL1 Note:** In Data Layer 1, recipe data is captured as `RecipeLoopIterationEvent`
+> and `RecipeLoopCompleteEvent` nodes. There is no `RecipeRun` node in DL1.
 
 **1. Sessions That Ran a Recipe** (via `RecipeLoopIterationEvent`):
 
@@ -1301,11 +1298,12 @@ RETURN iter.recipe_name,
 > `GROUP BY` needed. If `occurred_at` is stored as a Neo4j `datetime` type,
 > you can wrap both values in `duration.between()` to compute elapsed time.
 
-**5. Loop Iteration Count per Recipe** (count and max iteration reached):
+**5. Loop Iteration Count per Recipe** (count and max iteration reached, grouped by recipe + step):
 
 ```cypher
 MATCH (s:Session {workspace: $workspace})-[:HAS_EVENT]->(e:RecipeLoopIterationEvent)
 RETURN e.recipe_name,
+       e.step_id,
        count(e)         AS total_iterations,
        max(e.iteration) AS max_iteration_reached
 ORDER BY total_iterations DESC
