@@ -862,6 +862,13 @@ ORDER BY n DESC
 
 ## Graph Algorithm Examples
 
+> ⚠️ **Data Layer 2 Only — DL1 graphs will return zero results for most examples below.**
+> The "All Paths from Session to a Specific Tool Execution" and "Variable-Length Traversal"
+> examples use DL2 relationships (`HAS_RUN`, `HAS_STEP`, `TRIGGERED`, `SPAWNED`,
+> `SUBSESSION_OF`) and the `ToolExecution` label that do not exist in Data Layer 1.
+> Only the "Shortest Path" example works on DL1 (it uses no label/relationship filters).
+> These examples will be updated in Phase 2.
+
 ### Shortest Path Between Two Nodes
 
 Find the shortest undirected path between any two nodes by `node_id`:
