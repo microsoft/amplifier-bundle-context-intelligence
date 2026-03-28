@@ -8,8 +8,8 @@ license: MIT
 # Context Intelligence Graph Query (Cypher Dialect)
 
 This skill teaches how to query the context-intelligence property graph using
-the `graph_query` tool. All structural traversal — sessions, runs, steps, tool
-executions, delegations — is done through Cypher queries executed via the
+the `graph_query` tool. All structural traversal — sessions, events, tool calls,
+delegations — is done through Cypher queries executed via the
 `graph_query` tool.
 
 Query patterns for searching and traversing the context-intelligence graph.
@@ -162,8 +162,6 @@ documents but are **not present** in the graph:
 - `HAS_RUN`
 - `HAS_STEP`
 - `TRIGGERED`
-- `SPAWNED`
-- `SUBSESSION_OF`
 - `PARALLEL_WITH`
 - `NEXT`
 
@@ -266,10 +264,9 @@ PascalCase join. Examples: `ContextCompaction`, `SkillLoaded`, `OrchestrationSta
 | `HAS_RUN` | `Session` | `OrchestratorRun` | Session contains ordered orchestrator runs |
 | `HAS_STEP` | `OrchestratorRun` | `Step` | Run contains ordered steps (LLM iterations) |
 | `NEXT` | `Step` | `Step` | Sequential causal ordering within a run |
-| `TRIGGERED` | `Step` | `ToolExecution` | Step triggered these tool executions |
+| `TRIGGERED` | `Step` | `ToolExecution` | Step triggered these tool calls |
 | `PARALLEL_WITH` | `ToolExecution` | `ToolExecution` | Concurrent execution in the same parallel group |
-| `SPAWNED` | `ToolExecution` | `Session` | Delegation created a child session |
-| `SUBSESSION_OF` | `Session` | `Session` | Child session to parent lineage |
+| `HAS_FORK` | `Session` | `Session` | Delegation created a child session |
 | `HAS_EVENT` | `OrchestratorRun` (when active) / `Session` (fallback) | `Event` | Attaches lifecycle/custom events to their scope. DefaultHandler checks `cursors.current_run_id` — if an active run exists, the event attaches to the run; otherwise it falls back to the Session. |
 | `HAS_RECIPE_RUN` | `Session` | `RecipeRun` | Written once on first `recipe:*` event |
 | `SPANS_RUN` | `RecipeRun` | `OrchestratorRun` | Non-owning reference, deduplicated across approval-gate turns |
