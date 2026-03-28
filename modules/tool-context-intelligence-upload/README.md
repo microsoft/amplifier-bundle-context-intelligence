@@ -45,7 +45,7 @@ context-intelligence-upload --path PATH --server-url URL --api-key KEY
 | Flag | Required | Description |
 |------|----------|-------------|
 | `--path PATH` | **required** | File or folder to replay. If `PATH` is a `metadata.json` file, only that single session is processed. Otherwise, the tool recurses into `PATH` searching for all `metadata.json` files. |
-| `--server-url URL` | **required** | Base URL of the Context Intelligence ingestion server (e.g. `https://ci.example.com`). The `/events` endpoint is appended automatically. |
+| `--server-url URL` | **required** | Base URL of the Context Intelligence ingestion server (e.g. `https://context-intelligence.example.com`). The `/events` endpoint is appended automatically. |
 | `--api-key KEY` | **required** | Bearer token sent in the `Authorization` header for every request. |
 | `--job-id ID` | optional | Stable identifier for this upload job. Useful for correlating progress files and log output across retries. A random UUID4 is auto-generated and printed to stderr when omitted. |
 | `--progress FILE` | optional | Path to write the progress JSON file. Default: `/tmp/context-intelligence-upload-{job_id}.json` |
@@ -59,8 +59,8 @@ context-intelligence-upload --path PATH --server-url URL --api-key KEY
 ```bash
 context-intelligence-upload \
     --path ~/.amplifier/projects/my-project/sessions/abc123/context-intelligence \
-    --server-url https://ci.example.com \
-    --api-key $CI_API_KEY
+    --server-url https://context-intelligence.example.com \
+    --api-key $AMPLIFIER_CONTEXT_INTELLIGENCE_API_KEY
 ```
 
 **Replay an entire project tree:**
@@ -68,8 +68,8 @@ context-intelligence-upload \
 ```bash
 context-intelligence-upload \
     --path ~/.amplifier/projects/my-project \
-    --server-url https://ci.example.com \
-    --api-key $CI_API_KEY
+    --server-url https://context-intelligence.example.com \
+    --api-key $AMPLIFIER_CONTEXT_INTELLIGENCE_API_KEY
 ```
 
 **Target a recovery server with a custom job ID:**
@@ -78,7 +78,7 @@ context-intelligence-upload \
 context-intelligence-upload \
     --path /data/sessions \
     --server-url https://recovery.example.com \
-    --api-key $CI_API_KEY \
+    --api-key $AMPLIFIER_CONTEXT_INTELLIGENCE_API_KEY \
     --job-id my-retry-job-001
 ```
 
@@ -149,8 +149,8 @@ When the live hook cannot reach the server (circuit breaker tripped, network out
 ```bash
 context-intelligence-upload \
     --path ~/.amplifier/projects/my-project/sessions/affected-session-id/context-intelligence \
-    --server-url https://ci.example.com \
-    --api-key $CI_API_KEY
+    --server-url https://context-intelligence.example.com \
+    --api-key $AMPLIFIER_CONTEXT_INTELLIGENCE_API_KEY
 ```
 
 ### Targeting a different server
@@ -172,8 +172,8 @@ If the server loses stored events (database restore, accidental wipe), replay th
 ```bash
 context-intelligence-upload \
     --path ~/.amplifier/projects \
-    --server-url https://ci.example.com \
-    --api-key $CI_API_KEY \
+    --server-url https://context-intelligence.example.com \
+    --api-key $AMPLIFIER_CONTEXT_INTELLIGENCE_API_KEY \
     --job-id full-replay-after-data-loss
 ```
 
@@ -237,7 +237,7 @@ The upload tool writes a JSON progress file to disk and updates it atomically af
     "session_id": "sess-abc123",
     "event_index": 42,
     "http_status": 503,
-    "error": "HTTP 503 from https://ci.example.com/events"
+    "error": "HTTP 503 from https://context-intelligence.example.com/events"
   }
 }
 ```
