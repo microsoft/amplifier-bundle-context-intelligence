@@ -24,9 +24,9 @@ Choose the right approach based on what you need to find:
 
 | Query Type | Tool | Example |
 |-----------|------|---------|
-| Structural navigation (sessions, runs, steps, delegations) | `graph_query` | "Find all runs in this session" |
-| Relationship traversal (parent-child, SPAWNED, SUBSESSION_OF) | `graph_query` | "Find all child sessions" |
-| Session statistics and aggregations | `graph_query` | "Count tool executions by tool name" |
+| Structural navigation (sessions, events, tool calls, delegations) | `graph_query` | "Find all tool calls in this session" |
+| Relationship traversal (parent-child, HAS_FORK, HAS_TOOL_CALL) | `graph_query` | "Find all child sessions" |
+| Session statistics and aggregations | `graph_query` | "Count tool calls by tool name" |
 | Prompt text keyword search | `bash`+`grep` or `graph_query` | "Find prompts containing 'authentication'" |
 | Large payload inspection (messages, results) | `bash`+`jq` after `blob_read` | "Read tool result JSON" |
 | Event log text search across sessions | `bash`+`grep` on events.jsonl | "Find all sessions with a specific error" |
