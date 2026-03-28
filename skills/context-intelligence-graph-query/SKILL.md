@@ -1152,13 +1152,13 @@ analysis queries when you need up-to-date results.
 ## Foundational Traversal Primitive
 
 The multi-relationship wildcard reaches any descendant node type in one
-Cypher pattern, naturally crossing sub-session boundaries via SPAWNED.
+Cypher pattern, naturally crossing forked session boundaries via HAS_FORK.
 Add a depth cap to prevent runaway traversal on deep delegation chains.
 
 ```cypher
 -- All ToolExecutions under a session (including sub-sessions, any depth)
 MATCH (root:Session {node_id: $session_id, workspace: $workspace})
-      -[:HAS_RUN|HAS_STEP|TRIGGERED|SPAWNED*1..20]->(te:ToolExecution)
+      -[:HAS_RUN|HAS_STEP|TRIGGERED|HAS_FORK*1..20]->(te:ToolExecution)
 RETURN te.tool_name, count(te) AS calls
 ORDER BY calls DESC
 ```
