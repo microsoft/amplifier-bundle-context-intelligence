@@ -486,19 +486,45 @@ RETURN e.event_name, e.model, e.occurred_at
 ORDER BY e.occurred_at
 ```
 
-### Pattern 4: Find All Tool Executions in a Run
+### Pattern 4: Session Tool Activity
+
+There are two complementary paths to tool data in Data Layer 1. Use the **flexible
+path** (via `:ToolEvent`) for search and analysis — it lets you filter by tool name,
+read lifted fields, and query all tool activity regardless of lifecycle state. Use the
+**structured path** (via `:ToolCall`) when the lifecycle node itself is the natural
+anchor — for example, when you need start + end timestamps or want to correlate
+pre/post/error events via `(tc)-[:HAS_EVENT]->(e)`.
+
+**Variant 1 — Flexible path (preferred for search and analysis):**
 
 ```cypher
-MATCH (s:Session {workspace: $workspace, node_id: $session_id})
-      -[:HAS_RUN]->(r:OrchestratorRun {node_id: $run_id})
-      -[:HAS_STEP]->(step:Step)
-      -[:TRIGGERED]->(te:ToolExecution)
-RETURN te.node_id     AS tool_exec_id,
-       te.tool_name   AS tool_name,
-       te.status      AS status,
-       te.occurred_at AS occurred_at,
-       step.node_id   AS trigger_step_id
-ORDER BY te.occurred_at
+MATCH (s:Session {workspace: $workspace, node_id: $session_id})-[:HAS_EVENT]->(e:ToolEvent)
+RETURN e.event_name AS event_type,
+       e.tool_name,
+       e.tool_call_id,
+       e.parallel_group_id,
+       e.occurred_at
+ORDER BY e.occurred_at
+```
+
+**Variant 2 — Filter to tool:pre only:**
+
+```cypher
+MATCH (s:Session {workspace: $workspace, node_id: $session_id})-[:HAS_EVENT]->(e:ToolPreEvent)
+RETURN e.tool_name,
+       e.tool_call_id,
+       e.occurred_at
+```
+
+**Variant 3 — Structured path (when ToolCall is the anchor):**
+
+```cypher
+MATCH (s:Session {workspace: $workspace, node_id: $session_id})-[:HAS_TOOL_CALL]->(tc:ToolCall)
+RETURN tc.tool_name,
+       tc.tool_call_id,
+       tc.parallel_group_id,
+       tc.ended_at
+ORDER BY tc.ended_at
 ```
 
 ### Pattern 5: Find Delegations and Their Child Sessions
