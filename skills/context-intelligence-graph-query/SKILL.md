@@ -1369,46 +1369,97 @@ ORDER BY parallel_degree DESC
 
 ## Token Efficiency
 
-**Property distinction — never confuse these:**
-- `input_tokens` — provider's actual token count (from `usage.input_tokens`). Use for cost analysis.
-- `message_count` — orchestrator's message count (from `usage.input`). Use for context window analysis.
-Do not sum `input_tokens` and `message_count` together — they measure different things.
+> **In Data Layer 1, token data lives on event nodes.** `LlmResponseEvent` nodes carry
+> `model` and `provider` (via `LlmLifter`). Token counts may be at top level or in the
+> `data` blob — run the discovery queries below to confirm what is available in your graph.
 
-`cached_tokens` and `cache_write_tokens` can be null on older sessions.
-Always use `coalesce(property, 0)` in aggregations.
+---
 
-**Token usage aggregated per orchestrator run:**
+### 1. Discovery: What Token Properties Exist
 
-```cypher
-MATCH (s:Session {node_id: $session_id, workspace: $workspace})
-      -[:HAS_RUN]->(r:OrchestratorRun)
-      -[:HAS_STEP]->(a:AssistantStep)
-RETURN r.node_id                                AS run_id,
-       r.started_at,
-       sum(a.input_tokens)                      AS total_input,
-       sum(a.output_tokens)                     AS total_output,
-       sum(coalesce(a.cached_tokens, 0))        AS total_cached,
-       sum(coalesce(a.cache_write_tokens, 0))   AS total_cache_written,
-       sum(coalesce(a.reasoning_tokens, 0))     AS total_reasoning,
-       count(a)                                 AS llm_turns
-ORDER BY r.started_at
-```
+Run these two queries first to confirm which properties are present on your graph before
+writing any aggregation queries.
 
-**Cache efficiency — sessions with the best prompt cache utilisation:**
+**OrchestratorCompleteEvent properties:**
 
 ```cypher
-MATCH (s:Session:Root {workspace: $workspace})
-      -- AssistantStep reached via HAS_STEP only; TRIGGERED goes to ToolExecution
-      -[:HAS_RUN|HAS_STEP|SPAWNED*1..20]->(a:AssistantStep)
-WHERE a.input_tokens IS NOT NULL
-WITH s.node_id AS session_id,
-     sum(a.input_tokens)                    AS raw_input,
-     sum(coalesce(a.cached_tokens, 0))      AS cached
-WHERE raw_input + cached > 0
-RETURN session_id,
-       raw_input + cached                                     AS total_input_tokens,
-       cached                                                 AS cache_hits,
-       round(100.0 * cached / (raw_input + cached), 1)       AS cache_hit_pct
-ORDER BY cache_hit_pct DESC LIMIT 20
+MATCH (e:OrchestratorCompleteEvent {workspace: $workspace})
+RETURN keys(e) AS properties
+LIMIT 3
 ```
+
+**LlmResponseEvent properties:**
+
+```cypher
+MATCH (e:LlmResponseEvent {workspace: $workspace})
+RETURN keys(e) AS properties
+LIMIT 3
+```
+
+> **Confirmed property names** (from FieldLifter documentation and live graph):
+> - `OrchestratorCompleteEvent`: `total_input_tokens`, `total_output_tokens`, `turn_count`
+> - `LlmResponseEvent`: `model`, `provider` (lifted by `LlmLifter`); token counts may be in
+>   the `data` blob — use `blob_read` + `jq` to extract them (see note at end of section).
+
+---
+
+### 2. Session-Level Token Summary
+
+`OrchestratorCompleteEvent` fires once per session turn and carries cumulative token totals.
+Use `Session` → `HAS_EVENT` → `OrchestratorCompleteEvent` to retrieve them.
+
+```cypher
+MATCH (s:Session {workspace: $workspace, node_id: $session_id})-[:HAS_EVENT]->(e:OrchestratorCompleteEvent)
+RETURN e.total_input_tokens  AS total_input_tokens,
+       e.total_output_tokens AS total_output_tokens,
+       e.turn_count          AS turn_count,
+       e.occurred_at         AS occurred_at
+ORDER BY e.occurred_at
+```
+
+---
+
+### 3. Per-Model Usage in a Session
+
+`LlmResponseEvent` nodes carry `model` and `provider` (promoted by `LlmLifter`). Group by
+both columns to break down LLM call counts per model within a session.
+
+```cypher
+MATCH (s:Session {workspace: $workspace, node_id: $session_id})-[:HAS_EVENT]->(e:LlmResponseEvent)
+RETURN e.model    AS model,
+       e.provider AS provider,
+       count(e)   AS llm_calls
+ORDER BY llm_calls DESC
+```
+
+---
+
+### 4. Model Distribution Across Workspace
+
+Same pattern as above but without the `node_id` filter — returns model usage across all
+sessions in the workspace.
+
+```cypher
+MATCH (s:Session {workspace: $workspace})-[:HAS_EVENT]->(e:LlmResponseEvent)
+RETURN e.model    AS model,
+       e.provider AS provider,
+       count(e)   AS llm_calls
+ORDER BY llm_calls DESC
+```
+
+> **Extracting token counts from the data blob:** If `total_input_tokens` /
+> `total_output_tokens` are null on `OrchestratorCompleteEvent` nodes, the raw values are
+> stored in the `data` blob. Use `blob_read` to resolve the `ci-blob://` URI on the `data`
+> property, then use `jq` to extract the token fields:
+>
+> ```
+> # 1. Get the data blob URI
+> graph_query("MATCH (s:Session {workspace: $workspace, node_id: $session_id})
+>              -[:HAS_EVENT]->(e:OrchestratorCompleteEvent)
+>              RETURN e.data LIMIT 1")
+>
+> # 2. Resolve and inspect with jq
+> blob_read("ci-blob://...")  # returns local file path
+> bash("jq '.total_input_tokens, .total_output_tokens' /path/to/blob")
+> ```
 
