@@ -527,20 +527,41 @@ RETURN tc.tool_name,
 ORDER BY tc.ended_at
 ```
 
-### Pattern 5: Find Delegations and Their Child Sessions
+### Pattern 5: Child Sessions and Delegation Metadata
 
-Tool executions that spawned sub-sessions via the delegate tool:
+**Variant 1 — Direct child sessions (structural, via HAS_FORK):**
 
 ```cypher
-MATCH (parent:Session {workspace: $workspace})
-      -[:HAS_RUN]->()-[:HAS_STEP]->()-[:TRIGGERED]->
-      (d:Delegation)-[:SPAWNED]->(child:Session)
-RETURN parent.node_id  AS parent_session_id,
-       d.node_id        AS delegation_id,
-       d.tool_name      AS tool_name,
-       child.node_id    AS child_session_id,
-       child.occurred_at AS child_started_at
-ORDER BY child.occurred_at
+MATCH (parent:Session {workspace: $workspace, node_id: $session_id})-[:HAS_FORK]->(child:Session)
+RETURN child.node_id    AS child_session_id,
+       child.started_at AS started_at,
+       labels(child)    AS session_labels
+ORDER BY child.started_at
+```
+
+**Variant 2 — Delegation metadata (via DelegateAgentSpawnedEvent):**
+
+```cypher
+MATCH (parent:Session {workspace: $workspace, node_id: $session_id})-[:HAS_EVENT]->(e:DelegateAgentSpawnedEvent)
+RETURN e.agent            AS agent,
+       e.sub_session_id   AS sub_session_id,
+       e.tool_call_id     AS tool_call_id,
+       e.parallel_group_id AS parallel_group_id,
+       e.occurred_at      AS occurred_at
+ORDER BY e.occurred_at
+```
+
+**Variant 3 — Combined (structural children with delegation metadata):**
+
+```cypher
+MATCH (parent:Session {workspace: $workspace, node_id: $session_id})-[:HAS_FORK]->(child:Session)
+OPTIONAL MATCH (parent)-[:HAS_EVENT]->(e:DelegateAgentSpawnedEvent)
+WHERE e.sub_session_id = child.node_id
+RETURN child.node_id    AS child_session_id,
+       child.started_at AS started_at,
+       e.agent          AS agent,
+       e.tool_call_id   AS tool_call_id
+ORDER BY child.started_at
 ```
 
 ### Pattern 6: Full Execution Tree (Session → Runs → Steps → Tools)
@@ -627,27 +648,26 @@ MATCH (n:ToolCall {workspace: $workspace})
 RETURN count(n) AS tool_call_count
 ```
 
-### Pattern 10: Find Subsessions of a Parent Session
+### Pattern 10: Find Child Sessions of a Parent
 
-Direct children only:
+**Variant 1 — Direct children only:**
 
 ```cypher
-MATCH (child:Session {workspace: $workspace})
-      -[:SUBSESSION_OF]->(parent:Session {node_id: $parent_session_id})
+MATCH (parent:Session {workspace: $workspace, node_id: $session_id})-[:HAS_FORK]->(child:Session)
 RETURN child.node_id    AS child_session_id,
-       child.occurred_at AS started_at,
-       labels(child)     AS session_labels
-ORDER BY child.occurred_at
+       child.started_at AS started_at,
+       labels(child)    AS session_labels
+ORDER BY child.started_at
 ```
 
-All descendants (any depth) of a parent session:
+**Variant 2 — All descendants (any depth):**
 
 ```cypher
-MATCH (child:Session {workspace: $workspace})
-      -[:SUBSESSION_OF*1..]->(ancestor:Session {node_id: $ancestor_session_id})
-RETURN child.node_id    AS descendant_session_id,
-       child.occurred_at AS started_at
-ORDER BY child.occurred_at
+MATCH (parent:Session {workspace: $workspace, node_id: $session_id})-[:HAS_FORK*1..]->(descendant:Session)
+RETURN descendant.node_id    AS descendant_session_id,
+       descendant.started_at AS started_at,
+       labels(descendant)    AS session_labels
+ORDER BY descendant.started_at
 ```
 
 ### Pattern 11: Find Events Attached to a Session
