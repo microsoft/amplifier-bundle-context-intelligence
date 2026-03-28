@@ -1315,33 +1315,57 @@ ORDER BY total_iterations DESC
 
 ## Parallelism Degree
 
-**Parallel groups per session (any depth via wildcard):**
+When the orchestrator fires multiple tool calls at once, each concurrent call
+shares the same `parallel_group_id` (a UUID string). Tool calls that run alone
+get `parallel_group_id = ""` (empty string — **never null**). Always filter
+with `<> ""`, never with `IS NOT NULL`.
+
+**1. Parallel groups for a session — via ToolCall (structured path):**
 
 ```cypher
-MATCH (root:Session {node_id: $session_id, workspace: $workspace})
-      -[:HAS_RUN|HAS_STEP|TRIGGERED|SPAWNED*1..20]->(te:ToolExecution)
-WHERE te.parallel_group_id <> ""
-RETURN te.parallel_group_id,
-       collect(te.tool_name) AS tools,
-       count(te)             AS parallel_degree
+MATCH (s:Session {workspace: $workspace, node_id: $session_id})-[:HAS_TOOL_CALL]->(tc:ToolCall)
+WHERE tc.parallel_group_id <> ""
+RETURN tc.parallel_group_id,
+       collect(tc.tool_name) AS tools,
+       count(tc)             AS parallel_degree
 ORDER BY parallel_degree DESC
 ```
 
-**Sessions with the highest peak parallelism across the workspace:**
+**2. Parallel groups for a session — via ToolPreEvent (flexible path, includes tool_input):**
 
 ```cypher
-MATCH (s:Session:Root {workspace: $workspace})
-      -[:HAS_RUN|HAS_STEP|TRIGGERED|SPAWNED*1..20]->(te:ToolExecution)
-WHERE te.parallel_group_id <> ""
-WITH s.node_id AS session_id, te.parallel_group_id AS grp, count(te) AS grp_size
+MATCH (s:Session {workspace: $workspace, node_id: $session_id})-[:HAS_EVENT]->(e:ToolPreEvent)
+WHERE e.parallel_group_id <> ""
+RETURN e.parallel_group_id,
+       collect(e.tool_name)  AS tools,
+       collect(e.tool_input) AS tool_inputs,
+       count(e)              AS parallel_degree
+ORDER BY parallel_degree DESC
+```
+
+**3. Peak parallelism across workspace — via Session:RootSession and HAS_TOOL_CALL:**
+
+```cypher
+MATCH (s:Session:RootSession {workspace: $workspace})-[:HAS_TOOL_CALL]->(tc:ToolCall)
+WHERE tc.parallel_group_id <> ""
+WITH s.node_id AS session_id, tc.parallel_group_id AS grp, count(tc) AS grp_size
 RETURN session_id,
        max(grp_size)          AS peak_parallelism,
        count(DISTINCT grp)    AS parallel_groups
 ORDER BY peak_parallelism DESC LIMIT 20
 ```
 
-**Note:** `parallel_group_id` is `""` (empty string, not null) for
-non-parallel tools. Always use `<> ""` to filter, never `IS NOT NULL`.
+**4. Delegation parallelism — parallel agent spawns via DelegateAgentSpawnedEvent:**
+
+```cypher
+MATCH (s:Session {workspace: $workspace, node_id: $session_id})-[:HAS_EVENT]->(e:DelegateAgentSpawnedEvent)
+WHERE e.parallel_group_id <> ""
+RETURN e.parallel_group_id,
+       collect(e.agent)          AS agents,
+       collect(e.sub_session_id) AS sub_sessions,
+       count(e)                  AS parallel_degree
+ORDER BY parallel_degree DESC
+```
 
 ---
 
