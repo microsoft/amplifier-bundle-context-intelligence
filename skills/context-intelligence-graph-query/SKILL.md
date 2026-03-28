@@ -439,9 +439,9 @@ ORDER BY s.occurred_at DESC
 To restrict to only top-level (root) sessions:
 
 ```cypher
-MATCH (s:Session:Root {workspace: $workspace})
-RETURN s.node_id AS session_id, s.occurred_at AS started_at
-ORDER BY s.occurred_at DESC
+MATCH (s:Session:RootSession {workspace: $workspace})
+RETURN s.node_id AS session_id, s.started_at AS started_at
+ORDER BY s.started_at DESC
 ```
 
 ### Pattern 2: Get a Session's Orchestrator Runs
@@ -595,8 +595,8 @@ ORDER BY node_count DESC
 Count a specific label type:
 
 ```cypher
-MATCH (n:ToolExecution {workspace: $workspace})
-RETURN count(n) AS tool_execution_count
+MATCH (n:ToolCall {workspace: $workspace})
+RETURN count(n) AS tool_call_count
 ```
 
 ### Pattern 10: Find Subsessions of a Parent Session
