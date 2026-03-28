@@ -444,44 +444,46 @@ RETURN s.node_id AS session_id, s.started_at AS started_at
 ORDER BY s.started_at DESC
 ```
 
-### Pattern 2: Get a Session's Orchestrator Runs
+### Pattern 2: Session Execution Brackets
+
+Find all execution brackets (one per user turn):
 
 ```cypher
-MATCH (s:Session {workspace: $workspace, node_id: $session_id})
-      -[:HAS_RUN]->(r:OrchestratorRun)
-RETURN r.node_id AS run_id,
-       r.occurred_at AS started_at
-ORDER BY r.started_at
+MATCH (s:Session {workspace: $workspace, node_id: $session_id})-[:HAS_EVENT]->(e:ExecutionStartEvent)
+RETURN e.node_id AS bracket_id, e.occurred_at AS turn_started
+ORDER BY e.occurred_at
 ```
 
-### Pattern 3: Trace a Session's Step Sequence
-
-Walk all steps in order using `NEXT` chain within each run:
+Brackets with duration (pair each start with its nearest end):
 
 ```cypher
-MATCH (s:Session {workspace: $workspace, node_id: $session_id})
-      -[:HAS_RUN]->(r:OrchestratorRun)
-      -[:HAS_STEP]->(first:Step)
-WHERE NOT (:Step)-[:NEXT]->(first)
-OPTIONAL MATCH path = (first)-[:NEXT*0..]->(step:Step)
-RETURN r.node_id              AS run_id,
-       step.node_id           AS step_id,
-       labels(step)           AS step_labels,
-       step.occurred_at       AS occurred_at
-ORDER BY r.started_at, step.occurred_at
+MATCH (s:Session {workspace: $workspace, node_id: $session_id})-[:HAS_EVENT]->(start:ExecutionStartEvent)
+OPTIONAL MATCH (s)-[:HAS_EVENT]->(end:ExecutionEndEvent)
+WHERE end.occurred_at > start.occurred_at
+WITH start, min(end.occurred_at) AS turn_ended
+RETURN start.node_id AS bracket_id,
+       start.occurred_at AS turn_started,
+       turn_ended,
+       duration.between(datetime(start.occurred_at), datetime(turn_ended)) AS duration
+ORDER BY start.occurred_at
 ```
 
-Simpler alternative — fetch all steps without ordering by NEXT chain:
+### Pattern 3: Session Event Timeline
+
+Complete chronological event timeline for a session:
 
 ```cypher
-MATCH (s:Session {workspace: $workspace, node_id: $session_id})
-      -[:HAS_RUN]->(r:OrchestratorRun)
-      -[:HAS_STEP]->(step:Step)
-RETURN r.node_id        AS run_id,
-       step.node_id     AS step_id,
-       labels(step)     AS step_labels,
-       step.occurred_at AS occurred_at
-ORDER BY step.occurred_at
+MATCH (s:Session {workspace: $workspace, node_id: $session_id})-[:HAS_EVENT]->(e:Event)
+RETURN e.event_name, labels(e), e.occurred_at
+ORDER BY e.occurred_at
+```
+
+Filter to a specific event category (e.g., LLM events only):
+
+```cypher
+MATCH (s:Session {workspace: $workspace, node_id: $session_id})-[:HAS_EVENT]->(e:LlmEvent)
+RETURN e.event_name, e.model, e.occurred_at
+ORDER BY e.occurred_at
 ```
 
 ### Pattern 4: Find All Tool Executions in a Run
