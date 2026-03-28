@@ -2,7 +2,7 @@
 
 Acceptance criteria:
 - Agent inline examples use correct property names and traversal paths
-- graph-model-reference.md includes RecipeRun, RecipeStep, new edges
+- graph-model-reference.md reflects DL1-only schema (3 nodes, 3 edges; DL2 concepts in warning section)
 - SKILL.md schema tables include new labels/edges, Pattern 2 + 11 bugs fixed
 - SKILL.md has analytics sections A–E (wildcard, time-activity, recipe, parallelism, token)
 """
@@ -86,17 +86,16 @@ class TestGraphModelReference:
         assert "RecipeRun" in text
 
     def test_recipe_run_properties_documented(self):
-        """RecipeRun section must document key properties."""
-        # Scan the 2000 chars following the first RecipeRun occurrence to
-        # cover its full properties table without crossing into the next section.
-        _RECIPE_RUN_SCAN_WINDOW = 2000
+        """RecipeRun must be in the DL2 dead-label list — not a properties table."""
         text = _read(GRAPH_MODEL_FILE)
-        pos = text.find("RecipeRun")
-        assert pos != -1
-        section = text[pos : pos + _RECIPE_RUN_SCAN_WINDOW]
-        assert "recipe_name" in section
-        assert "started_at" in section
-        assert "ended_at" in section
+        # RecipeRun is a DL2 stub with no connected edges — documented in the
+        # Data Layer 2 Warning section, not as a node type with properties.
+        dl2_pos = text.find("Data Layer 2 Warning")
+        assert dl2_pos != -1, "Data Layer 2 Warning section must exist"
+        dl2_section = text[dl2_pos:]
+        assert "RecipeRun" in dl2_section, (
+            "RecipeRun must appear in the DL2 warning section as a dead-label"
+        )
 
     def test_recipe_step_in_step_section(self):
         """Step section must mention RecipeStep as a sub-label variant."""
@@ -108,41 +107,70 @@ class TestGraphModelReference:
         text = _read(GRAPH_MODEL_FILE)
         assert "RecipeLoopIteration" in text
 
-    def test_recipe_approval_present(self):
-        """RecipeApproval node type must be documented for approval-gate tracking."""
+    def test_recipe_approval_absent_from_dl1_node_types(self):
+        """RecipeApproval is a DL2 concept — must NOT appear in the DL1 Node Types table."""
         text = _read(GRAPH_MODEL_FILE)
-        assert "RecipeApproval" in text
+        # The DL1 Node Types section contains exactly 3 nodes; RecipeApproval is
+        # a DL2 concept that does not belong in the DL1 schema table.
+        node_types_pos = text.find("## Node Types")
+        assert node_types_pos != -1, "## Node Types section must exist"
+        edge_types_pos = text.find("## Edge Types")
+        assert edge_types_pos != -1, "## Edge Types section must exist"
+        node_types_section = text[node_types_pos:edge_types_pos]
+        assert "RecipeApproval" not in node_types_section, (
+            "RecipeApproval is a DL2 concept and must not appear in the DL1 Node Types table"
+        )
 
-    def test_has_recipe_run_edge_present(self):
-        """HAS_RECIPE_RUN edge must be in the Edge Types table."""
+    def test_has_recipe_run_absent_from_dl1_edge_types(self):
+        """HAS_RECIPE_RUN must NOT appear in the DL1 Edge Types table."""
         text = _read(GRAPH_MODEL_FILE)
-        assert "HAS_RECIPE_RUN" in text
+        # The DL1 Edge Types section contains exactly 3 edge types; HAS_RECIPE_RUN
+        # is a DL2 concept that was never implemented and must not appear there.
+        edge_types_pos = text.find("## Edge Types")
+        assert edge_types_pos != -1, "## Edge Types section must exist"
+        dl2_pos = text.find("## Data Layer 2")
+        assert dl2_pos != -1, "## Data Layer 2 section must exist"
+        edge_types_section = text[edge_types_pos:dl2_pos]
+        assert "HAS_RECIPE_RUN" not in edge_types_section, (
+            "HAS_RECIPE_RUN is a DL2 concept and must not appear in the DL1 Edge Types table"
+        )
 
-    def test_spans_run_edge_present(self):
-        """SPANS_RUN edge must be in the Edge Types table."""
+    def test_spans_run_absent_from_dl1_edge_types(self):
+        """SPANS_RUN must NOT appear in the DL1 Edge Types table."""
         text = _read(GRAPH_MODEL_FILE)
-        assert "SPANS_RUN" in text
+        # The DL1 Edge Types section contains exactly 3 edge types; SPANS_RUN
+        # is a DL2 concept that was never implemented and must not appear there.
+        edge_types_pos = text.find("## Edge Types")
+        assert edge_types_pos != -1, "## Edge Types section must exist"
+        dl2_pos = text.find("## Data Layer 2")
+        assert dl2_pos != -1, "## Data Layer 2 section must exist"
+        edge_types_section = text[edge_types_pos:dl2_pos]
+        assert "SPANS_RUN" not in edge_types_section, (
+            "SPANS_RUN is a DL2 concept and must not appear in the DL1 Edge Types table"
+        )
 
     def test_has_step_mentions_recipe_step(self):
-        """HAS_STEP description must include RecipeStep alongside PromptStep/AssistantStep."""
+        """HAS_STEP must appear in the DL2 non-existent relationships list."""
         text = _read(GRAPH_MODEL_FILE)
-        # Find the HAS_STEP row in the edge table; scan next ~300 chars to
-        # cover the rest of that table row without spilling into the next entry.
-        _HAS_STEP_ROW_WINDOW = 300
-        has_step_pos = text.find("HAS_STEP")
-        assert has_step_pos != -1
-        has_step_line = text[has_step_pos : has_step_pos + _HAS_STEP_ROW_WINDOW]
-        assert "RecipeStep" in has_step_line
+        # HAS_STEP is a non-existent relationship — must be documented in the
+        # DL2 warning section to prevent agents from querying it.
+        dl2_pos = text.find("Data Layer 2 Warning")
+        assert dl2_pos != -1, "Data Layer 2 Warning section must exist"
+        dl2_section = text[dl2_pos:]
+        assert "HAS_STEP" in dl2_section, (
+            "HAS_STEP must appear in the DL2 non-existent relationships list"
+        )
 
     def test_recipe_run_stub_gotcha_present(self):
-        """Gotcha about RecipeRun stub behaviour must be documented."""
+        """DL2 warning section must contain explicit 'do not write queries' text."""
         text = _read(GRAPH_MODEL_FILE)
-        # Should warn about ended_at being null when recipe:complete hasn't fired
-        gotchas_pos = text.find("Critical Gotchas")
-        assert gotchas_pos != -1
-        gotchas_section = text[gotchas_pos:]
-        assert (
-            "recipe_name" in gotchas_section.lower() or "RecipeRun" in gotchas_section
+        # The DL2 warning replaces the old 'Critical Gotchas' section.
+        # It must explicitly warn agents not to write queries against DL2 labels.
+        dl2_pos = text.find("Data Layer 2 Warning")
+        assert dl2_pos != -1, "Data Layer 2 Warning section must exist"
+        dl2_section = text[dl2_pos:]
+        assert "do not write queries" in dl2_section.lower(), (
+            "DL2 warning section must contain explicit 'do not write queries' text"
         )
 
 

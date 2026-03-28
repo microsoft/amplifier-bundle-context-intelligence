@@ -30,7 +30,7 @@ meta:
     Context: User needs to trace a delegation tree
     user: 'Show me the full delegation tree for my last recipe run'
     assistant: 'I will delegate to graph-analyst to trace the parent-child session chain and map the delegation tree using Cypher graph traversal.'
-    <commentary>Delegation tree tracing across many sessions benefits from graph traversal rather than scanning JSONL files.</commentary>
+    <commentary>delegation tree tracing across many sessions benefits from graph traversal rather than scanning JSONL files.</commentary>
     </example>
 
 model_role: reasoning
@@ -63,7 +63,7 @@ tools:
 
 ## ⛔ CRITICAL: Server Availability Check
 
-**Run this health check BEFORE every analysis.** If the server is unreachable, skip to Section 3 (Delegation Fallback) immediately.
+**Run this health check BEFORE every analysis.** If the server is unreachable, skip to Section 3 (Fallback) immediately.
 
 ### Health Check Query
 
@@ -139,39 +139,34 @@ Load skill: context-intelligence-session-navigation
 
 ### Using graph_query
 
-The `graph_query` tool auto-injects the `$workspace` parameter scoping results to the current workspace. You only need to provide the Cypher query:
+The `graph_query` tool auto-injects `$workspace` — you only need to provide the Cypher query. Here are 4 bootstrap queries to orient before loading the skill:
 
 ```cypher
--- Tool errors in a session (direct session only)
-MATCH (s:Session {node_id: $session_id, workspace: $workspace})
-      -[:HAS_RUN]->()-[:HAS_STEP]->()-[:TRIGGERED]->(te:ToolExecution {status: "error"})
-RETURN s.node_id, te.tool_name, te.occurred_at, te.data
-ORDER BY te.occurred_at DESC LIMIT 20
+-- 1. Health check
+MATCH (s:Session) RETURN count(s)
 
--- Tool errors — full delegation tree (includes sub-sessions)
-MATCH (s:Session)-[:SUBSESSION_OF*0..]->(root:Session {node_id: $session_id, workspace: $workspace})
-MATCH (s)-[:HAS_RUN]->()-[:HAS_STEP]->()-[:TRIGGERED]->(te:ToolExecution {status: "error"})
-RETURN s.node_id AS session, te.tool_name, te.occurred_at
-ORDER BY te.occurred_at DESC LIMIT 20
+-- 2. Recent sessions in this workspace
+MATCH (s:Session {workspace: $workspace})
+RETURN s.session_id, s.started_at, s.agent_name
+ORDER BY s.started_at DESC LIMIT 10
+
+-- 3. Tool calls for a session
+MATCH (s:Session {session_id: $session_id, workspace: $workspace})
+      -[:HAS_TOOL_CALL]->(tc:ToolCall)
+RETURN tc.tool_name, tc.started_at, tc.ended_at, tc.status
+ORDER BY tc.ended_at
+
+-- 4. Child sessions (one level of delegation)
+MATCH (s:Session {session_id: $session_id, workspace: $workspace})
+      -[:HAS_FORK]->(child:Session)
+RETURN child.session_id, child.agent_name, child.started_at
+ORDER BY child.started_at
 ```
 
-### Common Graph Queries
+For full query patterns, load the skill:
 
-```cypher
--- Delegation tree from a session (correct traversal)
-MATCH path = (root:Session {node_id: $session_id, workspace: $workspace})
-             -[:HAS_RUN]->()-[:HAS_STEP]->()-[:TRIGGERED]->
-             (d:Delegation)-[:SPAWNED*1..]->(child:Session)
-RETURN path
-
--- Tool usage by name across a session
-MATCH (s:Session {node_id: $session_id, workspace: $workspace})
-      -[:HAS_RUN]->()-[:HAS_STEP]->()-[:TRIGGERED]->(te:ToolExecution)
-RETURN te.tool_name,
-       count(te)                                                  AS total_calls,
-       sum(CASE te.status WHEN 'error' THEN 1 ELSE 0 END)        AS errors,
-       sum(CASE te.status WHEN 'complete' THEN 1 ELSE 0 END)     AS successes
-ORDER BY total_calls DESC
+```
+Load skill: context-intelligence-graph-query
 ```
 
 ---
@@ -204,7 +199,7 @@ jq '{event, ts: .timestamp, content_length: (.data.content | length)}' /path/to/
 
 ---
 
-## Section 3: Delegation Fallback
+## Section 3: Fallback to session-navigator
 
 When the graph server is unavailable, delegate to `session-navigator`:
 
@@ -254,7 +249,7 @@ Run `context-intelligence-upload --help` for full options.
 <!-- ConfigResolver fallback chain: how context_intelligence_server_url, workspace, and log_level are resolved from env vars and settings -->
 
 @context-intelligence:context/delegation-strategy.dot
-<!-- Delegation chain diagram: graph-analyst → session-navigator → foundation:session-analyst -->
+<!-- delegation chain diagram: graph-analyst → session-navigator → foundation:session-analyst -->
 
 ---
 
