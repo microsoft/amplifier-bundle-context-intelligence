@@ -1250,52 +1250,66 @@ ORDER BY root_started DESC
 
 ## Recipe Analytics
 
-**Find all sessions that ran a recipe:**
+> **DL1 Note:** In Data Layer 1, recipe data is captured as event nodes attached
+> directly to the `Session` via `HAS_EVENT` edges. Use `RecipeLoopIterationEvent`
+> (one per loop-iteration step) and `RecipeLoopCompleteEvent` (fired when the
+> recipe finishes). There is **no** `RecipeRun` wrapper node, `HAS_RECIPE_RUN`
+> relationship, or `SUBSESSION_OF` hierarchy in DL1 — query events directly.
+
+**1. Sessions That Ran a Recipe** (via `RecipeLoopIterationEvent`):
 
 ```cypher
-MATCH (s:Session:Root {workspace: $workspace})-[:HAS_RECIPE_RUN]->(rr:RecipeRun)
-RETURN s.node_id AS session_id, s.started_at,
-       rr.node_id AS recipe_run_id, rr.recipe_name,
-       rr.status, rr.started_at AS recipe_started, rr.ended_at AS recipe_ended
-ORDER BY rr.started_at DESC
+MATCH (s:Session {workspace: $workspace})-[:HAS_EVENT]->(e:RecipeLoopIterationEvent)
+RETURN DISTINCT s.node_id AS session_id, s.started_at,
+       e.recipe_name
+ORDER BY s.started_at DESC
 ```
 
-**Recipe execution duration** (uses RecipeStep timestamps as fallback when
-`ended_at` is null):
-
-```cypher
-MATCH (s:Session {node_id: $session_id, workspace: $workspace})
-      -[:HAS_RECIPE_RUN]->(rr:RecipeRun)
-MATCH (s2:Session)-[:SUBSESSION_OF*0..]->(s)
-MATCH (s2)-[:HAS_RUN]->(:OrchestratorRun)-[:HAS_STEP]->(step:RecipeStep)
-RETURN rr.node_id AS recipe_run_id,
-       rr.recipe_name,
-       coalesce(rr.started_at, min(step.occurred_at)) AS effective_start,
-       coalesce(rr.ended_at,   max(step.occurred_at)) AS effective_end,
-       min(step.occurred_at) AS first_step,
-       max(step.occurred_at) AS last_step
-```
-
-> **Note:** Cypher implicitly groups by the non-aggregated columns `rr.node_id` and
-> `rr.recipe_name` — no explicit `GROUP BY` clause is needed.
-
-**Loop count and depth per recipe:**
+**2. Recipe Progress for a Session** (`recipe_name`, `step_id`, `iteration`, `occurred_at`):
 
 ```cypher
 MATCH (s:Session {node_id: $session_id, workspace: $workspace})
-      -[:HAS_RECIPE_RUN]->(rr:RecipeRun)
-MATCH (s2:Session)-[:SUBSESSION_OF*0..]->(s)
-MATCH (s2)-[:HAS_RUN]->()-[:HAS_STEP]->(li:RecipeLoopIteration)
-RETURN rr.recipe_name,
-       li.step_id                  AS loop_name,
-       count(li)                   AS iterations,
-       max(li.iteration)           AS max_iteration_reached
-ORDER BY iterations DESC
+      -[:HAS_EVENT]->(e:RecipeLoopIterationEvent)
+RETURN e.recipe_name, e.step_id, e.iteration, e.occurred_at
+ORDER BY e.occurred_at
 ```
 
-**Note:** `RecipeRun.ended_at` and `recipe_name` are only set when
-`recipe:complete` fires. Use coalesce to fall back to step timestamps
-when the run node is still a stub.
+**3. Recipe Completion Events** (via `RecipeLoopCompleteEvent`):
+
+```cypher
+MATCH (s:Session {workspace: $workspace})-[:HAS_EVENT]->(e:RecipeLoopCompleteEvent)
+RETURN s.node_id AS session_id,
+       e.recipe_name,
+       e.occurred_at AS completed_at,
+       e.status
+ORDER BY e.occurred_at DESC
+```
+
+**4. Recipe Duration** (start to complete, joining iteration and complete events):
+
+```cypher
+MATCH (s:Session {node_id: $session_id, workspace: $workspace})
+      -[:HAS_EVENT]->(iter:RecipeLoopIterationEvent)
+MATCH (s)-[:HAS_EVENT]->(done:RecipeLoopCompleteEvent)
+WHERE iter.recipe_name = done.recipe_name
+RETURN iter.recipe_name,
+       min(iter.occurred_at) AS recipe_started,
+       done.occurred_at      AS recipe_completed
+```
+
+> **Note:** Cypher implicitly groups by non-aggregated columns — no explicit
+> `GROUP BY` needed. If `occurred_at` is stored as a Neo4j `datetime` type,
+> you can wrap both values in `duration.between()` to compute elapsed time.
+
+**5. Loop Iteration Count per Recipe** (count and max iteration reached):
+
+```cypher
+MATCH (s:Session {workspace: $workspace})-[:HAS_EVENT]->(e:RecipeLoopIterationEvent)
+RETURN e.recipe_name,
+       count(e)         AS total_iterations,
+       max(e.iteration) AS max_iteration_reached
+ORDER BY total_iterations DESC
+```
 
 ---
 
