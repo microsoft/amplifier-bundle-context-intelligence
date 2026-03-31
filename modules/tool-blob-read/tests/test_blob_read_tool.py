@@ -24,10 +24,16 @@ def _make_coordinator(resolver: Any) -> MagicMock:
     return coordinator
 
 
-def _make_resolver(server_url: str | None) -> MagicMock:
-    """Return a MagicMock resolver with context_intelligence_server_url set."""
+def _make_resolver(server_url: str | None, api_key: str | None = None) -> MagicMock:
+    """Return a MagicMock resolver with context_intelligence_server_url set.
+
+    api_key defaults to None so tests that don't exercise auth get a clean mock
+    (MagicMock attributes are truthy by default, which would cause the
+    Authorization header to be sent unintentionally in unrelated tests).
+    """
     resolver = MagicMock()
     resolver.context_intelligence_server_url = server_url
+    resolver.context_intelligence_api_key = api_key
     return resolver
 
 
@@ -262,7 +268,10 @@ class TestURIParsing:
         ):
             await tool.execute({"uri": "ci-blob://my-session/my-key"})
 
-        mock_client.get.assert_called_once_with("http://localhost:8080/blobs/my-session/my-key")
+        mock_client.get.assert_called_once_with(
+            "http://localhost:8080/blobs/my-session/my-key",
+            headers={},
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -398,7 +407,10 @@ class TestBlobReadSuccess:
         ):
             await tool.execute({"uri": "ci-blob://my-session/my-key"})
 
-        mock_client.get.assert_called_once_with("http://localhost:8080/blobs/my-session/my-key")
+        mock_client.get.assert_called_once_with(
+            "http://localhost:8080/blobs/my-session/my-key",
+            headers={},
+        )
 
     async def test_httpx_client_uses_timeout(self) -> None:
         """Client must set an explicit timeout to prevent indefinite hangs."""
@@ -492,3 +504,50 @@ class TestBlobReadErrors:
         assert result.success is False
         assert result.error is not None
         assert result.error["type"] == "blob_error"
+
+
+# ---------------------------------------------------------------------------
+# (7) Authorization header
+# ---------------------------------------------------------------------------
+
+
+class TestAuthHeader:
+    """Authorization header must be sent iff api_key is configured."""
+
+    async def test_bearer_token_sent_when_api_key_configured(self) -> None:
+        """When api_key is set the GET must carry Authorization: Bearer <key>."""
+        from amplifier_module_tool_blob_read.blob_read_tool import BlobReadTool
+
+        resolver = _make_resolver("http://localhost:8080", api_key="my-secret")
+        tool = BlobReadTool(_make_coordinator(resolver))
+
+        mock_client, mock_cls = _make_mock_client('{\"ok\": true}', 200)
+        with patch(
+            "amplifier_module_tool_blob_read.blob_read_tool.httpx.AsyncClient",
+            mock_cls,
+        ):
+            await tool.execute({"uri": "ci-blob://my-session/my-key"})
+
+        mock_client.get.assert_called_once_with(
+            "http://localhost:8080/blobs/my-session/my-key",
+            headers={"Authorization": "Bearer my-secret"},
+        )
+
+    async def test_no_auth_header_when_api_key_is_none(self) -> None:
+        """When api_key is None the GET must NOT include an Authorization header."""
+        from amplifier_module_tool_blob_read.blob_read_tool import BlobReadTool
+
+        resolver = _make_resolver("http://localhost:8080", api_key=None)
+        tool = BlobReadTool(_make_coordinator(resolver))
+
+        mock_client, mock_cls = _make_mock_client('{\"ok\": true}', 200)
+        with patch(
+            "amplifier_module_tool_blob_read.blob_read_tool.httpx.AsyncClient",
+            mock_cls,
+        ):
+            await tool.execute({"uri": "ci-blob://my-session/my-key"})
+
+        mock_client.get.assert_called_once_with(
+            "http://localhost:8080/blobs/my-session/my-key",
+            headers={},
+        )
