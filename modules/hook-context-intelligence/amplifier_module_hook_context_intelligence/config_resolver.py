@@ -245,20 +245,32 @@ class ConfigResolver:
     def context_intelligence_server_url(self) -> str | None:
         """URL of the context-intelligence server, or None if not configured.
 
-        Reads directly from config['context_intelligence_server_url'].
-        No coordinator fallback.
+        Resolution order (first truthy value wins):
+        1. config['context_intelligence_server_url']  — bundle config / settings.yaml overrides
+        2. coordinator.config['context_intelligence_server_url']  — coordinator-level config
+        3. AMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_URL env var  — last mile
         """
-        value = self._config.get("context_intelligence_server_url")
+        value = (
+            self._config.get("context_intelligence_server_url")
+            or self._coordinator_config_get("context_intelligence_server_url")
+            or _env("SERVER_URL")
+        )
         return str(value) if value else None
 
     @property
     def context_intelligence_api_key(self) -> str | None:
         """API key for the context-intelligence server, or None if not configured.
 
-        Reads directly from config['context_intelligence_api_key'].
-        No coordinator fallback.
+        Resolution order (first truthy value wins):
+        1. config['context_intelligence_api_key']  — bundle config / settings.yaml overrides
+        2. coordinator.config['context_intelligence_api_key']  — coordinator-level config
+        3. AMPLIFIER_CONTEXT_INTELLIGENCE_API_KEY env var  — last mile
         """
-        value = self._config.get("context_intelligence_api_key")
+        value = (
+            self._config.get("context_intelligence_api_key")
+            or self._coordinator_config_get("context_intelligence_api_key")
+            or _env("API_KEY")
+        )
         return str(value) if value else None
 
     @property

@@ -108,9 +108,14 @@ class GraphQueryTool:
             "workspace": effective_workspace,
         }
 
+        api_key = self._resolver.context_intelligence_api_key
+        headers: dict[str, str] = {}
+        if api_key:
+            headers["Authorization"] = f"Bearer {api_key}"
+
         try:
             async with httpx.AsyncClient() as client:
-                resp = await client.post(f"{server_url}/cypher", json=body)
+                resp = await client.post(f"{server_url}/cypher", json=body, headers=headers)
                 resp.raise_for_status()
                 return ToolResult(success=True, output=resp.json())
         except httpx.HTTPStatusError as exc:

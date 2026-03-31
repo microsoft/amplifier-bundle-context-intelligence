@@ -105,9 +105,14 @@ class BlobReadTool:
         safe_key = _sanitize_path_component(key)
 
         # (5) HTTP GET using ORIGINAL unsanitized values for the URL
+        api_key: str | None = self._resolver.context_intelligence_api_key
+        headers: dict[str, str] = {}
+        if api_key:
+            headers["Authorization"] = f"Bearer {api_key}"
+
         try:
             async with httpx.AsyncClient(timeout=30.0) as client:
-                resp = await client.get(f"{server_url}/blobs/{session_id}/{key}")
+                resp = await client.get(f"{server_url}/blobs/{session_id}/{key}", headers=headers)
                 resp.raise_for_status()
         except httpx.HTTPStatusError as e:
             return ToolResult(
