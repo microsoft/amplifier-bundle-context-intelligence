@@ -1,10 +1,11 @@
 """Tests verifying graph query analytics improvements.
 
-Acceptance criteria:
-- Agent inline examples use correct property names and traversal paths
+Post-Phase-1 acceptance criteria:
+- Agent inline examples must NOT contain deprecated/broken property names
 - graph-model-reference.md reflects DL1-only schema (3 nodes, 3 edges; DL2 concepts in warning section)
-- SKILL.md schema tables include new labels/edges, Pattern 2 + 11 bugs fixed
-- SKILL.md has analytics sections A–E (wildcard, time-activity, recipe, parallelism, token)
+- SKILL.md must not contain the two known pattern bugs (r.seq, HAS_EVENT from Step)
+- SKILL.md schema tables, analytics sections A–E, and inline bootstrap queries are now served
+  dynamically from the server; the bundled SKILL.md is a cold-start fallback only.
 """
 
 import pathlib
@@ -53,18 +54,10 @@ class TestAgentInlineExamples:
         text = _read(AGENT_FILE)
         assert "Session {session_id: $session_id})-[:SPAWNED*]" not in text
 
-    def test_correct_node_id_filter_present(self):
-        """Inline examples must filter sessions by node_id, not session_id."""
-        text = _read(AGENT_FILE)
-        assert "node_id: $session_id" in text
-
-    def test_correct_tool_execution_traversal_present(self):
-        """Inline examples must use the full HAS_RUN→HAS_STEP→TRIGGERED path."""
-        text = _read(AGENT_FILE)
-        assert "HAS_RUN" in text
-        assert "HAS_STEP" in text
-        assert "TRIGGERED" in text
-        assert "ToolExecution" in text
+    # Post-Phase-1: inline bootstrap queries were removed from the agent.
+    # Schema content (node_id filter, HAS_RUN→HAS_STEP→TRIGGERED traversal, etc.)
+    # is now served dynamically via the context-intelligence-graph-query skill.
+    # The tests below verify only that the deprecated/broken content was removed.
 
 
 # ---------------------------------------------------------------------------
@@ -180,10 +173,14 @@ class TestGraphModelReference:
 
 
 class TestSkillSchemaAndBugs:
-    """Verify SKILL.md schema tables are complete and Pattern 2 + 11 bugs are fixed."""
+    """Verify SKILL.md does not contain known query bugs.
 
-    _LABELS_SCAN_WINDOW = 2000
-    _RELS_SCAN_WINDOW = 2000
+    Post-Phase-1: SKILL.md is a minimal cold-start fallback only.  Schema tables,
+    node label listings, relationship tables, and analytics sections A–E are now
+    served dynamically from the server.  Only the two pre-existing pattern bugs
+    (r.seq and HAS_EVENT from Step) are checked here — they must not re-appear
+    in the cold-start fallback either.
+    """
 
     def test_r_seq_bug_fixed(self):
         """Pattern 2 must not reference r.seq — that property does not exist."""
@@ -195,115 +192,11 @@ class TestSkillSchemaAndBugs:
         text = _read(SKILL_FILE)
         assert "(step:Step)-[:HAS_EVENT]" not in text
 
-    def test_recipe_run_label_in_node_labels_table(self):
-        """RecipeRun must appear in the Node Labels table."""
-        text = _read(SKILL_FILE)
-        # Find the Node Labels section
-        labels_pos = text.find("## Node Labels")
-        assert labels_pos != -1
-        # Check within the table (before next ## section)
-        labels_section = text[labels_pos : labels_pos + self._LABELS_SCAN_WINDOW]
-        assert "RecipeRun" in labels_section
-
-    def test_recipe_loop_iteration_label_present(self):
-        """RecipeLoopIteration must appear in the Node Labels table."""
-        text = _read(SKILL_FILE)
-        labels_pos = text.find("## Node Labels")
-        assert labels_pos != -1, "## Node Labels section missing"
-        labels_section = text[labels_pos : labels_pos + self._LABELS_SCAN_WINDOW]
-        assert "RecipeLoopIteration" in labels_section
-
-    def test_recipe_approval_label_present(self):
-        """RecipeApproval must appear in the Node Labels table."""
-        text = _read(SKILL_FILE)
-        labels_pos = text.find("## Node Labels")
-        assert labels_pos != -1, "## Node Labels section missing"
-        labels_section = text[labels_pos : labels_pos + self._LABELS_SCAN_WINDOW]
-        assert "RecipeApproval" in labels_section
-
-    def test_has_recipe_run_in_relationships(self):
-        """HAS_RECIPE_RUN must appear in the Relationship Types table."""
-        text = _read(SKILL_FILE)
-        rels_pos = text.find("## Relationship Types")
-        assert rels_pos != -1, "## Relationship Types section missing"
-        rels_section = text[rels_pos : rels_pos + self._RELS_SCAN_WINDOW]
-        assert "HAS_RECIPE_RUN" in rels_section
-
-    def test_spans_run_in_relationships(self):
-        """SPANS_RUN must appear in the Relationship Types table."""
-        text = _read(SKILL_FILE)
-        rels_pos = text.find("## Relationship Types")
-        assert rels_pos != -1, "## Relationship Types section missing"
-        rels_section = text[rels_pos : rels_pos + self._RELS_SCAN_WINDOW]
-        assert "SPANS_RUN" in rels_section
-
 
 # ---------------------------------------------------------------------------
-# SKILL.md — analytics sections A–E
+# NOTE: TestSkillAnalyticsSections was removed in Phase 1.
+# SKILL.md analytics sections A–E (wildcard traversal, time-activity, recipe,
+# parallelism, token-efficiency) are now served dynamically from the server.
+# The bundled SKILL.md contains only a cold-start fallback; its content is
+# validated by tests/test_skill_graph_query_fallback.py instead.
 # ---------------------------------------------------------------------------
-
-
-class TestSkillAnalyticsSections:
-    """Verify SKILL.md contains the five new analytics sections."""
-
-    # Section A — Foundational traversal primitive
-    def test_wildcard_traversal_pattern_present(self):
-        """Multi-relationship wildcard must be documented."""
-        text = _read(SKILL_FILE)
-        assert "HAS_RUN|HAS_STEP|TRIGGERED|SPAWNED" in text
-
-    def test_parallel_group_empty_string_note(self):
-        """Must warn that parallel_group_id is '' not null."""
-        text = _read(SKILL_FILE)
-        assert 'parallel_group_id <> ""' in text
-
-    # Section B — Time-activity queries
-    def test_point_in_time_query_present(self):
-        text = _read(SKILL_FILE)
-        assert "$point_in_time" in text
-
-    def test_time_range_query_present(self):
-        text = _read(SKILL_FILE)
-        assert "$t1" in text
-        assert "$t2" in text
-
-    # Section C — Recipe analytics
-    def test_recipe_analytics_query_present(self):
-        """Recipe analytics section must contain HAS_RECIPE_RUN in a query."""
-        text = _read(SKILL_FILE)
-        # HAS_RECIPE_RUN already appears 2× in schema tables (Node Labels + Relationship Types).
-        # The analytics section adds ≥1 more occurrence in a Cypher query, so require ≥3.
-        count = text.count("HAS_RECIPE_RUN")
-        assert count >= 3, (
-            f"HAS_RECIPE_RUN appears {count} time(s), need ≥3 (2 tables + analytics query)"
-        )
-
-    def test_recipe_step_fallback_documented(self):
-        """Recipe duration query must use coalesce for stub fallback."""
-        text = _read(SKILL_FILE)
-        assert "coalesce(rr.started_at" in text or "coalesce(rr.ended_at" in text
-
-    # Section D — Parallelism degree
-    def test_parallelism_query_present(self):
-        text = _read(SKILL_FILE)
-        assert "parallel_degree" in text
-
-    def test_peak_parallelism_query_present(self):
-        text = _read(SKILL_FILE)
-        assert "peak_parallelism" in text
-
-    # Section E — Token efficiency
-    def test_cache_hit_pct_present(self):
-        text = _read(SKILL_FILE)
-        assert "cache_hit_pct" in text
-
-    def test_token_distinction_documented(self):
-        """Must document the input_tokens vs message_count distinction."""
-        text = _read(SKILL_FILE)
-        assert "message_count" in text
-        assert "input_tokens" in text
-
-    def test_coalesce_null_tokens_note(self):
-        """Must use coalesce for nullable token properties."""
-        text = _read(SKILL_FILE)
-        assert "coalesce(a.cached_tokens" in text

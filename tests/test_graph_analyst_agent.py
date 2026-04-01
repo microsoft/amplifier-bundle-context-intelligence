@@ -404,11 +404,17 @@ class TestBodyContent:
         for n in range(1, 5):
             assert f"Section {n}" in body, f"Body must contain Section {n}"
 
-    def test_context_reference_graph_model(self) -> None:
-        """Body must reference @context-intelligence:context/graph-model-reference.md."""
+    def test_graph_model_not_embedded_in_body(self) -> None:
+        """graph-model-reference.md must NOT be embedded in the agent body.
+
+        Post-Phase-1: schema content is served dynamically via the
+        context-intelligence-graph-query skill.  The agent must NOT embed
+        graph-model-reference.md directly — the skill is loaded at runtime instead.
+        """
         body = self._body()
-        assert "@context-intelligence:context/graph-model-reference.md" in body, (
-            "Body must reference @context-intelligence:context/graph-model-reference.md"
+        assert "@context-intelligence:context/graph-model-reference.md" not in body, (
+            "graph-model-reference.md must not be embedded in agent body; "
+            "schema content is served via the context-intelligence-graph-query skill"
         )
 
     def test_context_reference_delegation_strategy(self) -> None:
@@ -425,11 +431,16 @@ class TestBodyContent:
             "graph-analyst Section 4 must reference context/config-resolution.dot"
         )
 
-    def test_three_context_file_references_total(self) -> None:
-        """Body must contain all three required context file references."""
+    def test_two_context_file_references_total(self) -> None:
+        """Body must contain exactly 2 structural context file references.
+
+        Post-Phase-1: graph-model-reference.md was removed from the agent body.
+        Schema content is served dynamically via the context-intelligence-graph-query
+        skill.  The two remaining structural references (delegation-strategy.dot and
+        config-resolution.dot) must still be present in Section 4.
+        """
         body = self._body()
         refs = [
-            "@context-intelligence:context/graph-model-reference.md",
             "@context-intelligence:context/config-resolution.dot",
             "@context-intelligence:context/delegation-strategy.dot",
         ]

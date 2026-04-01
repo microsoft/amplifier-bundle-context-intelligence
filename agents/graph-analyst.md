@@ -33,7 +33,7 @@ meta:
     <commentary>delegation tree tracing across many sessions benefits from graph traversal rather than scanning JSONL files.</commentary>
     </example>
 
-model_role: reasoning
+model_role: [reasoning, general]
 
 tools:
   - module: tool-graph-query
