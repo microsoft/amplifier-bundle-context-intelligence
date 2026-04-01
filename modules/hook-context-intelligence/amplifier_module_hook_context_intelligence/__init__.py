@@ -74,19 +74,22 @@ async def mount(
 
     # Skill fetch phase — runs before logging handler registration
     server_url = resolver.context_intelligence_server_url
-    skills_discovery = coordinator.get_capability("skills_discovery")
     fetcher: SkillFetcher | None = None
-    if server_url and skills_discovery:
-        fetcher = SkillFetcher(server_url)
-        for skill_name in WATCHED_SKILLS:
-            metadata = skills_discovery.find(skill_name)
-            if metadata is None:
-                log.debug("skill_fetch_skipped: %s — not found in skills_discovery", skill_name)
-                continue
-            try:
-                await fetcher.fetch(skill_name, metadata.path)
-            except Exception as exc:
-                log.warning("skill_fetch_failed during mount: %s — %s", skill_name, exc)
+    skills_discovery = None  # initialise here so the unloaded-handler guard below can reference it
+
+    if server_url:
+        skills_discovery = coordinator.get_capability("skills_discovery")
+        if skills_discovery is not None:
+            fetcher = SkillFetcher(server_url)
+            for skill_name in WATCHED_SKILLS:
+                metadata = skills_discovery.find(skill_name)
+                if metadata is None:
+                    log.debug("skill_fetch_skipped: %s — not found in skills_discovery", skill_name)
+                    continue
+                try:
+                    await fetcher.fetch(skill_name, metadata.path)
+                except Exception as exc:
+                    log.warning("skill_fetch_failed during mount: %s — %s", skill_name, exc)
 
     exclude = resolver.exclude_events
     active_events = {e for e in events if not any(fnmatch.fnmatch(e, p) for p in exclude)}

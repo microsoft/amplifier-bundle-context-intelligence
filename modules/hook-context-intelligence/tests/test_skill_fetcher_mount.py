@@ -309,3 +309,39 @@ class TestSkillUnloadedHandler:
             )
 
         mock_create_task.assert_not_called()
+
+
+class TestMountNoOpWhenServerUrlAbsent:
+    """When server_url is not configured, mount() must not touch skills_discovery at all."""
+
+    async def test_get_capability_not_called_when_no_server_url(self, tmp_path: Path) -> None:
+        """coordinator.get_capability must NOT be called when server_url is None."""
+        from amplifier_module_hook_context_intelligence import mount
+
+        coordinator = _make_coordinator(server_url=None, skill_path=None)
+        await mount(coordinator, config={})
+
+        # get_capability should never have been called for skills_discovery
+        for call in coordinator.get_capability.call_args_list:
+            assert call.args[0] != "skills_discovery", (
+                "get_capability('skills_discovery') was called even though server_url is None"
+            )
+
+    async def test_skill_unloaded_not_registered_when_no_server_url(self, tmp_path: Path) -> None:
+        """skill:unloaded handler must NOT be registered when server_url is None."""
+        from amplifier_module_hook_context_intelligence import mount
+
+        registered_events: list[str] = []
+
+        def capture(event: str, handler: object, **kwargs: object) -> object:
+            registered_events.append(event)
+            return MagicMock()
+
+        coordinator = _make_coordinator(server_url=None, skill_path=None)
+        coordinator.hooks.register = MagicMock(side_effect=capture)
+
+        await mount(coordinator, config={})
+
+        assert "skill:unloaded" not in registered_events, (
+            "skill:unloaded handler was registered even though server_url is None"
+        )
