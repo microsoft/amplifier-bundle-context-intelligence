@@ -66,16 +66,22 @@ class SkillFetcher:
         url = f"{self._server_url}/version"
         try:
             response = await httpx.AsyncClient().get(url, timeout=self._timeout)
-        except (httpx.ConnectError, httpx.TimeoutException, httpx.RequestError):
+        except httpx.RequestError as exc:
+            logger.debug("check_server_version: unreachable — %s", exc)
             return VersionCheckResult(reachable=False, version=None)
 
         if response.status_code == 404:
+            logger.debug("check_server_version: server reachable, /version absent (404)")
             return VersionCheckResult(reachable=True, version=None)
 
         if response.status_code == 200:
             version = response.json().get("version")
             return VersionCheckResult(reachable=True, version=version)
 
+        logger.debug(
+            "check_server_version: unexpected status %d — treating as unreachable",
+            response.status_code,
+        )
         return VersionCheckResult(reachable=False, version=None)
 
     async def fetch(self, skill_name: str, skill_path: Path) -> bool:
