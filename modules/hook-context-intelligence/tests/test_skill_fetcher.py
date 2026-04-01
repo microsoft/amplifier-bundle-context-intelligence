@@ -461,3 +461,54 @@ class TestCheckServerVersion:
             result = await fetcher.check_server_version()
 
         assert result == VersionCheckResult(reachable=True, version=None)
+
+
+class TestWriteLegacyContent:
+    """SkillFetcher.write_legacy_content() writes bundled legacy skill content to disk."""
+
+    def test_writes_content_to_skill_path(self, tmp_path: Path) -> None:
+        """write_legacy_content() writes the skill file; content is > 500 chars."""
+        from amplifier_module_hook_context_intelligence.skill_fetcher import SkillFetcher
+
+        skill_path = tmp_path / "context-intelligence-graph-query.md"
+        fetcher = SkillFetcher("http://localhost:8000")
+
+        fetcher.write_legacy_content("context-intelligence-graph-query", skill_path)
+
+        assert skill_path.exists()
+        assert len(skill_path.read_text(encoding="utf-8")) > 500
+
+    def test_clears_existing_etag_sidecar(self, tmp_path: Path) -> None:
+        """write_legacy_content() removes an existing .etag sidecar file."""
+        from amplifier_module_hook_context_intelligence.skill_fetcher import SkillFetcher
+
+        skill_path = tmp_path / "context-intelligence-graph-query.md"
+        etag_path = tmp_path / ".etag"
+        etag_path.write_text('W/"old-etag"', encoding="utf-8")
+        fetcher = SkillFetcher("http://localhost:8000")
+
+        fetcher.write_legacy_content("context-intelligence-graph-query", skill_path)
+
+        assert not etag_path.exists()
+
+    def test_no_etag_created_when_none_existed(self, tmp_path: Path) -> None:
+        """write_legacy_content() does not create a .etag sidecar when none existed."""
+        from amplifier_module_hook_context_intelligence.skill_fetcher import SkillFetcher
+
+        skill_path = tmp_path / "context-intelligence-graph-query.md"
+        etag_path = tmp_path / ".etag"
+        fetcher = SkillFetcher("http://localhost:8000")
+
+        fetcher.write_legacy_content("context-intelligence-graph-query", skill_path)
+
+        assert not etag_path.exists()
+
+    def test_raises_file_not_found_for_unknown_skill(self, tmp_path: Path) -> None:
+        """write_legacy_content() raises FileNotFoundError for an unknown skill name."""
+        from amplifier_module_hook_context_intelligence.skill_fetcher import SkillFetcher
+
+        skill_path = tmp_path / "unknown-skill.md"
+        fetcher = SkillFetcher("http://localhost:8000")
+
+        with pytest.raises(FileNotFoundError):
+            fetcher.write_legacy_content("unknown-skill-that-does-not-exist", skill_path)

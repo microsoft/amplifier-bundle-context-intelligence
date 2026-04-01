@@ -86,6 +86,34 @@ class SkillFetcher:
         )
         return VersionCheckResult(reachable=False, version=None)
 
+    # DEPRECATED: Remove once all servers >= 2.0.0.
+    def write_legacy_content(self, skill_name: str, skill_path: Path) -> None:
+        """Write bundled legacy skill content to *skill_path*.
+
+        Reads the corresponding .md file from the ``legacy_content`` package
+        directory and writes it to *skill_path*.  Any existing ``.etag`` sidecar
+        alongside *skill_path* is removed so the next session performs an
+        unconditional GET once the server is upgraded.
+
+        Raises
+        ------
+        FileNotFoundError
+            If no legacy content exists for *skill_name* (packaging error —
+            must not be silenced).
+
+        .. deprecated::
+            Remove this method once all servers are >= 2.0.0.
+        """
+        legacy_path = Path(__file__).parent / "legacy_content" / f"{skill_name}.md"
+        content = legacy_path.read_text(encoding="utf-8")
+        skill_path.write_text(content, encoding="utf-8")
+
+        etag_path = skill_path.parent / ".etag"
+        if etag_path.exists():
+            etag_path.unlink()
+
+        logger.debug("legacy_skill_written: skill=%s [DEPRECATED]", skill_name)
+
     async def fetch(self, skill_name: str, skill_path: Path) -> bool:
         """Fetch a skill file from the server.
 
