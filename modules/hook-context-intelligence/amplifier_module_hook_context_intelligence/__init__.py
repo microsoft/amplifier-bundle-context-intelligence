@@ -82,38 +82,64 @@ async def mount(
     fetcher: SkillFetcher | None = None
     skills_discovery = None
 
-    if server_url:
+    if not server_url:
+        log.info("skill_fetch_skipped: no server_url configured")
+    else:
         skills_discovery = coordinator.get_capability(TOOL_SKILLS_DISCOVERY_CAPABILITY)
-        if skills_discovery is not None:
+        if skills_discovery is None:
+            log.info("skill_fetch_skipped: skills_discovery capability not available at mount time")
+        else:
             _tentative_fetcher = SkillFetcher(server_url)
             result = await _tentative_fetcher.check_server_version()
+            log.info(
+                "skill_fetch: server_url=%s reachable=%s version=%s",
+                server_url,
+                result.reachable,
+                result.version,
+            )
 
             if not result.reachable:
                 # Branch A: server unreachable — delegation fallback stays, SKILL.md untouched
-                log.debug("skill_fetch_skipped: server unreachable")
+                log.info("skill_fetch_branch: A (server unreachable) — SKILL.md untouched")
             elif not _is_skills_capable(result.version):
                 # Branch B: old server (DEPRECATED) — write bundled legacy content
+                log.info(
+                    "skill_fetch_branch: B (old server v%s) — writing legacy content",
+                    result.version,
+                )
                 for skill_name in WATCHED_SKILLS:
                     metadata = skills_discovery.find(skill_name)
                     if metadata is None:
-                        log.debug(
+                        log.info(
                             "skill_fetch_skipped: %s — not found in skills_discovery", skill_name
                         )
                         continue
                     _tentative_fetcher.write_legacy_content(skill_name, metadata.path)
-                    log.debug("skill_legacy_written [DEPRECATED]: %s", skill_name)
+                    log.info(
+                        "skill_legacy_written [DEPRECATED]: %s -> %s", skill_name, metadata.path
+                    )
             else:
                 # Branch C: new server — fetch from server
+                log.info(
+                    "skill_fetch_branch: C (new server v%s) — fetching from server", result.version
+                )
                 fetcher = _tentative_fetcher
                 for skill_name in WATCHED_SKILLS:
                     metadata = skills_discovery.find(skill_name)
                     if metadata is None:
-                        log.debug(
+                        log.info(
                             "skill_fetch_skipped: %s — not found in skills_discovery", skill_name
                         )
                         continue
+                    log.info("skill_fetch_attempt: %s -> %s", skill_name, metadata.path)
                     try:
-                        await fetcher.fetch(skill_name, metadata.path)
+                        fetched = await fetcher.fetch(skill_name, metadata.path)
+                        log.info(
+                            "skill_fetch_result: %s fetched=%s path=%s",
+                            skill_name,
+                            fetched,
+                            metadata.path,
+                        )
                     except Exception as exc:
                         log.warning("skill_fetch_failed during mount: %s — %s", skill_name, exc)
 
