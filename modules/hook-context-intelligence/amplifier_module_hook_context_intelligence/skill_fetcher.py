@@ -52,6 +52,32 @@ class SkillFetcher:
         self._server_url = server_url.rstrip("/")
         self._timeout = timeout
 
+    async def check_server_version(self) -> VersionCheckResult:
+        """Check the server version via GET /version.
+
+        Returns
+        -------
+        VersionCheckResult with reachable=False, version=None on network errors.
+        VersionCheckResult with reachable=True, version=None on 404.
+        VersionCheckResult with reachable=True, version=<str|None> on 200.
+        VersionCheckResult with reachable=False, version=None on any other status.
+        Never raises — all exceptions are caught.
+        """
+        url = f"{self._server_url}/version"
+        try:
+            response = await httpx.AsyncClient().get(url, timeout=self._timeout)
+        except (httpx.ConnectError, httpx.TimeoutException, httpx.RequestError):
+            return VersionCheckResult(reachable=False, version=None)
+
+        if response.status_code == 404:
+            return VersionCheckResult(reachable=True, version=None)
+
+        if response.status_code == 200:
+            version = response.json().get("version")
+            return VersionCheckResult(reachable=True, version=version)
+
+        return VersionCheckResult(reachable=False, version=None)
+
     async def fetch(self, skill_name: str, skill_path: Path) -> bool:
         """Fetch a skill file from the server.
 

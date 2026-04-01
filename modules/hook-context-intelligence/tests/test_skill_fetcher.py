@@ -53,6 +53,18 @@ def _make_error_mock(exc: Exception) -> MagicMock:
     return MagicMock(return_value=client)
 
 
+def _make_version_http_mock(status_code: int, body: dict) -> MagicMock:
+    """Build a patch-ready mock for httpx.AsyncClient returning a JSON response where response.json() is callable."""
+    response = MagicMock()
+    response.status_code = status_code
+    response.json = MagicMock(return_value=body)
+
+    client = AsyncMock()
+    client.get = AsyncMock(return_value=response)
+
+    return MagicMock(return_value=client)
+
+
 class TestSkillFetcher200:
     """SkillFetcher returns True and writes files on 200 response."""
 
@@ -355,3 +367,92 @@ class TestVersionCapability:
         result = VersionCheckResult(reachable=False, version=None)
         assert result.reachable is False
         assert result.version is None
+
+
+class TestCheckServerVersion:
+    """SkillFetcher.check_server_version() returns correct VersionCheckResult."""
+
+    async def test_connect_error_returns_unreachable(self) -> None:
+        """ConnectError maps to VersionCheckResult(reachable=False, version=None)."""
+        from amplifier_module_hook_context_intelligence.skill_fetcher import (
+            SkillFetcher,
+            VersionCheckResult,
+        )
+
+        fetcher = SkillFetcher("http://localhost:8000")
+
+        with patch(
+            "amplifier_module_hook_context_intelligence.skill_fetcher.httpx.AsyncClient",
+            _make_error_mock(httpx.ConnectError("refused")),
+        ):
+            result = await fetcher.check_server_version()
+
+        assert result == VersionCheckResult(reachable=False, version=None)
+
+    async def test_timeout_returns_unreachable(self) -> None:
+        """TimeoutException maps to VersionCheckResult(reachable=False, version=None)."""
+        from amplifier_module_hook_context_intelligence.skill_fetcher import (
+            SkillFetcher,
+            VersionCheckResult,
+        )
+
+        fetcher = SkillFetcher("http://localhost:8000")
+
+        with patch(
+            "amplifier_module_hook_context_intelligence.skill_fetcher.httpx.AsyncClient",
+            _make_error_mock(httpx.TimeoutException("timed out", request=None)),
+        ):
+            result = await fetcher.check_server_version()
+
+        assert result == VersionCheckResult(reachable=False, version=None)
+
+    async def test_404_returns_reachable_with_none_version(self) -> None:
+        """404 response maps to VersionCheckResult(reachable=True, version=None)."""
+        from amplifier_module_hook_context_intelligence.skill_fetcher import (
+            SkillFetcher,
+            VersionCheckResult,
+        )
+
+        fetcher = SkillFetcher("http://localhost:8000")
+
+        with patch(
+            "amplifier_module_hook_context_intelligence.skill_fetcher.httpx.AsyncClient",
+            _make_version_http_mock(404, {}),
+        ):
+            result = await fetcher.check_server_version()
+
+        assert result == VersionCheckResult(reachable=True, version=None)
+
+    async def test_200_with_version_returns_reachable_with_version(self) -> None:
+        """200 with version field maps to VersionCheckResult(reachable=True, version='2.0.0')."""
+        from amplifier_module_hook_context_intelligence.skill_fetcher import (
+            SkillFetcher,
+            VersionCheckResult,
+        )
+
+        fetcher = SkillFetcher("http://localhost:8000")
+
+        with patch(
+            "amplifier_module_hook_context_intelligence.skill_fetcher.httpx.AsyncClient",
+            _make_version_http_mock(200, {"version": "2.0.0"}),
+        ):
+            result = await fetcher.check_server_version()
+
+        assert result == VersionCheckResult(reachable=True, version="2.0.0")
+
+    async def test_200_without_version_returns_reachable_with_none(self) -> None:
+        """200 without version key maps to VersionCheckResult(reachable=True, version=None)."""
+        from amplifier_module_hook_context_intelligence.skill_fetcher import (
+            SkillFetcher,
+            VersionCheckResult,
+        )
+
+        fetcher = SkillFetcher("http://localhost:8000")
+
+        with patch(
+            "amplifier_module_hook_context_intelligence.skill_fetcher.httpx.AsyncClient",
+            _make_version_http_mock(200, {}),
+        ):
+            result = await fetcher.check_server_version()
+
+        assert result == VersionCheckResult(reachable=True, version=None)
