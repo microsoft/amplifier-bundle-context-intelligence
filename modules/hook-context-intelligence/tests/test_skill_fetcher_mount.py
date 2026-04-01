@@ -42,14 +42,18 @@ def _make_coordinator(server_url: str | None, skill_path: Path | None) -> MagicM
 
 
 class TestMountSkillFetchHappyPath:
-    """mount() fetches watched skills when server_url and skills_discovery are available."""
+    """mount() fetches watched skills when server_url is available and SKILL.md exists."""
 
     async def test_fetch_called_for_watched_skill(self, tmp_path: Path) -> None:
-        """SkillFetcher.fetch is called once with the watched skill name and its path."""
+        """SkillFetcher.fetch is called once with the watched skill name and bundle path."""
         from amplifier_module_hook_context_intelligence import mount
         from amplifier_module_hook_context_intelligence.skill_fetcher import VersionCheckResult
 
-        skill_path = tmp_path / "context-intelligence-graph-query" / "SKILL.md"
+        # Place the SKILL.md at the expected bundle-root-relative location
+        skill_path = tmp_path / "skills" / "context-intelligence-graph-query" / "SKILL.md"
+        skill_path.parent.mkdir(parents=True)
+        skill_path.write_text("# test")
+
         coordinator = _make_coordinator(
             server_url="http://localhost:8000",
             skill_path=skill_path,
@@ -62,9 +66,12 @@ class TestMountSkillFetchHappyPath:
         mock_fetcher_instance.fetch = AsyncMock(return_value=True)
         mock_fetcher_cls = MagicMock(return_value=mock_fetcher_instance)
 
-        with patch(
-            "amplifier_module_hook_context_intelligence.skill_fetcher.SkillFetcher",
-            mock_fetcher_cls,
+        with (
+            patch("amplifier_module_hook_context_intelligence._BUNDLE_ROOT", tmp_path),
+            patch(
+                "amplifier_module_hook_context_intelligence.skill_fetcher.SkillFetcher",
+                mock_fetcher_cls,
+            ),
         ):
             cleanup = await mount(
                 coordinator,
@@ -133,20 +140,27 @@ class TestMountSkillFetchSkipsWhenUnconfigured:
         assert not skill_path.exists()
         assert callable(cleanup)
 
-    async def test_no_fetch_when_skills_discovery_is_none(self) -> None:
-        """SkillFetcher.fetch is NOT called when skills_discovery capability is None."""
+    async def test_no_fetch_when_skill_path_not_found(self, tmp_path: Path) -> None:
+        """SkillFetcher.fetch is NOT called when SKILL.md does not exist at the bundle root."""
         from amplifier_module_hook_context_intelligence import mount
+        from amplifier_module_hook_context_intelligence.skill_fetcher import VersionCheckResult
 
-        # skill_path=None causes _make_coordinator to return skills_discovery capability as None
+        # tmp_path has no skills/ subdirectory — SKILL.md will not be found
         coordinator = _make_coordinator(server_url="http://localhost:8000", skill_path=None)
 
         mock_fetcher_instance = MagicMock()
+        mock_fetcher_instance.check_server_version = AsyncMock(
+            return_value=VersionCheckResult(reachable=True, version="2.0.0")
+        )
         mock_fetcher_instance.fetch = AsyncMock()
         mock_fetcher_cls = MagicMock(return_value=mock_fetcher_instance)
 
-        with patch(
-            "amplifier_module_hook_context_intelligence.skill_fetcher.SkillFetcher",
-            mock_fetcher_cls,
+        with (
+            patch("amplifier_module_hook_context_intelligence._BUNDLE_ROOT", tmp_path),
+            patch(
+                "amplifier_module_hook_context_intelligence.skill_fetcher.SkillFetcher",
+                mock_fetcher_cls,
+            ),
         ):
             await mount(
                 coordinator,
@@ -276,24 +290,15 @@ class TestSkillUnloadedHandler:
         mock_create_task.assert_not_called()
 
     async def test_does_not_crash_when_metadata_not_found(self, tmp_path: Path) -> None:
-        """Handler returns cleanly when skills_discovery.find() returns None."""
+        """Handler returns cleanly when SKILL.md does not exist at the bundle root."""
         from amplifier_module_hook_context_intelligence import mount
         from amplifier_module_hook_context_intelligence.skill_fetcher import VersionCheckResult
 
-        # Build coordinator where skills_discovery exists but find() returns None
-        coordinator = MagicMock()
-        coordinator.collect_contributions = AsyncMock(return_value=[])
-        coordinator.config = {"context_intelligence_server_url": "http://localhost:8000"}
-
-        skills_discovery = MagicMock()
-        skills_discovery.find = MagicMock(return_value=None)
-
-        def _get_capability(name: str) -> object:
-            if name == "skills_discovery":
-                return skills_discovery
-            return None
-
-        coordinator.get_capability = MagicMock(side_effect=_get_capability)
+        # tmp_path has no skills/ subdirectory — SKILL.md will not be found
+        coordinator = _make_coordinator(
+            server_url="http://localhost:8000",
+            skill_path=None,
+        )
 
         # Capture registered handlers via side_effect
         registered: dict[str, object] = {}
@@ -311,20 +316,23 @@ class TestSkillUnloadedHandler:
         mock_fetcher_instance.fetch = AsyncMock(return_value=True)
         mock_fetcher_cls = MagicMock(return_value=mock_fetcher_instance)
 
-        with patch(
-            "amplifier_module_hook_context_intelligence.skill_fetcher.SkillFetcher",
-            mock_fetcher_cls,
+        with (
+            patch("amplifier_module_hook_context_intelligence._BUNDLE_ROOT", tmp_path),
+            patch(
+                "amplifier_module_hook_context_intelligence.skill_fetcher.SkillFetcher",
+                mock_fetcher_cls,
+            ),
+            patch("asyncio.create_task") as mock_create_task,
         ):
             await mount(
                 coordinator,
                 config={"context_intelligence_server_url": "http://localhost:8000"},
             )
 
-        assert "skill:unloaded" in registered
+            assert "skill:unloaded" in registered
 
-        handler = registered["skill:unloaded"]
-        with patch("asyncio.create_task") as mock_create_task:
-            # Should not raise AttributeError even though find() returned None
+            # SKILL.md absent at bundle root — handler must return without scheduling a task
+            handler = registered["skill:unloaded"]
             await handler(  # type: ignore[operator]
                 "skill:unloaded", {"skill_name": "context-intelligence-graph-query"}
             )
@@ -408,7 +416,11 @@ class TestMountThreeWayBranch:
         from amplifier_module_hook_context_intelligence import mount
         from amplifier_module_hook_context_intelligence.skill_fetcher import VersionCheckResult
 
-        skill_path = tmp_path / "context-intelligence-graph-query" / "SKILL.md"
+        # Place SKILL.md at the expected bundle-root-relative location
+        skill_path = tmp_path / "skills" / "context-intelligence-graph-query" / "SKILL.md"
+        skill_path.parent.mkdir(parents=True)
+        skill_path.write_text("# test")
+
         coordinator = _make_coordinator(
             server_url="http://localhost:8000",
             skill_path=skill_path,
@@ -422,9 +434,12 @@ class TestMountThreeWayBranch:
         mock_fetcher_instance.write_legacy_content = MagicMock()
         mock_fetcher_cls = MagicMock(return_value=mock_fetcher_instance)
 
-        with patch(
-            "amplifier_module_hook_context_intelligence.skill_fetcher.SkillFetcher",
-            mock_fetcher_cls,
+        with (
+            patch("amplifier_module_hook_context_intelligence._BUNDLE_ROOT", tmp_path),
+            patch(
+                "amplifier_module_hook_context_intelligence.skill_fetcher.SkillFetcher",
+                mock_fetcher_cls,
+            ),
         ):
             await mount(
                 coordinator,
@@ -441,7 +456,11 @@ class TestMountThreeWayBranch:
         from amplifier_module_hook_context_intelligence import mount
         from amplifier_module_hook_context_intelligence.skill_fetcher import VersionCheckResult
 
-        skill_path = tmp_path / "context-intelligence-graph-query" / "SKILL.md"
+        # Place SKILL.md at the expected bundle-root-relative location
+        skill_path = tmp_path / "skills" / "context-intelligence-graph-query" / "SKILL.md"
+        skill_path.parent.mkdir(parents=True)
+        skill_path.write_text("# test")
+
         coordinator = _make_coordinator(
             server_url="http://localhost:8000",
             skill_path=skill_path,
@@ -455,9 +474,12 @@ class TestMountThreeWayBranch:
         mock_fetcher_instance.write_legacy_content = MagicMock()
         mock_fetcher_cls = MagicMock(return_value=mock_fetcher_instance)
 
-        with patch(
-            "amplifier_module_hook_context_intelligence.skill_fetcher.SkillFetcher",
-            mock_fetcher_cls,
+        with (
+            patch("amplifier_module_hook_context_intelligence._BUNDLE_ROOT", tmp_path),
+            patch(
+                "amplifier_module_hook_context_intelligence.skill_fetcher.SkillFetcher",
+                mock_fetcher_cls,
+            ),
         ):
             await mount(
                 coordinator,

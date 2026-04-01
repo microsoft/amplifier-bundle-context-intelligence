@@ -29,11 +29,19 @@ import asyncio
 import fnmatch
 import logging
 from collections.abc import Callable, Coroutine
+from pathlib import Path
 from typing import Any
 
 log = logging.getLogger(__name__)
 
 __amplifier_module_type__ = "hook"
+
+# Path to the bundle root — works regardless of cache location or mounting order
+# Path(__file__).parent = amplifier_module_hook_context_intelligence/
+# .parent               = hook-context-intelligence/
+# .parent               = modules/
+# .parent               = bundle root (where skills/ lives)
+_BUNDLE_ROOT = Path(__file__).parent.parent.parent.parent
 
 
 async def _discover_events(coordinator: Any) -> set[str]:
@@ -67,55 +75,68 @@ async def mount(
     from .config_resolver import ConfigResolver
     from .handlers.logging_handler import LoggingHandler
     from .skill_fetcher import (
-        TOOL_SKILLS_DISCOVERY_CAPABILITY,
         WATCHED_SKILLS,
         SkillFetcher,
         _is_skills_capable,
     )
 
     resolver = ConfigResolver(config, coordinator)
+    log.setLevel(resolver.log_level)
     coordinator.register_capability("context_intelligence.config_resolver", resolver)
     events = await _discover_events(coordinator)
 
     # Skill fetch phase — runs before logging handler registration
     server_url = resolver.context_intelligence_server_url
     fetcher: SkillFetcher | None = None
-    skills_discovery = None
 
-    if server_url:
-        skills_discovery = coordinator.get_capability(TOOL_SKILLS_DISCOVERY_CAPABILITY)
-        if skills_discovery is not None:
-            _tentative_fetcher = SkillFetcher(server_url)
-            result = await _tentative_fetcher.check_server_version()
+    if not server_url:
+        log.info("skill_fetch_skipped: no server_url in config")
+    else:
+        _tentative_fetcher = SkillFetcher(server_url)
+        result = await _tentative_fetcher.check_server_version()
+        log.info(
+            "skill_version_check: server=%s reachable=%s version=%s",
+            server_url,
+            result.reachable,
+            result.version,
+        )
 
-            if not result.reachable:
-                # Branch A: server unreachable — delegation fallback stays, SKILL.md untouched
-                log.debug("skill_fetch_skipped: server unreachable")
-            elif not _is_skills_capable(result.version):
-                # Branch B: old server (DEPRECATED) — write bundled legacy content
-                for skill_name in WATCHED_SKILLS:
-                    metadata = skills_discovery.find(skill_name)
-                    if metadata is None:
-                        log.debug(
-                            "skill_fetch_skipped: %s — not found in skills_discovery", skill_name
-                        )
-                        continue
-                    _tentative_fetcher.write_legacy_content(skill_name, metadata.path)
-                    log.debug("skill_legacy_written [DEPRECATED]: %s", skill_name)
-            else:
-                # Branch C: new server — fetch from server
-                fetcher = _tentative_fetcher
-                for skill_name in WATCHED_SKILLS:
-                    metadata = skills_discovery.find(skill_name)
-                    if metadata is None:
-                        log.debug(
-                            "skill_fetch_skipped: %s — not found in skills_discovery", skill_name
-                        )
-                        continue
-                    try:
-                        await fetcher.fetch(skill_name, metadata.path)
-                    except Exception as exc:
-                        log.warning("skill_fetch_failed during mount: %s — %s", skill_name, exc)
+        if not result.reachable:
+            # Branch A: server unreachable — delegation fallback stays, SKILL.md untouched
+            log.info("skill_fetch_branch=A: server unreachable — SKILL.md unchanged")
+        elif not _is_skills_capable(result.version):
+            # Branch B: old server (DEPRECATED) — write bundled legacy content
+            log.info(
+                "skill_fetch_branch=B: old server v%s — writing bundled fallback",
+                result.version,
+            )
+            for skill_name in WATCHED_SKILLS:
+                skill_path = _BUNDLE_ROOT / "skills" / skill_name / "SKILL.md"
+                if not skill_path.exists():
+                    log.warning("skill_fetch_skipped: %s not found at %s", skill_name, skill_path)
+                    continue
+                _tentative_fetcher.write_legacy_content(skill_name, skill_path)
+                log.info("skill_legacy_written [DEPRECATED]: %s -> %s", skill_name, skill_path)
+        else:
+            # Branch C: new server — fetch live content from server
+            log.info("skill_fetch_branch=C: server v%s — fetching live content", result.version)
+            fetcher = _tentative_fetcher
+            for skill_name in WATCHED_SKILLS:
+                skill_path = _BUNDLE_ROOT / "skills" / skill_name / "SKILL.md"
+                if not skill_path.exists():
+                    log.warning("skill_fetch_skipped: %s not found at %s", skill_name, skill_path)
+                    continue
+                log.info("skill_fetch_attempt: %s -> %s", skill_name, skill_path)
+                try:
+                    fetched = await fetcher.fetch(skill_name, skill_path)
+                    log.info(
+                        "skill_fetch_done: %s fetched=%s path=%s",
+                        skill_name,
+                        fetched,
+                        skill_path,
+                    )
+                except Exception as exc:
+                    log.warning("skill_fetch_failed: %s — %s", skill_name, exc)
 
     exclude = resolver.exclude_events
     active_events = {e for e in events if not any(fnmatch.fnmatch(e, p) for p in exclude)}
@@ -130,18 +151,16 @@ async def mount(
 
     # skill:unloaded handler — re-fetches watched skills when they are reloaded
     if fetcher is not None:
-        # Invariant: fetcher is only created when skills_discovery is non-None
-        assert skills_discovery is not None
 
         async def on_skill_unloaded(event_name: str, data: dict[str, Any]) -> None:
             skill_name = data.get("skill_name")
             if skill_name not in WATCHED_SKILLS:
                 return
-            metadata = skills_discovery.find(skill_name)
-            if metadata is None:
+            skill_path = _BUNDLE_ROOT / "skills" / skill_name / "SKILL.md"
+            if not skill_path.exists():
                 return
             try:
-                asyncio.create_task(fetcher.fetch(skill_name, metadata.path))
+                asyncio.create_task(fetcher.fetch(skill_name, skill_path))
             except RuntimeError:
                 # Event loop is closing; skip scheduling
                 pass
