@@ -65,6 +65,7 @@ class SkillFetcher:
         """
         url = f"{self._server_url}/version"
         try:
+            # Single GET — no context manager needed; httpx cleans up via __del__.
             response = await httpx.AsyncClient().get(url, timeout=self._timeout)
         except httpx.RequestError as exc:
             logger.debug("check_server_version: unreachable — %s", exc)
@@ -76,6 +77,7 @@ class SkillFetcher:
 
         if response.status_code == 200:
             version = response.json().get("version")
+            logger.debug("check_server_version: server at %s reported version=%s", url, version)
             return VersionCheckResult(reachable=True, version=version)
 
         logger.debug(

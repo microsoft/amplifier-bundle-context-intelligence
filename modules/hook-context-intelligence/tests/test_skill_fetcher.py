@@ -54,7 +54,12 @@ def _make_error_mock(exc: Exception) -> MagicMock:
 
 
 def _make_version_http_mock(status_code: int, body: dict) -> MagicMock:
-    """Build a patch-ready mock for httpx.AsyncClient returning a JSON response where response.json() is callable."""
+    """Build a patch-ready mock for httpx.AsyncClient returning a JSON response.
+
+    Unlike _make_http_mock, this mock intentionally omits __aenter__/__aexit__
+    because check_server_version() calls AsyncClient().get() directly rather
+    than via ``async with``.  The mock matches the production call pattern exactly.
+    """
     response = MagicMock()
     response.status_code = status_code
     response.json = MagicMock(return_value=body)
