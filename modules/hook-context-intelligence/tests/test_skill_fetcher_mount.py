@@ -234,8 +234,9 @@ class TestSkillUnloadedHandler:
         coordinator.hooks.register = MagicMock(side_effect=capture_register)
 
         # Use AsyncMock for the entire fetcher instance so that attribute access
-        # (e.g. .fetch) automatically returns awaitable AsyncMock children —
-        # avoids the RuntimeWarning about unawaited coroutines in Python 3.13.
+        # (e.g. .fetch) automatically returns awaitable AsyncMock children.
+        # Note: a RuntimeWarning about unawaited coroutines may appear during teardown
+        # in Python 3.13 — this is a known mock teardown artifact, not a bug.
         mock_fetcher_instance = AsyncMock()
         mock_fetcher_cls = MagicMock(return_value=mock_fetcher_instance)
 
@@ -314,7 +315,7 @@ class TestSkillUnloadedHandler:
 class TestMountNoOpWhenServerUrlAbsent:
     """When server_url is not configured, mount() must not touch skills_discovery at all."""
 
-    async def test_get_capability_not_called_when_no_server_url(self, tmp_path: Path) -> None:
+    async def test_get_capability_not_called_when_no_server_url(self) -> None:
         """coordinator.get_capability must NOT be called when server_url is None."""
         from amplifier_module_hook_context_intelligence import mount
 
@@ -327,7 +328,7 @@ class TestMountNoOpWhenServerUrlAbsent:
                 "get_capability('skills_discovery') was called even though server_url is None"
             )
 
-    async def test_skill_unloaded_not_registered_when_no_server_url(self, tmp_path: Path) -> None:
+    async def test_skill_unloaded_not_registered_when_no_server_url(self) -> None:
         """skill:unloaded handler must NOT be registered when server_url is None."""
         from amplifier_module_hook_context_intelligence import mount
 

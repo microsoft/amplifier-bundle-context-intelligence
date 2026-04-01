@@ -75,7 +75,7 @@ async def mount(
     # Skill fetch phase — runs before logging handler registration
     server_url = resolver.context_intelligence_server_url
     fetcher: SkillFetcher | None = None
-    skills_discovery = None  # initialise here so the unloaded-handler guard below can reference it
+    skills_discovery = None
 
     if server_url:
         skills_discovery = coordinator.get_capability("skills_discovery")
@@ -103,7 +103,9 @@ async def mount(
         unregister_fns.append(unreg)
 
     # skill:unloaded handler — re-fetches watched skills when they are reloaded
-    if fetcher is not None and skills_discovery is not None:
+    if fetcher is not None:
+        # Invariant: fetcher is only created when skills_discovery is non-None
+        assert skills_discovery is not None
 
         async def on_skill_unloaded(event_name: str, data: dict[str, Any]) -> None:
             skill_name = data.get("skill_name")
