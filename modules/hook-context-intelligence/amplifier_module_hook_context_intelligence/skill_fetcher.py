@@ -11,6 +11,11 @@ logger = logging.getLogger(__name__)
 
 WATCHED_SKILLS: frozenset[str] = frozenset({"context-intelligence-graph-query"})
 
+# Coordinator capability key registered by the tool-skills module at mount time.
+# tool-skills populates this with a SkillsDiscovery object that exposes
+# .find(skill_name) -> SkillMetadata with the absolute filesystem path for each skill.
+TOOL_SKILLS_DISCOVERY_CAPABILITY: str = "skills_discovery"
+
 
 class SkillFetcher:
     """Fetches skill files from a remote server with conditional GET (ETag)."""

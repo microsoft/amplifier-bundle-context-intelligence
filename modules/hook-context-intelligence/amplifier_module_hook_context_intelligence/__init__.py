@@ -66,7 +66,7 @@ async def mount(
     """
     from .config_resolver import ConfigResolver
     from .handlers.logging_handler import LoggingHandler
-    from .skill_fetcher import WATCHED_SKILLS, SkillFetcher
+    from .skill_fetcher import TOOL_SKILLS_DISCOVERY_CAPABILITY, WATCHED_SKILLS, SkillFetcher
 
     resolver = ConfigResolver(config, coordinator)
     coordinator.register_capability("context_intelligence.config_resolver", resolver)
@@ -78,7 +78,7 @@ async def mount(
     skills_discovery = None
 
     if server_url:
-        skills_discovery = coordinator.get_capability("skills_discovery")
+        skills_discovery = coordinator.get_capability(TOOL_SKILLS_DISCOVERY_CAPABILITY)
         if skills_discovery is not None:
             fetcher = SkillFetcher(server_url)
             for skill_name in WATCHED_SKILLS:

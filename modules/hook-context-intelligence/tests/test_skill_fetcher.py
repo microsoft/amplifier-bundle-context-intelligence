@@ -10,6 +10,24 @@ import httpx
 import pytest
 
 
+class TestConstants:
+    """Module constants have the correct values."""
+
+    def test_tool_skills_discovery_capability_value(self) -> None:
+        from amplifier_module_hook_context_intelligence.skill_fetcher import (
+            TOOL_SKILLS_DISCOVERY_CAPABILITY,
+        )
+
+        # Must match exactly what tool-skills registers:
+        # coordinator.register_capability("skills_discovery", SkillsDiscovery(...))
+        assert TOOL_SKILLS_DISCOVERY_CAPABILITY == "skills_discovery"
+
+    def test_watched_skills_contains_only_graph_query(self) -> None:
+        from amplifier_module_hook_context_intelligence.skill_fetcher import WATCHED_SKILLS
+
+        assert WATCHED_SKILLS == frozenset({"context-intelligence-graph-query"})
+
+
 def _make_http_mock(status_code: int, text: str, etag: str) -> MagicMock:
     """Build a patch-ready mock for httpx.AsyncClient as async context manager."""
     response = MagicMock()
