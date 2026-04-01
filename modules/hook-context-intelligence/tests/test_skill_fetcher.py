@@ -305,3 +305,53 @@ class TestSkillFetcherETagSidecar:
             await fetcher.fetch("my-skill", skill_path)
 
         assert etag_path.read_text() == "new-etag"
+
+
+class TestVersionCapability:
+    """Tests for VersionCheckResult NamedTuple and _is_skills_capable() function."""
+
+    def test_is_skills_capable_none_returns_false(self) -> None:
+        """_is_skills_capable(None) returns False (no version information)."""
+        from amplifier_module_hook_context_intelligence.skill_fetcher import _is_skills_capable
+
+        assert _is_skills_capable(None) is False
+
+    def test_is_skills_capable_old_version_returns_false(self) -> None:
+        """_is_skills_capable('1.9.0') returns False (below minimum)."""
+        from amplifier_module_hook_context_intelligence.skill_fetcher import _is_skills_capable
+
+        assert _is_skills_capable("1.9.0") is False
+
+    def test_is_skills_capable_min_version_returns_true(self) -> None:
+        """_is_skills_capable('2.0.0') returns True (exactly at minimum)."""
+        from amplifier_module_hook_context_intelligence.skill_fetcher import _is_skills_capable
+
+        assert _is_skills_capable("2.0.0") is True
+
+    def test_is_skills_capable_newer_version_returns_true(self) -> None:
+        """_is_skills_capable('3.1.0') returns True (above minimum)."""
+        from amplifier_module_hook_context_intelligence.skill_fetcher import _is_skills_capable
+
+        assert _is_skills_capable("3.1.0") is True
+
+    def test_is_skills_capable_unparseable_returns_false(self) -> None:
+        """_is_skills_capable('invalid') returns False (unparseable string)."""
+        from amplifier_module_hook_context_intelligence.skill_fetcher import _is_skills_capable
+
+        assert _is_skills_capable("invalid") is False
+
+    def test_version_check_result_namedtuple_reachable(self) -> None:
+        """VersionCheckResult can be constructed with reachable=True, version='2.0.0'."""
+        from amplifier_module_hook_context_intelligence.skill_fetcher import VersionCheckResult
+
+        result = VersionCheckResult(reachable=True, version="2.0.0")
+        assert result.reachable is True
+        assert result.version == "2.0.0"
+
+    def test_version_check_result_namedtuple_unreachable(self) -> None:
+        """VersionCheckResult can be constructed with reachable=False, version=None."""
+        from amplifier_module_hook_context_intelligence.skill_fetcher import VersionCheckResult
+
+        result = VersionCheckResult(reachable=False, version=None)
+        assert result.reachable is False
+        assert result.version is None

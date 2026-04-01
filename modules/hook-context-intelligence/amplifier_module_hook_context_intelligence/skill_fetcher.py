@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
+from typing import NamedTuple
 
 import httpx
 
@@ -15,6 +16,33 @@ WATCHED_SKILLS: frozenset[str] = frozenset({"context-intelligence-graph-query"})
 # tool-skills populates this with a SkillsDiscovery object that exposes
 # .find(skill_name) -> SkillMetadata with the absolute filesystem path for each skill.
 TOOL_SKILLS_DISCOVERY_CAPABILITY: str = "skills_discovery"
+
+
+class VersionCheckResult(NamedTuple):
+    """Result of a server version pre-check.
+
+    reachable: True when the server responded (even with 404); False on network errors.
+    version: The server version string from GET /version, or None if not available.
+    """
+
+    reachable: bool
+    version: str | None
+
+
+# DEPRECATED: Use server capability negotiation instead of version comparison.
+_MIN_SKILLS_VERSION: tuple[int, ...] = (2, 0, 0)
+
+
+def _is_skills_capable(version: str | None) -> bool:
+    """Return True if *version* is >= 2.0.0, False otherwise.
+
+    Returns False for None, unparseable strings, and versions below 2.0.0.
+    """
+    try:
+        parsed = tuple(int(part) for part in version.split("."))  # type: ignore[union-attr]
+    except (ValueError, AttributeError):
+        return False
+    return parsed >= _MIN_SKILLS_VERSION
 
 
 class SkillFetcher:
