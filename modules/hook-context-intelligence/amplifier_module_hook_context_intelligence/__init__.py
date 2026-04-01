@@ -25,6 +25,7 @@ exclude_events : list[str], optional
 
 from __future__ import annotations
 
+import asyncio
 import fnmatch
 import logging
 from collections.abc import Callable, Coroutine
@@ -65,10 +66,24 @@ async def mount(
     """
     from .config_resolver import ConfigResolver
     from .handlers.logging_handler import LoggingHandler
+    from .skill_fetcher import WATCHED_SKILLS, SkillFetcher
 
     resolver = ConfigResolver(config, coordinator)
     coordinator.register_capability("context_intelligence.config_resolver", resolver)
     events = await _discover_events(coordinator)
+
+    # Skill fetch phase — runs before logging handler registration
+    server_url = resolver.context_intelligence_server_url
+    skills_discovery = coordinator.get_capability("skills_discovery")
+    fetcher: SkillFetcher | None = None
+    if server_url and skills_discovery:
+        fetcher = SkillFetcher(server_url)
+        for skill_name in WATCHED_SKILLS:
+            try:
+                metadata = skills_discovery.find(skill_name)
+                await fetcher.fetch(skill_name, metadata.path)
+            except Exception:
+                pass
 
     exclude = resolver.exclude_events
     active_events = {e for e in events if not any(fnmatch.fnmatch(e, p) for p in exclude)}
@@ -80,6 +95,27 @@ async def mount(
             event, logging_handler, priority=100, name="LoggingHandler"
         )
         unregister_fns.append(unreg)
+
+    # skill:unloaded handler — re-fetches watched skills when they are reloaded
+    if fetcher is not None and skills_discovery is not None:
+
+        async def on_skill_unloaded(event_name: str, data: dict[str, Any]) -> None:
+            skill_name = data.get("skill_name")
+            if skill_name not in WATCHED_SKILLS:
+                return
+            metadata = skills_discovery.find(skill_name)
+            if metadata is None:
+                return
+            try:
+                asyncio.create_task(fetcher.fetch(skill_name, metadata.path))
+            except RuntimeError:
+                # Event loop is closing; skip scheduling
+                pass
+
+        unreg_skill = coordinator.hooks.register(
+            "skill:unloaded", on_skill_unloaded, priority=100, name="SkillFetcher"
+        )
+        unregister_fns.append(unreg_skill)
 
     async def cleanup() -> None:
         # Drain pending dispatch tasks and close the HTTP client *before*

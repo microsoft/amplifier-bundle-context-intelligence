@@ -139,29 +139,7 @@ Load skill: context-intelligence-session-navigation
 
 ### Using graph_query
 
-The `graph_query` tool auto-injects `$workspace` — you only need to provide the Cypher query. Here are 4 bootstrap queries to orient before loading the skill:
-
-```cypher
--- 1. Health check
-MATCH (s:Session) RETURN count(s)
-
--- 2. Recent sessions in this workspace
-MATCH (s:Session {workspace: $workspace})
-RETURN s.session_id, s.started_at, s.agent_name
-ORDER BY s.started_at DESC LIMIT 10
-
--- 3. Tool calls for a session
-MATCH (s:Session {session_id: $session_id, workspace: $workspace})
-      -[:HAS_TOOL_CALL]->(tc:ToolCall)
-RETURN tc.tool_name, tc.started_at, tc.ended_at, tc.status
-ORDER BY tc.ended_at
-
--- 4. Child sessions (one level of delegation)
-MATCH (s:Session {session_id: $session_id, workspace: $workspace})
-      -[:HAS_FORK]->(child:Session)
-RETURN child.session_id, child.agent_name, child.started_at
-ORDER BY child.started_at
-```
+The `graph_query` tool auto-injects `$workspace` — you only need to provide the Cypher query.
 
 For full query patterns, load the skill:
 
@@ -241,9 +219,6 @@ Run `context-intelligence-upload --help` for full options.
 ---
 
 ## Section 4: Context File References
-
-@context-intelligence:context/graph-model-reference.md
-<!-- Graph node types, relationship types, and property schemas for writing Cypher queries -->
 
 @context-intelligence:context/config-resolution.dot
 <!-- ConfigResolver fallback chain: how context_intelligence_server_url, workspace, and log_level are resolved from env vars and settings -->
