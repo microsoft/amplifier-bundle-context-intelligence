@@ -47,6 +47,7 @@ class TestMountSkillFetchHappyPath:
     async def test_fetch_called_for_watched_skill(self, tmp_path: Path) -> None:
         """SkillFetcher.fetch is called once with the watched skill name and its path."""
         from amplifier_module_hook_context_intelligence import mount
+        from amplifier_module_hook_context_intelligence.skill_fetcher import VersionCheckResult
 
         skill_path = tmp_path / "context-intelligence-graph-query" / "SKILL.md"
         coordinator = _make_coordinator(
@@ -55,6 +56,9 @@ class TestMountSkillFetchHappyPath:
         )
 
         mock_fetcher_instance = MagicMock()
+        mock_fetcher_instance.check_server_version = AsyncMock(
+            return_value=VersionCheckResult(reachable=True, version="2.0.0")
+        )
         mock_fetcher_instance.fetch = AsyncMock(return_value=True)
         mock_fetcher_cls = MagicMock(return_value=mock_fetcher_instance)
 
@@ -75,6 +79,7 @@ class TestMountSkillFetchHappyPath:
     async def test_cleanup_is_still_callable_after_fetch(self, tmp_path: Path) -> None:
         """cleanup() returned from mount() can be awaited without error after fetch."""
         from amplifier_module_hook_context_intelligence import mount
+        from amplifier_module_hook_context_intelligence.skill_fetcher import VersionCheckResult
 
         skill_path = tmp_path / "context-intelligence-graph-query" / "SKILL.md"
         coordinator = _make_coordinator(
@@ -83,6 +88,9 @@ class TestMountSkillFetchHappyPath:
         )
 
         mock_fetcher_instance = MagicMock()
+        mock_fetcher_instance.check_server_version = AsyncMock(
+            return_value=VersionCheckResult(reachable=True, version="2.0.0")
+        )
         mock_fetcher_instance.fetch = AsyncMock(return_value=True)
         mock_fetcher_cls = MagicMock(return_value=mock_fetcher_instance)
 
@@ -175,6 +183,7 @@ class TestSkillUnloadedHandler:
     async def test_creates_task_for_watched_skill(self, tmp_path: Path) -> None:
         """Handler calls asyncio.create_task once for a skill in WATCHED_SKILLS."""
         from amplifier_module_hook_context_intelligence import mount
+        from amplifier_module_hook_context_intelligence.skill_fetcher import VersionCheckResult
 
         skill_path = tmp_path / "context-intelligence-graph-query" / "SKILL.md"
         coordinator = _make_coordinator(
@@ -192,6 +201,9 @@ class TestSkillUnloadedHandler:
         coordinator.hooks.register = MagicMock(side_effect=capture_register)
 
         mock_fetcher_instance = MagicMock()
+        mock_fetcher_instance.check_server_version = AsyncMock(
+            return_value=VersionCheckResult(reachable=True, version="2.0.0")
+        )
         mock_fetcher_instance.fetch = AsyncMock(return_value=True)
         mock_fetcher_cls = MagicMock(return_value=mock_fetcher_instance)
 
@@ -217,6 +229,7 @@ class TestSkillUnloadedHandler:
     async def test_does_not_create_task_for_unwatched_skill(self, tmp_path: Path) -> None:
         """Handler does NOT call asyncio.create_task for a skill NOT in WATCHED_SKILLS."""
         from amplifier_module_hook_context_intelligence import mount
+        from amplifier_module_hook_context_intelligence.skill_fetcher import VersionCheckResult
 
         skill_path = tmp_path / "context-intelligence-graph-query" / "SKILL.md"
         coordinator = _make_coordinator(
@@ -238,6 +251,9 @@ class TestSkillUnloadedHandler:
         # Note: a RuntimeWarning about unawaited coroutines may appear during teardown
         # in Python 3.13 — this is a known mock teardown artifact, not a bug.
         mock_fetcher_instance = AsyncMock()
+        mock_fetcher_instance.check_server_version = AsyncMock(
+            return_value=VersionCheckResult(reachable=True, version="2.0.0")
+        )
         mock_fetcher_cls = MagicMock(return_value=mock_fetcher_instance)
 
         with patch(
@@ -262,6 +278,7 @@ class TestSkillUnloadedHandler:
     async def test_does_not_crash_when_metadata_not_found(self, tmp_path: Path) -> None:
         """Handler returns cleanly when skills_discovery.find() returns None."""
         from amplifier_module_hook_context_intelligence import mount
+        from amplifier_module_hook_context_intelligence.skill_fetcher import VersionCheckResult
 
         # Build coordinator where skills_discovery exists but find() returns None
         coordinator = MagicMock()
@@ -288,6 +305,9 @@ class TestSkillUnloadedHandler:
         coordinator.hooks.register = MagicMock(side_effect=capture_register)
 
         mock_fetcher_instance = MagicMock()
+        mock_fetcher_instance.check_server_version = AsyncMock(
+            return_value=VersionCheckResult(reachable=True, version="2.0.0")
+        )
         mock_fetcher_instance.fetch = AsyncMock(return_value=True)
         mock_fetcher_cls = MagicMock(return_value=mock_fetcher_instance)
 
@@ -346,3 +366,105 @@ class TestMountNoOpWhenServerUrlAbsent:
         assert "skill:unloaded" not in registered_events, (
             "skill:unloaded handler was registered even though server_url is None"
         )
+
+
+class TestMountThreeWayBranch:
+    """mount() routes to unreachable/old-server/new-server based on check_server_version."""
+
+    async def test_unreachable_server_no_op(self, tmp_path: Path) -> None:
+        """Unreachable server: SKILL.md untouched, fetch not called, write_legacy_content not called."""
+        from amplifier_module_hook_context_intelligence import mount
+        from amplifier_module_hook_context_intelligence.skill_fetcher import VersionCheckResult
+
+        skill_path = tmp_path / "context-intelligence-graph-query" / "SKILL.md"
+        coordinator = _make_coordinator(
+            server_url="http://localhost:8000",
+            skill_path=skill_path,
+        )
+
+        mock_fetcher_instance = MagicMock()
+        mock_fetcher_instance.check_server_version = AsyncMock(
+            return_value=VersionCheckResult(reachable=False, version=None)
+        )
+        mock_fetcher_instance.fetch = AsyncMock()
+        mock_fetcher_instance.write_legacy_content = MagicMock()
+        mock_fetcher_cls = MagicMock(return_value=mock_fetcher_instance)
+
+        with patch(
+            "amplifier_module_hook_context_intelligence.skill_fetcher.SkillFetcher",
+            mock_fetcher_cls,
+        ):
+            await mount(
+                coordinator,
+                config={"context_intelligence_server_url": "http://localhost:8000"},
+            )
+
+        assert not skill_path.exists()
+        mock_fetcher_instance.fetch.assert_not_called()
+        mock_fetcher_instance.write_legacy_content.assert_not_called()
+
+    async def test_old_server_write_legacy_content(self, tmp_path: Path) -> None:
+        """Old server (reachable=True, version=None): write_legacy_content called once, fetch not called."""
+        from amplifier_module_hook_context_intelligence import mount
+        from amplifier_module_hook_context_intelligence.skill_fetcher import VersionCheckResult
+
+        skill_path = tmp_path / "context-intelligence-graph-query" / "SKILL.md"
+        coordinator = _make_coordinator(
+            server_url="http://localhost:8000",
+            skill_path=skill_path,
+        )
+
+        mock_fetcher_instance = MagicMock()
+        mock_fetcher_instance.check_server_version = AsyncMock(
+            return_value=VersionCheckResult(reachable=True, version=None)
+        )
+        mock_fetcher_instance.fetch = AsyncMock()
+        mock_fetcher_instance.write_legacy_content = MagicMock()
+        mock_fetcher_cls = MagicMock(return_value=mock_fetcher_instance)
+
+        with patch(
+            "amplifier_module_hook_context_intelligence.skill_fetcher.SkillFetcher",
+            mock_fetcher_cls,
+        ):
+            await mount(
+                coordinator,
+                config={"context_intelligence_server_url": "http://localhost:8000"},
+            )
+
+        mock_fetcher_instance.write_legacy_content.assert_called_once_with(
+            "context-intelligence-graph-query", skill_path
+        )
+        mock_fetcher_instance.fetch.assert_not_called()
+
+    async def test_new_server_fetch(self, tmp_path: Path) -> None:
+        """New server (reachable=True, version='2.0.0'): fetch called once, write_legacy_content not called."""
+        from amplifier_module_hook_context_intelligence import mount
+        from amplifier_module_hook_context_intelligence.skill_fetcher import VersionCheckResult
+
+        skill_path = tmp_path / "context-intelligence-graph-query" / "SKILL.md"
+        coordinator = _make_coordinator(
+            server_url="http://localhost:8000",
+            skill_path=skill_path,
+        )
+
+        mock_fetcher_instance = MagicMock()
+        mock_fetcher_instance.check_server_version = AsyncMock(
+            return_value=VersionCheckResult(reachable=True, version="2.0.0")
+        )
+        mock_fetcher_instance.fetch = AsyncMock(return_value=True)
+        mock_fetcher_instance.write_legacy_content = MagicMock()
+        mock_fetcher_cls = MagicMock(return_value=mock_fetcher_instance)
+
+        with patch(
+            "amplifier_module_hook_context_intelligence.skill_fetcher.SkillFetcher",
+            mock_fetcher_cls,
+        ):
+            await mount(
+                coordinator,
+                config={"context_intelligence_server_url": "http://localhost:8000"},
+            )
+
+        mock_fetcher_instance.fetch.assert_called_once_with(
+            "context-intelligence-graph-query", skill_path
+        )
+        mock_fetcher_instance.write_legacy_content.assert_not_called()
