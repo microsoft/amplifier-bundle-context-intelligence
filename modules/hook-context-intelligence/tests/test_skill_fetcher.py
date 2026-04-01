@@ -121,6 +121,44 @@ class TestSkillFetcher304:
         assert skill_path.read_text() == "# Existing Content"
 
 
+class TestSkillFetcherUnexpectedStatus:
+    """SkillFetcher returns False and logs a warning on unexpected HTTP status codes."""
+
+    async def test_returns_false_on_404(self, tmp_path: Path) -> None:
+        """fetch() returns False and logs a warning when the server returns 404."""
+        from amplifier_module_hook_context_intelligence.skill_fetcher import SkillFetcher
+
+        skill_path = tmp_path / "SKILL.md"
+        fetcher = SkillFetcher("http://localhost:8000")
+
+        with patch(
+            "amplifier_module_hook_context_intelligence.skill_fetcher.httpx.AsyncClient",
+            _make_http_mock(404, "not found", ""),
+        ):
+            result = await fetcher.fetch("my-skill", skill_path)
+
+        assert result is False
+        assert not skill_path.exists()
+
+    async def test_logs_warning_on_unexpected_status(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """fetch() emits a skill_fetch_failed warning for any non-200/304 status."""
+        from amplifier_module_hook_context_intelligence.skill_fetcher import SkillFetcher
+
+        skill_path = tmp_path / "SKILL.md"
+        fetcher = SkillFetcher("http://localhost:8000")
+
+        with caplog.at_level(logging.WARNING):
+            with patch(
+                "amplifier_module_hook_context_intelligence.skill_fetcher.httpx.AsyncClient",
+                _make_http_mock(500, "server error", ""),
+            ):
+                await fetcher.fetch("my-skill", skill_path)
+
+        assert any("skill_fetch_failed" in record.getMessage() for record in caplog.records)
+
+
 class TestSkillFetcherErrors:
     """SkillFetcher returns False on connection errors and timeouts."""
 
@@ -210,6 +248,28 @@ class TestSkillFetcherETagSidecar:
         mock_client = mock_cls.return_value
         sent_headers = mock_client.get.call_args.kwargs.get("headers", {})
         assert sent_headers.get("If-None-Match") == "stored-etag-value"
+
+    async def test_no_etag_sidecar_written_when_response_omits_etag(self, tmp_path: Path) -> None:
+        """fetch() must NOT write a .etag sidecar when the server omits the ETag header.
+
+        An empty .etag file would be indistinguishable from an intentional empty-string
+        ETag and can confuse debugging.  When no ETag is returned, skip the write.
+        """
+        from amplifier_module_hook_context_intelligence.skill_fetcher import SkillFetcher
+
+        skill_path = tmp_path / "SKILL.md"
+        etag_path = tmp_path / ".etag"
+        fetcher = SkillFetcher("http://localhost:8000")
+
+        with patch(
+            "amplifier_module_hook_context_intelligence.skill_fetcher.httpx.AsyncClient",
+            _make_http_mock(200, "skill content", ""),  # no ETag in response
+        ):
+            result = await fetcher.fetch("my-skill", skill_path)
+
+        assert result is True
+        assert skill_path.read_text() == "skill content"
+        assert not etag_path.exists(), ".etag must not be written when response has no ETag"
 
     async def test_etag_sidecar_updated_on_200(self, tmp_path: Path) -> None:
         from amplifier_module_hook_context_intelligence.skill_fetcher import SkillFetcher

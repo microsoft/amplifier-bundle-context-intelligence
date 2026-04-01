@@ -49,7 +49,8 @@ class SkillFetcher:
         if response.status_code == 200:
             skill_path.write_text(response.text)
             etag = response.headers.get("etag", "")
-            etag_path.write_text(etag)
+            if etag:
+                etag_path.write_text(etag)
             return True
 
         if response.status_code == 304:

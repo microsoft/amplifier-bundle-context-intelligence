@@ -233,8 +233,10 @@ class TestSkillUnloadedHandler:
 
         coordinator.hooks.register = MagicMock(side_effect=capture_register)
 
-        mock_fetcher_instance = MagicMock()
-        mock_fetcher_instance.fetch = AsyncMock(return_value=True)
+        # Use AsyncMock for the entire fetcher instance so that attribute access
+        # (e.g. .fetch) automatically returns awaitable AsyncMock children —
+        # avoids the RuntimeWarning about unawaited coroutines in Python 3.13.
+        mock_fetcher_instance = AsyncMock()
         mock_fetcher_cls = MagicMock(return_value=mock_fetcher_instance)
 
         with patch(

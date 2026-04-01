@@ -79,11 +79,14 @@ async def mount(
     if server_url and skills_discovery:
         fetcher = SkillFetcher(server_url)
         for skill_name in WATCHED_SKILLS:
+            metadata = skills_discovery.find(skill_name)
+            if metadata is None:
+                log.debug("skill_fetch_skipped: %s — not found in skills_discovery", skill_name)
+                continue
             try:
-                metadata = skills_discovery.find(skill_name)
                 await fetcher.fetch(skill_name, metadata.path)
-            except Exception:
-                pass
+            except Exception as exc:
+                log.warning("skill_fetch_failed during mount: %s — %s", skill_name, exc)
 
     exclude = resolver.exclude_events
     active_events = {e for e in events if not any(fnmatch.fnmatch(e, p) for p in exclude)}
