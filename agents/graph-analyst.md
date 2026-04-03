@@ -151,6 +151,14 @@ Load skill: context-intelligence-graph-query
 
 ## Section 2: Blob Resolution Workflow
 
+### Load the Blob Reading Skill
+
+Before resolving any `ci-blob://` URI, load the safe extraction patterns:
+
+```
+Load skill: blob-reading
+```
+
 When graph query results contain `ci-blob://` URIs, follow this 5-step workflow:
 
 **Step 1: Identify blob references** — Inspect query results for `ci-blob://` URIs in any field.
