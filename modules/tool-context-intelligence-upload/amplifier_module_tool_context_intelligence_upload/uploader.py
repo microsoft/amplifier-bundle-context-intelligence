@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import sys
+import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -100,6 +101,7 @@ def run_upload(
     server_url: str,
     api_key: str,
     tracker: ProgressTracker,
+    event_delay_s: float = 0.0,
 ) -> UploadResult:
     """Replay all events from *sessions* to the server.
 
@@ -113,6 +115,10 @@ def run_upload(
         API key used in the ``Authorization: Bearer`` header.
     tracker:
         A :class:`ProgressTracker` instance that is updated after every event.
+    event_delay_s:
+        Seconds to sleep between each successful event POST.  Defaults to
+        ``0.0`` (no delay).  Set to a positive value (e.g. ``0.05``) to
+        throttle the upload rate and reduce Neo4j write pressure on the server.
 
     Returns
     -------
@@ -221,6 +227,8 @@ def run_upload(
                     tracker.event_sent()
                     total_events_uploaded += 1
                     event_index += 1
+                    if event_delay_s > 0:
+                        time.sleep(event_delay_s)
 
             tracker.session_completed()
             total_sessions_uploaded += 1

@@ -25,19 +25,22 @@ from .uploader import run_upload
 
 _COMPACT_HELP = """\
 usage: context-intelligence-upload --path PATH --server-url URL --api-key KEY
-                                    [--job-id ID] [--progress FILE]
+	                                    [--job-id ID] [--progress FILE]
+	                                    [--event-delay-ms MS]
 
 Replay context-intelligence session data to a server.
 
 flags:
-  -h            Show this compact help and exit
-  --help        Show detailed documentation and exit
-  --path        File or folder to replay (required)
-  --server-url  Target server base URL (required)
-  --api-key     Bearer token for authorization (required)
-  --job-id      Job identifier (auto-generated UUID4 if omitted)
-  --progress    Progress file path
-                  default: /tmp/context-intelligence-upload-{job_id}.json
+  -h                 Show this compact help and exit
+  --help             Show detailed documentation and exit
+  --path             File or folder to replay (required)
+  --server-url       Target server base URL (required)
+  --api-key          Bearer token for authorization (required)
+  --job-id           Job identifier (auto-generated UUID4 if omitted)
+  --progress         Progress file path
+                       default: /tmp/context-intelligence-upload-{job_id}.json
+  --event-delay-ms   Milliseconds to sleep between events (default: 0)
+                       Use 50-200 to reduce Neo4j write pressure on the server
 """
 
 # ---------------------------------------------------------------------------
@@ -80,6 +83,14 @@ PARAMETERS
   --progress FILE        (optional)
       Where to write the progress JSON file.
       Default: /tmp/context-intelligence-upload-{job_id}.json
+
+  --event-delay-ms MS   (optional, default: 0)
+      Milliseconds to sleep between each successful event POST.  Use this to
+      throttle the upload rate and reduce write pressure on the Neo4j backend.
+      A value of 0 (the default) means no delay — events are sent as fast as
+      the server can accept them.
+      Recommended range: 50–200 ms when uploading large session trees and the
+      server reports Neo4j thread starvation warnings.
 
 METADATA VALIDATION
 -------------------
@@ -308,6 +319,14 @@ def _build_parser() -> argparse.ArgumentParser:
         metavar="FILE",
         help="Progress file path (default: /tmp/context-intelligence-upload-{job_id}.json)",
     )
+    parser.add_argument(
+        "--event-delay-ms",
+        type=int,
+        default=0,
+        metavar="MS",
+        dest="event_delay_ms",
+        help="Milliseconds to sleep between events (default: 0; use 50-200 to reduce Neo4j pressure)",
+    )
 
     return parser
 
@@ -369,6 +388,7 @@ def main() -> None:
         server_url=args.server_url,
         api_key=args.api_key,
         tracker=tracker,
+        event_delay_s=args.event_delay_ms / 1000.0,
     )
 
     # 7. Write result JSON to stdout
