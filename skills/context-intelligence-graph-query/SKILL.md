@@ -1,6 +1,6 @@
 ---
 name: context-intelligence-graph-query
-version: 1.0.0
+version: 2.0.0
 description: Cypher query patterns for the context-intelligence graph store via graph_query tool
 license: MIT
 ---

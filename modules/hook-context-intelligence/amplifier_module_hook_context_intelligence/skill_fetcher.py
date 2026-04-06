@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import logging
 from pathlib import Path
 from typing import NamedTuple
@@ -16,6 +17,10 @@ WATCHED_SKILLS: frozenset[str] = frozenset({"context-intelligence-graph-query"})
 # tool-skills populates this with a SkillsDiscovery object that exposes
 # .find(skill_name) -> SkillMetadata with the absolute filesystem path for each skill.
 TOOL_SKILLS_DISCOVERY_CAPABILITY: str = "skills_discovery"
+
+# Sidecar filenames stored alongside SKILL.md
+_ETAG_FILENAME: str = ".etag"
+_CONTENT_HASH_FILENAME: str = ".content_hash"
 
 
 class VersionCheckResult(NamedTuple):
@@ -45,8 +50,25 @@ def _is_skills_capable(version: str | None) -> bool:
     return parsed >= _MIN_SKILLS_VERSION
 
 
+def _sha256(path: Path) -> str:
+    """Return the hex SHA-256 digest of *path*'s content."""
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
 class SkillFetcher:
-    """Fetches skill files from a remote server with conditional GET (ETag)."""
+    """Fetches skill files from a remote server with conditional GET (ETag).
+
+    Drift detection
+    ---------------
+    tool-skills loads skills from git at mount time, potentially overwriting a
+    SKILL.md that was previously fetched from the server.  To avoid the fetcher
+    incorrectly trusting a stale ETag after such an external write, a
+    ``.content_hash`` sidecar (SHA-256 of the last server-written content) is
+    stored alongside the ``.etag`` sidecar.  Before sending ``If-None-Match``,
+    the fetcher verifies that the local file's hash still matches the stored
+    hash.  A mismatch means the file drifted (git, manual edit, etc.) and an
+    unconditional GET is performed instead.
+    """
 
     def __init__(self, server_url: str, timeout: float = 3.0) -> None:
         self._server_url = server_url.rstrip("/")
@@ -93,7 +115,9 @@ class SkillFetcher:
         Reads the corresponding .md file from the ``legacy_content`` package
         directory and writes it to *skill_path*.  Any existing ``.etag`` sidecar
         alongside *skill_path* is removed so the next session performs an
-        unconditional GET once the server is upgraded.
+        unconditional GET once the server is upgraded.  The ``.content_hash``
+        sidecar is updated to reflect what was written so drift detection
+        remains accurate.
 
         Raises
         ------
@@ -108,9 +132,14 @@ class SkillFetcher:
         content = legacy_path.read_text(encoding="utf-8")
         skill_path.write_text(content, encoding="utf-8")
 
-        etag_path = skill_path.parent / ".etag"
+        etag_path = skill_path.parent / _ETAG_FILENAME
         if etag_path.exists():
             etag_path.unlink()
+
+        # Keep .content_hash in sync with what was written so the next
+        # fetch() can detect if git later overwrites the file again.
+        content_hash_path = skill_path.parent / _CONTENT_HASH_FILENAME
+        content_hash_path.write_text(_sha256(skill_path))
 
         logger.debug("legacy_skill_written: skill=%s [DEPRECATED]", skill_name)
 
@@ -118,21 +147,56 @@ class SkillFetcher:
         """Fetch a skill file from the server.
 
         Performs a conditional HTTP GET using If-None-Match when an ETag sidecar
-        exists alongside *skill_path*.
+        exists alongside *skill_path* **and** the local file's SHA-256 still
+        matches the stored ``.content_hash`` sidecar.  A mismatch between the
+        local file and the stored hash means the file was modified externally
+        (e.g. tool-skills loaded a newer version from git) — in that case the
+        ETag is stale relative to the local state and an unconditional GET is
+        performed to re-align the local file with the server.
 
         Returns
         -------
-        True  — 200 received; *skill_path* and the .etag sidecar were updated.
+        True  — 200 received; *skill_path*, ``.etag``, and ``.content_hash``
+                sidecars were all updated.
         False — 304 (not modified), connection/timeout error, or unexpected status.
         """
         url = f"{self._server_url}/skills/{skill_name}"
-        etag_path = skill_path.parent / ".etag"
+        etag_path = skill_path.parent / _ETAG_FILENAME
+        content_hash_path = skill_path.parent / _CONTENT_HASH_FILENAME
 
         headers: dict[str, str] = {}
         if etag_path.exists():
             stored_etag = etag_path.read_text().strip()
             if stored_etag:
-                headers["If-None-Match"] = stored_etag
+                if skill_path.exists() and content_hash_path.exists():
+                    stored_hash = content_hash_path.read_text().strip()
+                    current_hash = _sha256(skill_path)
+                    if current_hash == stored_hash:
+                        # Local file unchanged since last server fetch — safe to
+                        # use the cached ETag for a conditional GET.
+                        headers["If-None-Match"] = stored_etag
+                    else:
+                        # Local file drifted (e.g. git overwrote it).  The stored
+                        # ETag no longer corresponds to local content; skip it to
+                        # force an unconditional GET and re-align with the server.
+                        logger.info(
+                            "skill_local_drift: %s — local content modified externally "
+                            "(stored hash %s… → current %s…); "
+                            "skipping If-None-Match for unconditional GET",
+                            skill_name,
+                            stored_hash[:8],
+                            current_hash[:8],
+                        )
+                else:
+                    # No content_hash sidecar yet (first run after upgrade, or
+                    # legacy session).  We cannot verify whether the local file
+                    # still matches the server's ETag, so skip If-None-Match and
+                    # let the server decide authoritatively.
+                    logger.debug(
+                        "skill_hash_missing: %s — no .content_hash sidecar; "
+                        "skipping If-None-Match for unconditional GET",
+                        skill_name,
+                    )
 
         try:
             async with httpx.AsyncClient() as client:
@@ -146,6 +210,9 @@ class SkillFetcher:
             etag = response.headers.get("etag", "")
             if etag:
                 etag_path.write_text(etag)
+            # Record the hash of exactly what we wrote so drift detection works
+            # on the next session start.
+            content_hash_path.write_text(_sha256(skill_path))
             return True
 
         if response.status_code == 304:
