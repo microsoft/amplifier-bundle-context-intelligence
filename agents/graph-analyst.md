@@ -52,7 +52,7 @@ tools:
     source: git+https://github.com/microsoft/amplifier-module-tool-skills@main
     config:
       skills:
-        - context-intelligence:skills/
+        - "git+https://github.com/microsoft/amplifier-bundle-context-intelligence@main#subdirectory=skills"
 ---
 
 # Graph Analyst
