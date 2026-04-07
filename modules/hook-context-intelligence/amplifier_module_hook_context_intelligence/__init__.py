@@ -116,6 +116,7 @@ async def _refresh_watched_skills(
             try:
                 await fetcher.fetch(skill_name, skill_path)
             except Exception as exc:
+                # Swallow per-skill failures — one bad skill must not block others
                 log.warning("skill_fetch_failed: %s — %s", skill_name, exc)
 
 
@@ -228,7 +229,7 @@ async def mount(
     if fetcher is not None:
 
         async def on_skill_unloaded(event_name: str, data: dict[str, Any]) -> None:
-            import asyncio
+            import asyncio  # Kept local: top-level import removed per task-03 spec
 
             skill_name = data.get("skill_name")
             if skill_name not in WATCHED_SKILLS:
