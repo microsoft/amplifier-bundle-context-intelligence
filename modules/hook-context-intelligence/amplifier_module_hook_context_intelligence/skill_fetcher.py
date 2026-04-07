@@ -7,8 +7,6 @@ import logging
 from pathlib import Path
 from typing import NamedTuple
 
-import httpx
-
 logger = logging.getLogger(__name__)
 
 WATCHED_SKILLS: frozenset[str] = frozenset({"context-intelligence-graph-query"})
@@ -85,6 +83,8 @@ class SkillFetcher:
         VersionCheckResult with reachable=False, version=None on any other status.
         Never raises — all exceptions are caught.
         """
+        import httpx  # noqa: PLC0415 — lazy import to avoid loading httpx at module init time
+
         url = f"{self._server_url}/version"
         try:
             # Single GET — no context manager needed; httpx cleans up via __del__.
@@ -160,6 +160,8 @@ class SkillFetcher:
                 sidecars were all updated.
         False — 304 (not modified), connection/timeout error, or unexpected status.
         """
+        import httpx  # noqa: PLC0415 — lazy import to avoid loading httpx at module init time
+
         url = f"{self._server_url}/skills/{skill_name}"
         etag_path = skill_path.parent / _ETAG_FILENAME
         content_hash_path = skill_path.parent / _CONTENT_HASH_FILENAME
