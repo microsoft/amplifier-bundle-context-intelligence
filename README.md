@@ -369,7 +369,7 @@ print('YAML validates OK')
 
 ## Testing locally with Digital Twin Universe
 
-The `profiles/context-intelligence-bundle-test.yaml` DTU profile lets you test the bundle end-to-end in an isolated environment — including the Neo4j graph store and context-intelligence server — **without pushing changes to GitHub origin**. It uses a local Gitea mirror to serve bundle changes to the DTU container via git URL rewriting.
+The `.amplifier/digital_twin_profiles/context-intelligence-bundle-test.yaml` DTU profile (in the workspace root) lets you test the bundle end-to-end in an isolated environment — including the Neo4j graph store and context-intelligence server — **without pushing changes to GitHub origin**. It uses a local Gitea mirror to serve bundle changes to the DTU container via git URL rewriting.
 
 ### Required tools
 
@@ -411,7 +411,7 @@ GITEA_TOKEN=$(amplifier-gitea token <id> | jq -r .token)
 
 ```bash
 GH_TOKEN=$(gh auth token) amplifier-digital-twin launch \
-  profiles/context-intelligence-bundle-test.yaml \
+  .amplifier/digital_twin_profiles/context-intelligence-bundle-test.yaml \
   --var GITEA_URL=$GITEA_URL \
   --var GITEA_TOKEN=$GITEA_TOKEN
 ```
