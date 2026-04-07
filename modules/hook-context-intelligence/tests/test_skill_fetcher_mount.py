@@ -41,6 +41,35 @@ def _make_coordinator(server_url: str | None, skill_path: Path | None) -> MagicM
     return coordinator
 
 
+def _capture_hooks_register() -> tuple[MagicMock, list[tuple[str, object, dict]]]:
+    """Create a hooks.register mock that records all calls.
+
+    Returns (mock, calls) where calls is a list of (event, handler, kwargs) tuples.
+    """
+    calls: list[tuple[str, object, dict]] = []
+
+    def _side_effect(event: str, handler: object, **kwargs: object) -> MagicMock:
+        calls.append((event, handler, dict(kwargs)))
+        return MagicMock()
+
+    mock = MagicMock(side_effect=_side_effect)
+    return mock, calls
+
+
+def _find_handler(calls: list[tuple[str, object, dict]], event: str, name: str) -> object:
+    """Find a registered handler by event name and handler name (from kwargs).
+
+    Asserts exactly 1 match found.
+    """
+    matches = [
+        handler for evt, handler, kwargs in calls if evt == event and kwargs.get("name") == name
+    ]
+    assert len(matches) == 1, (
+        f"Expected 1 handler for event={event!r} name={name!r}, found {len(matches)}."
+    )
+    return matches[0]
+
+
 class TestMountSkillFetchHappyPath:
     """mount() fetches watched skills when server_url is available and SKILL.md exists."""
 
@@ -490,3 +519,99 @@ class TestMountThreeWayBranch:
             "context-intelligence-graph-query", skill_path
         )
         mock_fetcher_instance.write_legacy_content.assert_not_called()
+
+
+class TestSkillsDiscoveredHandler:
+    """mount() registers skills:discovered handler that triggers refresh on new server."""
+
+    async def test_skills_discovered_triggers_refresh(self, tmp_path: Path) -> None:
+        """skills:discovered handler calls fetch once for the watched skill.
+
+        The handler should be registered during mount() and trigger a fetch
+        when fired — fetch must NOT be called during mount itself.
+        """
+        from amplifier_module_hook_context_intelligence import mount
+        from amplifier_module_hook_context_intelligence.skill_fetcher import VersionCheckResult
+
+        # Place skill_path at a non-standard location (no skills/ prefix) so that
+        # _BUNDLE_ROOT / "skills" / skill_name / "SKILL.md" won't resolve it during
+        # mount — only skills_discovery capability returns this path.
+        skill_path = tmp_path / "context-intelligence-graph-query" / "SKILL.md"
+        skill_path.parent.mkdir(parents=True)
+        skill_path.write_text("# test")
+
+        coordinator = _make_coordinator(
+            server_url="http://localhost:8000",
+            skill_path=skill_path,
+        )
+
+        mock_register, calls = _capture_hooks_register()
+        coordinator.hooks.register = mock_register
+
+        mock_fetcher_instance = MagicMock()
+        mock_fetcher_instance.check_server_version = AsyncMock(
+            return_value=VersionCheckResult(reachable=True, version="2.0.0")
+        )
+        mock_fetcher_instance.fetch = AsyncMock(return_value=True)
+        mock_fetcher_cls = MagicMock(return_value=mock_fetcher_instance)
+
+        with (
+            patch("amplifier_module_hook_context_intelligence._BUNDLE_ROOT", tmp_path),
+            patch(
+                "amplifier_module_hook_context_intelligence.skill_fetcher.SkillFetcher",
+                mock_fetcher_cls,
+            ),
+        ):
+            await mount(
+                coordinator,
+                config={"context_intelligence_server_url": "http://localhost:8000"},
+            )
+
+        # fetch must NOT be called during mount — deferred to the skills:discovered handler
+        mock_fetcher_instance.fetch.assert_not_called()
+
+        # Find the skills:discovered handler and fire it
+        handler = _find_handler(calls, "skills:discovered", "SkillFetcher-trigger")
+        await handler("skills:discovered", {})  # type: ignore[operator]
+
+        # After the handler fires, fetch should have been called exactly once
+        mock_fetcher_instance.fetch.assert_called_once_with(
+            "context-intelligence-graph-query", skill_path
+        )
+
+    async def test_no_handler_when_server_unreachable(self) -> None:
+        """No skills:discovered SkillFetcher-trigger handler when server is unreachable."""
+        from amplifier_module_hook_context_intelligence import mount
+        from amplifier_module_hook_context_intelligence.skill_fetcher import VersionCheckResult
+
+        coordinator = _make_coordinator(server_url="http://localhost:8000", skill_path=None)
+
+        mock_register, calls = _capture_hooks_register()
+        coordinator.hooks.register = mock_register
+
+        mock_fetcher_instance = MagicMock()
+        mock_fetcher_instance.check_server_version = AsyncMock(
+            return_value=VersionCheckResult(reachable=False, version=None)
+        )
+        mock_fetcher_cls = MagicMock(return_value=mock_fetcher_instance)
+
+        with patch(
+            "amplifier_module_hook_context_intelligence.skill_fetcher.SkillFetcher",
+            mock_fetcher_cls,
+        ):
+            await mount(
+                coordinator,
+                config={"context_intelligence_server_url": "http://localhost:8000"},
+            )
+
+        # No SkillFetcher-trigger handler should be registered for skills:discovered
+        # when the server is unreachable (Branch A)
+        trigger_handlers = [
+            (evt, hdlr, kw)
+            for evt, hdlr, kw in calls
+            if evt == "skills:discovered" and kw.get("name") == "SkillFetcher-trigger"
+        ]
+        assert len(trigger_handlers) == 0, (
+            "skills:discovered SkillFetcher-trigger handler was registered even though "
+            "server is unreachable"
+        )
