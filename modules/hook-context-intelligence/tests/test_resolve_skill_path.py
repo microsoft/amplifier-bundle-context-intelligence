@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 
 class TestResolveSkillPath:
@@ -61,3 +61,80 @@ class TestResolveSkillPath:
             result = _resolve_skill_path("context-intelligence-graph-query", coordinator)
 
         assert result is None
+
+
+class TestRefreshWatchedSkills:
+    """_refresh_watched_skills routes to write_legacy_content or fetch based on skills_capable."""
+
+    async def test_branch_b_legacy(self, tmp_path: Path) -> None:
+        """Branch B: skills_capable=False calls write_legacy_content, not fetch."""
+        from amplifier_module_hook_context_intelligence import _refresh_watched_skills  # type: ignore[attr-defined]
+
+        skill_path = tmp_path / "context-intelligence-graph-query" / "SKILL.md"
+
+        # Build coordinator mock with skills_discovery capability returning metadata with skill_path
+        metadata = MagicMock()
+        metadata.path = skill_path
+        discovery = MagicMock()
+        discovery.find = MagicMock(return_value=metadata)
+
+        coordinator = MagicMock()
+        coordinator.get_capability = MagicMock(return_value=discovery)
+
+        # Build fetcher mock
+        fetcher = MagicMock()
+        fetcher.fetch = AsyncMock()
+
+        await _refresh_watched_skills(coordinator, fetcher, skills_capable=False)
+
+        fetcher.write_legacy_content.assert_called_once_with(
+            "context-intelligence-graph-query", skill_path
+        )
+        fetcher.fetch.assert_not_called()
+
+    async def test_branch_c_fetch(self, tmp_path: Path) -> None:
+        """Branch C: skills_capable=True calls fetch, not write_legacy_content."""
+        from amplifier_module_hook_context_intelligence import _refresh_watched_skills  # type: ignore[attr-defined]
+
+        skill_path = tmp_path / "context-intelligence-graph-query" / "SKILL.md"
+
+        # Build coordinator mock with skills_discovery capability returning metadata with skill_path
+        metadata = MagicMock()
+        metadata.path = skill_path
+        discovery = MagicMock()
+        discovery.find = MagicMock(return_value=metadata)
+
+        coordinator = MagicMock()
+        coordinator.get_capability = MagicMock(return_value=discovery)
+
+        # Build fetcher mock — fetch returns True via AsyncMock
+        fetcher = MagicMock()
+        fetcher.fetch = AsyncMock(return_value=True)
+
+        await _refresh_watched_skills(coordinator, fetcher, skills_capable=True)
+
+        fetcher.fetch.assert_called_once_with(
+            "context-intelligence-graph-query", skill_path
+        )
+        fetcher.write_legacy_content.assert_not_called()
+
+    async def test_skips_when_path_none(self, tmp_path: Path) -> None:
+        """When skill_path resolves to None, neither fetch nor write_legacy_content is called."""
+        import amplifier_module_hook_context_intelligence as mod
+        from amplifier_module_hook_context_intelligence import _refresh_watched_skills  # type: ignore[attr-defined]
+
+        # skills_discovery not available (get_capability returns None)
+        coordinator = MagicMock()
+        coordinator.get_capability = MagicMock(return_value=None)
+
+        # Build fetcher mock
+        fetcher = MagicMock()
+        fetcher.fetch = AsyncMock()
+
+        nonexistent = tmp_path / "does_not_exist"
+
+        with patch.object(mod, "_BUNDLE_ROOT", nonexistent):
+            await _refresh_watched_skills(coordinator, fetcher, skills_capable=True)
+
+        fetcher.fetch.assert_not_called()
+        fetcher.write_legacy_content.assert_not_called()
