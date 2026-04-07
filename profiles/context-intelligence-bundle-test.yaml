@@ -1,0 +1,549 @@
+# context-intelligence-bundle-test.yaml
+#
+# Digital Twin Universe profile for integration-testing the
+# amplifier-bundle-context-intelligence bundle.
+#
+# WHAT IT PROVISIONS
+# ─────────────────────────────────────────────────────────────────────────────
+#   • Neo4j 5.26.22-community (graph store) — Docker container (port 7687/7474)
+#   • context-intelligence server (FastAPI + Gunicorn) — Python process built
+#     directly from the LOCAL workspace submodule via pypi_overrides
+#   • Amplifier CLI with the context-intelligence bundle loaded and wired to
+#     the local server instance (fixed test credentials — not production secrets)
+#
+# BUNDLE CONFIGURATION WIRING
+# ─────────────────────────────────────────────────────────────────────────────
+#   The bundle's behaviors/context-intelligence.yaml hook config is:
+#     context_intelligence_server_url: "${AMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_URL:}"
+#     context_intelligence_api_key:    "${AMPLIFIER_CONTEXT_INTELLIGENCE_API_KEY:}"
+#     workspace:                       "${AMPLIFIER_CONTEXT_INTELLIGENCE_WORKSPACE:}"
+#
+#   These env vars are written to /etc/profile.d/ci-test.sh during provisioning
+#   so every login shell — including `amplifier` sessions — picks them up.
+#   The fixed test values are:
+#     AMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_URL = http://localhost:8000
+#     AMPLIFIER_CONTEXT_INTELLIGENCE_API_KEY    = ci-test-token-abc123
+#
+#   AMPLIFIER_CONTEXT_INTELLIGENCE_WORKSPACE is intentionally NOT set here —
+#   the Amplifier CLI resolves it automatically from the working directory slug.
+#
+# PREREQUISITES ON THE HOST
+# ─────────────────────────────────────────────────────────────────────────────
+#   • amplifier-digital-twin installed:
+#     uv tool install git+https://github.com/microsoft/amplifier-bundle-digital-twin-universe@main
+#   • Incus installed and running; user in the incus-admin group
+#   • Docker on the host with ip-forward-no-drop=true (prevents iptables/Incus
+#     networking conflicts on WSL2/bare-metal):
+#     echo '{"ip-forward-no-drop": true}' | sudo tee /etc/docker/daemon.json
+#   • python3 -m build available on the host (pip install build)
+#   • ANTHROPIC_API_KEY set in the host shell
+#
+# REQUIRED VARIABLE
+# ─────────────────────────────────────────────────────────────────────────────
+#   CI_SERVER_REPO  Path to the local amplifier-context-intelligence git repo.
+#                   Must be a file:// URL pointing at the submodule root.
+#                   The wheel is built on the HOST from the latest committed
+#                   state of this repo, then installed inside the container.
+#                   (If you have uncommitted changes, commit them first.)
+#
+# LAUNCH
+# ─────────────────────────────────────────────────────────────────────────────
+#   amplifier-digital-twin launch \
+#     amplifier-bundle-context-intelligence/profiles/context-intelligence-bundle-test.yaml \
+#     --var CI_SERVER_REPO=file:///home/<user>/workspace/amplifier-context-intelligence-dynamic-skill/amplifier-context-intelligence
+#
+# CHECK READINESS
+# ─────────────────────────────────────────────────────────────────────────────
+#   amplifier-digital-twin check-readiness <id>
+#
+# ACCESS POINTS (once provisioned)
+# ─────────────────────────────────────────────────────────────────────────────
+#   http://localhost:8100/status        CI server health
+#   http://localhost:8100/version       CI server version + schema
+#   http://localhost:8100/dashboard     CI server web UI
+#   http://localhost:7500/browser/      Neo4j browser UI
+#
+# RUNNING A TEST SESSION (exec into the environment)
+# ─────────────────────────────────────────────────────────────────────────────
+#   incus exec <container-name> -- bash -l
+#   cd /workspace && amplifier
+#   # Bundle env vars are pre-set; the hook will capture events and forward
+#   # them to the local CI server at http://localhost:8000.
+#
+# ITERATING ON LOCAL CHANGES
+# ─────────────────────────────────────────────────────────────────────────────
+#   After committing changes to the server submodule:
+#   amplifier-digital-twin update <id> --var CI_SERVER_REPO=file:///...
+#   (update.refresh_pypi=true rebuilds the wheel and reinstalls automatically)
+#
+# ─────────────────────────────────────────────────────────────────────────────
+# TESTING LOCAL BUNDLE MODULE CHANGES (optional)
+# ─────────────────────────────────────────────────────────────────────────────
+#   Uncomment the additional entries in pypi_overrides below and pass:
+#   --var BUNDLE_REPO=file:///path/to/amplifier-bundle-context-intelligence
+#
+#   This installs the 4 Python modules (hook, tool-graph-query, tool-blob-read,
+#   tool-context-intelligence-upload) from your local workspace instead of
+#   the published GitHub bundle.
+#
+#   Note: changes to bundle.md, agents/, context/, behaviors/ still require
+#   a Gitea mirror + url_rewrites (see amplifier-user-sim.yaml for that pattern).
+# ─────────────────────────────────────────────────────────────────────────────
+
+name: context-intelligence-bundle-test
+description: >
+  Integration test environment for amplifier-bundle-context-intelligence.
+  Builds the context-intelligence server from local source (via pypi_overrides),
+  runs Neo4j inside Docker (nested in Incus), and provisions Amplifier with the
+  bundle loaded and wired to the local server instance.
+
+# Docker nesting required for the Neo4j container.
+base:
+  image: ubuntu:24.04
+  config:
+    security.nesting: "true"
+
+# Forward LLM provider keys so Amplifier sessions can make real API calls.
+passthrough:
+  allow_external: true
+  services:
+    - name: anthropic
+      key_env: ANTHROPIC_API_KEY
+    - name: google
+      key_env: GOOGLE_API_KEY
+    # Required: forward the GitHub token so git can clone the private bundle repo.
+    # Set before launching: export GH_TOKEN=$(gh auth token)
+    - name: github
+      key_env: GH_TOKEN
+
+# Host-side port forwarding for interactive access.
+access:
+  ports:
+    - host: 8100
+      container: 8000
+      label: CI Server API
+      path: /status
+    - host: 7500
+      container: 7474
+      label: Neo4j Browser
+      path: /browser/
+
+# ── Server source ─────────────────────────────────────────────────────────────
+# The CI server is installed directly from GitHub in setup_cmds step 7 using
+# pip3 install git+https://... — no pypi_overrides / pypiserver needed.
+# The HEAD commit of the server submodule is on origin/main, so @main always
+# gives the latest committed code.
+#
+# To test uncommitted local changes: commit them, push, and the next launch
+# picks them up automatically (or pin a specific commit SHA with @<sha>).
+
+provision:
+  setup_cmds:
+
+    # ── 1. System packages ────────────────────────────────────────────────────
+    - apt-get update -qq && apt-get install -y --no-install-recommends
+        git curl ca-certificates gnupg lsb-release python3 python3-pip
+
+    # ── 2. uv (Python + tool manager for Amplifier) ───────────────────────────
+    - curl -LsSf https://astral.sh/uv/install.sh | sh
+
+    # ── 3. Persistent PATH + bundle env vars ──────────────────────────────────
+    # Written early so ALL subsequent `bash -lc` commands (and all interactive
+    # sessions in the container) pick them up automatically.
+    #
+    # The bundle's hook config resolves:
+    #   context_intelligence_server_url -> ${AMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_URL:}
+    #   context_intelligence_api_key    -> ${AMPLIFIER_CONTEXT_INTELLIGENCE_API_KEY:}
+    #   workspace                       -> ${AMPLIFIER_CONTEXT_INTELLIGENCE_WORKSPACE:}
+    # These must be present in the environment when `amplifier` starts a session.
+    - |
+      cat > /etc/profile.d/ci-test.sh << 'PROFILE_EOF'
+      export PATH="/root/.local/bin:$PATH"
+
+      # ── Context-intelligence bundle wiring ───────────────────────────────
+      # Fixed test values — not production secrets.
+      # WORKSPACE is intentionally omitted: Amplifier resolves it automatically
+      # from the working directory slug when a session starts.
+      export AMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_URL="http://localhost:8000"
+      export AMPLIFIER_CONTEXT_INTELLIGENCE_API_KEY="ci-test-token-abc123"
+
+      # ── CI server config file location ────────────────────────────────────
+      export AMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_CONFIG_FILE="/data/server-config.yaml"
+      PROFILE_EOF
+      chmod +x /etc/profile.d/ci-test.sh
+
+    # ── 4. Docker Engine (for Neo4j only) ─────────────────────────────────────
+    - |
+      install -m 0755 -d /etc/apt/keyrings
+      curl -fsSL https://download.docker.com/linux/ubuntu/gpg \
+        | gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+      chmod a+r /etc/apt/keyrings/docker.gpg
+      echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] \
+        https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" \
+        | tee /etc/apt/sources.list.d/docker.list > /dev/null
+      apt-get update -qq
+      apt-get install -y docker-ce docker-ce-cli containerd.io
+
+    # Start dockerd manually — no systemd inside Incus containers.
+    - |
+      nohup dockerd > /var/log/dockerd.log 2>&1 &
+      timeout 30 sh -c 'until docker info > /dev/null 2>&1; do sleep 1; done'
+      echo "Docker daemon ready: $(docker --version)"
+
+    # ── 5. Storage directories + server config file ───────────────────────────
+    # Uses a YAML config file so the server reads everything from one place.
+    # Values mirror the env vars set in /etc/profile.d/ci-test.sh.
+    - |
+      mkdir -p /data/neo4j /data/blobs /data/logs
+      cat > /data/server-config.yaml << 'CONFIG_EOF'
+      neo4j_url: "bolt://localhost:7687"
+      neo4j_user: "neo4j"
+      neo4j_password: "neo4j-test-pass-xyz"
+      api_key: "ci-test-token-abc123"
+      blob_path: "/data/blobs"
+      log_path: "/data/logs/server.jsonl"
+      server_host: "0.0.0.0"
+      server_port: 8000
+      log_level: "INFO"
+      CONFIG_EOF
+      chmod 600 /data/server-config.yaml
+      echo "Server config written to /data/server-config.yaml"
+
+    # ── 6. Neo4j (Docker container) ───────────────────────────────────────────
+    # Using bolt:// (not neo4j://) — community edition single-node requires bolt.
+    # Neo4j 5.x takes 60–120 s to initialise its graph store on first launch.
+    - |
+      docker run -d --name neo4j \
+        -e NEO4J_AUTH="neo4j/neo4j-test-pass-xyz" \
+        -p 7474:7474 -p 7687:7687 \
+        -v /data/neo4j:/data \
+        neo4j:5.26.22-community
+      echo "Neo4j container started — waiting for HTTP on :7474 (up to 150 s)..."
+      timeout 150 sh -c 'until curl -sf http://localhost:7474 > /dev/null 2>&1; do sleep 3; done'
+      echo "Neo4j ready"
+
+    # ── 7. Context-intelligence server (from GitHub main) ─────────────────────
+    # Uses uv tool install (not pip3) to avoid PEP 668 "externally managed
+    # environment" failures on Ubuntu 24.04. uv creates an isolated venv
+    # and installs the server CLI + all dependencies cleanly.
+    # The script lands at ~/.local/bin/context-intelligence-server, which is
+    # already in PATH via /etc/profile.d/ci-test.sh written in step 3.
+    - |
+      uv tool install \
+        "git+https://github.com/microsoft/amplifier-context-intelligence.git@main"
+      echo "Installed: $(uv tool list | grep context-intelligence)"
+
+    # Start the server using its CLI entry point (calls gunicorn internally).
+    # The config file path is set in /etc/profile.d/ci-test.sh so it's in env.
+    - |
+      export AMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_CONFIG_FILE="/data/server-config.yaml"
+      nohup /root/.local/bin/context-intelligence-server > /var/log/ci-server.log 2>&1 &
+      echo $! > /var/run/ci-server.pid
+      echo "CI server starting (PID $(cat /var/run/ci-server.pid)) — waiting for /status (up to 60 s)..."
+      timeout 60 sh -c 'until curl -sf http://localhost:8000/status > /dev/null 2>&1; do sleep 2; done'
+      echo "CI server ready: $(curl -s http://localhost:8000/status)"
+
+    # ── 8. Amplifier CLI ──────────────────────────────────────────────────────
+    - uv tool install git+https://github.com/microsoft/amplifier
+
+    # Configure the Anthropic provider.
+    # ANTHROPIC_API_KEY is substituted from the passthrough-forwarded env var
+    # (heredoc uses unquoted EOF so the variable is expanded at write time).
+    - |
+      mkdir -p /root/.amplifier
+      cat > /root/.amplifier/settings.yaml << EOF
+      config:
+        providers:
+          - module: provider-anthropic
+            source: git+https://github.com/microsoft/amplifier-module-provider-anthropic@main
+            config:
+              api_key: $ANTHROPIC_API_KEY
+      EOF
+
+    # Configure git to authenticate with GitHub using the forwarded token.
+    # Required because amplifier-bundle-context-intelligence is a private repo.
+    - |
+      if [ -n "${GH_TOKEN:-}" ]; then
+        git config --global \
+          url."https://x-access-token:${GH_TOKEN}@github.com/".insteadOf \
+          "https://github.com/"
+        echo "Git GitHub auth configured via GH_TOKEN"
+      else
+        echo "WARN: GH_TOKEN not set — bundle add may fail for private GitHub repos"
+      fi
+
+    # Add the context-intelligence bundle and make it the active bundle.
+    # The bundle's hook reads AMPLIFIER_CONTEXT_INTELLIGENCE_* env vars
+    # (set in /etc/profile.d/ci-test.sh) when each Amplifier session starts.
+    - |
+      amplifier bundle add git+https://github.com/microsoft/amplifier-bundle-context-intelligence@main
+      amplifier bundle use context-intelligence
+
+    # ── 9. Test workspace ─────────────────────────────────────────────────────
+    - mkdir -p /workspace
+    - |
+      cat > /workspace/README.md << 'EOF'
+      # Context Intelligence Bundle — Test Workspace
+
+      This environment tests amplifier-bundle-context-intelligence against a
+      local context-intelligence server + Neo4j instance.
+
+      ## Bundle configuration (pre-wired)
+        AMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_URL = http://localhost:8000
+        AMPLIFIER_CONTEXT_INTELLIGENCE_API_KEY    = ci-test-token-abc123
+        AMPLIFIER_CONTEXT_INTELLIGENCE_WORKSPACE  → auto-resolved by Amplifier CLI
+
+      ## Run a test session
+        cd /workspace && amplifier
+        # The hook will capture events and forward them to localhost:8000
+
+      ## Verify event forwarding (after a session)
+        ls ~/.amplifier/projects/*/sessions/*/context-intelligence/events.jsonl
+        curl http://localhost:8000/status
+
+      ## Test the full SkillFetcher flow
+        bash /workspace/test-skill-fetch.sh
+
+      ## Tail the CI server log
+        tail -f /var/log/ci-server.log
+
+      ## Neo4j browser
+        http://localhost:7500/browser/  (from host)
+        Credentials: neo4j / neo4j-test-pass-xyz
+      EOF
+
+    # ── 10. Smoke test ────────────────────────────────────────────────────────
+    - |
+      echo ""
+      echo "══════════════════════════════════════════════════════════"
+      echo " Context Intelligence Bundle — Provisioning Report"
+      echo "══════════════════════════════════════════════════════════"
+      echo ""
+      echo "Amplifier:"
+      amplifier --version
+      echo ""
+      echo "Active bundle:"
+      amplifier bundle current 2>/dev/null || echo "(use 'amplifier bundle current' to verify)"
+      echo ""
+      echo "Server version + connection:"
+      curl -s http://localhost:8000/status \
+        | python3 -c "
+      import sys, json
+      d = json.load(sys.stdin)
+      print(f'  status          = {d[\"status\"]}')
+      print(f'  neo4j_connected = {d[\"neo4j_connected\"]}')
+      print(f'  version         = {d.get(\"version\", \"<unknown>\")}')
+      "
+      echo ""
+      echo "Neo4j HTTP on :7474: $(curl -sf http://localhost:7474 > /dev/null && echo OK || echo FAIL)"
+      echo ""
+      echo "Skill fetch endpoint:"
+      SKILL_BYTES=$(curl -sf http://localhost:8000/skills/context-intelligence-graph-query | wc -c)
+      echo "  /skills/context-intelligence-graph-query → ${SKILL_BYTES} bytes"
+      echo ""
+      echo "Bundle env vars (set in /etc/profile.d/ci-test.sh):"
+      echo "  AMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_URL = http://localhost:8000"
+      echo "  AMPLIFIER_CONTEXT_INTELLIGENCE_API_KEY    = ci-test-token-abc123"
+      echo "  AMPLIFIER_CONTEXT_INTELLIGENCE_WORKSPACE  = (auto-resolved by Amplifier from cwd)"
+      echo ""
+      echo "Host access:"
+      echo "  http://localhost:8100/status     CI server"
+      echo "  http://localhost:7500/browser/   Neo4j browser"
+      echo ""
+      echo "To start a test session:"
+      echo "  incus exec <container> -- bash -l"
+      echo "  cd /workspace && amplifier"
+      echo "══════════════════════════════════════════════════════════"
+
+    # ── 11. Write skill-fetch test script ─────────────────────────────────────
+    # Dropped into /workspace so it can be run after the DTU is up.
+    # Tests the complete SkillFetcher lifecycle:
+    #   Phase 1 — server exposes skill at the correct endpoint (no session needed)
+    #   Phase 2 — starting a session triggers hook mount → SkillFetcher → cache populated
+    #   Phase 3 — cached file matches server content and ETag sidecar confirms the fetch
+    - |
+      cat > /workspace/test-skill-fetch.sh << 'SCRIPT_EOF'
+      #!/usr/bin/env bash
+      # test-skill-fetch.sh
+      # Verifies the complete SkillFetcher lifecycle end-to-end.
+      #
+      # Usage (from inside the DTU container):
+      #   cd /workspace && bash test-skill-fetch.sh
+
+      # Source env vars written during provisioning.
+      # Required when the script is exec'd via amplifier-digital-twin (no login shell).
+      # shellcheck disable=SC1091
+      source /etc/profile.d/ci-test.sh 2>/dev/null || true
+
+      set -uo pipefail
+
+      SKILL_NAME="context-intelligence-graph-query"
+      SERVER_URL="http://localhost:8000"
+      PASS=0
+      FAIL=0
+      WARN=0
+
+      ok()   { echo "  PASS  $1"; PASS=$((PASS + 1)); }
+      fail() { echo "  FAIL  $1"; FAIL=$((FAIL + 1)); }
+      warn() { echo "  WARN  $1"; WARN=$((WARN + 1)); }
+      section() { echo ""; echo "── $1"; echo "   $(printf '%.0s─' $(seq 1 60))"; }
+
+      # ──────────────────────────────────────────────────────────────────────
+      section "Phase 1: Server skill endpoint (no session needed)"
+      # ──────────────────────────────────────────────────────────────────────
+
+      # Server version must be >= 2.0.0 for SkillFetcher to use live content.
+      VERSION=$(curl -sf "$SERVER_URL/version" \
+        | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('version','0.0.0'))" \
+        2>/dev/null || echo "0.0.0")
+      MAJOR=$(echo "$VERSION" | cut -d. -f1)
+      echo "  Server version: $VERSION"
+      if [ "$MAJOR" -ge 2 ]; then
+        ok "Version >= 2.0.0 — SkillFetcher will fetch live skill content"
+      else
+        fail "Version $VERSION < 2.0.0 — SkillFetcher falls back to bundled placeholder"
+      fi
+
+      # The /skills/* endpoints are auth-exempt by server design.
+      # This is the same GET the SkillFetcher issues at hook mount time.
+      SKILL_FROM_SERVER=$(curl -sf "$SERVER_URL/skills/$SKILL_NAME" 2>/dev/null || echo "")
+      SERVER_LEN=${#SKILL_FROM_SERVER}
+      echo "  /skills/$SKILL_NAME → $SERVER_LEN bytes"
+
+      if [ "$SERVER_LEN" -lt 50 ]; then
+        fail "Server returned no/empty skill content"
+        echo "       → check: curl -v $SERVER_URL/skills/$SKILL_NAME"
+        echo "       → check: tail /var/log/ci-server.log"
+      else
+        ok "Server endpoint returns skill content ($SERVER_LEN bytes)"
+        echo "  First line: $(echo "$SKILL_FROM_SERVER" | head -1)"
+      fi
+
+      # ──────────────────────────────────────────────────────────────────────
+      section "Phase 2: SkillFetcher populates the bundle cache"
+      # ──────────────────────────────────────────────────────────────────────
+      # The SkillFetcher runs at hook MOUNT time — before the first LLM call.
+      # Starting any Amplifier session is enough to trigger it.
+
+      echo "  Starting Amplifier session to trigger hook mount + SkillFetcher..."
+      echo "  (session output follows, then verification resumes)"
+      echo ""
+      timeout 90 amplifier run "Reply with only the word: SKILL_TEST_OK" 2>&1 || true
+      echo ""
+      echo "  Session complete (exit code ignored — hook runs before LLM response)."
+
+      SKILL_FILE=$(find ~/.amplifier/cache -name "SKILL.md" \
+        -path "*/$SKILL_NAME/*" 2>/dev/null | head -1)
+
+      if [ -z "$SKILL_FILE" ]; then
+        fail "Skill file not found in bundle cache after session"
+        echo "       Expected: ~/.amplifier/cache/.../skills/$SKILL_NAME/SKILL.md"
+        echo "       → verify bundle is active: amplifier bundle current"
+      else
+        echo "  Skill file: $SKILL_FILE"
+        CACHED_CONTENT=$(cat "$SKILL_FILE")
+        CACHED_LEN=${#CACHED_CONTENT}
+        echo "  Cached content: $CACHED_LEN bytes"
+
+        if echo "$CACHED_CONTENT" | grep -qi "unavailable\|not available\|placeholder"; then
+          fail "Skill file still contains placeholder — SkillFetcher did not fetch from server"
+          echo "  First 5 lines of cached file:"
+          echo "$CACHED_CONTENT" | head -5 | sed 's/^/    /'
+          echo "       → confirm env vars are set: echo \$AMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_URL"
+          echo "       → confirm API key is set:   echo \$AMPLIFIER_CONTEXT_INTELLIGENCE_API_KEY"
+        else
+          ok "Cached skill file populated (no placeholder text)"
+        fi
+      fi
+
+      # ──────────────────────────────────────────────────────────────────────
+      section "Phase 3: Cached content matches server response"
+      # ──────────────────────────────────────────────────────────────────────
+
+      if [ -n "${SKILL_FILE:-}" ] && [ "$SERVER_LEN" -ge 50 ]; then
+        CACHED_CONTENT=$(cat "$SKILL_FILE")
+
+        # ETag sidecar — written by SkillFetcher after a successful fetch.
+        SKILL_DIR=$(dirname "$SKILL_FILE")
+        ETAG_FILE=$(ls "$SKILL_DIR"/*.etag "$SKILL_DIR"/.etag 2>/dev/null | head -1 || echo "")
+        if [ -n "$ETAG_FILE" ] && [ -f "$ETAG_FILE" ]; then
+          ok "ETag sidecar present — SkillFetcher ran: $(cat "$ETAG_FILE")"
+        else
+          warn "ETag sidecar not found in $SKILL_DIR — may use different naming"
+        fi
+
+        # Content spot-check: first line of server response should appear in cache.
+        FIRST_SERVER_LINE=$(echo "$SKILL_FROM_SERVER" | head -1)
+        if echo "$CACHED_CONTENT" | grep -qF "$FIRST_SERVER_LINE" 2>/dev/null; then
+          ok "Cached content matches server response (first line verified)"
+        else
+          warn "First line mismatch — cache may be from a previous server version"
+          echo "       Server : $(echo "$SKILL_FROM_SERVER" | head -1)"
+          echo "       Cache  : $(echo "$CACHED_CONTENT"    | head -1)"
+        fi
+      else
+        warn "Skipping content comparison (missing skill file or empty server response)"
+      fi
+
+      # ──────────────────────────────────────────────────────────────────────
+      echo ""
+      echo "══════════════════════════════════════════════════════"
+      echo " Results: $PASS passed  $FAIL failed  $WARN warnings"
+      echo "══════════════════════════════════════════════════════"
+      [ "$FAIL" -eq 0 ]
+      SCRIPT_EOF
+      chmod +x /workspace/test-skill-fetch.sh
+      echo "Test script written to /workspace/test-skill-fetch.sh"
+      echo "Run it inside the container with: bash /workspace/test-skill-fetch.sh"
+
+# ── Readiness checks ─────────────────────────────────────────────────────────
+readiness:
+  - name: neo4j-http
+    http:
+      url: http://localhost:7474
+
+  - name: ci-server-healthy
+    # Passes only when Neo4j is fully connected (not just HTTP up).
+    http:
+      url: http://localhost:8000/status
+      expect_json:
+        status: ok
+        neo4j_connected: true
+
+  - name: amplifier-cli
+    command: amplifier --version
+
+  - name: skill-content-endpoint
+    # Verifies the server is serving skill content at the endpoint the
+    # bundle's SkillFetcher queries when an Amplifier session starts.
+    # Auth-exempt per server design — no Bearer header needed.
+    http:
+      url: http://localhost:8000/skills/context-intelligence-graph-query
+
+# ── Update workflow ───────────────────────────────────────────────────────────
+# Run with: amplifier-digital-twin update <id>
+# Reinstalls the server from the latest GitHub main and clears the Amplifier
+# bundle cache so it re-fetches the latest bundle on the next session.
+update:
+  cmds:
+    - |
+      export AMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_CONFIG_FILE="/data/server-config.yaml"
+      # Stop current server
+      if [ -f /var/run/ci-server.pid ]; then
+        kill $(cat /var/run/ci-server.pid) 2>/dev/null || true
+        rm /var/run/ci-server.pid
+        sleep 1
+      fi
+      # Reinstall from GitHub main (picks up newly pushed commits)
+      pip3 install --upgrade \
+        "git+https://github.com/microsoft/amplifier-context-intelligence.git@main" \
+        --quiet
+      echo "Reinstalled: $(pip3 show context-intelligence-server | grep Version)"
+      # Restart
+      nohup context-intelligence-server > /var/log/ci-server.log 2>&1 &
+      echo $! > /var/run/ci-server.pid
+      timeout 60 sh -c 'until curl -sf http://localhost:8000/status > /dev/null 2>&1; do sleep 2; done'
+      echo "CI server updated: $(curl -s http://localhost:8000/status)"
+
+    # Clear cached bundle/module downloads so Amplifier re-fetches latest.
+    - amplifier reset --remove cache -y
