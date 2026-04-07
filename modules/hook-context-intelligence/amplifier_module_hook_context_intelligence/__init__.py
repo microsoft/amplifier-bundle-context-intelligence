@@ -25,12 +25,14 @@ exclude_events : list[str], optional
 
 from __future__ import annotations
 
-import asyncio
 import fnmatch
 import logging
 from collections.abc import Callable, Coroutine
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from .skill_fetcher import SkillFetcher
 
 log = logging.getLogger(__name__)
 
@@ -42,6 +44,79 @@ __amplifier_module_type__ = "hook"
 # .parent               = modules/
 # .parent               = bundle root (where skills/ lives)
 _BUNDLE_ROOT = Path(__file__).parent.parent.parent.parent
+
+
+def _resolve_skill_path(skill_name: str, coordinator: Any) -> Path | None:
+    """Resolve the filesystem path for a watched skill's SKILL.md file.
+
+    Primary: queries the ``skills_discovery`` coordinator capability
+    (registered by the tool-skills module at mount time).  Returns
+    ``metadata.path`` when the capability finds the skill.
+
+    Fallback: returns ``_BUNDLE_ROOT / 'skills' / skill_name / 'SKILL.md'``
+    when the parent directory exists on disk.
+
+    Returns ``None`` when neither source can provide a valid path.
+    """
+    from .skill_fetcher import TOOL_SKILLS_DISCOVERY_CAPABILITY
+
+    # Primary: use skills_discovery capability
+    discovery = coordinator.get_capability(TOOL_SKILLS_DISCOVERY_CAPABILITY)
+    if discovery is not None:
+        metadata = discovery.find(skill_name)
+        if metadata is not None:
+            log.debug(
+                "skill_path_resolved: %s -> %s (via skills_discovery)",
+                skill_name,
+                metadata.path,
+            )
+            return metadata.path
+
+    # Fallback: check bundle root location
+    fallback = _BUNDLE_ROOT / "skills" / skill_name / "SKILL.md"
+    if fallback.parent.exists():
+        log.debug(
+            "skill_path_resolved: %s -> %s (via bundle root fallback)",
+            skill_name,
+            fallback,
+        )
+        return fallback
+
+    log.warning(
+        "skill_path_unresolvable: %s — not found via skills_discovery or bundle root", skill_name
+    )
+    return None
+
+
+async def _refresh_watched_skills(
+    coordinator: Any,
+    fetcher: "SkillFetcher",
+    skills_capable: bool,
+) -> None:
+    """Refresh all watched skills by resolving their paths and updating content.
+
+    Branch B (not skills_capable): writes bundled legacy content via
+    ``fetcher.write_legacy_content``.
+
+    Branch C (skills_capable): fetches live content from the server via
+    ``fetcher.fetch``, wrapped in a try/except to skip individual failures.
+    """
+    from .skill_fetcher import WATCHED_SKILLS
+
+    for skill_name in WATCHED_SKILLS:
+        skill_path = _resolve_skill_path(skill_name, coordinator)
+        if skill_path is None:
+            continue
+
+        if not skills_capable:
+            # Branch B: old server — write bundled legacy content
+            fetcher.write_legacy_content(skill_name, skill_path)
+        else:
+            # Branch C: new server — fetch live content
+            try:
+                await fetcher.fetch(skill_name, skill_path)
+            except Exception as exc:
+                log.warning("skill_fetch_failed: %s — %s", skill_name, exc)
 
 
 async def _discover_events(coordinator: Any) -> set[str]:
@@ -153,6 +228,8 @@ async def mount(
     if fetcher is not None:
 
         async def on_skill_unloaded(event_name: str, data: dict[str, Any]) -> None:
+            import asyncio
+
             skill_name = data.get("skill_name")
             if skill_name not in WATCHED_SKILLS:
                 return
