@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import overload
 from unittest.mock import AsyncMock, MagicMock, patch
+
+_HookCalls = list[tuple[str, object, dict[str, object]]]
 
 
 def _make_coordinator(server_url: str | None, skill_path: Path | None) -> MagicMock:
@@ -41,22 +44,39 @@ def _make_coordinator(server_url: str | None, skill_path: Path | None) -> MagicM
     return coordinator
 
 
-def _capture_hooks_register() -> tuple[MagicMock, list[tuple[str, object, dict]]]:
+@overload
+def _capture_hooks_register() -> tuple[MagicMock, _HookCalls]: ...
+
+
+@overload
+def _capture_hooks_register(coordinator: MagicMock) -> _HookCalls: ...
+
+
+def _capture_hooks_register(
+    coordinator: MagicMock | None = None,
+) -> _HookCalls | tuple[MagicMock, _HookCalls]:
     """Create a hooks.register mock that records all calls.
 
-    Returns (mock, calls) where calls is a list of (event, handler, kwargs) tuples.
+    When *coordinator* is supplied, wires ``coordinator.hooks.register`` automatically
+    and returns just the *calls* list.
+
+    When called without arguments, returns ``(mock, calls)`` for callers that need
+    to wire the mock themselves.
     """
-    calls: list[tuple[str, object, dict]] = []
+    calls: _HookCalls = []
 
     def _side_effect(event: str, handler: object, **kwargs: object) -> MagicMock:
         calls.append((event, handler, dict(kwargs)))
         return MagicMock()
 
     mock = MagicMock(side_effect=_side_effect)
+    if coordinator is not None:
+        coordinator.hooks.register = mock
+        return calls
     return mock, calls
 
 
-def _find_handler(calls: list[tuple[str, object, dict]], event: str, name: str) -> object:
+def _find_handler(calls: _HookCalls, event: str, name: str) -> object:
     """Find a registered handler by event name and handler name (from kwargs).
 
     Asserts exactly 1 match found.
@@ -246,8 +266,8 @@ class TestMountSkillFetchSkipsWhenUnconfigured:
 class TestSkillUnloadedHandler:
     """mount() registers skill:unloaded handler that creates tasks for watched skills."""
 
-    async def test_does_not_use_create_task_for_watched_skill(self, tmp_path: Path) -> None:
-        """Handler does NOT call asyncio.create_task for a skill in WATCHED_SKILLS.
+    async def test_skill_unloaded_triggers_fetch_for_watched_skill(self, tmp_path: Path) -> None:
+        """Handler fetches when skill:unloaded fires for a skill in WATCHED_SKILLS.
 
         After the refactor, the handler uses await _refresh_watched_skills directly
         instead of asyncio.create_task.
@@ -261,14 +281,7 @@ class TestSkillUnloadedHandler:
             skill_path=skill_path,
         )
 
-        # Capture registered handlers via side_effect
-        registered: dict[str, object] = {}
-
-        def capture_register(event: str, handler: object, **kwargs: object) -> MagicMock:
-            registered[event] = handler
-            return MagicMock()
-
-        coordinator.hooks.register = MagicMock(side_effect=capture_register)
+        registered = _capture_hooks_register(coordinator)
 
         mock_fetcher_instance = MagicMock()
         mock_fetcher_instance.check_server_version = AsyncMock(
@@ -286,9 +299,7 @@ class TestSkillUnloadedHandler:
                 config={"context_intelligence_server_url": "http://localhost:8000"},
             )
 
-        assert "skill:unloaded" in registered
-
-        handler = registered["skill:unloaded"]
+        handler = _find_handler(registered, "skill:unloaded", "SkillFetcher")
         await handler(  # type: ignore[operator]
             "skill:unloaded", {"skill_name": "context-intelligence-graph-query"}
         )
@@ -296,8 +307,8 @@ class TestSkillUnloadedHandler:
         # New behavior: fetcher.fetch is called directly (no asyncio.create_task)
         mock_fetcher_instance.fetch.assert_awaited_once()
 
-    async def test_does_not_create_task_for_unwatched_skill(self, tmp_path: Path) -> None:
-        """Handler does NOT call asyncio.create_task for a skill NOT in WATCHED_SKILLS."""
+    async def test_skill_unloaded_skips_fetch_for_unwatched_skill(self, tmp_path: Path) -> None:
+        """Handler does nothing when skill:unloaded fires for a skill NOT in WATCHED_SKILLS."""
         from amplifier_module_hook_context_intelligence import mount
         from amplifier_module_hook_context_intelligence.skill_fetcher import VersionCheckResult
 
@@ -307,14 +318,7 @@ class TestSkillUnloadedHandler:
             skill_path=skill_path,
         )
 
-        # Capture registered handlers via side_effect
-        registered: dict[str, object] = {}
-
-        def capture_register(event: str, handler: object, **kwargs: object) -> MagicMock:
-            registered[event] = handler
-            return MagicMock()
-
-        coordinator.hooks.register = MagicMock(side_effect=capture_register)
+        registered = _capture_hooks_register(coordinator)
 
         # Use AsyncMock for the entire fetcher instance so that attribute access
         # (e.g. .fetch) automatically returns awaitable AsyncMock children.
@@ -335,9 +339,7 @@ class TestSkillUnloadedHandler:
                 config={"context_intelligence_server_url": "http://localhost:8000"},
             )
 
-        assert "skill:unloaded" in registered
-
-        handler = registered["skill:unloaded"]
+        handler = _find_handler(registered, "skill:unloaded", "SkillFetcher")
         await handler(  # type: ignore[operator]
             "skill:unloaded", {"skill_name": "some-other-unrelated-skill"}
         )
@@ -355,14 +357,7 @@ class TestSkillUnloadedHandler:
             skill_path=None,
         )
 
-        # Capture registered handlers via side_effect
-        registered: dict[str, object] = {}
-
-        def capture_register(event: str, handler: object, **kwargs: object) -> MagicMock:
-            registered[event] = handler
-            return MagicMock()
-
-        coordinator.hooks.register = MagicMock(side_effect=capture_register)
+        registered = _capture_hooks_register(coordinator)
 
         mock_fetcher_instance = MagicMock()
         mock_fetcher_instance.check_server_version = AsyncMock(
@@ -383,10 +378,8 @@ class TestSkillUnloadedHandler:
                 config={"context_intelligence_server_url": "http://localhost:8000"},
             )
 
-            assert "skill:unloaded" in registered
-
             # SKILL.md absent at bundle root — handler must return without calling fetch
-            handler = registered["skill:unloaded"]
+            handler = _find_handler(registered, "skill:unloaded", "SkillFetcher")
             await handler(  # type: ignore[operator]
                 "skill:unloaded", {"skill_name": "context-intelligence-graph-query"}
             )
@@ -661,7 +654,7 @@ class TestSkillsDiscoveredHandler:
         )
 
 
-class TestSkillUnloadedHandlerRefactored:
+class TestSkillUnloadedHandlerRefresh:
     """skill:unloaded handler uses await _refresh_watched_skills (not asyncio.create_task)."""
 
     async def test_skill_unloaded_awaits_refresh_for_watched_skill(self, tmp_path: Path) -> None:
@@ -686,13 +679,7 @@ class TestSkillUnloadedHandlerRefactored:
             skill_path=skill_path,
         )
 
-        registered: dict[str, object] = {}
-
-        def capture_register(event: str, handler: object, **kwargs: object) -> MagicMock:
-            registered[event] = handler
-            return MagicMock()
-
-        coordinator.hooks.register = MagicMock(side_effect=capture_register)
+        registered = _capture_hooks_register(coordinator)
 
         mock_fetcher_instance = MagicMock()
         mock_fetcher_instance.check_server_version = AsyncMock(
@@ -710,12 +697,10 @@ class TestSkillUnloadedHandlerRefactored:
                 config={"context_intelligence_server_url": "http://localhost:8000"},
             )
 
-        assert "skill:unloaded" in registered
-
         # Reset fetch calls after mount (mount should NOT have called fetch directly)
         mock_fetcher_instance.fetch.reset_mock()
 
-        handler = registered["skill:unloaded"]
+        handler = _find_handler(registered, "skill:unloaded", "SkillFetcher")
         await handler(  # type: ignore[operator]
             "skill:unloaded", {"skill_name": skill_name}
         )
@@ -737,13 +722,7 @@ class TestSkillUnloadedHandlerRefactored:
             skill_path=skill_path,
         )
 
-        registered: dict[str, object] = {}
-
-        def capture_register(event: str, handler: object, **kwargs: object) -> MagicMock:
-            registered[event] = handler
-            return MagicMock()
-
-        coordinator.hooks.register = MagicMock(side_effect=capture_register)
+        registered = _capture_hooks_register(coordinator)
 
         mock_fetcher_instance = MagicMock()
         mock_fetcher_instance.check_server_version = AsyncMock(
@@ -761,11 +740,9 @@ class TestSkillUnloadedHandlerRefactored:
                 config={"context_intelligence_server_url": "http://localhost:8000"},
             )
 
-        assert "skill:unloaded" in registered
-
         mock_fetcher_instance.fetch.reset_mock()
 
-        handler = registered["skill:unloaded"]
+        handler = _find_handler(registered, "skill:unloaded", "SkillFetcher")
         await handler(  # type: ignore[operator]
             "skill:unloaded", {"skill_name": "some-unwatched-unrelated-skill"}
         )
