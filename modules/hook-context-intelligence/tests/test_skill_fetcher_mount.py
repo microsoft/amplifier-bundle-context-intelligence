@@ -289,13 +289,12 @@ class TestSkillUnloadedHandler:
         assert "skill:unloaded" in registered
 
         handler = registered["skill:unloaded"]
-        with patch("asyncio.create_task") as mock_create_task:
-            await handler(  # type: ignore[operator]
-                "skill:unloaded", {"skill_name": "context-intelligence-graph-query"}
-            )
+        await handler(  # type: ignore[operator]
+            "skill:unloaded", {"skill_name": "context-intelligence-graph-query"}
+        )
 
-        # New behavior: asyncio.create_task is NOT used
-        mock_create_task.assert_not_called()
+        # New behavior: fetcher.fetch is called directly (no asyncio.create_task)
+        mock_fetcher_instance.fetch.assert_awaited_once()
 
     async def test_does_not_create_task_for_unwatched_skill(self, tmp_path: Path) -> None:
         """Handler does NOT call asyncio.create_task for a skill NOT in WATCHED_SKILLS."""
@@ -339,12 +338,11 @@ class TestSkillUnloadedHandler:
         assert "skill:unloaded" in registered
 
         handler = registered["skill:unloaded"]
-        with patch("asyncio.create_task") as mock_create_task:
-            await handler(  # type: ignore[operator]
-                "skill:unloaded", {"skill_name": "some-other-unrelated-skill"}
-            )
+        await handler(  # type: ignore[operator]
+            "skill:unloaded", {"skill_name": "some-other-unrelated-skill"}
+        )
 
-        mock_create_task.assert_not_called()
+        mock_fetcher_instance.fetch.assert_not_awaited()
 
     async def test_does_not_crash_when_metadata_not_found(self, tmp_path: Path) -> None:
         """Handler returns cleanly when SKILL.md does not exist at the bundle root."""
@@ -379,7 +377,6 @@ class TestSkillUnloadedHandler:
                 "amplifier_module_hook_context_intelligence.skill_fetcher.SkillFetcher",
                 mock_fetcher_cls,
             ),
-            patch("asyncio.create_task") as mock_create_task,
         ):
             await mount(
                 coordinator,
@@ -388,13 +385,13 @@ class TestSkillUnloadedHandler:
 
             assert "skill:unloaded" in registered
 
-            # SKILL.md absent at bundle root — handler must return without scheduling a task
+            # SKILL.md absent at bundle root — handler must return without calling fetch
             handler = registered["skill:unloaded"]
             await handler(  # type: ignore[operator]
                 "skill:unloaded", {"skill_name": "context-intelligence-graph-query"}
             )
 
-        mock_create_task.assert_not_called()
+        mock_fetcher_instance.fetch.assert_not_awaited()
 
 
 class TestMountNoOpWhenServerUrlAbsent:
@@ -719,14 +716,11 @@ class TestSkillUnloadedHandlerRefactored:
         mock_fetcher_instance.fetch.reset_mock()
 
         handler = registered["skill:unloaded"]
-        with patch("asyncio.create_task") as mock_create_task:
-            await handler(  # type: ignore[operator]
-                "skill:unloaded", {"skill_name": skill_name}
-            )
+        await handler(  # type: ignore[operator]
+            "skill:unloaded", {"skill_name": skill_name}
+        )
 
-        # New behavior: asyncio.create_task must NOT be used
-        mock_create_task.assert_not_called()
-        # New behavior: fetcher.fetch IS called (via _refresh_watched_skills)
+        # New behavior: fetcher.fetch IS called directly (via _refresh_watched_skills)
         mock_fetcher_instance.fetch.assert_awaited_once()
 
     async def test_skill_unloaded_ignores_unwatched_skill(self, tmp_path: Path) -> None:
