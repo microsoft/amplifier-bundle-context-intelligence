@@ -1,6 +1,6 @@
 [project]
 name = "amplifier-module-hook-context-intelligence"
-version = "0.1.0"
+version = "0.1.1"
 description = "Context intelligence hook — event-driven property graph builder for Amplifier sessions"
 requires-python = ">=3.11"
 license = "MIT"
