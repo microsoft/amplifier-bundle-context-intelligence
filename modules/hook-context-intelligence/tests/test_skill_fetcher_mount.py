@@ -73,8 +73,11 @@ def _find_handler(calls: list[tuple[str, object, dict]], event: str, name: str) 
 class TestMountSkillFetchHappyPath:
     """mount() fetches watched skills when server_url is available and SKILL.md exists."""
 
-    async def test_fetch_called_for_watched_skill(self, tmp_path: Path) -> None:
-        """SkillFetcher.fetch is called once with the watched skill name and bundle path."""
+    async def test_fetch_not_called_during_mount(self, tmp_path: Path) -> None:
+        """SkillFetcher.fetch is NOT called during mount() — it is deferred to skills:discovered.
+
+        mount() registers a skills:discovered handler; fetch runs only when the handler fires.
+        """
         from amplifier_module_hook_context_intelligence import mount
         from amplifier_module_hook_context_intelligence.skill_fetcher import VersionCheckResult
 
@@ -107,9 +110,8 @@ class TestMountSkillFetchHappyPath:
                 config={"context_intelligence_server_url": "http://localhost:8000"},
             )
 
-        mock_fetcher_instance.fetch.assert_called_once_with(
-            "context-intelligence-graph-query", skill_path
-        )
+        # fetch must NOT be called during mount — it is deferred to skills:discovered handler
+        mock_fetcher_instance.fetch.assert_not_called()
         assert callable(cleanup)
 
     async def test_cleanup_is_still_callable_after_fetch(self, tmp_path: Path) -> None:
@@ -223,8 +225,12 @@ class TestMountSkillFetchSkipsWhenUnconfigured:
 class TestSkillUnloadedHandler:
     """mount() registers skill:unloaded handler that creates tasks for watched skills."""
 
-    async def test_creates_task_for_watched_skill(self, tmp_path: Path) -> None:
-        """Handler calls asyncio.create_task once for a skill in WATCHED_SKILLS."""
+    async def test_does_not_use_create_task_for_watched_skill(self, tmp_path: Path) -> None:
+        """Handler does NOT call asyncio.create_task for a skill in WATCHED_SKILLS.
+
+        After the refactor, the handler uses await _refresh_watched_skills directly
+        instead of asyncio.create_task.
+        """
         from amplifier_module_hook_context_intelligence import mount
         from amplifier_module_hook_context_intelligence.skill_fetcher import VersionCheckResult
 
@@ -267,7 +273,8 @@ class TestSkillUnloadedHandler:
                 "skill:unloaded", {"skill_name": "context-intelligence-graph-query"}
             )
 
-        mock_create_task.assert_called_once()
+        # New behavior: asyncio.create_task is NOT used
+        mock_create_task.assert_not_called()
 
     async def test_does_not_create_task_for_unwatched_skill(self, tmp_path: Path) -> None:
         """Handler does NOT call asyncio.create_task for a skill NOT in WATCHED_SKILLS."""
@@ -440,8 +447,13 @@ class TestMountThreeWayBranch:
         mock_fetcher_instance.fetch.assert_not_called()
         mock_fetcher_instance.write_legacy_content.assert_not_called()
 
-    async def test_old_server_write_legacy_content(self, tmp_path: Path) -> None:
-        """Old server (reachable=True, version=None): write_legacy_content called once, fetch not called."""
+    async def test_old_server_registers_skills_discovered_handler(self, tmp_path: Path) -> None:
+        """Old server (reachable=True, version=None): skills:discovered handler registered.
+
+        After the refactor, both old and new servers register a skills:discovered handler
+        rather than calling write_legacy_content or fetch inline during mount().
+        The handler fires later and uses skills_capable to decide which path to take.
+        """
         from amplifier_module_hook_context_intelligence import mount
         from amplifier_module_hook_context_intelligence.skill_fetcher import VersionCheckResult
 
@@ -454,6 +466,9 @@ class TestMountThreeWayBranch:
             server_url="http://localhost:8000",
             skill_path=skill_path,
         )
+
+        mock_register, calls = _capture_hooks_register()
+        coordinator.hooks.register = mock_register
 
         mock_fetcher_instance = MagicMock()
         mock_fetcher_instance.check_server_version = AsyncMock(
@@ -475,13 +490,17 @@ class TestMountThreeWayBranch:
                 config={"context_intelligence_server_url": "http://localhost:8000"},
             )
 
-        mock_fetcher_instance.write_legacy_content.assert_called_once_with(
-            "context-intelligence-graph-query", skill_path
-        )
+        # Both fetch and write_legacy_content must NOT be called during mount
         mock_fetcher_instance.fetch.assert_not_called()
+        mock_fetcher_instance.write_legacy_content.assert_not_called()
+        # skills:discovered SkillFetcher-trigger handler must be registered
+        _find_handler(calls, "skills:discovered", "SkillFetcher-trigger")
 
-    async def test_new_server_fetch(self, tmp_path: Path) -> None:
-        """New server (reachable=True, version='2.0.0'): fetch called once, write_legacy_content not called."""
+    async def test_new_server_registers_skills_discovered_handler(self, tmp_path: Path) -> None:
+        """New server (reachable=True, version='2.0.0'): skills:discovered handler registered.
+
+        After the refactor, fetch is deferred — mount() only registers the handler.
+        """
         from amplifier_module_hook_context_intelligence import mount
         from amplifier_module_hook_context_intelligence.skill_fetcher import VersionCheckResult
 
@@ -494,6 +513,9 @@ class TestMountThreeWayBranch:
             server_url="http://localhost:8000",
             skill_path=skill_path,
         )
+
+        mock_register, calls = _capture_hooks_register()
+        coordinator.hooks.register = mock_register
 
         mock_fetcher_instance = MagicMock()
         mock_fetcher_instance.check_server_version = AsyncMock(
@@ -515,10 +537,11 @@ class TestMountThreeWayBranch:
                 config={"context_intelligence_server_url": "http://localhost:8000"},
             )
 
-        mock_fetcher_instance.fetch.assert_called_once_with(
-            "context-intelligence-graph-query", skill_path
-        )
+        # fetch must NOT be called during mount — it is deferred to skills:discovered handler
+        mock_fetcher_instance.fetch.assert_not_called()
         mock_fetcher_instance.write_legacy_content.assert_not_called()
+        # skills:discovered SkillFetcher-trigger handler must be registered
+        _find_handler(calls, "skills:discovered", "SkillFetcher-trigger")
 
 
 class TestSkillsDiscoveredHandler:
@@ -615,3 +638,119 @@ class TestSkillsDiscoveredHandler:
             "skills:discovered SkillFetcher-trigger handler was registered even though "
             "server is unreachable"
         )
+
+
+class TestSkillUnloadedHandlerRefactored:
+    """skill:unloaded handler uses await _refresh_watched_skills (not asyncio.create_task)."""
+
+    async def test_skill_unloaded_awaits_refresh_for_watched_skill(self, tmp_path: Path) -> None:
+        """skill:unloaded handler awaits _refresh_watched_skills for watched skills.
+
+        After the refactor, the handler must NOT use asyncio.create_task. Instead,
+        it must directly await _refresh_watched_skills, which calls fetcher.fetch.
+        """
+        from amplifier_module_hook_context_intelligence import mount
+        from amplifier_module_hook_context_intelligence.skill_fetcher import (
+            VersionCheckResult,
+            WATCHED_SKILLS,
+        )
+
+        skill_name = next(iter(WATCHED_SKILLS))
+        skill_path = tmp_path / skill_name / "SKILL.md"
+        skill_path.parent.mkdir(parents=True)
+        skill_path.write_text("# test")
+
+        coordinator = _make_coordinator(
+            server_url="http://localhost:8000",
+            skill_path=skill_path,
+        )
+
+        registered: dict[str, object] = {}
+
+        def capture_register(event: str, handler: object, **kwargs: object) -> MagicMock:
+            registered[event] = handler
+            return MagicMock()
+
+        coordinator.hooks.register = MagicMock(side_effect=capture_register)
+
+        mock_fetcher_instance = MagicMock()
+        mock_fetcher_instance.check_server_version = AsyncMock(
+            return_value=VersionCheckResult(reachable=True, version="2.0.0")
+        )
+        mock_fetcher_instance.fetch = AsyncMock(return_value=True)
+        mock_fetcher_cls = MagicMock(return_value=mock_fetcher_instance)
+
+        with patch(
+            "amplifier_module_hook_context_intelligence.skill_fetcher.SkillFetcher",
+            mock_fetcher_cls,
+        ):
+            await mount(
+                coordinator,
+                config={"context_intelligence_server_url": "http://localhost:8000"},
+            )
+
+        assert "skill:unloaded" in registered
+
+        # Reset fetch calls after mount (mount should NOT have called fetch directly)
+        mock_fetcher_instance.fetch.reset_mock()
+
+        handler = registered["skill:unloaded"]
+        with patch("asyncio.create_task") as mock_create_task:
+            await handler(  # type: ignore[operator]
+                "skill:unloaded", {"skill_name": skill_name}
+            )
+
+        # New behavior: asyncio.create_task must NOT be used
+        mock_create_task.assert_not_called()
+        # New behavior: fetcher.fetch IS called (via _refresh_watched_skills)
+        mock_fetcher_instance.fetch.assert_awaited_once()
+
+    async def test_skill_unloaded_ignores_unwatched_skill(self, tmp_path: Path) -> None:
+        """skill:unloaded handler does nothing for skills NOT in WATCHED_SKILLS."""
+        from amplifier_module_hook_context_intelligence import mount
+        from amplifier_module_hook_context_intelligence.skill_fetcher import VersionCheckResult
+
+        skill_path = tmp_path / "some-skill" / "SKILL.md"
+        skill_path.parent.mkdir(parents=True)
+        skill_path.write_text("# test")
+
+        coordinator = _make_coordinator(
+            server_url="http://localhost:8000",
+            skill_path=skill_path,
+        )
+
+        registered: dict[str, object] = {}
+
+        def capture_register(event: str, handler: object, **kwargs: object) -> MagicMock:
+            registered[event] = handler
+            return MagicMock()
+
+        coordinator.hooks.register = MagicMock(side_effect=capture_register)
+
+        mock_fetcher_instance = MagicMock()
+        mock_fetcher_instance.check_server_version = AsyncMock(
+            return_value=VersionCheckResult(reachable=True, version="2.0.0")
+        )
+        mock_fetcher_instance.fetch = AsyncMock(return_value=True)
+        mock_fetcher_cls = MagicMock(return_value=mock_fetcher_instance)
+
+        with patch(
+            "amplifier_module_hook_context_intelligence.skill_fetcher.SkillFetcher",
+            mock_fetcher_cls,
+        ):
+            await mount(
+                coordinator,
+                config={"context_intelligence_server_url": "http://localhost:8000"},
+            )
+
+        assert "skill:unloaded" in registered
+
+        mock_fetcher_instance.fetch.reset_mock()
+
+        handler = registered["skill:unloaded"]
+        await handler(  # type: ignore[operator]
+            "skill:unloaded", {"skill_name": "some-unwatched-unrelated-skill"}
+        )
+
+        # Not a watched skill — no fetch should be triggered
+        mock_fetcher_instance.fetch.assert_not_called()

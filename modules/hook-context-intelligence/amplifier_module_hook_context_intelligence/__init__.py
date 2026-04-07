@@ -161,9 +161,10 @@ async def mount(
     coordinator.register_capability("context_intelligence.config_resolver", resolver)
     events = await _discover_events(coordinator)
 
-    # Skill fetch phase — runs before logging handler registration
+    # Skill fetch phase — deferred to skills:discovered event
     server_url = resolver.context_intelligence_server_url
     fetcher: SkillFetcher | None = None
+    skills_capable: bool = False
 
     if not server_url:
         log.info("skill_fetch_skipped: no server_url in config")
@@ -180,39 +181,21 @@ async def mount(
         if not result.reachable:
             # Branch A: server unreachable — delegation fallback stays, SKILL.md untouched
             log.info("skill_fetch_branch=A: server unreachable — SKILL.md unchanged")
-        elif not _is_skills_capable(result.version):
-            # Branch B: old server (DEPRECATED) — write bundled legacy content
-            log.info(
-                "skill_fetch_branch=B: old server v%s — writing bundled fallback",
-                result.version,
-            )
-            for skill_name in WATCHED_SKILLS:
-                skill_path = _BUNDLE_ROOT / "skills" / skill_name / "SKILL.md"
-                if not skill_path.exists():
-                    log.warning("skill_fetch_skipped: %s not found at %s", skill_name, skill_path)
-                    continue
-                _tentative_fetcher.write_legacy_content(skill_name, skill_path)
-                log.info("skill_legacy_written [DEPRECATED]: %s -> %s", skill_name, skill_path)
         else:
-            # Branch C: new server — fetch live content from server
-            log.info("skill_fetch_branch=C: server v%s — fetching live content", result.version)
+            # Reachable: defer skill fetch to skills:discovered event
             fetcher = _tentative_fetcher
-            for skill_name in WATCHED_SKILLS:
-                skill_path = _BUNDLE_ROOT / "skills" / skill_name / "SKILL.md"
-                if not skill_path.exists():
-                    log.warning("skill_fetch_skipped: %s not found at %s", skill_name, skill_path)
-                    continue
-                log.info("skill_fetch_attempt: %s -> %s", skill_name, skill_path)
-                try:
-                    fetched = await fetcher.fetch(skill_name, skill_path)
-                    log.info(
-                        "skill_fetch_done: %s fetched=%s path=%s",
-                        skill_name,
-                        fetched,
-                        skill_path,
-                    )
-                except Exception as exc:
-                    log.warning("skill_fetch_failed: %s — %s", skill_name, exc)
+            skills_capable = _is_skills_capable(result.version)
+
+            async def on_skills_discovered(event_name: str, data: dict[str, Any]) -> None:
+                await _refresh_watched_skills(coordinator, fetcher, skills_capable)
+
+            coordinator.hooks.register(
+                "skills:discovered",
+                on_skills_discovered,
+                priority=50,
+                name="SkillFetcher-trigger",
+            )
+            log.info("skill_fetch_deferred: registered skills:discovered handler")
 
     exclude = resolver.exclude_events
     active_events = {e for e in events if not any(fnmatch.fnmatch(e, p) for p in exclude)}
@@ -229,19 +212,8 @@ async def mount(
     if fetcher is not None:
 
         async def on_skill_unloaded(event_name: str, data: dict[str, Any]) -> None:
-            import asyncio  # Kept local: top-level import removed per task-03 spec
-
-            skill_name = data.get("skill_name")
-            if skill_name not in WATCHED_SKILLS:
-                return
-            skill_path = _BUNDLE_ROOT / "skills" / skill_name / "SKILL.md"
-            if not skill_path.exists():
-                return
-            try:
-                asyncio.create_task(fetcher.fetch(skill_name, skill_path))
-            except RuntimeError:
-                # Event loop is closing; skip scheduling
-                pass
+            if data.get("skill_name") in WATCHED_SKILLS:
+                await _refresh_watched_skills(coordinator, fetcher, skills_capable)  # type: ignore[arg-type]
 
         unreg_skill = coordinator.hooks.register(
             "skill:unloaded", on_skill_unloaded, priority=100, name="SkillFetcher"
