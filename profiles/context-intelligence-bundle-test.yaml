@@ -38,19 +38,29 @@
 #   • python3 -m build available on the host (pip install build)
 #   • ANTHROPIC_API_KEY set in the host shell
 #
-# REQUIRED VARIABLE
+# REQUIRED VARIABLES
 # ─────────────────────────────────────────────────────────────────────────────
-#   CI_SERVER_REPO  Path to the local amplifier-context-intelligence git repo.
-#                   Must be a file:// URL pointing at the submodule root.
-#                   The wheel is built on the HOST from the latest committed
-#                   state of this repo, then installed inside the container.
-#                   (If you have uncommitted changes, commit them first.)
+#   GITEA_URL     Base URL of the Gitea instance (managed by amplifier-gitea)
+#                 reachable from inside the DTU container. Pass via --var.
+#                 The amplifier-bundle-context-intelligence repo must be
+#                 mirrored into Gitea before launching:
+#                   amplifier-gitea create
+#                   amplifier-gitea mirror-from-github <id> microsoft/amplifier-bundle-context-intelligence
+#                   GITEA_URL=$(amplifier-gitea url <id> | jq -r .url)
+#                   GITEA_TOKEN=$(amplifier-gitea token <id> | jq -r .token)
+#
+#   GITEA_TOKEN   Admin token for the Gitea instance. Pass via --var.
+#
+#   GH_TOKEN      GitHub personal access token for the CI server install
+#                 (amplifier-context-intelligence stays on GitHub).
+#                 Set in the host environment: export GH_TOKEN=$(gh auth token)
 #
 # LAUNCH
 # ─────────────────────────────────────────────────────────────────────────────
-#   amplifier-digital-twin launch \
-#     amplifier-bundle-context-intelligence/profiles/context-intelligence-bundle-test.yaml \
-#     --var CI_SERVER_REPO=file:///home/<user>/workspace/amplifier-context-intelligence-dynamic-skill/amplifier-context-intelligence
+#   GH_TOKEN=$(gh auth token) amplifier-digital-twin launch \
+#     profiles/context-intelligence-bundle-test.yaml \
+#     --var GITEA_URL=http://localhost:10110 \
+#     --var GITEA_TOKEN=<token-from-amplifier-gitea>
 #
 # CHECK READINESS
 # ─────────────────────────────────────────────────────────────────────────────
@@ -70,25 +80,12 @@
 #   # Bundle env vars are pre-set; the hook will capture events and forward
 #   # them to the local CI server at http://localhost:8000.
 #
-# ITERATING ON LOCAL CHANGES
+# ITERATING ON LOCAL BUNDLE CHANGES (without pushing to GitHub)
 # ─────────────────────────────────────────────────────────────────────────────
-#   After committing changes to the server submodule:
-#   amplifier-digital-twin update <id> --var CI_SERVER_REPO=file:///...
-#   (update.refresh_pypi=true rebuilds the wheel and reinstalls automatically)
-#
-# ─────────────────────────────────────────────────────────────────────────────
-# TESTING LOCAL BUNDLE MODULE CHANGES (optional)
-# ─────────────────────────────────────────────────────────────────────────────
-#   Uncomment the additional entries in pypi_overrides below and pass:
-#   --var BUNDLE_REPO=file:///path/to/amplifier-bundle-context-intelligence
-#
-#   This installs the 4 Python modules (hook, tool-graph-query, tool-blob-read,
-#   tool-context-intelligence-upload) from your local workspace instead of
-#   the published GitHub bundle.
-#
-#   Note: changes to bundle.md, agents/, context/, behaviors/ still require
-#   a Gitea mirror + url_rewrites (see amplifier-user-sim.yaml for that pattern).
-# ─────────────────────────────────────────────────────────────────────────────
+#   1. Make changes in the bundle repo
+#   2. git push http://<gitea-url>/admin/amplifier-bundle-context-intelligence.git main
+#   3. amplifier-digital-twin update <id> --var GITEA_URL=... --var GITEA_TOKEN=...
+#      (clears Amplifier cache so re-clone goes via Gitea url_rewrites)
 
 name: context-intelligence-bundle-test
 description: >
@@ -111,7 +108,8 @@ passthrough:
       key_env: ANTHROPIC_API_KEY
     - name: google
       key_env: GOOGLE_API_KEY
-    # Required: forward the GitHub token so git can clone the private bundle repo.
+    # Required for CI server install (amplifier-context-intelligence is a
+    # separate private GitHub repo — not redirected via Gitea).
     # Set before launching: export GH_TOKEN=$(gh auth token)
     - name: github
       key_env: GH_TOKEN
@@ -127,6 +125,23 @@ access:
       container: 7474
       label: Neo4j Browser
       path: /browser/
+
+# ── Bundle source via Gitea (local development) ──────────────────────────────
+# url_rewrites intercepts every git+https://github.com/microsoft/amplifier-bundle-context-intelligence
+# request inside the container (bundle add, module installs from bundle source URI)
+# and redirects it to the local Gitea mirror. This means the DTU tests the LOCAL
+# bundle without pushing to GitHub origin.
+#
+# The amplifier-bundle-context-intelligence URL covers the bundle itself AND all
+# four Python module subdirectory installs (behaviors/context-intelligence.yaml
+# references them as git+https://github.com/microsoft/amplifier-bundle-context-intelligence@main#subdirectory=...)
+url_rewrites:
+  auth:
+    username: admin
+    token_var: GITEA_TOKEN
+  rules:
+    - match: github.com/microsoft/amplifier-bundle-context-intelligence
+      target: ${GITEA_URL}/admin/amplifier-bundle-context-intelligence
 
 # ── Server source ─────────────────────────────────────────────────────────────
 # The CI server is installed directly from GitHub in setup_cmds step 7 using
@@ -522,29 +537,25 @@ readiness:
       url: http://localhost:8000/skills/context-intelligence-graph-query
 
 # ── Update workflow ───────────────────────────────────────────────────────────
-# Run with: amplifier-digital-twin update <id>
-# Reinstalls the server from the latest GitHub main and clears the Amplifier
-# bundle cache so it re-fetches the latest bundle on the next session.
+# Run with: amplifier-digital-twin update <id> --var GITEA_URL=... --var GITEA_TOKEN=...
+# Clears Amplifier cache so the bundle re-clones from Gitea via url_rewrites.
+# Also reinstalls the CI server from latest GitHub main.
 update:
   cmds:
+    # Clear Amplifier module/bundle cache — forces re-clone via url_rewrites from Gitea
+    - amplifier reset --remove cache -y
+
+    # Reinstall CI server from GitHub main (picks up newly pushed server changes)
     - |
       export AMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_CONFIG_FILE="/data/server-config.yaml"
-      # Stop current server
       if [ -f /var/run/ci-server.pid ]; then
         kill $(cat /var/run/ci-server.pid) 2>/dev/null || true
         rm /var/run/ci-server.pid
         sleep 1
       fi
-      # Reinstall from GitHub main (picks up newly pushed commits)
-      pip3 install --upgrade \
-        "git+https://github.com/microsoft/amplifier-context-intelligence.git@main" \
-        --quiet
-      echo "Reinstalled: $(pip3 show context-intelligence-server | grep Version)"
-      # Restart
-      nohup context-intelligence-server > /var/log/ci-server.log 2>&1 &
+      uv tool install --reinstall \
+        "git+https://github.com/microsoft/amplifier-context-intelligence.git@main"
+      nohup /root/.local/bin/context-intelligence-server > /var/log/ci-server.log 2>&1 &
       echo $! > /var/run/ci-server.pid
       timeout 60 sh -c 'until curl -sf http://localhost:8000/status > /dev/null 2>&1; do sleep 2; done'
       echo "CI server updated: $(curl -s http://localhost:8000/status)"
-
-    # Clear cached bundle/module downloads so Amplifier re-fetches latest.
-    - amplifier reset --remove cache -y

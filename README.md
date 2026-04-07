@@ -367,6 +367,85 @@ print('YAML validates OK')
 
 ---
 
+## Testing locally with Digital Twin Universe
+
+The `profiles/context-intelligence-bundle-test.yaml` DTU profile lets you test the bundle end-to-end in an isolated environment — including the Neo4j graph store and context-intelligence server — **without pushing changes to GitHub origin**. It uses a local Gitea mirror to serve bundle changes to the DTU container via git URL rewriting.
+
+### Required tools
+
+Two CLI tools must be installed on your host:
+
+```bash
+# Digital Twin Universe — creates and manages isolated Incus environments
+uv tool install git+https://github.com/microsoft/amplifier-bundle-digital-twin-universe@main
+
+# Gitea — creates ephemeral Docker-based Gitea instances for local git mirroring
+uv tool install git+https://github.com/microsoft/amplifier-bundle-gitea@main
+```
+
+Verify:
+
+```bash
+which amplifier-digital-twin && amplifier-digital-twin --version
+which amplifier-gitea && amplifier-gitea --version
+```
+
+Incus must also be installed and running. See the [Digital Twin Universe README](https://github.com/microsoft/amplifier-bundle-digital-twin-universe) for platform-specific Incus installation steps.
+
+### One-time setup
+
+```bash
+# 1. Start a Gitea instance
+amplifier-gitea create
+# → returns an ID, e.g. gitea-abc123
+
+# 2. Mirror the bundle repo into Gitea
+amplifier-gitea mirror-from-github <id> microsoft/amplifier-bundle-context-intelligence
+
+# 3. Get the Gitea URL and token
+GITEA_URL=$(amplifier-gitea url <id> | jq -r .url)
+GITEA_TOKEN=$(amplifier-gitea token <id> | jq -r .token)
+```
+
+### Launch the DTU
+
+```bash
+GH_TOKEN=$(gh auth token) amplifier-digital-twin launch \
+  profiles/context-intelligence-bundle-test.yaml \
+  --var GITEA_URL=$GITEA_URL \
+  --var GITEA_TOKEN=$GITEA_TOKEN
+```
+
+The DTU intercepts every `github.com/microsoft/amplifier-bundle-context-intelligence` clone request inside the container and redirects it to your local Gitea mirror. This covers the bundle itself and all four Python module subdirectory installs.
+
+### Iterating on local changes
+
+To test uncommitted changes in the DTU without touching GitHub:
+
+```bash
+# 1. Make and commit changes locally in the bundle repo
+
+# 2. Push to Gitea (not GitHub)
+git push http://<gitea-url>/admin/amplifier-bundle-context-intelligence.git main
+
+# 3. Update the running DTU — clears cache so re-clone goes via Gitea
+amplifier-digital-twin update <id> \
+  --var GITEA_URL=$GITEA_URL \
+  --var GITEA_TOKEN=$GITEA_TOKEN
+
+# 4. Run the acceptance test inside the DTU
+amplifier-digital-twin exec <dtu-id> -- bash -l /workspace/test-skill-fetch.sh
+```
+
+### Teardown
+
+```bash
+amplifier-digital-twin destroy <dtu-id>
+amplifier-gitea destroy <gitea-id>
+```
+
+---
+
 ## Related
 
 - [amplifier-context-intelligence](https://github.com/microsoft/amplifier-context-intelligence) — the CI server (Neo4j + blob storage + dashboard)
