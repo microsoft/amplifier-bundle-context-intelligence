@@ -73,10 +73,11 @@ def _find_handler(calls: list[tuple[str, object, dict]], event: str, name: str) 
 class TestMountSkillFetchHappyPath:
     """mount() fetches watched skills when server_url is available and SKILL.md exists."""
 
-    async def test_fetch_not_called_during_mount(self, tmp_path: Path) -> None:
-        """SkillFetcher.fetch is NOT called during mount() — it is deferred to skills:discovered.
+    async def test_fetch_called_for_watched_skill(self, tmp_path: Path) -> None:
+        """SkillFetcher.fetch is called via skills:discovered handler (deferred from mount).
 
-        mount() registers a skills:discovered handler; fetch runs only when the handler fires.
+        fetch must NOT be called during mount(), but must be called when the
+        skills:discovered handler fires.
         """
         from amplifier_module_hook_context_intelligence import mount
         from amplifier_module_hook_context_intelligence.skill_fetcher import VersionCheckResult
@@ -90,6 +91,9 @@ class TestMountSkillFetchHappyPath:
             server_url="http://localhost:8000",
             skill_path=skill_path,
         )
+
+        mock_register, calls = _capture_hooks_register()
+        coordinator.hooks.register = mock_register
 
         mock_fetcher_instance = MagicMock()
         mock_fetcher_instance.check_server_version = AsyncMock(
@@ -105,14 +109,22 @@ class TestMountSkillFetchHappyPath:
                 mock_fetcher_cls,
             ),
         ):
-            cleanup = await mount(
+            await mount(
                 coordinator,
                 config={"context_intelligence_server_url": "http://localhost:8000"},
             )
 
         # fetch must NOT be called during mount — it is deferred to skills:discovered handler
         mock_fetcher_instance.fetch.assert_not_called()
-        assert callable(cleanup)
+
+        # Find and fire the skills:discovered handler
+        handler = _find_handler(calls, "skills:discovered", "SkillFetcher-trigger")
+        await handler("skills:discovered", {})  # type: ignore[operator]
+
+        # After the handler fires, fetch should have been called exactly once
+        mock_fetcher_instance.fetch.assert_called_once_with(
+            "context-intelligence-graph-query", skill_path
+        )
 
     async def test_cleanup_is_still_callable_after_fetch(self, tmp_path: Path) -> None:
         """cleanup() returned from mount() can be awaited without error after fetch."""
@@ -179,6 +191,9 @@ class TestMountSkillFetchSkipsWhenUnconfigured:
         # tmp_path has no skills/ subdirectory — SKILL.md will not be found
         coordinator = _make_coordinator(server_url="http://localhost:8000", skill_path=None)
 
+        mock_register, calls = _capture_hooks_register()
+        coordinator.hooks.register = mock_register
+
         mock_fetcher_instance = MagicMock()
         mock_fetcher_instance.check_server_version = AsyncMock(
             return_value=VersionCheckResult(reachable=True, version="2.0.0")
@@ -197,6 +212,12 @@ class TestMountSkillFetchSkipsWhenUnconfigured:
                 coordinator,
                 config={"context_intelligence_server_url": "http://localhost:8000"},
             )
+
+            # Find and fire the skills:discovered handler — path is unresolvable, fetch must not run.
+            # Handler must be invoked while _BUNDLE_ROOT is still patched to tmp_path (empty dir),
+            # otherwise the real bundle root fallback would resolve the skill path and call fetch.
+            handler = _find_handler(calls, "skills:discovered", "SkillFetcher-trigger")
+            await handler("skills:discovered", {})  # type: ignore[operator]
 
         mock_fetcher_instance.fetch.assert_not_called()
 
@@ -409,6 +430,9 @@ class TestMountNoOpWhenServerUrlAbsent:
 
         assert "skill:unloaded" not in registered_events, (
             "skill:unloaded handler was registered even though server_url is None"
+        )
+        assert "skills:discovered" not in registered_events, (
+            "skills:discovered handler was registered even though server_url is None"
         )
 
 
