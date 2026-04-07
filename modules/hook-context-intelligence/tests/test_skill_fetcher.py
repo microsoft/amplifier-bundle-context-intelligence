@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import logging
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -80,7 +81,7 @@ class TestSkillFetcher200:
         fetcher = SkillFetcher("http://localhost:8000")
 
         with patch(
-            "amplifier_module_hook_context_intelligence.skill_fetcher.httpx.AsyncClient",
+            "httpx.AsyncClient",
             _make_http_mock(200, "skill content", 'W/"abc123"'),
         ):
             result = await fetcher.fetch("my-skill", skill_path)
@@ -94,7 +95,7 @@ class TestSkillFetcher200:
         fetcher = SkillFetcher("http://localhost:8000")
 
         with patch(
-            "amplifier_module_hook_context_intelligence.skill_fetcher.httpx.AsyncClient",
+            "httpx.AsyncClient",
             _make_http_mock(200, "skill content here", 'W/"abc123"'),
         ):
             await fetcher.fetch("my-skill", skill_path)
@@ -108,7 +109,7 @@ class TestSkillFetcher200:
         fetcher = SkillFetcher("http://localhost:8000")
 
         with patch(
-            "amplifier_module_hook_context_intelligence.skill_fetcher.httpx.AsyncClient",
+            "httpx.AsyncClient",
             _make_http_mock(200, "skill content", 'W/"etag-value"'),
         ):
             await fetcher.fetch("my-skill", skill_path)
@@ -131,7 +132,7 @@ class TestSkillFetcher304:
         fetcher = SkillFetcher("http://localhost:8000")
 
         with patch(
-            "amplifier_module_hook_context_intelligence.skill_fetcher.httpx.AsyncClient",
+            "httpx.AsyncClient",
             _make_http_mock(304, "", ""),
         ):
             result = await fetcher.fetch("my-skill", skill_path)
@@ -148,7 +149,7 @@ class TestSkillFetcher304:
         fetcher = SkillFetcher("http://localhost:8000")
 
         with patch(
-            "amplifier_module_hook_context_intelligence.skill_fetcher.httpx.AsyncClient",
+            "httpx.AsyncClient",
             _make_http_mock(304, "", ""),
         ):
             await fetcher.fetch("my-skill", skill_path)
@@ -167,7 +168,7 @@ class TestSkillFetcherUnexpectedStatus:
         fetcher = SkillFetcher("http://localhost:8000")
 
         with patch(
-            "amplifier_module_hook_context_intelligence.skill_fetcher.httpx.AsyncClient",
+            "httpx.AsyncClient",
             _make_http_mock(404, "not found", ""),
         ):
             result = await fetcher.fetch("my-skill", skill_path)
@@ -186,7 +187,7 @@ class TestSkillFetcherUnexpectedStatus:
 
         with caplog.at_level(logging.WARNING):
             with patch(
-                "amplifier_module_hook_context_intelligence.skill_fetcher.httpx.AsyncClient",
+                "httpx.AsyncClient",
                 _make_http_mock(500, "server error", ""),
             ):
                 await fetcher.fetch("my-skill", skill_path)
@@ -204,7 +205,7 @@ class TestSkillFetcherErrors:
         fetcher = SkillFetcher("http://localhost:8000")
 
         with patch(
-            "amplifier_module_hook_context_intelligence.skill_fetcher.httpx.AsyncClient",
+            "httpx.AsyncClient",
             _make_error_mock(httpx.ConnectError("refused")),
         ):
             result = await fetcher.fetch("my-skill", skill_path)
@@ -219,7 +220,7 @@ class TestSkillFetcherErrors:
         fetcher = SkillFetcher("http://localhost:8000")
 
         with patch(
-            "amplifier_module_hook_context_intelligence.skill_fetcher.httpx.AsyncClient",
+            "httpx.AsyncClient",
             _make_error_mock(httpx.TimeoutException("timed out", request=None)),
         ):
             result = await fetcher.fetch("my-skill", skill_path)
@@ -237,7 +238,7 @@ class TestSkillFetcherErrors:
 
         with caplog.at_level(logging.WARNING):
             with patch(
-                "amplifier_module_hook_context_intelligence.skill_fetcher.httpx.AsyncClient",
+                "httpx.AsyncClient",
                 _make_error_mock(httpx.ConnectError("refused")),
             ):
                 await fetcher.fetch("my-skill", skill_path)
@@ -256,7 +257,7 @@ class TestSkillFetcherETagSidecar:
 
         mock_cls = _make_http_mock(200, "skill content", "")
         with patch(
-            "amplifier_module_hook_context_intelligence.skill_fetcher.httpx.AsyncClient",
+            "httpx.AsyncClient",
             mock_cls,
         ):
             await fetcher.fetch("my-skill", skill_path)
@@ -269,13 +270,18 @@ class TestSkillFetcherETagSidecar:
         from amplifier_module_hook_context_intelligence.skill_fetcher import SkillFetcher
 
         skill_path = tmp_path / "SKILL.md"
+        # Drift detection requires both the skill file and a matching .content_hash
+        # to trust the stored ETag; create both so If-None-Match is sent.
+        skill_path.write_text("# Existing skill content")
+        content_hash_path = tmp_path / ".content_hash"
+        content_hash_path.write_text(hashlib.sha256(skill_path.read_bytes()).hexdigest())
         etag_path = tmp_path / ".etag"
         etag_path.write_text("stored-etag-value")
         fetcher = SkillFetcher("http://localhost:8000")
 
         mock_cls = _make_http_mock(304, "", "")
         with patch(
-            "amplifier_module_hook_context_intelligence.skill_fetcher.httpx.AsyncClient",
+            "httpx.AsyncClient",
             mock_cls,
         ):
             await fetcher.fetch("my-skill", skill_path)
@@ -297,7 +303,7 @@ class TestSkillFetcherETagSidecar:
         fetcher = SkillFetcher("http://localhost:8000")
 
         with patch(
-            "amplifier_module_hook_context_intelligence.skill_fetcher.httpx.AsyncClient",
+            "httpx.AsyncClient",
             _make_http_mock(200, "skill content", ""),  # no ETag in response
         ):
             result = await fetcher.fetch("my-skill", skill_path)
@@ -316,7 +322,7 @@ class TestSkillFetcherETagSidecar:
 
         mock_cls = _make_http_mock(200, "new content", "new-etag")
         with patch(
-            "amplifier_module_hook_context_intelligence.skill_fetcher.httpx.AsyncClient",
+            "httpx.AsyncClient",
             mock_cls,
         ):
             await fetcher.fetch("my-skill", skill_path)
@@ -387,7 +393,7 @@ class TestCheckServerVersion:
         fetcher = SkillFetcher("http://localhost:8000")
 
         with patch(
-            "amplifier_module_hook_context_intelligence.skill_fetcher.httpx.AsyncClient",
+            "httpx.AsyncClient",
             _make_error_mock(httpx.ConnectError("refused")),
         ):
             result = await fetcher.check_server_version()
@@ -404,7 +410,7 @@ class TestCheckServerVersion:
         fetcher = SkillFetcher("http://localhost:8000")
 
         with patch(
-            "amplifier_module_hook_context_intelligence.skill_fetcher.httpx.AsyncClient",
+            "httpx.AsyncClient",
             _make_error_mock(httpx.TimeoutException("timed out", request=None)),
         ):
             result = await fetcher.check_server_version()
@@ -421,7 +427,7 @@ class TestCheckServerVersion:
         fetcher = SkillFetcher("http://localhost:8000")
 
         with patch(
-            "amplifier_module_hook_context_intelligence.skill_fetcher.httpx.AsyncClient",
+            "httpx.AsyncClient",
             _make_version_http_mock(404, {}),
         ):
             result = await fetcher.check_server_version()
@@ -438,7 +444,7 @@ class TestCheckServerVersion:
         fetcher = SkillFetcher("http://localhost:8000")
 
         with patch(
-            "amplifier_module_hook_context_intelligence.skill_fetcher.httpx.AsyncClient",
+            "httpx.AsyncClient",
             _make_version_http_mock(200, {"version": "2.0.0"}),
         ):
             result = await fetcher.check_server_version()
@@ -455,7 +461,7 @@ class TestCheckServerVersion:
         fetcher = SkillFetcher("http://localhost:8000")
 
         with patch(
-            "amplifier_module_hook_context_intelligence.skill_fetcher.httpx.AsyncClient",
+            "httpx.AsyncClient",
             _make_version_http_mock(200, {}),
         ):
             result = await fetcher.check_server_version()

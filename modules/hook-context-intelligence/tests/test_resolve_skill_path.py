@@ -11,7 +11,7 @@ class TestResolveSkillPath:
 
     def test_prefers_skills_discovery(self, tmp_path: Path) -> None:
         """When skills_discovery capability is available, return metadata.path."""
-        from amplifier_module_hook_context_intelligence import _resolve_skill_path
+        from amplifier_module_hook_context_intelligence import _resolve_skill_path  # type: ignore[attr-defined]
 
         skill_path = tmp_path / "context-intelligence-graph-query" / "SKILL.md"
 
@@ -33,7 +33,7 @@ class TestResolveSkillPath:
     def test_fallback_to_bundle_root(self, tmp_path: Path) -> None:
         """When skills_discovery is unavailable, fall back to _BUNDLE_ROOT/skills/."""
         import amplifier_module_hook_context_intelligence as mod
-        from amplifier_module_hook_context_intelligence import _resolve_skill_path
+        from amplifier_module_hook_context_intelligence import _resolve_skill_path  # type: ignore[attr-defined]
 
         skill_name = "context-intelligence-graph-query"
         skill_dir = tmp_path / "skills" / skill_name
@@ -50,7 +50,7 @@ class TestResolveSkillPath:
     def test_returns_none_when_parent_missing(self, tmp_path: Path) -> None:
         """Returns None when _BUNDLE_ROOT doesn't contain the expected skills directory."""
         import amplifier_module_hook_context_intelligence as mod
-        from amplifier_module_hook_context_intelligence import _resolve_skill_path
+        from amplifier_module_hook_context_intelligence import _resolve_skill_path  # type: ignore[attr-defined]
 
         nonexistent = tmp_path / "does_not_exist"
 
