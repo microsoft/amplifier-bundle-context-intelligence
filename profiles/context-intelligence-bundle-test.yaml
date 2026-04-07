@@ -172,7 +172,20 @@ provision:
       PROFILE_EOF
       chmod +x /etc/profile.d/ci-test.sh
 
-    # ── 4. Docker Engine (for Neo4j only) ─────────────────────────────────────
+    # — 4. Configure git auth for GitHub (required before installing private repos) —————————————
+    # This must run BEFORE the uv tool install step that accesses the private
+    # amplifier-context-intelligence repository on GitHub.
+    - |
+      if [ -n "${GH_TOKEN:-}" ]; then
+        git config --global \
+          url."https://x-access-token:${GH_TOKEN}@github.com/".insteadOf \
+          "https://github.com/"
+        echo "Git GitHub auth configured via GH_TOKEN"
+      else
+        echo "WARN: GH_TOKEN not set — CI server install may fail for private GitHub repos"
+      fi
+
+    # — 5. Docker Engine (for Neo4j only) ——————————————————————————————————————————————————————————
     - |
       install -m 0755 -d /etc/apt/keyrings
       curl -fsSL https://download.docker.com/linux/ubuntu/gpg \
@@ -190,7 +203,7 @@ provision:
       timeout 30 sh -c 'until docker info > /dev/null 2>&1; do sleep 1; done'
       echo "Docker daemon ready: $(docker --version)"
 
-    # ── 5. Storage directories + server config file ───────────────────────────
+    # ── 6. Storage directories + server config file ───────────────────────────
     # Uses a YAML config file so the server reads everything from one place.
     # Values mirror the env vars set in /etc/profile.d/ci-test.sh.
     - |
@@ -209,7 +222,7 @@ provision:
       chmod 600 /data/server-config.yaml
       echo "Server config written to /data/server-config.yaml"
 
-    # ── 6. Neo4j (Docker container) ───────────────────────────────────────────
+    # ── 7. Neo4j (Docker container) ───────────────────────────────────────────
     # Using bolt:// (not neo4j://) — community edition single-node requires bolt.
     # Neo4j 5.x takes 60–120 s to initialise its graph store on first launch.
     - |
@@ -222,7 +235,7 @@ provision:
       timeout 150 sh -c 'until curl -sf http://localhost:7474 > /dev/null 2>&1; do sleep 3; done'
       echo "Neo4j ready"
 
-    # ── 7. Context-intelligence server (from GitHub main) ─────────────────────
+    # ── 8. Context-intelligence server (from GitHub main) ─────────────────────
     # Uses uv tool install (not pip3) to avoid PEP 668 "externally managed
     # environment" failures on Ubuntu 24.04. uv creates an isolated venv
     # and installs the server CLI + all dependencies cleanly.
@@ -243,7 +256,7 @@ provision:
       timeout 60 sh -c 'until curl -sf http://localhost:8000/status > /dev/null 2>&1; do sleep 2; done'
       echo "CI server ready: $(curl -s http://localhost:8000/status)"
 
-    # ── 8. Amplifier CLI ──────────────────────────────────────────────────────
+    # ── 9. Amplifier CLI ──────────────────────────────────────────────────────
     - uv tool install git+https://github.com/microsoft/amplifier
 
     # Configure the Anthropic provider.
@@ -260,18 +273,6 @@ provision:
               api_key: $ANTHROPIC_API_KEY
       EOF
 
-    # Configure git to authenticate with GitHub using the forwarded token.
-    # Required because amplifier-bundle-context-intelligence is a private repo.
-    - |
-      if [ -n "${GH_TOKEN:-}" ]; then
-        git config --global \
-          url."https://x-access-token:${GH_TOKEN}@github.com/".insteadOf \
-          "https://github.com/"
-        echo "Git GitHub auth configured via GH_TOKEN"
-      else
-        echo "WARN: GH_TOKEN not set — bundle add may fail for private GitHub repos"
-      fi
-
     # Add the context-intelligence bundle and make it the active bundle.
     # The bundle's hook reads AMPLIFIER_CONTEXT_INTELLIGENCE_* env vars
     # (set in /etc/profile.d/ci-test.sh) when each Amplifier session starts.
@@ -279,7 +280,7 @@ provision:
       amplifier bundle add git+https://github.com/microsoft/amplifier-bundle-context-intelligence@main
       amplifier bundle use context-intelligence
 
-    # ── 9. Test workspace ─────────────────────────────────────────────────────
+    # ── 10. Test workspace ─────────────────────────────────────────────────────
     - mkdir -p /workspace
     - |
       cat > /workspace/README.md << 'EOF'
@@ -312,7 +313,7 @@ provision:
         Credentials: neo4j / neo4j-test-pass-xyz
       EOF
 
-    # ── 10. Smoke test ────────────────────────────────────────────────────────
+    # ── 11. Smoke test ────────────────────────────────────────────────────────
     - |
       echo ""
       echo "══════════════════════════════════════════════════════════"
@@ -355,7 +356,7 @@ provision:
       echo "  cd /workspace && amplifier"
       echo "══════════════════════════════════════════════════════════"
 
-    # ── 11. Write skill-fetch test script ─────────────────────────────────────
+    # ── 12. Write skill-fetch test script ─────────────────────────────────────
     # Dropped into /workspace so it can be run after the DTU is up.
     # Tests the complete SkillFetcher lifecycle:
     #   Phase 1 — server exposes skill at the correct endpoint (no session needed)
