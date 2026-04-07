@@ -117,6 +117,12 @@ If the server is configured, open `http://localhost:8000/dashboard` — your ses
 
 ---
 
+## Exploration guide
+
+If you're wondering what's worth trying after getting set up, [`docs/context-intelligence-exploration-guide.md`](docs/context-intelligence-exploration-guide.md) is a curated list of things to explore — verifying the connection, testing session capture, querying the graph, and more. Not a formal test plan; more "here's what's interesting."
+
+---
+
 ## Embedding in an Amplifier application
 
 When integrating this hook from Python rather than through the bundle CLI, call `mount()` directly.
@@ -325,6 +331,7 @@ amplifier-bundle-context-intelligence/
 │   ├── tool-graph-query/               ← graph_query tool module
 │   └── tool-blob-read/                 ← blob_read tool module
 ├── docs/
+│   ├── context-intelligence-exploration-guide.md   ← what to explore and how to test
 │   ├── dispatch-circuit-breaker.dot    ← dispatch flow and circuit breaker state machine
 │   └── logging-handler-flow.dot        ← thin forwarder architecture
 ├── skills/
