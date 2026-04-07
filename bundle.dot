@@ -1,0 +1,90 @@
+// Context Intelligence: tracks and queries AI conversation history using a knowledge graph
+digraph context_intelligence {
+    rankdir=LR
+    fontname="Helvetica"
+    fontsize=12
+    label="Context Intelligence\nTracks and queries AI conversation history"
+    labelloc=t
+    labeljust=c
+    nodesep=0.6
+    ranksep=0.7
+    bgcolor="white"
+    source_hash="8cadbde861403596df3b01a4b478efc75253cf3210ad4263d32ce545e7541693"
+
+    node [fontname="Helvetica", fontsize=11, style="filled,rounded"]
+    edge [fontname="Helvetica", fontsize=9]
+
+    root_context_intelligence [label="Context Intelligence v0.1.0\n0 tools · 0 agents\n~98 tok aggregate", shape=box, fillcolor="#80cbc4", style="filled,rounded,bold", penwidth=2]
+
+    subgraph cluster_behaviors {
+        label="Core Capability"
+        style="filled"
+        fillcolor="#f9f9f9"
+        color="#999999"
+
+        beh_context_intelligence_behavior [label="Session Analysis & Graph Queries\n3 tools · 1 ctx\n~2206 tok", shape=box, fillcolor="#e0f2f1", style="filled,rounded"]
+    }
+
+    subgraph cluster_agents {
+        label="AI Specialists"
+        style="filled"
+        fillcolor="#f9f9f9"
+        color="#999999"
+
+        agt_graph_analyst [label="Graph Analyst\nQueries session history via knowledge graph\n~543 tok desc", shape=box, fillcolor="#c8e6c9", style="filled,rounded"]
+        agt_session_navigator [label="Session Navigator\nBrowses local session files as fallback\n~366 tok desc", shape=box, fillcolor="#c8e6c9", style="filled,rounded"]
+    }
+
+    subgraph cluster_modules {
+        label="Tools & Hooks"
+        style="filled"
+        fillcolor="#f9f9f9"
+        color="#999999"
+
+        mod_hook_context_intelligence [label="Automatic Session Tracking\nhook-context-intelligence", shape=box, fillcolor="#bbdefb", style="filled,rounded"]
+        mod_tool_blob_read [label="Retrieve Stored Data\ntool-blob-read", shape=box, fillcolor="#bbdefb", style="filled,rounded"]
+        mod_tool_context_intelligence_upload [label="Upload Session Data\ntool-context-intelligence-upload", shape=box, fillcolor="#bbdefb", style="filled,rounded"]
+        mod_tool_graph_query [label="Query the Knowledge Graph\ntool-graph-query", shape=box, fillcolor="#bbdefb", style="filled,rounded"]
+    }
+
+    subgraph cluster_context {
+        label="Background Knowledge"
+        style="filled"
+        fillcolor="#f9f9f9"
+        color="#999999"
+
+        ctx_context_intelligence_awareness_md [label="How to Use Context Intelligence\ncontext-intelligence-awareness.md\n~861 tok", shape=box, fillcolor="#e1bee7", style="filled,rounded"]
+    }
+
+    subgraph cluster_legend {
+        label="Legend"
+        style="filled"
+        fillcolor="white"
+        color="#cccccc"
+        fontsize=9
+
+        leg_root [label="root bundle", shape=box, fillcolor="#80cbc4", style="filled,rounded,bold", fontsize=9]
+        leg_behavior [label="behavior", shape=box, fillcolor="#e0f2f1", style="filled,rounded", fontsize=9]
+        leg_agent [label="agent", shape=box, fillcolor="#c8e6c9", style="filled,rounded", fontsize=9]
+        leg_module [label="module", shape=box, fillcolor="#bbdefb", style="filled,rounded", fontsize=9]
+        leg_provider [label="provider", shape=box, fillcolor="#e0e0e0", style="filled,rounded", fontsize=9]
+        leg_context [label="context", shape=box, fillcolor="#e1bee7", style="filled,rounded", fontsize=9]
+        leg_standalone [label="standalone", shape=box, fillcolor="#80cbc4", style="filled,rounded", fontsize=9]
+        leg_experiment [label="experiment", shape=box, fillcolor="#e1bee7", style="filled,rounded", fontsize=9]
+        leg_ext_cost [label="ext+cost", shape=box, fillcolor="#80cbc4", style="dashed", color="red", penwidth=2, fontsize=9]
+        leg_ext_muted [label="ext+no-cost", shape=box, fillcolor="#f5f5f5", style="dashed", fontsize=9]
+    }
+
+    disclaimer [label="Token estimates: ~4 chars/token\nSolid border = local (counted)\nDashed + red = external, hidden cost (not counted)\nDashed + muted = external, no cost\nExcludes: sub-session costs, runtime-dynamic", shape=note, fillcolor="#eceff1", style="filled", fontsize=9]
+
+    ext_githttps___github_com_microsoft_amplifier_foundation_main [label="Amplifier Foundation\n(external, cost)", shape=box, fillcolor="#80cbc4", style="dashed", color="red", penwidth=2]
+
+    root_context_intelligence -> ext_githttps___github_com_microsoft_amplifier_foundation_main [style=dashed]
+    root_context_intelligence -> beh_context_intelligence_behavior [label="composes"]
+    beh_context_intelligence_behavior -> agt_graph_analyst [label="owns"]
+    beh_context_intelligence_behavior -> agt_session_navigator [label="owns"]
+    beh_context_intelligence_behavior -> mod_tool_graph_query [label="uses", penwidth=0.8]
+    beh_context_intelligence_behavior -> mod_tool_blob_read [label="uses", penwidth=0.8]
+    beh_context_intelligence_behavior -> mod_hook_context_intelligence [label="uses", penwidth=0.8]
+    beh_context_intelligence_behavior -> ctx_context_intelligence_awareness_md [style=dotted, color=purple]
+}

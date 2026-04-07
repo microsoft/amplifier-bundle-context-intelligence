@@ -151,6 +151,7 @@ async def mount(
     from .config_resolver import ConfigResolver
     from .handlers.logging_handler import LoggingHandler
     from .skill_fetcher import (
+        TOOL_SKILLS_DISCOVERY_CAPABILITY,
         WATCHED_SKILLS,
         SkillFetcher,
         _is_skills_capable,
@@ -196,6 +197,15 @@ async def mount(
                 name="SkillFetcher-trigger",
             )
             log.info("skill_fetch_deferred: registered skills:discovered handler")
+            # tools mount before hooks in Amplifier: if skills_discovery is
+            # already registered (tool-skills already ran), fetch immediately.
+            # The event handler above handles the reverse order if it ever occurs.
+            if coordinator.get_capability(TOOL_SKILLS_DISCOVERY_CAPABILITY) is not None:
+                log.info(
+                    "skill_fetch_immediate: skills_discovery already registered "
+                    "(tools mount before hooks) — fetching now"
+                )
+                await _refresh_watched_skills(coordinator, fetcher, skills_capable)
 
     exclude = resolver.exclude_events
     active_events = {e for e in events if not any(fnmatch.fnmatch(e, p) for p in exclude)}

@@ -134,14 +134,17 @@ class TestMountSkillFetchHappyPath:
                 config={"context_intelligence_server_url": "http://localhost:8000"},
             )
 
-        # fetch must NOT be called during mount — it is deferred to skills:discovered handler
-        mock_fetcher_instance.fetch.assert_not_called()
+        # fetch IS called immediately during mount — skills_discovery was already registered
+        mock_fetcher_instance.fetch.assert_called_once_with(
+            "context-intelligence-graph-query", skill_path
+        )
+        mock_fetcher_instance.fetch.reset_mock()
 
-        # Find and fire the skills:discovered handler
+        # Find and fire the skills:discovered handler — it must also trigger a refresh
         handler = _find_handler(calls, "skills:discovered", "SkillFetcher-trigger")
         await handler("skills:discovered", {})  # type: ignore[operator]
 
-        # After the handler fires, fetch should have been called exactly once
+        # After the handler fires, fetch should have been called once more
         mock_fetcher_instance.fetch.assert_called_once_with(
             "context-intelligence-graph-query", skill_path
         )
@@ -299,12 +302,15 @@ class TestSkillUnloadedHandler:
                 config={"context_intelligence_server_url": "http://localhost:8000"},
             )
 
+        # Reset calls from mount-time immediate check (skills_discovery already registered)
+        mock_fetcher_instance.fetch.reset_mock()
+
         handler = _find_handler(registered, "skill:unloaded", "SkillFetcher")
         await handler(  # type: ignore[operator]
             "skill:unloaded", {"skill_name": "context-intelligence-graph-query"}
         )
 
-        # New behavior: fetcher.fetch is called directly (no asyncio.create_task)
+        # fetch is called directly by the skill:unloaded handler (no asyncio.create_task)
         mock_fetcher_instance.fetch.assert_awaited_once()
 
     async def test_skill_unloaded_skips_fetch_for_unwatched_skill(self, tmp_path: Path) -> None:
@@ -339,11 +345,15 @@ class TestSkillUnloadedHandler:
                 config={"context_intelligence_server_url": "http://localhost:8000"},
             )
 
+        # Reset calls from mount-time immediate check (skills_discovery already registered)
+        mock_fetcher_instance.fetch.reset_mock()
+
         handler = _find_handler(registered, "skill:unloaded", "SkillFetcher")
         await handler(  # type: ignore[operator]
             "skill:unloaded", {"skill_name": "some-other-unrelated-skill"}
         )
 
+        # skill is unwatched — no additional fetch should be triggered by the handler
         mock_fetcher_instance.fetch.assert_not_awaited()
 
     async def test_does_not_crash_when_metadata_not_found(self, tmp_path: Path) -> None:
@@ -504,10 +514,11 @@ class TestMountThreeWayBranch:
                 config={"context_intelligence_server_url": "http://localhost:8000"},
             )
 
-        # Both fetch and write_legacy_content must NOT be called during mount
+        # fetch is NOT called for old server (write_legacy_content is used instead)
         mock_fetcher_instance.fetch.assert_not_called()
-        mock_fetcher_instance.write_legacy_content.assert_not_called()
-        # skills:discovered SkillFetcher-trigger handler must be registered
+        # write_legacy_content IS called immediately during mount — skills_discovery was already registered
+        mock_fetcher_instance.write_legacy_content.assert_called_once()
+        # skills:discovered SkillFetcher-trigger handler must still be registered
         _find_handler(calls, "skills:discovered", "SkillFetcher-trigger")
 
     async def test_new_server_registers_skills_discovered_handler(self, tmp_path: Path) -> None:
@@ -551,10 +562,10 @@ class TestMountThreeWayBranch:
                 config={"context_intelligence_server_url": "http://localhost:8000"},
             )
 
-        # fetch must NOT be called during mount — it is deferred to skills:discovered handler
-        mock_fetcher_instance.fetch.assert_not_called()
+        # fetch IS called immediately during mount — skills_discovery was already registered
+        mock_fetcher_instance.fetch.assert_called_once()
         mock_fetcher_instance.write_legacy_content.assert_not_called()
-        # skills:discovered SkillFetcher-trigger handler must be registered
+        # skills:discovered SkillFetcher-trigger handler must still be registered
         _find_handler(calls, "skills:discovered", "SkillFetcher-trigger")
 
 
@@ -604,14 +615,17 @@ class TestSkillsDiscoveredHandler:
                 config={"context_intelligence_server_url": "http://localhost:8000"},
             )
 
-        # fetch must NOT be called during mount — deferred to the skills:discovered handler
-        mock_fetcher_instance.fetch.assert_not_called()
+        # fetch IS called immediately during mount — skills_discovery was already registered
+        mock_fetcher_instance.fetch.assert_called_once_with(
+            "context-intelligence-graph-query", skill_path
+        )
+        mock_fetcher_instance.fetch.reset_mock()
 
-        # Find the skills:discovered handler and fire it
+        # Find the skills:discovered handler and fire it — handler must also trigger a refresh
         handler = _find_handler(calls, "skills:discovered", "SkillFetcher-trigger")
         await handler("skills:discovered", {})  # type: ignore[operator]
 
-        # After the handler fires, fetch should have been called exactly once
+        # After the handler fires, fetch should have been called once more
         mock_fetcher_instance.fetch.assert_called_once_with(
             "context-intelligence-graph-query", skill_path
         )
