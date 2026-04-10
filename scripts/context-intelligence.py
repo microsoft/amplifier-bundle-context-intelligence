@@ -23,10 +23,8 @@ from __future__ import annotations
 
 import argparse
 import json
-import logging
 import os
 import sys
-import time  # noqa: F401  (used by cmd_upload in Task 12)
 from pathlib import Path
 
 # ---------------------------------------------------------------------------
@@ -40,18 +38,6 @@ if str(_root) not in sys.path:
     sys.path.insert(0, str(_root))
 
 from context_intelligence import CIClient, resolve_config  # noqa: E402, F401
-from context_intelligence.config import AMPLIFIER_DIR  # noqa: E402, F401
-from context_intelligence.reconstruct import (  # noqa: E402, F401
-    build_disk_only_metadata,  # noqa: F401
-    discover_sessions,  # noqa: F401
-    extract_events,  # noqa: F401
-    extract_metadata,  # noqa: F401
-    extract_transcript,  # noqa: F401
-    sessions_dir_for_project,  # noqa: F401
-    workspace_slug,  # noqa: F401
-)
-
-log = logging.getLogger("context-intelligence")
 
 
 # ---------------------------------------------------------------------------
