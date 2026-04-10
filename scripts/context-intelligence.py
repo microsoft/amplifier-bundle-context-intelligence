@@ -353,8 +353,57 @@ def cmd_upload(args: argparse.Namespace) -> int:
 
 
 def cmd_status(args: argparse.Namespace) -> int:
-    """Check server health and session statistics. (Task 13)"""
-    raise NotImplementedError("cmd_status is implemented in Task 13")
+    """Check server health and session statistics. (Task 12)"""
+    # ── Logging ──────────────────────────────────────────────────────────────
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)-5s %(message)s",
+        datefmt="%H:%M:%S",
+    )
+
+    # ── Resolve configuration ────────────────────────────────────────────────
+    server_url, api_key = _ci_config.resolve_config(
+        server_url=args.server_url,
+        api_key=args.api_key,
+    )
+    client = CIClient(server_url, api_key)
+
+    # ── Check server health ──────────────────────────────────────────────────
+    health = client.health_check()
+    status = health.get("status", "unknown")
+
+    if status != "ok":
+        result: dict = {
+            "status": status,
+            "server_url": server_url,
+            "error": health.get("error", f"Server status: {status}"),
+        }
+        print(json.dumps(result, indent=4))
+        return 1
+
+    # ── Query session counts by workspace ────────────────────────────────────
+    cypher_workspace = args.workspace if args.workspace else "*"
+    rows = client.cypher(
+        "MATCH (s:Session) RETURN s.workspace AS workspace, count(s) AS count ORDER BY count DESC",
+        workspace=cypher_workspace,
+    )
+
+    workspaces = []
+    total_sessions = 0
+    for row in rows:
+        ws = row.get("workspace", "")
+        count = row.get("count", 0)
+        workspaces.append({"workspace": ws, "session_count": count})
+        total_sessions += count
+
+    result = {
+        "status": "ok",
+        "server_url": server_url,
+        "total_sessions": total_sessions,
+        "workspaces": workspaces,
+    }
+    print(json.dumps(result, indent=4))
+    return 0
 
 
 def cmd_query(args: argparse.Namespace) -> int:
