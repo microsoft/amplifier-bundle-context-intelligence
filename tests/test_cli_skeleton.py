@@ -50,6 +50,23 @@ def _read_script_text() -> str:
     return SCRIPT_PATH.read_text()
 
 
+def _patch_cmd_placeholders(module):
+    """Ensure cmd_* functions exist as no-ops so main() can be called."""
+    for name in ["cmd_reconstruct", "cmd_upload", "cmd_status", "cmd_query"]:
+        if not hasattr(module, name):
+            setattr(module, name, lambda args: 0)
+
+
+def _register_subcommand_mock(module, subcommand: str, mock_fn):
+    """Re-run main() argument parsing with a mock func for the given subcommand.
+
+    This works by rebuilding the argument parser and re-registering the mock.
+    We do it by monkey-patching the module's cmd_* attribute before calling main().
+    """
+    cmd_name = f"cmd_{subcommand}"
+    setattr(module, cmd_name, mock_fn)
+
+
 # ---------------------------------------------------------------------------
 # File existence
 # ---------------------------------------------------------------------------
@@ -870,25 +887,3 @@ class TestPlaceholderComment:
         assert "Tasks 11" in text or "task 11" in text.lower() or "11-14" in text, (
             "Script must have placeholder comment mentioning Tasks 11-14"
         )
-
-
-# ---------------------------------------------------------------------------
-# Helper utilities (used across test classes)
-# ---------------------------------------------------------------------------
-
-
-def _patch_cmd_placeholders(module):
-    """Ensure cmd_* functions exist as no-ops so main() can be called."""
-    for name in ["cmd_reconstruct", "cmd_upload", "cmd_status", "cmd_query"]:
-        if not hasattr(module, name):
-            setattr(module, name, lambda args: 0)
-
-
-def _register_subcommand_mock(module, subcommand: str, mock_fn):
-    """Re-run main() argument parsing with a mock func for the given subcommand.
-
-    This works by rebuilding the argument parser and re-registering the mock.
-    We do it by monkey-patching the module's cmd_* attribute before calling main().
-    """
-    cmd_name = f"cmd_{subcommand}"
-    setattr(module, cmd_name, mock_fn)

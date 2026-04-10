@@ -150,7 +150,6 @@ def main(argv: list[str] | None = None) -> int:
     recon_p.add_argument(
         "--resolve-blobs",
         action="store_true",
-        default=False,
         help="Resolve $blob_ref URIs and inline full content in events.jsonl",
     )
     recon_p.add_argument(
