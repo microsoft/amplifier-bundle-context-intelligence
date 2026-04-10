@@ -13,6 +13,38 @@ Level 2 — Network I/O
 Level 3 — Filesystem + Orchestration
     Code that reads session files from disk, drives upload pipelines, and
     coordinates the other levels. Depends on Levels 1 and 2.
-
-Imports are deferred to Task 9 when the public API is finalised.
 """
+
+from __future__ import annotations
+
+from context_intelligence.client import CIClient
+from context_intelligence.config import (
+    AMPLIFIER_DIR,
+    LOG_SCHEMA,
+    SETTINGS_PATH,
+    resolve_config,
+)
+from context_intelligence.reconstruct import (
+    build_disk_only_metadata,
+    discover_sessions,
+    extract_events,
+    extract_metadata,
+    extract_transcript,
+    sessions_dir_for_project,
+    workspace_slug,
+)
+
+__all__ = [
+    "CIClient",
+    "resolve_config",
+    "LOG_SCHEMA",
+    "AMPLIFIER_DIR",
+    "SETTINGS_PATH",
+    "extract_events",
+    "extract_transcript",
+    "extract_metadata",
+    "build_disk_only_metadata",
+    "discover_sessions",
+    "workspace_slug",
+    "sessions_dir_for_project",
+]
