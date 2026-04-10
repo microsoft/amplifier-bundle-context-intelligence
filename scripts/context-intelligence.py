@@ -23,8 +23,10 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import os
 import sys
+import time
 from pathlib import Path
 
 # ---------------------------------------------------------------------------
@@ -37,7 +39,16 @@ _root = _here.parent
 if str(_root) not in sys.path:
     sys.path.insert(0, str(_root))
 
-from context_intelligence import CIClient, resolve_config  # noqa: E402, F401
+from context_intelligence import CIClient  # noqa: E402
+from context_intelligence.config import resolve_config  # noqa: E402, F401
+
+import context_intelligence.config as _ci_config  # noqa: E402
+import context_intelligence.reconstruct.discover as _ci_discover  # noqa: E402
+import context_intelligence.reconstruct.events as _ci_events  # noqa: E402
+import context_intelligence.reconstruct.metadata as _ci_metadata  # noqa: E402
+import context_intelligence.reconstruct.transcript as _ci_transcript  # noqa: E402
+
+log = logging.getLogger("context_intelligence_cli")
 
 
 # ---------------------------------------------------------------------------
@@ -91,7 +102,249 @@ def _add_server_args(parser: argparse.ArgumentParser) -> None:
 
 def cmd_reconstruct(args: argparse.Namespace) -> int:
     """Reconstruct local session files from the graph server. (Task 11)"""
-    raise NotImplementedError("cmd_reconstruct is implemented in Task 11")
+    # ── Logging ──────────────────────────────────────────────────────────────
+    logging.basicConfig(
+        level=logging.DEBUG if args.verbose else logging.INFO,
+        format="%(asctime)s %(levelname)-5s %(message)s",
+        datefmt="%H:%M:%S",
+    )
+
+    # ── Resolve configuration ─────────────────────────────────────────────────
+    server_url, api_key = _ci_config.resolve_config(
+        server_url=args.server_url,
+        api_key=args.api_key,
+    )
+    client = CIClient(server_url, api_key)
+
+    # Determine what to reconstruct.
+    # When any --*-only flag is set, only that artifact is produced.
+    only_flags = (args.events_only, args.transcript_only, args.metadata_only)
+    any_only = any(only_flags)
+    do_events = args.events_only if any_only else True
+    do_transcript = args.transcript_only if any_only else True
+    do_metadata = args.metadata_only if any_only else True
+
+    # ── Derive workspace and session directory ────────────────────────────────
+    workspace = _ci_discover.workspace_slug(args.project_dir)
+    sessions_dir = _ci_discover.sessions_dir_for_project(args.project_dir)
+    log.info("Project dir : %s", os.path.abspath(args.project_dir))
+    log.info("Workspace   : %s", workspace)
+    log.info("Sessions dir: %s", sessions_dir)
+    log.info("Server      : %s", server_url)
+    log.info(
+        "Reconstruct : %s",
+        " + ".join(
+            (["events.jsonl"] if do_events else [])
+            + (["transcript.jsonl"] if do_transcript else [])
+            + (["metadata.json"] if do_metadata else [])
+        ),
+    )
+    if args.resolve_blobs:
+        log.info("Blob resolution: ENABLED")
+
+    # ── Discover sessions ─────────────────────────────────────────────────────
+    log.info("Discovering sessions for workspace %s ...", workspace)
+    sessions, disk_only_ids = _ci_discover.discover_sessions(client, workspace, sessions_dir)
+
+    # Filter to a specific session if requested
+    if args.session:
+        prefix = args.session
+        sessions = [s for s in sessions if (s.get("s.node_id") or "").startswith(prefix)]
+        disk_only_ids = [sid for sid in disk_only_ids if sid.startswith(prefix)]
+
+    if not sessions and not disk_only_ids:
+        log.warning("No sessions found for workspace %s", workspace)
+        sys.exit(0)
+
+    log.info(
+        "Found %d graph session(s), %d disk-only session(s)",
+        len(sessions),
+        len(disk_only_ids),
+    )
+
+    # ── Process each session ──────────────────────────────────────────────────
+    total_count = len(sessions) + len(disk_only_ids)
+    stats: dict[str, int] = {
+        "total": total_count,
+        "disk_only": len(disk_only_ids),
+        "events_written": 0,
+        "events_skipped": 0,
+        "transcript_written": 0,
+        "transcript_skipped": 0,
+        "metadata_written": 0,
+        "metadata_skipped": 0,
+        "errors": 0,
+    }
+    start_time = time.time()
+
+    for idx, session in enumerate(sessions, 1):
+        session_id = session.get("s.node_id", "")
+        status = session.get("s.status", "")
+        started = session.get("s.started_at", "")
+
+        log.info(
+            "[%d/%d] Session %s (status=%s, started=%s)",
+            idx,
+            stats["total"],
+            session_id[:12],
+            status,
+            (started or "?")[:19],
+        )
+
+        session_dir = sessions_dir / session_id
+        events_path = session_dir / "events.jsonl"
+        transcript_path = session_dir / "transcript.jsonl"
+
+        # ── events.jsonl ──────────────────────────────────────────────────────
+        if do_events:
+            if events_path.exists() and not args.force:
+                log.info("  events.jsonl exists, skipping (use --force to overwrite)")
+                stats["events_skipped"] += 1
+            else:
+                try:
+                    events = _ci_events.extract_events(
+                        client,
+                        session_id,
+                        workspace,
+                        resolve_blobs=args.resolve_blobs,
+                    )
+                    if events:
+                        if args.dry_run:
+                            log.info(
+                                "  [DRY RUN] Would write events.jsonl (%d events)",
+                                len(events),
+                            )
+                        else:
+                            n = write_jsonl(events_path, events)
+                            log.info("  Wrote events.jsonl (%d events)", n)
+                        stats["events_written"] += 1
+                    else:
+                        log.info("  No events found, skipping events.jsonl")
+                        stats["events_skipped"] += 1
+                except Exception as exc:
+                    log.error("  Failed to extract events: %s", exc, exc_info=args.verbose)
+                    stats["errors"] += 1
+
+        # ── transcript.jsonl ──────────────────────────────────────────────────
+        if do_transcript:
+            if transcript_path.exists() and not args.force:
+                log.info("  transcript.jsonl exists, skipping (use --force to overwrite)")
+                stats["transcript_skipped"] += 1
+            else:
+                try:
+                    messages = _ci_transcript.extract_transcript(client, session_id, workspace)
+                    if messages:
+                        if args.dry_run:
+                            log.info(
+                                "  [DRY RUN] Would write transcript.jsonl (%d messages)",
+                                len(messages),
+                            )
+                        else:
+                            n = write_jsonl(transcript_path, messages)
+                            log.info("  Wrote transcript.jsonl (%d messages)", n)
+                        stats["transcript_written"] += 1
+                    else:
+                        log.info("  No messages found, skipping transcript.jsonl")
+                        stats["transcript_skipped"] += 1
+                except Exception as exc:
+                    log.error("  Failed to extract transcript: %s", exc, exc_info=args.verbose)
+                    stats["errors"] += 1
+
+        # ── metadata.json ─────────────────────────────────────────────────────
+        if do_metadata:
+            metadata_path = session_dir / "metadata.json"
+            if metadata_path.exists() and not args.force:
+                log.info("  metadata.json exists, skipping (use --force to overwrite)")
+                stats["metadata_skipped"] += 1
+            else:
+                try:
+                    metadata = _ci_metadata.extract_metadata(client, workspace, session_id)
+                    if metadata:
+                        if args.dry_run:
+                            log.info(
+                                "  [DRY RUN] Would write metadata.json (%s)",
+                                metadata.get("bundle", "no bundle"),
+                            )
+                        else:
+                            write_json(metadata_path, metadata)
+                            bundle_info = metadata.get("bundle", "no bundle")
+                            log.info("  Wrote metadata.json (bundle=%s)", bundle_info)
+                        stats["metadata_written"] += 1
+                    else:
+                        log.info("  No metadata extracted, skipping metadata.json")
+                        stats["metadata_skipped"] += 1
+                except Exception as exc:
+                    log.error("  Failed to extract metadata: %s", exc, exc_info=args.verbose)
+                    stats["errors"] += 1
+
+    # ── Process disk-only sessions ────────────────────────────────────────────
+    if disk_only_ids and do_metadata:
+        graph_count = len(sessions)
+        for didx, disk_sid in enumerate(disk_only_ids, 1):
+            overall_idx = graph_count + didx
+            session_dir = sessions_dir / disk_sid
+
+            log.info(
+                "[%d/%d] Session %s (disk-only)",
+                overall_idx,
+                stats["total"],
+                disk_sid[:12],
+            )
+
+            metadata_path = session_dir / "metadata.json"
+            if metadata_path.exists() and not args.force:
+                log.info("  metadata.json exists, skipping (use --force to overwrite)")
+                stats["metadata_skipped"] += 1
+            else:
+                try:
+                    metadata = _ci_metadata.build_disk_only_metadata(disk_sid, session_dir)
+                    if args.dry_run:
+                        log.info("  [DRY RUN] Would write metadata.json (disk-only)")
+                    else:
+                        write_json(metadata_path, metadata)
+                        log.info("  Wrote metadata.json (disk-only)")
+                    stats["metadata_written"] += 1
+                except Exception as exc:
+                    log.error(
+                        "  Failed to build disk-only metadata: %s",
+                        exc,
+                        exc_info=args.verbose,
+                    )
+                    stats["errors"] += 1
+
+    # ── Summary ───────────────────────────────────────────────────────────────
+    elapsed = time.time() - start_time
+    log.info("")
+    log.info("═══ Summary ════════════════════════════════════════════════════════")
+    log.info("Sessions processed : %d", stats["total"])
+    if stats["disk_only"]:
+        log.info("  (disk-only       : %d)", stats["disk_only"])
+    if do_events:
+        log.info(
+            "events.jsonl       : %d written, %d skipped",
+            stats["events_written"],
+            stats["events_skipped"],
+        )
+    if do_transcript:
+        log.info(
+            "transcript.jsonl   : %d written, %d skipped",
+            stats["transcript_written"],
+            stats["transcript_skipped"],
+        )
+    if do_metadata:
+        log.info(
+            "metadata.json      : %d written, %d skipped",
+            stats["metadata_written"],
+            stats["metadata_skipped"],
+        )
+    if stats["errors"]:
+        log.info("Errors             : %d", stats["errors"])
+    log.info("Time elapsed       : %.1fs", elapsed)
+    if args.dry_run:
+        log.info("(DRY RUN \u2014 no files were written)")
+    log.info("═" * 63)
+
+    return 1 if stats["errors"] else 0
 
 
 def cmd_upload(args: argparse.Namespace) -> int:
