@@ -17,7 +17,6 @@ Covers:
 from __future__ import annotations
 
 import json
-import os
 import tempfile
 from pathlib import Path
 from unittest.mock import MagicMock
@@ -36,7 +35,10 @@ class TestImport:
 
     def test_acceptance_criteria_command(self):
         """Simulate the acceptance criteria import command."""
-        from context_intelligence.reconstruct.metadata import build_disk_only_metadata, extract_metadata
+        from context_intelligence.reconstruct.metadata import (
+            build_disk_only_metadata,
+            extract_metadata,
+        )
 
         assert extract_metadata is not None
         assert build_disk_only_metadata is not None
@@ -138,7 +140,7 @@ class TestExtractModelFromConfig:
         assert _extract_model_from_config({}) == ""
         assert _extract_model_from_config({"providers": []}) == ""
 
-    def test_returns_empty_when_no_priority_zero(self):
+    def test_returns_first_provider_model_as_fallback(self):
         """Falls back to first provider when no priority==0 provider found."""
         from context_intelligence.reconstruct.metadata import _extract_model_from_config
 
@@ -370,9 +372,7 @@ class TestGenerateSessionName:
         """Returns the prompt_preview of the first OrchestratorRun."""
         from context_intelligence.reconstruct.metadata import _generate_session_name
 
-        mock_client = self._make_mock_client(
-            [{"r.prompt_preview": "What is the weather today?"}]
-        )
+        mock_client = self._make_mock_client([{"r.prompt_preview": "What is the weather today?"}])
         result = _generate_session_name(mock_client, "workspace1", "sess-abc")
         assert result == "What is the weather today?"
 
@@ -427,8 +427,6 @@ class TestBuildSubsessionMetadata:
 
     def _get_subsession_match(self, session_id):
         """Helper to get a regex match for a subsession ID."""
-        import re
-
         from context_intelligence.reconstruct.metadata import _SUBSESSION_ID_RE
 
         return _SUBSESSION_ID_RE.match(session_id)
@@ -704,13 +702,24 @@ class TestBuildRootMetadata:
 class TestExtractMetadata:
     """extract_metadata() must query Session node and build proper metadata."""
 
-    def _make_mock_client(self, session_rows=None, run_rows=None, session_name_rows=None,
-                          blob_keys=None, session_start_blob=None):
+    def _make_mock_client(
+        self,
+        session_rows=None,
+        run_rows=None,
+        session_name_rows=None,
+        blob_keys=None,
+        session_start_blob=None,
+    ):
         """Create a mock CIClient with configured cypher responses."""
         mock_client = MagicMock()
 
         def cypher_side_effect(query, workspace="*"):
-            if "Session" in query and "node_id" in query and "turn_count" not in query and "OrchestratorRun" not in query:
+            if (
+                "Session" in query
+                and "node_id" in query
+                and "turn_count" not in query
+                and "OrchestratorRun" not in query
+            ):
                 return session_rows if session_rows is not None else []
             if "OrchestratorRun" in query and "count" in query:
                 return run_rows if run_rows is not None else [{"turn_count": 0}]

@@ -10,6 +10,7 @@ Extracted from prototype scripts/ci-reconstruct-sessions.py (lines 771-1044).
 
 from __future__ import annotations
 
+import json
 import logging
 import re
 from datetime import datetime, timezone
@@ -61,6 +62,8 @@ def _find_session_start_blob_key(blob_keys: set[str], session_id: str) -> str | 
     """Find the session_start raw blob key from available blob keys.
 
     Key pattern: ``{session_id}__session_start__{epoch}__raw``
+
+    ``session_id`` is reserved for future key-format validation.
     """
     for key in blob_keys:
         if "session_start" in key and key.endswith("__raw"):
@@ -102,8 +105,6 @@ def build_disk_only_metadata(session_id: str, session_dir: Path) -> dict:
     ci_meta_path = session_dir / "context-intelligence" / "metadata.json"
     if ci_meta_path.is_file():
         try:
-            import json
-
             with open(ci_meta_path) as f:
                 ci_meta = json.load(f)
             if isinstance(ci_meta, dict):
@@ -117,7 +118,7 @@ def build_disk_only_metadata(session_id: str, session_dir: Path) -> dict:
                     metadata["parent_id"] = ci_meta["parent_id"]
                 if ci_meta.get("working_dir"):
                     metadata["working_dir"] = ci_meta["working_dir"]
-        except (Exception,) as exc:
+        except Exception as exc:
             log.debug("  Could not read CI metadata: %s", exc)
 
     # Fallback: use directory ctime if no created timestamp
@@ -222,7 +223,7 @@ def _build_root_metadata(
     session_id: str,
     started_at: str,
     turn_count: int,
-    session_data: dict,
+    session_data: dict,  # TODO: use as 3rd fallback for bundle_name/model/working_dir (graph properties tier)
 ) -> dict:
     """Build metadata for a root session, resolving the session_start blob."""
     metadata: dict[str, Any] = {
