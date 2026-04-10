@@ -407,8 +407,28 @@ def cmd_status(args: argparse.Namespace) -> int:
 
 
 def cmd_query(args: argparse.Namespace) -> int:
-    """Run ad-hoc Cypher queries against the graph. (Task 14)"""
-    raise NotImplementedError("cmd_query is implemented in Task 14")
+    """Run ad-hoc Cypher queries against the graph. (Task 13)"""
+    # ── Logging ──────────────────────────────────────────────────────────────
+    # Use WARNING level to keep stdout clean (only errors/warnings go to stderr)
+    logging.basicConfig(
+        level=logging.WARNING,
+        format="%(asctime)s %(levelname)-5s %(message)s",
+        datefmt="%H:%M:%S",
+    )
+
+    # ── Resolve configuration ─────────────────────────────────────────────────
+    server_url, api_key = _ci_config.resolve_config(
+        server_url=args.server_url,
+        api_key=args.api_key,
+    )
+    client = CIClient(server_url, api_key)
+
+    # ── Run Cypher query ──────────────────────────────────────────────────────
+    results = client.cypher(args.cypher, workspace=args.workspace)
+
+    # ── Print results as indented JSON to stdout ──────────────────────────────
+    print(json.dumps(results, indent=4))
+    return 0
 
 
 # ---------------------------------------------------------------------------
