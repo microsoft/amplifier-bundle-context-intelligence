@@ -154,7 +154,7 @@ def cmd_reconstruct(args: argparse.Namespace) -> int:
 
     if not sessions and not disk_only_ids:
         log.warning("No sessions found for workspace %s", workspace)
-        sys.exit(0)
+        return 0
 
     log.info(
         "Found %d graph session(s), %d disk-only session(s)",

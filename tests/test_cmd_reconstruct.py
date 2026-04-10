@@ -21,10 +21,8 @@ from __future__ import annotations
 
 import argparse
 import importlib.util
-import logging
 import sys
 from pathlib import Path
-from typing import Any
 from unittest.mock import MagicMock, patch
 
 REPO_ROOT = Path(__file__).parent.parent
@@ -111,7 +109,9 @@ class TestCmdReconstructExists:
             try:
                 result = module.cmd_reconstruct(args)
                 # If it returns, it must return an int
-                assert isinstance(result, int), f"cmd_reconstruct must return int, got {type(result)}"
+                assert isinstance(result, int), (
+                    f"cmd_reconstruct must return int, got {type(result)}"
+                )
             except NotImplementedError:
                 raise AssertionError(
                     "cmd_reconstruct raised NotImplementedError — must be implemented in Task 11"
@@ -144,7 +144,9 @@ class TestCmdReconstructReturnCode:
                 result = module.cmd_reconstruct(args)
                 assert result == 0, f"Expected 0 on no sessions, got {result}"
             except SystemExit as e:
-                assert e.code == 0 or e.code is None, f"Expected sys.exit(0), got sys.exit({e.code!r})"
+                assert e.code == 0 or e.code is None, (
+                    f"Expected sys.exit(0), got sys.exit({e.code!r})"
+                )
 
     def test_returns_zero_on_successful_processing(self):
         """Returns 0 when sessions are processed without errors."""
@@ -180,7 +182,9 @@ class TestCmdReconstructReturnCode:
                 result = module.cmd_reconstruct(args)
                 assert result == 0, f"Expected 0 on success, got {result}"
             except SystemExit as e:
-                assert e.code == 0 or e.code is None, f"Expected sys.exit(0), got sys.exit({e.code!r})"
+                assert e.code == 0 or e.code is None, (
+                    f"Expected sys.exit(0), got sys.exit({e.code!r})"
+                )
 
     def test_returns_one_on_extract_errors(self):
         """Returns 1 when extraction errors occur."""
@@ -459,9 +463,7 @@ class TestSessionFiltering:
         )
         # Verify the call was for the matching session
         call_args = extract_events_mock.call_args
-        assert "abc123def456" in str(call_args), (
-            f"Expected call for abc123def456, got {call_args}"
-        )
+        assert "abc123def456" in str(call_args), f"Expected call for abc123def456, got {call_args}"
 
 
 # ---------------------------------------------------------------------------
