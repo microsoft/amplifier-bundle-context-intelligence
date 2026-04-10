@@ -1,0 +1,39 @@
+[project]
+name = "amplifier-bundle-context-intelligence"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = []
+
+[build-system]
+requires = [
+    "hatchling",
+]
+build-backend = "hatchling.build"
+
+[tool.uv]
+package = true
+
+[tool.hatch.build.targets.wheel]
+packages = [
+    "context_intelligence",
+]
+
+[tool.hatch.metadata]
+allow-direct-references = true
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "pyright>=1.1",
+    "ruff>=0.4",
+]
+
+[tool.pyright]
+pythonVersion = "3.11"
+typeCheckingMode = "basic"
+include = ["context_intelligence", "tests"]
+extraPaths = ["."]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
