@@ -38,47 +38,56 @@ class TestImport:
 class TestSafeJsonLoads:
     """_safe_json_loads() must parse JSON strings and pass through non-strings."""
 
-    def setup_method(self):
-        from context_intelligence.client import _safe_json_loads
-
-        self._fn = _safe_json_loads
-
     def test_parses_json_dict_string(self):
         """A JSON dict string is parsed into a dict."""
-        result = self._fn('{"key": "value"}')
+        from context_intelligence.client import _safe_json_loads
+
+        result = _safe_json_loads('{"key": "value"}')
         assert result == {"key": "value"}
 
     def test_parses_json_list_string(self):
         """A JSON list string is parsed into a list."""
-        result = self._fn("[1, 2, 3]")
+        from context_intelligence.client import _safe_json_loads
+
+        result = _safe_json_loads("[1, 2, 3]")
         assert result == [1, 2, 3]
 
     def test_parses_json_number_string(self):
         """A JSON number string is parsed into a number."""
-        result = self._fn("42")
+        from context_intelligence.client import _safe_json_loads
+
+        result = _safe_json_loads("42")
         assert result == 42
 
     def test_returns_dict_as_is(self):
         """A dict passed directly is returned as-is."""
+        from context_intelligence.client import _safe_json_loads
+
         d = {"already": "parsed"}
-        result = self._fn(d)
+        result = _safe_json_loads(d)
         assert result is d
 
     def test_returns_list_as_is(self):
         """A list passed directly is returned as-is."""
+        from context_intelligence.client import _safe_json_loads
+
         lst = [1, 2, 3]
-        result = self._fn(lst)
+        result = _safe_json_loads(lst)
         assert result is lst
 
     def test_returns_none_as_is(self):
         """None is returned as-is."""
-        result = self._fn(None)
+        from context_intelligence.client import _safe_json_loads
+
+        result = _safe_json_loads(None)
         assert result is None
 
     def test_returns_invalid_json_string_as_is(self):
         """A non-JSON string is returned as-is (not raised)."""
+        from context_intelligence.client import _safe_json_loads
+
         bad = "not json"
-        result = self._fn(bad)
+        result = _safe_json_loads(bad)
         assert result == bad
 
 
@@ -108,11 +117,6 @@ class TestCIClientInit:
 
 class TestCIClientCypher:
     """CIClient.cypher() must POST to /cypher and return list[dict]."""
-
-    def _make_client(self):
-        from context_intelligence.client import CIClient
-
-        return CIClient("http://localhost:8000", "testkey")
 
     def test_cypher_returns_list_of_dicts(self):
         """cypher() returns a list[dict] from the server response."""
@@ -227,8 +231,8 @@ class TestCIClientListBlobKeys:
 
         assert result == set()
 
-    def test_list_blob_keys_returns_none_on_error(self):
-        """list_blob_keys() returns empty set or raises, but doesn't crash with no traceback."""
+    def test_list_blob_keys_returns_empty_set_on_none_response(self):
+        """list_blob_keys() returns empty set when _http_get returns None."""
         from context_intelligence.client import CIClient
 
         client = CIClient("http://localhost:8000", "key")
@@ -333,13 +337,13 @@ class TestCIClientHealthCheck:
         assert "/health" in url
 
     def test_health_check_returns_error_dict_on_failure(self):
-        """health_check() returns a dict with status and session_count even on failure."""
+        """health_check() returns a dict with status and session_count even when _http_get returns None."""
         from context_intelligence.client import CIClient
 
         client = CIClient("http://localhost:8000", "key")
 
         with patch("context_intelligence.client._http_get") as mock_get:
-            mock_get.side_effect = Exception("connection refused")
+            mock_get.return_value = None
             result = client.health_check()
 
         assert isinstance(result, dict)

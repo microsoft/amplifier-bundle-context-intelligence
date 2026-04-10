@@ -268,11 +268,7 @@ class CIClient:
             Server health response with ``status`` and ``session_count``.
         """
         url = f"{self._server_url}/health"
-        try:
-            result = _http_get(url, self._auth_headers())
-        except Exception as exc:
-            logger.debug("health_check error: %s", exc)
-            result = None
+        result = _http_get(url, self._auth_headers())
 
         if isinstance(result, dict):
             # Ensure required keys are present
