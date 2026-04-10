@@ -90,6 +90,18 @@ def _make_event_line(
     return result
 
 
+def _maybe_append(
+    events: list[dict[str, Any]],
+    event_type: str,
+    data_json_str: str | None,
+    session_id: str,
+) -> None:
+    """Build one event line and append it to *events* if the result is not None."""
+    ev = _make_event_line(event_type, data_json_str, session_id)
+    if ev:
+        events.append(ev)
+
+
 # ---------------------------------------------------------------------------
 # Blob resolution
 # ---------------------------------------------------------------------------
@@ -138,7 +150,9 @@ def _resolve_event_blobs(
 
         blob_session, blob_key = parts
 
-        # Check cache first
+        # Cache key is blob_key only (not blob_session/blob_key) because
+        # extract_events is session-scoped, so a session's blob keys are unique
+        # within a single invocation and cannot collide with themselves.
         if blob_key in blob_cache:
             data[field] = blob_cache[blob_key]
             continue
@@ -195,80 +209,58 @@ def extract_events(
     """
     events: list[dict[str, Any]] = []
 
-    # ── Session-level events ─────────────────────────────────────────────────
+    # ── Session-level events ────────────────────────────────────────────────
     rows = client.cypher(
         f'MATCH (s:Session {{node_id: "{session_id}"}}) RETURN s.data, s.data_session_end',
         workspace=workspace,
     )
     for row in rows:
-        ev = _make_event_line("session:start", row.get("s.data"), session_id)
-        if ev:
-            events.append(ev)
-        ev = _make_event_line("session:end", row.get("s.data_session_end"), session_id)
-        if ev:
-            events.append(ev)
+        _maybe_append(events, "session:start", row.get("s.data"), session_id)
+        _maybe_append(events, "session:end", row.get("s.data_session_end"), session_id)
 
-    # ── Subsession events ────────────────────────────────────────────────────
+    # ── Subsession events ───────────────────────────────────────────────────
     rows = client.cypher(
         f'MATCH (sub:Subsession)-[:SUBSESSION_OF]->(root:Session {{node_id: "{session_id}"}}) '
         f"RETURN sub.node_id, sub.data, sub.data_session_end",
         workspace=workspace,
     )
     for row in rows:
-        ev = _make_event_line("session:start", row.get("sub.data"), session_id)
-        if ev:
-            events.append(ev)
-        ev = _make_event_line("session:end", row.get("sub.data_session_end"), session_id)
-        if ev:
-            events.append(ev)
+        _maybe_append(events, "session:start", row.get("sub.data"), session_id)
+        _maybe_append(events, "session:end", row.get("sub.data_session_end"), session_id)
 
-    # ── OrchestratorRun events ───────────────────────────────────────────────
+    # ── OrchestratorRun events ──────────────────────────────────────────────
     rows = client.cypher(
         f'MATCH (s:Session {{node_id: "{session_id}"}})-[:HAS_RUN]->(r:OrchestratorRun) '
         f"RETURN r.data, r.data_execution_end, r.data_orchestrator_complete",
         workspace=workspace,
     )
     for row in rows:
-        ev = _make_event_line("execution:start", row.get("r.data"), session_id)
-        if ev:
-            events.append(ev)
-        ev = _make_event_line("execution:end", row.get("r.data_execution_end"), session_id)
-        if ev:
-            events.append(ev)
-        ev = _make_event_line(
-            "orchestrator:complete", row.get("r.data_orchestrator_complete"), session_id
+        _maybe_append(events, "execution:start", row.get("r.data"), session_id)
+        _maybe_append(events, "execution:end", row.get("r.data_execution_end"), session_id)
+        _maybe_append(
+            events, "orchestrator:complete", row.get("r.data_orchestrator_complete"), session_id
         )
-        if ev:
-            events.append(ev)
 
-    # ── PromptStep events ────────────────────────────────────────────────────
+    # ── PromptStep events ───────────────────────────────────────────────────
     rows = client.cypher(
         f'MATCH (p:PromptStep) WHERE p.session_id = "{session_id}" RETURN p.data',
         workspace=workspace,
     )
     for row in rows:
-        ev = _make_event_line("prompt:submit", row.get("p.data"), session_id)
-        if ev:
-            events.append(ev)
+        _maybe_append(events, "prompt:submit", row.get("p.data"), session_id)
 
-    # ── AssistantStep events ─────────────────────────────────────────────────
+    # ── AssistantStep events ────────────────────────────────────────────────
     rows = client.cypher(
         f'MATCH (a:AssistantStep) WHERE a.session_id = "{session_id}" '
         f"RETURN a.data, a.data_llm_request, a.data_llm_response",
         workspace=workspace,
     )
     for row in rows:
-        ev = _make_event_line("provider:request", row.get("a.data"), session_id)
-        if ev:
-            events.append(ev)
-        ev = _make_event_line("llm:request", row.get("a.data_llm_request"), session_id)
-        if ev:
-            events.append(ev)
-        ev = _make_event_line("llm:response", row.get("a.data_llm_response"), session_id)
-        if ev:
-            events.append(ev)
+        _maybe_append(events, "provider:request", row.get("a.data"), session_id)
+        _maybe_append(events, "llm:request", row.get("a.data_llm_request"), session_id)
+        _maybe_append(events, "llm:response", row.get("a.data_llm_response"), session_id)
 
-    # ── ToolExecution events (non-delegate) ──────────────────────────────────
+    # ── ToolExecution events (non-delegate) ─────────────────────────────────
     rows = client.cypher(
         f'MATCH (t:ToolExecution) WHERE t.session_id = "{session_id}" '
         f"AND (t.tool_name IS NULL OR t.tool_name <> 'delegate') "
@@ -276,14 +268,10 @@ def extract_events(
         workspace=workspace,
     )
     for row in rows:
-        ev = _make_event_line("tool:pre", row.get("t.data"), session_id)
-        if ev:
-            events.append(ev)
-        ev = _make_event_line("tool:post", row.get("t.data_tool_post"), session_id)
-        if ev:
-            events.append(ev)
+        _maybe_append(events, "tool:pre", row.get("t.data"), session_id)
+        _maybe_append(events, "tool:post", row.get("t.data_tool_post"), session_id)
 
-    # ── Delegate events from ToolExecution nodes ─────────────────────────────
+    # ── Delegate events from ToolExecution nodes ────────────────────────────
     rows = client.cypher(
         f'MATCH (t:ToolExecution) WHERE t.session_id = "{session_id}" '
         f"AND t.tool_name = 'delegate' "
@@ -292,26 +280,17 @@ def extract_events(
         workspace=workspace,
     )
     for row in rows:
-        ev = _make_event_line("tool:pre", row.get("t.data"), session_id)
-        if ev:
-            events.append(ev)
-        ev = _make_event_line("tool:post", row.get("t.data_tool_post"), session_id)
-        if ev:
-            events.append(ev)
-        ev = _make_event_line(
-            "delegate:agent_spawned",
-            row.get("t.data_delegate_agent_spawned"),
-            session_id,
+        _maybe_append(events, "tool:pre", row.get("t.data"), session_id)
+        _maybe_append(events, "tool:post", row.get("t.data_tool_post"), session_id)
+        _maybe_append(
+            events, "delegate:agent_spawned", row.get("t.data_delegate_agent_spawned"), session_id
         )
-        if ev:
-            events.append(ev)
-        ev = _make_event_line(
+        _maybe_append(
+            events,
             "delegate:agent_completed",
             row.get("t.data_delegate_agent_completed"),
             session_id,
         )
-        if ev:
-            events.append(ev)
 
     # ── Generic Event nodes (prompt:complete, session:resume, etc.) ──────────
     rows = client.cypher(
@@ -322,17 +301,15 @@ def extract_events(
     for row in rows:
         event_name = row.get("e.event_name", "unknown")
         data_str = row.get("e.data")
-        ev = _make_event_line(event_name, data_str, session_id)
-        if ev:
-            events.append(ev)
+        _maybe_append(events, event_name, data_str, session_id)
 
-    # ── Sort by timestamp ────────────────────────────────────────────────────
+    # ── Sort by timestamp ───────────────────────────────────────────────────
     def _sort_key(e: dict[str, Any]) -> str:
         return e.get("ts", "") or ""
 
     events.sort(key=_sort_key)
 
-    # ── Optionally resolve blob refs ─────────────────────────────────────────
+    # ── Optionally resolve blob refs ────────────────────────────────────────
     if resolve_blobs:
         log.info("  Resolving blob references ...")
         _resolve_event_blobs(events, client, session_id)
