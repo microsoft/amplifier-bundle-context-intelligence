@@ -256,24 +256,20 @@ class CIClient:
         return _http_get(url, self._auth_headers())
 
     def health_check(self) -> dict[str, Any]:
-        """Check the server health.
+        """Check server health by running a simple count query.
 
-        Calls ``GET /health`` and returns the server's response dict.
-        Always returns a dict with at least ``status`` and ``session_count``
-        keys, even when the server is unreachable.
+        Uses ``POST /cypher`` with a lightweight session-count query
+        instead of a dedicated ``/health`` endpoint (which does not exist).
 
         Returns
         -------
         dict
-            Server health response with ``status`` and ``session_count``.
+            ``{"status": "ok", "session_count": N}`` on success, or
+            ``{"status": "unavailable", "error": "..."}`` on failure.
         """
-        url = f"{self._server_url}/health"
-        result = _http_get(url, self._auth_headers())
-
-        if isinstance(result, dict):
-            # Ensure required keys are present
-            result.setdefault("status", "unknown")
-            result.setdefault("session_count", 0)
-            return result
-
-        return {"status": "unavailable", "session_count": 0}
+        try:
+            results = self.cypher("MATCH (s:Session) RETURN count(s) as session_count")
+            count = results[0]["session_count"] if results else 0
+            return {"status": "ok", "session_count": count}
+        except Exception as exc:
+            return {"status": "unavailable", "error": str(exc)}

@@ -5,12 +5,12 @@ Verifies the behavior of cmd_status in scripts/context-intelligence.py:
 - Returns int exit code (1 on unhealthy server, 0 on healthy server)
 - Configures logging (INFO level)
 - Resolves config via resolve_config
-- Creates CIClient and calls health_check()
+- Creates CIClient and calls health_check() (uses cypher query, not /health endpoint)
 - When status != 'ok': prints JSON with status/server_url/error to stdout, returns 1
-- When status == 'ok': queries session counts by workspace
+- When status == 'ok': queries workspace breakdown via cypher
   - Filtered by --workspace if provided
-  - All workspaces ordered by count DESC otherwise
-- Builds result dict with status/server_url/total_sessions/workspaces
+  - All workspaces ordered by cnt DESC otherwise
+- Builds result dict with status/server_url/session_count/workspaces
 - Prints as indented JSON to stdout, returns 0
 """
 
@@ -310,14 +310,14 @@ class TestCmdStatusHealthy:
             f"server_url must match, got {output['server_url']!r}"
         )
 
-    def test_healthy_json_has_total_sessions_field(self, capsys):
-        """Healthy JSON output must have a 'total_sessions' field."""
+    def test_healthy_json_has_session_count_field(self, capsys):
+        """Healthy JSON output must have a 'session_count' field from health check."""
         module = _load_script_module()
 
-        mock_health = {"status": "ok", "session_count": 0}
+        mock_health = {"status": "ok", "session_count": 10}
         mock_cypher_result = [
-            {"workspace": "ws-a", "count": 7},
-            {"workspace": "ws-b", "count": 3},
+            {"workspace": "ws-a", "cnt": 7},
+            {"workspace": "ws-b", "cnt": 3},
         ]
 
         with (
@@ -330,9 +330,9 @@ class TestCmdStatusHealthy:
 
         captured = capsys.readouterr()
         output = json.loads(captured.out)
-        assert "total_sessions" in output, "Healthy JSON must have 'total_sessions' field"
-        assert output["total_sessions"] == 10, (
-            f"total_sessions must be 10 (7+3), got {output['total_sessions']}"
+        assert "session_count" in output, "Healthy JSON must have 'session_count' field"
+        assert output["session_count"] == 10, (
+            f"session_count must be 10 (from health check), got {output['session_count']}"
         )
 
     def test_healthy_json_has_workspaces_array(self, capsys):
@@ -399,8 +399,8 @@ class TestCmdStatusHealthy:
         # Indented JSON has newlines
         assert "\n" in captured.out, "Healthy JSON output must be indented (has newlines)"
 
-    def test_healthy_total_sessions_zero_when_no_workspaces(self, capsys):
-        """total_sessions must be 0 when no workspaces returned."""
+    def test_healthy_session_count_zero_when_no_workspaces(self, capsys):
+        """session_count must be 0 when health check reports 0."""
         module = _load_script_module()
 
         mock_health = {"status": "ok", "session_count": 0}
@@ -415,8 +415,8 @@ class TestCmdStatusHealthy:
 
         captured = capsys.readouterr()
         output = json.loads(captured.out)
-        assert output["total_sessions"] == 0, (
-            f"total_sessions must be 0 when no workspaces, got {output['total_sessions']}"
+        assert output["session_count"] == 0, (
+            f"session_count must be 0 when health reports 0, got {output['session_count']}"
         )
 
 

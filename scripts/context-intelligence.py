@@ -435,30 +435,25 @@ def cmd_status(args: argparse.Namespace) -> int:
         result: dict = {
             "status": status,
             "server_url": server_url,
-            "error": health.get("error", f"Server status: {status}"),
+            "error": health.get("error", ""),
         }
         print(json.dumps(result, indent=4))
         return 1
 
     # ── Query session counts by workspace ────────────────────────────────────
-    cypher_workspace = args.workspace if args.workspace else "*"
-    rows = client.cypher(
-        "MATCH (s:Session) RETURN s.workspace AS workspace, count(s) AS count ORDER BY count DESC",
-        workspace=cypher_workspace,
-    )
-
-    workspaces = []
-    total_sessions = 0
-    for row in rows:
-        ws = row.get("workspace", "")
-        count = row.get("count", 0)
-        workspaces.append({"workspace": ws, "session_count": count})
-        total_sessions += count
+    try:
+        cypher_workspace = args.workspace if args.workspace else "*"
+        workspaces = client.cypher(
+            "MATCH (s:Session) RETURN s.workspace as workspace, count(s) as cnt ORDER BY cnt DESC",
+            workspace=cypher_workspace,
+        )
+    except Exception:
+        workspaces = []
 
     result = {
         "status": "ok",
         "server_url": server_url,
-        "total_sessions": total_sessions,
+        "session_count": health.get("session_count", 0),
         "workspaces": workspaces,
     }
     print(json.dumps(result, indent=4))

@@ -7,7 +7,7 @@ Covers:
 - CIClient.cypher() POSTs to /cypher and returns list[dict]
 - CIClient.list_blob_keys() parses ci-blob:// URIs into a set[str]
 - CIClient.fetch_blob() GETs /blobs/{session_id}/{key} and returns content
-- CIClient.health_check() GETs /health and returns dict with status/session_count
+- CIClient.health_check() uses cypher() query and returns dict with status/session_count
 - Logger is named context_intelligence.client
 """
 
@@ -305,50 +305,61 @@ class TestCIClientFetchBlob:
 
 
 class TestCIClientHealthCheck:
-    """CIClient.health_check() must GET /health and return dict with status and session_count."""
+    """CIClient.health_check() must use cypher() to run a count query and return dict."""
 
-    def test_health_check_returns_dict(self):
-        """health_check() returns a dict."""
+    def test_health_check_returns_ok_with_session_count(self):
+        """health_check() returns status='ok' and session_count from cypher query."""
         from context_intelligence.client import CIClient
 
         client = CIClient("http://localhost:8000", "key")
-        mock_response = {"status": "ok", "session_count": 42}
 
-        with patch("context_intelligence.client._http_get") as mock_get:
-            mock_get.return_value = mock_response
+        with patch.object(client, "cypher", return_value=[{"session_count": 42}]):
             result = client.health_check()
 
         assert isinstance(result, dict)
         assert result["status"] == "ok"
         assert result["session_count"] == 42
 
-    def test_health_check_calls_health_endpoint(self):
-        """health_check() calls /health."""
+    def test_health_check_uses_cypher_not_http_get(self):
+        """health_check() must call cypher() not _http_get (no /health endpoint)."""
         from context_intelligence.client import CIClient
 
         client = CIClient("http://localhost:8000", "key")
 
-        with patch("context_intelligence.client._http_get") as mock_get:
-            mock_get.return_value = {"status": "ok", "session_count": 0}
+        with (
+            patch.object(client, "cypher", return_value=[{"session_count": 0}]) as mock_cypher,
+            patch("context_intelligence.client._http_get") as mock_get,
+        ):
             client.health_check()
 
-        call_args = mock_get.call_args
-        url = call_args[0][0] if call_args[0] else call_args[1]["url"]
-        assert "/health" in url
+        assert mock_cypher.called, "health_check must call cypher()"
+        assert not mock_get.called, "health_check must NOT call _http_get"
 
-    def test_health_check_returns_error_dict_on_failure(self):
-        """health_check() returns a dict with status and session_count even when _http_get returns None."""
+    def test_health_check_returns_unavailable_on_exception(self):
+        """health_check() returns status='unavailable' with error when cypher raises."""
         from context_intelligence.client import CIClient
 
         client = CIClient("http://localhost:8000", "key")
 
-        with patch("context_intelligence.client._http_get") as mock_get:
-            mock_get.return_value = None
+        with patch.object(client, "cypher", side_effect=Exception("connection refused")):
             result = client.health_check()
 
         assert isinstance(result, dict)
-        assert "status" in result
-        assert "session_count" in result
+        assert result["status"] == "unavailable"
+        assert "error" in result
+        assert "connection refused" in result["error"]
+
+    def test_health_check_returns_zero_count_on_empty_result(self):
+        """health_check() returns session_count=0 when cypher returns empty list."""
+        from context_intelligence.client import CIClient
+
+        client = CIClient("http://localhost:8000", "key")
+
+        with patch.object(client, "cypher", return_value=[]):
+            result = client.health_check()
+
+        assert result["status"] == "ok"
+        assert result["session_count"] == 0
 
 
 class TestLogger:
