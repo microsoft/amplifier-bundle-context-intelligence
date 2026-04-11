@@ -348,8 +348,67 @@ def cmd_reconstruct(args: argparse.Namespace) -> int:
 
 
 def cmd_upload(args: argparse.Namespace) -> int:
-    """Replay session events to the server. (Task 12)"""
-    raise NotImplementedError("cmd_upload is implemented in Task 12")
+    """Replay session events to the server. (Task 14)"""
+    # ── Logging ──────────────────────────────────────────────────────────────
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)-5s %(message)s",
+        datefmt="%H:%M:%S",
+    )
+
+    # ── Resolve configuration ─────────────────────────────────────────────────
+    try:
+        server_url, api_key = _ci_config.resolve_config(
+            server_url=args.server_url,
+            api_key=args.api_key,
+        )
+    except SystemExit:
+        log.error(
+            "Failed to resolve CI server URL or API key. "
+            "Set AMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_URL and "
+            "AMPLIFIER_CONTEXT_INTELLIGENCE_API_KEY, or use --server-url and --api-key, "
+            "or configure in ~/.amplifier/settings.yaml"
+        )
+        return 2
+
+    # ── Build upload_argv ─────────────────────────────────────────────────────
+    upload_argv = ["context-intelligence-upload", "--path", args.path]
+    upload_argv.extend(["--server-url", server_url])
+    upload_argv.extend(["--api-key", api_key])
+    if args.job_id:
+        upload_argv.extend(["--job-id", args.job_id])
+    if args.progress:
+        upload_argv.extend(["--progress", args.progress])
+    if args.event_delay_ms:
+        upload_argv.extend(["--event-delay-ms", str(args.event_delay_ms)])
+
+    # ── Locate and import upload module ───────────────────────────────────────
+    upload_module_path = str(_root / "modules" / "tool-context-intelligence-upload")
+    if upload_module_path not in sys.path:
+        sys.path.insert(0, upload_module_path)
+
+    try:
+        from amplifier_module_tool_context_intelligence_upload.cli import (  # noqa: PLC0415  # type: ignore[import]
+            main as upload_main,
+        )
+    except ImportError:
+        log.error(
+            "Could not import the context-intelligence-upload module. "
+            "Install it with: pip install -e modules/tool-context-intelligence-upload/"
+        )
+        return 1
+
+    # ── Temporarily replace sys.argv and call upload_main() ───────────────────
+    old_argv = sys.argv
+    try:
+        sys.argv = upload_argv
+        upload_main()
+    except SystemExit as exc:
+        return int(exc.code) if exc.code is not None else 0
+    finally:
+        sys.argv = old_argv
+
+    return 0
 
 
 def cmd_status(args: argparse.Namespace) -> int:
