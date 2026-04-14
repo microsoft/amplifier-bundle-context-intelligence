@@ -25,7 +25,7 @@ packages = ["amplifier_module_hook_context_intelligence"]
 [dependency-groups]
 dev = [
     "amplifier-core",
-    "pytest>=8.0",
+    "pytest>=9.0.3",
     "pytest-asyncio>=0.24",
     "pyyaml>=6.0",
     "pyright>=1.1",
