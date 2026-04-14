@@ -1,0 +1,130 @@
+# Example: Digital Twin Universe profile with context-intelligence bundle
+#
+# This is an example of how to set up the context-intelligence bundle with
+# Amplifier inside a Digital Twin Universe environment, configured to send
+# session events to a context-intelligence server running outside the DTU.
+# The server and Neo4j are not installed inside the container -- this profile
+# only installs the client-side hook and bundle.
+#
+# Events are tagged with a custom workspace name so they can be queried
+# independently from other sessions hitting the same server.
+#
+# Example Cypher query for just this Digital Twin Universe's sessions:
+#   MATCH (n)-[r]->(m)
+#   WHERE n.workspace = "my-experiment"
+#   RETURN n, r, m
+#
+# Usage:
+#   amplifier-digital-twin launch amplifier-user-context-intelligence \
+#     --var CONTEXT_INTELLIGENCE_WORKSPACE=my-experiment
+#
+# The server URL is auto-detected from the Incus bridge gateway (host).
+# To override (e.g. the server is on another machine):
+#   --var CONTEXT_INTELLIGENCE_SERVER_URL=http://10.0.0.5:8000
+#
+# Variables (provided at launch via --var):
+#   CONTEXT_INTELLIGENCE_WORKSPACE      -- (required) identifying name for events
+#   CONTEXT_INTELLIGENCE_SERVER_URL     -- (optional) server URL, auto-detected if omitted
+#   CONTEXT_INTELLIGENCE_SERVER_PORT    -- (optional) server port, defaults to 8000
+#
+# Requires: ANTHROPIC_API_KEY, GH_TOKEN (or gh auth login),
+#           AMPLIFIER_CONTEXT_INTELLIGENCE_API_KEY on the host
+name: amplifier-user-context-intelligence
+description: >
+  Amplifier user environment with context-intelligence logging to an external
+  server. Events are tagged with a workspace name for identification and filtering.
+
+base:
+  image: ubuntu:24.04
+
+passthrough:
+  allow_external: true
+  services:
+    - name: anthropic
+      key_env: ANTHROPIC_API_KEY
+    - name: github
+      key_env: GH_TOKEN
+    - name: context-intelligence-auth
+      key_env: AMPLIFIER_CONTEXT_INTELLIGENCE_API_KEY
+
+provision:
+  setup_cmds:
+    # Core tooling
+    - apt-get update && apt-get install -y git curl
+    - curl -LsSf https://astral.sh/uv/install.sh | sh
+
+    # Configure git credentials for private GitHub repos
+    - |
+      if [ -n "$GH_TOKEN" ]; then
+        echo "machine github.com login x-token-auth password $GH_TOKEN" > /root/.netrc
+        chmod 600 /root/.netrc
+        git config --global credential.helper 'store'
+      fi
+
+    # Install Amplifier
+    - |
+      export PATH="/root/.local/bin:$PATH"
+      uv tool install git+https://github.com/microsoft/amplifier@main
+
+    # Configure Amplifier provider (must be written BEFORE bundle add --app
+    # because bundle add modifies settings.yaml in place)
+    - |
+      mkdir -p /root/.amplifier
+      cat > /root/.amplifier/settings.yaml << EOF
+      config:
+        providers:
+          - module: provider-anthropic
+            source: git+https://github.com/microsoft/amplifier-module-provider-anthropic@main
+            config:
+              api_key: $ANTHROPIC_API_KEY
+      EOF
+
+    # Install context-intelligence bundle (adds hook, agents, tools).
+    # This appends to the settings.yaml written above.
+    - |
+      export PATH="/root/.local/bin:$PATH"
+      amplifier bundle add git+https://github.com/microsoft/amplifier-bundle-context-intelligence@main --app
+
+    # Configure context-intelligence to log to the external server.
+    #
+    # Server URL resolution:
+    #   1. If --var CONTEXT_INTELLIGENCE_SERVER_URL was provided, use it directly
+    #   2. Otherwise, detect the host IP via the default gateway (Incus bridge)
+    #      and use port 8000 (or CONTEXT_INTELLIGENCE_SERVER_PORT if provided)
+    #
+    # The workspace name is set from the required --var CONTEXT_INTELLIGENCE_WORKSPACE.
+    # The API key is forwarded from the host via passthrough.
+    - |
+      CI_URL="${CONTEXT_INTELLIGENCE_SERVER_URL}"
+      if [ -z "$CI_URL" ]; then
+        HOST_IP=$(ip route | grep default | awk '{print $3}')
+        CI_PORT="${CONTEXT_INTELLIGENCE_SERVER_PORT}"
+        CI_PORT="${CI_PORT:-8000}"
+        CI_URL="http://$HOST_IP:$CI_PORT"
+      fi
+      CI_WORKSPACE="${CONTEXT_INTELLIGENCE_WORKSPACE}"
+      CI_KEY="$AMPLIFIER_CONTEXT_INTELLIGENCE_API_KEY"
+
+      # Persist for interactive shells
+      cat >> /root/.bashrc << ENVEOF
+      export PATH="/root/.local/bin:$PATH"
+      export AMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_URL=$CI_URL
+      export AMPLIFIER_CONTEXT_INTELLIGENCE_API_KEY=$CI_KEY
+      export AMPLIFIER_CONTEXT_INTELLIGENCE_WORKSPACE=$CI_WORKSPACE
+      ENVEOF
+
+      # Persist for non-interactive exec commands
+      echo "PATH=/root/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" >> /etc/environment
+      echo "AMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_URL=$CI_URL" >> /etc/environment
+      echo "AMPLIFIER_CONTEXT_INTELLIGENCE_API_KEY=$CI_KEY" >> /etc/environment
+      echo "AMPLIFIER_CONTEXT_INTELLIGENCE_WORKSPACE=$CI_WORKSPACE" >> /etc/environment
+
+    # Validation
+    - amplifier --version
+
+    # Workspace for the user to launch Amplifier sessions in
+    - mkdir -p /home/user/project
+
+readiness:
+  - name: context-intelligence-server
+    command: ". /etc/environment && curl -sf $AMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_URL/status > /dev/null"
