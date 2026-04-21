@@ -541,3 +541,45 @@ class TestSettingsYamlFallback:
         resolver = ConfigResolver(config={}, coordinator=_make_coordinator(config={}))
 
         assert resolver.context_intelligence_server_url == "http://from-settings-yaml"
+
+    def test_env_var_wins_over_settings_yaml(self, monkeypatch, tmp_path):
+        """Env var has higher priority than settings.yaml."""
+        monkeypatch.setenv("AMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_URL", "http://from-env")
+
+        settings_file = tmp_path / "settings.yaml"
+        settings_file.write_text(
+            "overrides:\n"
+            "  hook-context-intelligence:\n"
+            "    config:\n"
+            "      context_intelligence_server_url: http://from-settings-yaml\n"
+        )
+
+        monkeypatch.setattr(
+            "amplifier_module_hook_context_intelligence.config_resolver.SETTINGS_PATH",
+            settings_file,
+        )
+
+        resolver = ConfigResolver(config={}, coordinator=_make_coordinator(config={}))
+
+        assert resolver.context_intelligence_server_url == "http://from-env"
+
+    def test_api_key_falls_back_to_settings_yaml(self, monkeypatch, tmp_path):
+        """When config, coordinator, and env var are all absent, context_intelligence_api_key falls back to settings.yaml."""
+        monkeypatch.delenv("AMPLIFIER_CONTEXT_INTELLIGENCE_API_KEY", raising=False)
+
+        settings_file = tmp_path / "settings.yaml"
+        settings_file.write_text(
+            "overrides:\n"
+            "  hook-context-intelligence:\n"
+            "    config:\n"
+            "      context_intelligence_api_key: sk-from-settings-yaml\n"
+        )
+
+        monkeypatch.setattr(
+            "amplifier_module_hook_context_intelligence.config_resolver.SETTINGS_PATH",
+            settings_file,
+        )
+
+        resolver = ConfigResolver(config={}, coordinator=_make_coordinator(config={}))
+
+        assert resolver.context_intelligence_api_key == "sk-from-settings-yaml"
