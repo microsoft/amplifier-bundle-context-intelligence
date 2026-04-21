@@ -394,3 +394,20 @@ class TestHttpHelpers:
         from context_intelligence.client import _http_get  # noqa: F401
 
         assert callable(_http_get)
+
+
+class TestBuildHeaders:
+    """_build_headers() must return an Authorization: Bearer header dict."""
+
+    def test_returns_bearer_header(self):
+        from context_intelligence.client import _build_headers
+
+        result = _build_headers("my-key")
+        assert result == {"Authorization": "Bearer my-key"}
+
+    def test_returns_dict_with_string_values(self):
+        from context_intelligence.client import _build_headers
+
+        result = _build_headers("test-api-key")
+        assert isinstance(result, dict)
+        assert all(isinstance(v, str) for v in result.values())

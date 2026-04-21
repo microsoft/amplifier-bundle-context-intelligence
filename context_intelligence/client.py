@@ -146,6 +146,16 @@ def _safe_json_loads(raw: Any) -> Any:
 
 
 # ---------------------------------------------------------------------------
+# Auth header helper
+# ---------------------------------------------------------------------------
+
+
+def _build_headers(api_key: str) -> dict[str, str]:
+    """Return the standard Authorization header dict for *api_key*."""
+    return {"Authorization": f"Bearer {api_key}"}
+
+
+# ---------------------------------------------------------------------------
 # CIClient
 # ---------------------------------------------------------------------------
 
@@ -171,7 +181,7 @@ class CIClient:
 
     def _auth_headers(self) -> dict[str, str]:
         """Return the ``Authorization`` header dict."""
-        return {"Authorization": f"Bearer {self._api_key}"}
+        return _build_headers(self._api_key)
 
     # ------------------------------------------------------------------
     # Public API
