@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
+import json
 import re
 from pathlib import Path
 from typing import Any
 
-import httpx
-
 from amplifier_core import ToolResult
+from context_intelligence.client import AsyncCIClient
 
 _URI_SCHEME = "ci-blob://"
 _BLOB_DIR = Path("/tmp/ci-blobs")
@@ -104,45 +104,30 @@ class BlobReadTool:
         safe_session_id = _sanitize_path_component(session_id)
         safe_key = _sanitize_path_component(key)
 
-        # (5) HTTP GET using ORIGINAL unsanitized values for the URL
+        # (5) Construct AsyncCIClient
         api_key: str | None = self._resolver.context_intelligence_api_key
-        headers: dict[str, str] = {}
-        if api_key:
-            headers["Authorization"] = f"Bearer {api_key}"
+        async_client = AsyncCIClient(server_url=server_url, api_key=api_key or "")
 
-        try:
-            async with httpx.AsyncClient(timeout=30.0) as client:
-                resp = await client.get(f"{server_url}/blobs/{session_id}/{key}", headers=headers)
-                resp.raise_for_status()
-        except httpx.HTTPStatusError as e:
+        # (6) Fetch blob using original unsanitized values for the server request
+        data = await async_client.fetch_blob(session_id, key)
+
+        # (7) Return http_error if data is None
+        if data is None:
             return ToolResult(
                 success=False,
                 error={
-                    "message": f"HTTP {e.response.status_code} error fetching blob",
+                    "message": "HTTP error fetching blob",
                     "type": "http_error",
                 },
             )
-        except httpx.TransportError as e:
-            return ToolResult(
-                success=False,
-                error={
-                    "message": str(e),
-                    "type": "connection_error",
-                },
-            )
-        except Exception as e:
-            return ToolResult(
-                success=False,
-                error={
-                    "message": str(e),
-                    "type": "blob_error",
-                },
-            )
 
-        # (6) Write resp.text to _BLOB_DIR / safe_session_id / f"{safe_key}.json"
+        # (8) Write to disk: json.dumps for dict/list, raw string otherwise
         dest = _BLOB_DIR / safe_session_id / f"{safe_key}.json"
         dest.parent.mkdir(parents=True, exist_ok=True)
-        dest.write_text(resp.text)
+        if isinstance(data, (dict, list)):
+            dest.write_text(json.dumps(data))
+        else:
+            dest.write_text(data)
 
-        # (7) Return success with path
+        # (9) Return success with path
         return ToolResult(success=True, output={"path": str(dest)})
