@@ -616,3 +616,7 @@ class TestSlugifyPath:
         assert ":" not in result
         assert "C" in result
         assert "Users" in result
+
+    def test_empty_string_returns_default(self) -> None:
+        """Empty path string returns the default project slug."""
+        assert _slugify_path("") == "default"
