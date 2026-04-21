@@ -189,8 +189,12 @@ class TestWorkspaceResolution:
 class TestContextIntelligenceServerUrl:
     """context_intelligence_server_url property."""
 
-    def test_returns_none_when_absent(self) -> None:
+    def test_returns_none_when_absent(self, monkeypatch, tmp_path) -> None:
         """Returns None when context_intelligence_server_url not in config."""
+        monkeypatch.setattr(
+            "amplifier_module_hook_context_intelligence.config_resolver.SETTINGS_PATH",
+            tmp_path / "nonexistent.yaml",
+        )
         coordinator = _make_coordinator(config={})
         resolver = ConfigResolver(config={}, coordinator=coordinator)
 
@@ -206,8 +210,12 @@ class TestContextIntelligenceServerUrl:
 
         assert resolver.context_intelligence_server_url == "http://localhost:8000"
 
-    def test_returns_none_for_empty_string(self) -> None:
+    def test_returns_none_for_empty_string(self, monkeypatch, tmp_path) -> None:
         """Returns None when value is an empty string (falsy)."""
+        monkeypatch.setattr(
+            "amplifier_module_hook_context_intelligence.config_resolver.SETTINGS_PATH",
+            tmp_path / "nonexistent.yaml",
+        )
         coordinator = _make_coordinator(config={})
         resolver = ConfigResolver(
             config={"context_intelligence_server_url": ""},
@@ -351,8 +359,12 @@ class TestBlobStoreRoot:
 class TestContextIntelligenceApiKey:
     """context_intelligence_api_key property."""
 
-    def test_returns_none_when_not_configured(self) -> None:
+    def test_returns_none_when_not_configured(self, monkeypatch, tmp_path) -> None:
         """Returns None when context_intelligence_api_key not in config."""
+        monkeypatch.setattr(
+            "amplifier_module_hook_context_intelligence.config_resolver.SETTINGS_PATH",
+            tmp_path / "nonexistent.yaml",
+        )
         resolver = ConfigResolver(config={}, coordinator=_make_coordinator(config={}))
 
         assert resolver.context_intelligence_api_key is None
@@ -366,8 +378,12 @@ class TestContextIntelligenceApiKey:
 
         assert resolver.context_intelligence_api_key == "my-secret-key"
 
-    def test_returns_none_for_empty_string(self) -> None:
+    def test_returns_none_for_empty_string(self, monkeypatch, tmp_path) -> None:
         """Returns None when value is an empty string (falsy)."""
+        monkeypatch.setattr(
+            "amplifier_module_hook_context_intelligence.config_resolver.SETTINGS_PATH",
+            tmp_path / "nonexistent.yaml",
+        )
         resolver = ConfigResolver(
             config={"context_intelligence_api_key": ""},
             coordinator=_make_coordinator(config={}),

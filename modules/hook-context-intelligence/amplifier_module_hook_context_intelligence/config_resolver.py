@@ -6,6 +6,8 @@ import os
 from pathlib import Path
 from typing import Any
 
+from context_intelligence.config import SETTINGS_PATH, _parse_settings_yaml
+
 _DEFAULT_BASE_PATH = "~/.amplifier/projects"
 _DEFAULT_PROJECT_SLUG = "default"
 
@@ -261,12 +263,14 @@ class ConfigResolver:
         Resolution order (first truthy value wins):
         1. config['context_intelligence_server_url']  — bundle config / settings.yaml overrides
         2. coordinator.config['context_intelligence_server_url']  — coordinator-level config
-        3. AMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_URL env var  — last mile
+        3. AMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_URL env var
+        4. ~/.amplifier/settings.yaml  — lowest-priority fallback
         """
         value = (
             self._config.get("context_intelligence_server_url")
             or self._coordinator_config_get("context_intelligence_server_url")
             or _env("SERVER_URL")
+            or _parse_settings_yaml(SETTINGS_PATH).get("server_url")
         )
         return str(value) if value else None
 
@@ -277,12 +281,14 @@ class ConfigResolver:
         Resolution order (first truthy value wins):
         1. config['context_intelligence_api_key']  — bundle config / settings.yaml overrides
         2. coordinator.config['context_intelligence_api_key']  — coordinator-level config
-        3. AMPLIFIER_CONTEXT_INTELLIGENCE_API_KEY env var  — last mile
+        3. AMPLIFIER_CONTEXT_INTELLIGENCE_API_KEY env var
+        4. ~/.amplifier/settings.yaml  — lowest-priority fallback
         """
         value = (
             self._config.get("context_intelligence_api_key")
             or self._coordinator_config_get("context_intelligence_api_key")
             or _env("API_KEY")
+            or _parse_settings_yaml(SETTINGS_PATH).get("api_key")
         )
         return str(value) if value else None
 
