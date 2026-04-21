@@ -3,15 +3,34 @@ revision = 3
 requires-python = ">=3.11"
 
 [[package]]
+name = "amplifier-bundle-context-intelligence"
+version = "0.1.0"
+source = { directory = "../../" }
+
+[package.metadata]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "pyright", specifier = ">=1.1" },
+    { name = "pytest", specifier = ">=8.0" },
+    { name = "pytest-asyncio", specifier = ">=0.24" },
+    { name = "ruff", specifier = ">=0.4" },
+]
+
+[[package]]
 name = "amplifier-module-hook-context-intelligence"
 version = "0.1.1"
 source = { editable = "../hook-context-intelligence" }
 dependencies = [
+    { name = "amplifier-bundle-context-intelligence" },
     { name = "httpx" },
 ]
 
 [package.metadata]
-requires-dist = [{ name = "httpx", specifier = ">=0.28.1" }]
+requires-dist = [
+    { name = "amplifier-bundle-context-intelligence", directory = "../../" },
+    { name = "httpx", specifier = ">=0.28.1" },
+]
 
 [package.metadata.requires-dev]
 dev = [

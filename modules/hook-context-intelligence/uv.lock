@@ -11,9 +11,11 @@ source = { directory = "../../" }
 
 [package.metadata.requires-dev]
 dev = [
+    { name = "httpx", specifier = ">=0.25" },
     { name = "pyright", specifier = ">=1.1" },
     { name = "pytest", specifier = ">=8.0" },
     { name = "pytest-asyncio", specifier = ">=0.24" },
+    { name = "pyyaml", specifier = ">=6.0" },
     { name = "ruff", specifier = ">=0.4" },
 ]
 
