@@ -15,12 +15,16 @@ workspace : str, optional
     Resolved automatically from the coordinator when not set
     (see ConfigResolver.workspace).
 log_level : str, optional
-    Logging level.  Default ``"INFO"``.
+    Logging level.  Default ``"WARNING"``.
 base_path : str, optional
     Root directory for JSONL output.  Defaults to the coordinator
     working directory.
 exclude_events : list[str], optional
     Event name patterns (fnmatch) to suppress from logging and dispatch.
+additional_events : list[str], optional
+    Event names to register unconditionally, regardless of capability
+    discovery order.  Use to capture events from modules that mount after
+    this hook (e.g. ``delegate:agent_spawned``).
 """
 
 from __future__ import annotations
