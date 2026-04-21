@@ -7,6 +7,7 @@ license = "MIT"
 
 dependencies = [
     "httpx>=0.28.1",
+    "amplifier-bundle-context-intelligence",
 ]
 
 [project.entry-points."amplifier.modules"]
@@ -34,6 +35,7 @@ dev = [
 
 [tool.uv.sources]
 amplifier-core = { git = "https://github.com/microsoft/amplifier-core", branch = "main" }
+amplifier-bundle-context-intelligence = { path = "../.." }
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
