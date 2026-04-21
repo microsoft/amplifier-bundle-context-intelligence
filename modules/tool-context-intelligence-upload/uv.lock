@@ -4,7 +4,7 @@ requires-python = ">=3.11"
 
 [[package]]
 name = "amplifier-module-hook-context-intelligence"
-version = "0.1.0"
+version = "0.1.1"
 source = { editable = "../hook-context-intelligence" }
 dependencies = [
     { name = "httpx" },
