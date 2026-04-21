@@ -13,7 +13,7 @@ Covers:
 
 from __future__ import annotations
 
-from unittest.mock import patch
+from unittest.mock import patch, AsyncMock, MagicMock
 
 
 class TestImport:
@@ -411,3 +411,301 @@ class TestBuildHeaders:
         result = _build_headers("test-api-key")
         assert isinstance(result, dict)
         assert all(isinstance(v, str) for v in result.values())
+
+
+# ---------------------------------------------------------------------------
+# Async mock helpers
+# ---------------------------------------------------------------------------
+
+
+def _make_async_mock_response(json_data, status_code=200):
+    """Create a mock httpx response for async HTTP calls."""
+    mock_resp = MagicMock()
+    mock_resp.status_code = status_code
+    mock_resp.json.return_value = json_data
+    if status_code >= 400:
+        mock_resp.raise_for_status.side_effect = Exception(f"HTTP error {status_code}")
+    else:
+        mock_resp.raise_for_status.return_value = None
+    return mock_resp
+
+
+def _make_async_httpx_client(mock_response):
+    """Create a mock async httpx.AsyncClient usable as an async context manager."""
+    mock_client = AsyncMock()
+    mock_client.post = AsyncMock(return_value=mock_response)
+    mock_client.get = AsyncMock(return_value=mock_response)
+    mock_ctx = MagicMock()
+    mock_ctx.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_ctx.__aexit__ = AsyncMock(return_value=None)
+    return mock_ctx
+
+
+# ---------------------------------------------------------------------------
+# AsyncCIClient tests
+# ---------------------------------------------------------------------------
+
+
+class TestAsyncCIClientCypher:
+    """AsyncCIClient.cypher() must POST to /cypher and return list[dict]."""
+
+    async def test_async_cypher_returns_results(self):
+        """cypher() returns a list of dicts from the server response."""
+        from context_intelligence.client import AsyncCIClient
+
+        mock_data = [{"n": {"id": "1"}}, {"n": {"id": "2"}}]
+        mock_resp = _make_async_mock_response(mock_data)
+        mock_http = _make_async_httpx_client(mock_resp)
+
+        with patch("context_intelligence.client.httpx.AsyncClient", return_value=mock_http):
+            client = AsyncCIClient("http://localhost:8000", "testkey")
+            result = await client.cypher("MATCH (n) RETURN n LIMIT 2")
+
+        assert isinstance(result, list)
+        assert result == mock_data
+
+    async def test_async_cypher_sends_correct_body(self):
+        """cypher() sends query and workspace in the POST body."""
+        from context_intelligence.client import AsyncCIClient
+
+        mock_resp = _make_async_mock_response([])
+        mock_http = _make_async_httpx_client(mock_resp)
+        mock_inner_client = mock_http.__aenter__.return_value
+
+        with patch("context_intelligence.client.httpx.AsyncClient", return_value=mock_http):
+            client = AsyncCIClient("http://localhost:8000", "testkey")
+            await client.cypher("MATCH (n) RETURN n", workspace="myworkspace")
+
+        call_kwargs = mock_inner_client.post.call_args
+        sent_json = call_kwargs[1].get("json") or call_kwargs[0][1]
+        assert sent_json["query"] == "MATCH (n) RETURN n"
+        assert sent_json["workspace"] == "myworkspace"
+
+    async def test_async_cypher_default_workspace_is_star(self):
+        """cypher() defaults workspace to '*'."""
+        from context_intelligence.client import AsyncCIClient
+
+        mock_resp = _make_async_mock_response([])
+        mock_http = _make_async_httpx_client(mock_resp)
+        mock_inner_client = mock_http.__aenter__.return_value
+
+        with patch("context_intelligence.client.httpx.AsyncClient", return_value=mock_http):
+            client = AsyncCIClient("http://localhost:8000", "testkey")
+            await client.cypher("MATCH (n) RETURN n")
+
+        call_kwargs = mock_inner_client.post.call_args
+        sent_json = call_kwargs[1].get("json") or call_kwargs[0][1]
+        assert sent_json["workspace"] == "*"
+
+    async def test_async_cypher_sends_auth_header(self):
+        """cypher() sends Authorization: Bearer header."""
+        from context_intelligence.client import AsyncCIClient
+
+        mock_resp = _make_async_mock_response([])
+        mock_http = _make_async_httpx_client(mock_resp)
+        mock_inner_client = mock_http.__aenter__.return_value
+
+        with patch("context_intelligence.client.httpx.AsyncClient", return_value=mock_http):
+            client = AsyncCIClient("http://localhost:8000", "secretkey")
+            await client.cypher("MATCH (n) RETURN n")
+
+        call_kwargs = mock_inner_client.post.call_args
+        sent_headers = call_kwargs[1].get("headers") or call_kwargs[0][2]
+        assert sent_headers.get("Authorization") == "Bearer secretkey"
+
+    async def test_async_cypher_returns_empty_list_on_none(self):
+        """cypher() returns [] when the server response is None/null."""
+        from context_intelligence.client import AsyncCIClient
+
+        mock_resp = _make_async_mock_response(None)
+        mock_http = _make_async_httpx_client(mock_resp)
+
+        with patch("context_intelligence.client.httpx.AsyncClient", return_value=mock_http):
+            client = AsyncCIClient("http://localhost:8000", "testkey")
+            result = await client.cypher("MATCH (n) RETURN n")
+
+        assert result == []
+
+    async def test_async_cypher_unwraps_results_key(self):
+        """cypher() unwraps {'results': [...]} server response."""
+        from context_intelligence.client import AsyncCIClient
+
+        inner = [{"session_count": 5}]
+        mock_resp = _make_async_mock_response({"results": inner})
+        mock_http = _make_async_httpx_client(mock_resp)
+
+        with patch("context_intelligence.client.httpx.AsyncClient", return_value=mock_http):
+            client = AsyncCIClient("http://localhost:8000", "testkey")
+            result = await client.cypher("MATCH (n) RETURN n")
+
+        assert result == inner
+
+
+class TestAsyncCIClientFetchBlob:
+    """AsyncCIClient.fetch_blob() must GET /blobs/{session_id}/{key}."""
+
+    async def test_async_fetch_blob_returns_parsed_json(self):
+        """fetch_blob() returns the parsed JSON response content."""
+        from context_intelligence.client import AsyncCIClient
+
+        blob_data = {"payload": "content here"}
+        mock_resp = _make_async_mock_response(blob_data)
+        mock_http = _make_async_httpx_client(mock_resp)
+
+        with patch("context_intelligence.client.httpx.AsyncClient", return_value=mock_http):
+            client = AsyncCIClient("http://localhost:8000", "testkey")
+            result = await client.fetch_blob("session1", "mykey")
+
+        assert result == blob_data
+
+    async def test_async_fetch_blob_calls_correct_url(self):
+        """fetch_blob() calls {server_url}/blobs/{session_id}/{key}."""
+        from context_intelligence.client import AsyncCIClient
+
+        mock_resp = _make_async_mock_response({})
+        mock_http = _make_async_httpx_client(mock_resp)
+        mock_inner_client = mock_http.__aenter__.return_value
+
+        with patch("context_intelligence.client.httpx.AsyncClient", return_value=mock_http):
+            client = AsyncCIClient("http://localhost:8000", "testkey")
+            await client.fetch_blob("my-session", "my-key")
+
+        call_args = mock_inner_client.get.call_args
+        url = call_args[0][0] if call_args[0] else call_args[1]["url"]
+        assert "http://localhost:8000" in url
+        assert "/blobs/" in url
+        assert "my-session" in url
+        assert "my-key" in url
+
+    async def test_async_fetch_blob_returns_none_on_404(self):
+        """fetch_blob() returns None when the server returns 404."""
+        from context_intelligence.client import AsyncCIClient
+
+        mock_resp = _make_async_mock_response(None, status_code=404)
+        mock_http = _make_async_httpx_client(mock_resp)
+
+        with patch("context_intelligence.client.httpx.AsyncClient", return_value=mock_http):
+            client = AsyncCIClient("http://localhost:8000", "testkey")
+            result = await client.fetch_blob("session1", "missing-key")
+
+        assert result is None
+
+    async def test_async_fetch_blob_sends_auth_header(self):
+        """fetch_blob() sends Authorization: Bearer header."""
+        from context_intelligence.client import AsyncCIClient
+
+        mock_resp = _make_async_mock_response({})
+        mock_http = _make_async_httpx_client(mock_resp)
+        mock_inner_client = mock_http.__aenter__.return_value
+
+        with patch("context_intelligence.client.httpx.AsyncClient", return_value=mock_http):
+            client = AsyncCIClient("http://localhost:8000", "blobkey")
+            await client.fetch_blob("sess", "k")
+
+        call_kwargs = mock_inner_client.get.call_args
+        sent_headers = call_kwargs[1].get("headers") or call_kwargs[0][1]
+        assert sent_headers.get("Authorization") == "Bearer blobkey"
+
+
+class TestAsyncCIClientListBlobKeys:
+    """AsyncCIClient.list_blob_keys() must return set[str] of ci-blob:// URIs."""
+
+    async def test_async_list_blob_keys_returns_set(self):
+        """list_blob_keys() returns a set of ci-blob:// URI strings."""
+        from context_intelligence.client import AsyncCIClient
+
+        blob_uris = ["ci-blob://session1/key1", "ci-blob://session1/key2"]
+        mock_resp = _make_async_mock_response(blob_uris)
+        mock_http = _make_async_httpx_client(mock_resp)
+
+        with patch("context_intelligence.client.httpx.AsyncClient", return_value=mock_http):
+            client = AsyncCIClient("http://localhost:8000", "testkey")
+            result = await client.list_blob_keys("session1")
+
+        assert isinstance(result, set)
+        assert "ci-blob://session1/key1" in result
+        assert "ci-blob://session1/key2" in result
+
+    async def test_async_list_blob_keys_filters_non_ci_blob_uris(self):
+        """list_blob_keys() returns only ci-blob:// URIs, filtering out others."""
+        from context_intelligence.client import AsyncCIClient
+
+        mixed = [
+            "ci-blob://session1/key1",
+            "http://other.example.com/data",
+            "ci-blob://session1/key2",
+        ]
+        mock_resp = _make_async_mock_response(mixed)
+        mock_http = _make_async_httpx_client(mock_resp)
+
+        with patch("context_intelligence.client.httpx.AsyncClient", return_value=mock_http):
+            client = AsyncCIClient("http://localhost:8000", "testkey")
+            result = await client.list_blob_keys("session1")
+
+        assert "ci-blob://session1/key1" in result
+        assert "ci-blob://session1/key2" in result
+        assert "http://other.example.com/data" not in result
+
+    async def test_async_list_blob_keys_empty_response(self):
+        """list_blob_keys() returns empty set when server returns empty list."""
+        from context_intelligence.client import AsyncCIClient
+
+        mock_resp = _make_async_mock_response([])
+        mock_http = _make_async_httpx_client(mock_resp)
+
+        with patch("context_intelligence.client.httpx.AsyncClient", return_value=mock_http):
+            client = AsyncCIClient("http://localhost:8000", "testkey")
+            result = await client.list_blob_keys("session1")
+
+        assert result == set()
+
+
+class TestAsyncCIClientHealthCheck:
+    """AsyncCIClient.health_check() must query the graph and return status dict."""
+
+    async def test_async_health_check_returns_ok_with_count(self):
+        """health_check() returns status='ok' and session_count from query."""
+        from context_intelligence.client import AsyncCIClient
+
+        mock_resp = _make_async_mock_response([{"session_count": 42}])
+        mock_http = _make_async_httpx_client(mock_resp)
+
+        with patch("context_intelligence.client.httpx.AsyncClient", return_value=mock_http):
+            client = AsyncCIClient("http://localhost:8000", "testkey")
+            result = await client.health_check()
+
+        assert isinstance(result, dict)
+        assert result["status"] == "ok"
+        assert result["session_count"] == 42
+
+    async def test_async_health_check_returns_unavailable_on_error(self):
+        """health_check() returns status='unavailable' with error message on failure."""
+        from context_intelligence.client import AsyncCIClient
+
+        client = AsyncCIClient("http://localhost:8000", "testkey")
+
+        # Patch cypher() directly to raise
+        async def _raise(*args, **kwargs):
+            raise Exception("connection refused")
+
+        client.cypher = _raise  # type: ignore[method-assign]
+        result = await client.health_check()
+
+        assert isinstance(result, dict)
+        assert result["status"] == "unavailable"
+        assert "error" in result
+        assert "connection refused" in result["error"]
+
+    async def test_async_health_check_returns_zero_on_empty(self):
+        """health_check() returns session_count=0 when cypher returns empty list."""
+        from context_intelligence.client import AsyncCIClient
+
+        mock_resp = _make_async_mock_response([])
+        mock_http = _make_async_httpx_client(mock_resp)
+
+        with patch("context_intelligence.client.httpx.AsyncClient", return_value=mock_http):
+            client = AsyncCIClient("http://localhost:8000", "testkey")
+            result = await client.health_check()
+
+        assert result["status"] == "ok"
+        assert result["session_count"] == 0

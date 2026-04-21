@@ -38,6 +38,11 @@ try:
 except ImportError:
     pass
 
+try:
+    import httpx
+except ImportError:
+    httpx = None  # type: ignore[assignment]
+
 _CI_BLOB_SCHEME = "ci-blob://"
 
 
@@ -279,6 +284,149 @@ class CIClient:
         """
         try:
             results = self.cypher("MATCH (s:Session) RETURN count(s) as session_count")
+            count = results[0]["session_count"] if results else 0
+            return {"status": "ok", "session_count": count}
+        except Exception as exc:
+            return {"status": "unavailable", "error": str(exc)}
+
+
+# ---------------------------------------------------------------------------
+# AsyncCIClient
+# ---------------------------------------------------------------------------
+
+
+class AsyncCIClient:
+    """Asynchronous client for the context-intelligence server.
+
+    Requires the ``httpx`` library (``pip install httpx``).
+
+    Parameters
+    ----------
+    server_url:
+        Base URL of the context-intelligence server (trailing slash is stripped).
+    api_key:
+        API key sent as ``Authorization: Bearer <api_key>`` on every request.
+    """
+
+    def __init__(self, server_url: str, api_key: str) -> None:
+        if httpx is None:
+            raise ImportError(
+                "httpx is required for AsyncCIClient. Install it with: pip install httpx"
+            )
+        self._server_url: str = server_url.rstrip("/")
+        self._api_key: str = api_key
+
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
+
+    async def cypher(self, query: str, workspace: str = "*") -> list[dict[str, Any]]:
+        """Execute a Cypher query against the graph store (async).
+
+        Parameters
+        ----------
+        query:
+            Cypher query string.
+        workspace:
+            Workspace to scope the query. Defaults to ``"*"`` (all workspaces).
+
+        Returns
+        -------
+        list[dict]
+            Rows returned by the server, or an empty list on failure.
+        """
+        url = f"{self._server_url}/cypher"
+        body: dict[str, Any] = {
+            "query": query,
+            "params": {},
+            "workspace": workspace,
+        }
+        try:
+            async with httpx.AsyncClient() as client:  # type: ignore[union-attr]
+                resp = await client.post(url, json=body, headers=_build_headers(self._api_key))
+                resp.raise_for_status()
+                result = resp.json()
+        except Exception:
+            return []
+        if result is None:
+            return []
+        if isinstance(result, list):
+            return result
+        # Some servers wrap in {"results": [...]}
+        if isinstance(result, dict) and "results" in result:
+            return result["results"]
+        return []
+
+    async def fetch_blob(self, session_id: str, key: str) -> Any | None:
+        """Fetch a blob from the server (async).
+
+        Calls ``GET /blobs/{session_id}/{key}`` and returns the parsed JSON
+        response, or ``None`` on failure.
+
+        Parameters
+        ----------
+        session_id:
+            The session the blob belongs to.
+        key:
+            The blob key.
+
+        Returns
+        -------
+        Any or None
+            Parsed JSON content, or ``None`` when the request fails.
+        """
+        url = f"{self._server_url}/blobs/{session_id}/{key}"
+        try:
+            async with httpx.AsyncClient() as client:  # type: ignore[union-attr]
+                resp = await client.get(url, headers=_build_headers(self._api_key))
+                resp.raise_for_status()
+                return resp.json()
+        except Exception:
+            return None
+
+    async def list_blob_keys(self, session_id: str) -> set[str]:
+        """Return the set of ``ci-blob://`` URI keys for *session_id* (async).
+
+        Calls ``GET /blobs/{session_id}`` and parses the response list of
+        ``ci-blob://`` URIs. Returns an empty set on any error.
+
+        Parameters
+        ----------
+        session_id:
+            The session whose blob keys to list.
+
+        Returns
+        -------
+        set[str]
+            Set of ``ci-blob://`` URI strings.
+        """
+        url = f"{self._server_url}/blobs/{session_id}"
+        try:
+            async with httpx.AsyncClient() as client:  # type: ignore[union-attr]
+                resp = await client.get(url, headers=_build_headers(self._api_key))
+                resp.raise_for_status()
+                result = resp.json()
+        except Exception:
+            return set()
+        if not isinstance(result, list):
+            return set()
+        return {
+            item for item in result if isinstance(item, str) and item.startswith(_CI_BLOB_SCHEME)
+        }
+
+    async def health_check(self) -> dict[str, Any]:
+        """Check server health by running a simple count query (async).
+
+        Uses ``cypher()`` with a lightweight session-count query.
+
+        Returns
+        -------
+        dict
+            ``{"status": "ok", "session_count": N}`` on success, or
+            ``{"status": "unavailable", "error": "..."}`` on failure.
+        """
+        try:
+            results = await self.cypher("MATCH (s:Session) RETURN count(s) as session_count")
             count = results[0]["session_count"] if results else 0
             return {"status": "ok", "session_count": count}
         except Exception as exc:
