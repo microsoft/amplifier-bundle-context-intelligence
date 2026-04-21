@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from context_intelligence.config import SETTINGS_PATH, _parse_settings_yaml
+from context_intelligence.reconstruct.discover import workspace_slug
 
 _DEFAULT_BASE_PATH = "~/.amplifier/projects"
 _DEFAULT_PROJECT_SLUG = "default"
@@ -37,7 +38,11 @@ def _slugify_path(path_str: str) -> str:
         ``/workspace``            → ``-workspace``
         ``/home/user/repos/app``  → ``-home-user-repos-app``
     """
-    slug = path_str.replace("/", "-").replace("\\", "-").replace(":", "")
+    if not path_str:
+        return _DEFAULT_PROJECT_SLUG
+    slug = workspace_slug(path_str)
+    # Windows normalisation: replace backslashes and strip drive-letter colons.
+    slug = slug.replace("\\", "-").replace(":", "")
     if slug and not slug.startswith("-"):
         slug = "-" + slug
     return slug or _DEFAULT_PROJECT_SLUG
