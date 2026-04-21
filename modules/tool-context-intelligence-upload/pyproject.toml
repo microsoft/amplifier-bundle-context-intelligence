@@ -5,6 +5,7 @@ requires-python = ">=3.11"
 license = "MIT"
 
 dependencies = [
+    "amplifier-bundle-context-intelligence",
     "httpx>=0.28.1",
     "amplifier-module-hook-context-intelligence",
 ]
@@ -31,6 +32,7 @@ dev = [
 ]
 
 [tool.uv.sources]
+amplifier-bundle-context-intelligence = { path = "../.." }
 amplifier-module-hook-context-intelligence = { path = "../hook-context-intelligence", editable = true }
 
 [tool.pytest.ini_options]

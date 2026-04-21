@@ -11,9 +11,11 @@ source = { directory = "../../" }
 
 [package.metadata.requires-dev]
 dev = [
+    { name = "httpx", specifier = ">=0.25" },
     { name = "pyright", specifier = ">=1.1" },
     { name = "pytest", specifier = ">=8.0" },
     { name = "pytest-asyncio", specifier = ">=0.24" },
+    { name = "pyyaml", specifier = ">=6.0" },
     { name = "ruff", specifier = ">=0.4" },
 ]
 
@@ -47,6 +49,7 @@ name = "amplifier-module-tool-context-intelligence-upload"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
+    { name = "amplifier-bundle-context-intelligence" },
     { name = "amplifier-module-hook-context-intelligence" },
     { name = "httpx" },
 ]
@@ -61,6 +64,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "amplifier-bundle-context-intelligence", directory = "../../" },
     { name = "amplifier-module-hook-context-intelligence", editable = "../hook-context-intelligence" },
     { name = "httpx", specifier = ">=0.28.1" },
 ]
