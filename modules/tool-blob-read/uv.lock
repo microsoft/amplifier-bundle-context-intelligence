@@ -3,6 +3,22 @@ revision = 3
 requires-python = ">=3.11"
 
 [[package]]
+name = "amplifier-bundle-context-intelligence"
+version = "0.1.0"
+source = { editable = "../../" }
+
+[package.metadata]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "httpx", specifier = ">=0.28.1" },
+    { name = "pyright", specifier = ">=1.1" },
+    { name = "pytest", specifier = ">=8.0" },
+    { name = "pytest-asyncio", specifier = ">=0.24" },
+    { name = "ruff", specifier = ">=0.4" },
+]
+
+[[package]]
 name = "amplifier-core"
 version = "1.2.5"
 source = { git = "https://github.com/microsoft/amplifier-core?branch=main#308b2455728378be896266cf620c00da2a408b65" }
@@ -19,6 +35,7 @@ name = "amplifier-module-tool-blob-read"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
+    { name = "amplifier-bundle-context-intelligence" },
     { name = "httpx" },
 ]
 
@@ -32,7 +49,10 @@ dev = [
 ]
 
 [package.metadata]
-requires-dist = [{ name = "httpx", specifier = ">=0.28.1" }]
+requires-dist = [
+    { name = "amplifier-bundle-context-intelligence", editable = "../../" },
+    { name = "httpx", specifier = ">=0.28.1" },
+]
 
 [package.metadata.requires-dev]
 dev = [
