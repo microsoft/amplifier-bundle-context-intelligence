@@ -226,6 +226,21 @@ Run `context-intelligence-upload --help` for full options.
 
 ---
 
+## Section 3.6: Session Reconstruction Capability
+
+When local session files are missing or the resume list shows sessions with unnamed or unknown
+identities, guide the user to run `context-intelligence reconstruct` to rebuild session metadata
+from available event data. This command scans local project directories for JSONL event files and
+reconstructs session summaries that can then be uploaded to the graph server for analysis.
+
+@context-intelligence:context/agents/reconstruction-knowledge.md
+<!-- detailed CLI usage patterns for context-intelligence reconstruct -->
+
+@context-intelligence:context/session-reconstruction.md
+<!-- reconstruction workflow reference -->
+
+---
+
 ## Section 4: Context File References
 
 @context-intelligence:context/config-resolution.dot

@@ -295,13 +295,15 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--server-url",
-        required=True,
+        required=False,
+        default=None,
         metavar="URL",
         help="Target server base URL",
     )
     parser.add_argument(
         "--api-key",
-        required=True,
+        required=False,
+        default=None,
         metavar="KEY",
         help="Bearer token for authorization",
     )
@@ -340,6 +342,14 @@ def main() -> None:
     """CLI entry point — synchronous, exits with an appropriate code."""
     parser = _build_parser()
     args = parser.parse_args()
+
+    # 0. Resolve server config — CLI flags > env vars > settings.yaml
+    from context_intelligence.config import resolve_config
+
+    server_url, api_key = resolve_config(
+        server_url=args.server_url,
+        api_key=args.api_key,
+    )
 
     # 1. Auto-generate job_id if not provided
     job_id: str = args.job_id
@@ -385,8 +395,8 @@ def main() -> None:
     # 6. Run upload
     upload_result = run_upload(
         sessions=sessions,
-        server_url=args.server_url,
-        api_key=args.api_key,
+        server_url=server_url,
+        api_key=api_key,
         tracker=tracker,
         event_delay_s=args.event_delay_ms / 1000.0,
     )
