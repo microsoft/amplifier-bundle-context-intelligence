@@ -55,8 +55,12 @@ class TestBundleRoot:
         data = tomllib.loads(pyproject.read_text())
         assert data["project"]["name"] == "amplifier-bundle-context-intelligence"
         packages = (
-            data.get("tool", {}).get("hatch", {}).get("build", {}).get("targets", {})
-            .get("wheel", {}).get("packages", [])
+            data.get("tool", {})
+            .get("hatch", {})
+            .get("build", {})
+            .get("targets", {})
+            .get("wheel", {})
+            .get("packages", [])
         )
         assert "context_intelligence" in packages
 

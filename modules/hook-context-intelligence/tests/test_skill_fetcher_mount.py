@@ -429,9 +429,7 @@ class TestMountNoOpWhenServerUrlAbsent:
                 "get_capability('skills_discovery') was called even though server_url is None"
             )
 
-    async def test_skill_unloaded_not_registered_when_no_server_url(
-        self, tmp_path: Path
-    ) -> None:
+    async def test_skill_unloaded_not_registered_when_no_server_url(self, tmp_path: Path) -> None:
         """skill:unloaded handler must NOT be registered when server_url is None."""
         from amplifier_module_hook_context_intelligence import mount
 

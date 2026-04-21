@@ -113,9 +113,7 @@ class TestRefreshWatchedSkills:
 
         await _refresh_watched_skills(coordinator, fetcher, skills_capable=True)
 
-        fetcher.fetch.assert_called_once_with(
-            "context-intelligence-graph-query", skill_path
-        )
+        fetcher.fetch.assert_called_once_with("context-intelligence-graph-query", skill_path)
         fetcher.write_legacy_content.assert_not_called()
 
     async def test_skips_when_path_none(self, tmp_path: Path) -> None:
