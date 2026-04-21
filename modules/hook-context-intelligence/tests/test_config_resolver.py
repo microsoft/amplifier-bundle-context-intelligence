@@ -608,3 +608,11 @@ class TestSlugifyPath:
 
         path = "/home/user/project"
         assert _slugify_path(path) == workspace_slug(path)
+
+    def test_handles_windows_path(self) -> None:
+        """Windows-style path has backslashes replaced and colon stripped."""
+        result = _slugify_path("C:\\Users\\user\\project")
+        assert "\\" not in result
+        assert ":" not in result
+        assert "C" in result
+        assert "Users" in result
