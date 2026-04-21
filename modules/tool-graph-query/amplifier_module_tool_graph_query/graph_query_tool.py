@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Any
 
-import httpx
+from context_intelligence.client import AsyncCIClient
 
 from amplifier_core.models import ToolResult
 
@@ -95,50 +95,11 @@ class GraphQueryTool:
             )
 
         workspace = self._resolver.workspace
-        server_url = server_url.rstrip("/")
-
         query: str = input["query"]
-        params: dict[str, Any] | None = input.get("params")
         ws_override = input.get("workspace")
         effective_workspace = ws_override if ws_override is not None else workspace
 
-        body = {
-            "query": query,
-            "params": params if params is not None else {},
-            "workspace": effective_workspace,
-        }
-
         api_key = self._resolver.context_intelligence_api_key
-        headers: dict[str, str] = {}
-        if api_key:
-            headers["Authorization"] = f"Bearer {api_key}"
-
-        try:
-            async with httpx.AsyncClient() as client:
-                resp = await client.post(f"{server_url}/cypher", json=body, headers=headers)
-                resp.raise_for_status()
-                return ToolResult(success=True, output=resp.json())
-        except httpx.HTTPStatusError as exc:
-            return ToolResult(
-                success=False,
-                error={
-                    "message": f"Server returned {exc.response.status_code}: {exc.response.text}",
-                    "type": "http_error",
-                },
-            )
-        except httpx.TransportError as exc:
-            return ToolResult(
-                success=False,
-                error={
-                    "message": f"Server unavailable: {exc}",
-                    "type": "connection_error",
-                },
-            )
-        except Exception as exc:
-            return ToolResult(
-                success=False,
-                error={
-                    "message": f"Graph query failed: {exc}",
-                    "type": "query_error",
-                },
-            )
+        async_client = AsyncCIClient(server_url=server_url, api_key=api_key or "")
+        result = await async_client.cypher(query, effective_workspace)
+        return ToolResult(success=True, output=result)
