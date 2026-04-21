@@ -167,6 +167,8 @@ async def mount(
     events = await _discover_events(coordinator)
     events.update(resolver.additional_events)  # static config, no timing dependency
 
+    unregister_fns: list[Callable[[], None]] = []
+
     # Skill fetch phase — deferred to skills:discovered event
     server_url = resolver.context_intelligence_server_url
     fetcher: SkillFetcher | None = None
@@ -195,12 +197,13 @@ async def mount(
             async def on_skills_discovered(event_name: str, data: dict[str, Any]) -> None:
                 await _refresh_watched_skills(coordinator, fetcher, skills_capable)
 
-            coordinator.hooks.register(
+            unreg_skills_discovered = coordinator.hooks.register(
                 "skills:discovered",
                 on_skills_discovered,
                 priority=50,
                 name="SkillFetcher-trigger",
             )
+            unregister_fns.append(unreg_skills_discovered)
             log.info("skill_fetch_deferred: registered skills:discovered handler")
             # tools mount before hooks in Amplifier: if skills_discovery is
             # already registered (tool-skills already ran), fetch immediately.
@@ -216,7 +219,6 @@ async def mount(
     active_events = {e for e in events if not any(fnmatch.fnmatch(e, p) for p in exclude)}
 
     logging_handler = LoggingHandler(resolver)
-    unregister_fns: list[Callable[[], None]] = []
     for event in active_events:
         unreg = coordinator.hooks.register(
             event, logging_handler, priority=100, name="LoggingHandler"

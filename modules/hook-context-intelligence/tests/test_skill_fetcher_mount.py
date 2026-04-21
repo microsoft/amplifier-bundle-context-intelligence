@@ -195,9 +195,15 @@ class TestMountSkillFetchSkipsWhenUnconfigured:
         mock_fetcher_instance.fetch = AsyncMock()
         mock_fetcher_cls = MagicMock(return_value=mock_fetcher_instance)
 
-        with patch(
-            "amplifier_module_hook_context_intelligence.skill_fetcher.SkillFetcher",
-            mock_fetcher_cls,
+        with (
+            patch(
+                "amplifier_module_hook_context_intelligence.config_resolver.SETTINGS_PATH",
+                tmp_path / "no-settings.yaml",
+            ),
+            patch(
+                "amplifier_module_hook_context_intelligence.skill_fetcher.SkillFetcher",
+                mock_fetcher_cls,
+            ),
         ):
             cleanup = await mount(coordinator, config={})
 
@@ -244,7 +250,7 @@ class TestMountSkillFetchSkipsWhenUnconfigured:
 
         mock_fetcher_instance.fetch.assert_not_called()
 
-    async def test_mount_still_returns_cleanup_when_fetch_skipped(self) -> None:
+    async def test_mount_still_returns_cleanup_when_fetch_skipped(self, tmp_path: Path) -> None:
         """mount() returns a callable, awaitable cleanup even when the fetch phase is skipped."""
         from amplifier_module_hook_context_intelligence import mount
 
@@ -255,9 +261,15 @@ class TestMountSkillFetchSkipsWhenUnconfigured:
         mock_fetcher_instance.fetch = AsyncMock()
         mock_fetcher_cls = MagicMock(return_value=mock_fetcher_instance)
 
-        with patch(
-            "amplifier_module_hook_context_intelligence.skill_fetcher.SkillFetcher",
-            mock_fetcher_cls,
+        with (
+            patch(
+                "amplifier_module_hook_context_intelligence.config_resolver.SETTINGS_PATH",
+                tmp_path / "no-settings.yaml",
+            ),
+            patch(
+                "amplifier_module_hook_context_intelligence.skill_fetcher.SkillFetcher",
+                mock_fetcher_cls,
+            ),
         ):
             cleanup = await mount(coordinator, config={})
 
@@ -400,12 +412,16 @@ class TestSkillUnloadedHandler:
 class TestMountNoOpWhenServerUrlAbsent:
     """When server_url is not configured, mount() must not touch skills_discovery at all."""
 
-    async def test_get_capability_not_called_when_no_server_url(self) -> None:
+    async def test_get_capability_not_called_when_no_server_url(self, tmp_path: Path) -> None:
         """coordinator.get_capability must NOT be called when server_url is None."""
         from amplifier_module_hook_context_intelligence import mount
 
         coordinator = _make_coordinator(server_url=None, skill_path=None)
-        await mount(coordinator, config={})
+        with patch(
+            "amplifier_module_hook_context_intelligence.config_resolver.SETTINGS_PATH",
+            tmp_path / "no-settings.yaml",
+        ):
+            await mount(coordinator, config={})
 
         # get_capability should never have been called for skills_discovery
         for call in coordinator.get_capability.call_args_list:
@@ -413,7 +429,9 @@ class TestMountNoOpWhenServerUrlAbsent:
                 "get_capability('skills_discovery') was called even though server_url is None"
             )
 
-    async def test_skill_unloaded_not_registered_when_no_server_url(self) -> None:
+    async def test_skill_unloaded_not_registered_when_no_server_url(
+        self, tmp_path: Path
+    ) -> None:
         """skill:unloaded handler must NOT be registered when server_url is None."""
         from amplifier_module_hook_context_intelligence import mount
 
@@ -426,7 +444,11 @@ class TestMountNoOpWhenServerUrlAbsent:
         coordinator = _make_coordinator(server_url=None, skill_path=None)
         coordinator.hooks.register = MagicMock(side_effect=capture)
 
-        await mount(coordinator, config={})
+        with patch(
+            "amplifier_module_hook_context_intelligence.config_resolver.SETTINGS_PATH",
+            tmp_path / "no-settings.yaml",
+        ):
+            await mount(coordinator, config={})
 
         assert "skill:unloaded" not in registered_events, (
             "skill:unloaded handler was registered even though server_url is None"
