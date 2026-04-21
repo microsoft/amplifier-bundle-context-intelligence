@@ -17,7 +17,7 @@ Level 3 — Filesystem + Orchestration
 
 from __future__ import annotations
 
-from context_intelligence.client import CIClient
+from context_intelligence.client import AsyncCIClient, CIClient
 from context_intelligence.config import (
     AMPLIFIER_DIR,
     LOG_SCHEMA,
@@ -35,6 +35,7 @@ from context_intelligence.reconstruct import (
 )
 
 __all__ = [
+    "AsyncCIClient",
     "CIClient",
     "resolve_config",
     "LOG_SCHEMA",

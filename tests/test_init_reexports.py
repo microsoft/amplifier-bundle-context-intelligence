@@ -91,6 +91,12 @@ class TestReconstructInitReexports:
 class TestContextIntelligenceInitReexports:
     """context_intelligence must re-export all required symbols at the top level."""
 
+    def test_asyncciclient_importable_from_top(self):
+        """AsyncCIClient must be importable from context_intelligence."""
+        from context_intelligence import AsyncCIClient
+
+        assert AsyncCIClient is not None
+
     def test_ciclient_importable_from_top(self):
         """CIClient must be importable from context_intelligence."""
         from context_intelligence import CIClient
@@ -176,6 +182,7 @@ class TestContextIntelligenceInitReexports:
         import context_intelligence as ci
 
         required = {
+            "AsyncCIClient",
             "CIClient",
             "resolve_config",
             "LOG_SCHEMA",
