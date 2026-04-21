@@ -4,6 +4,7 @@ from pathlib import Path
 from unittest.mock import MagicMock
 
 from amplifier_module_hook_context_intelligence.config_resolver import ConfigResolver
+from amplifier_module_hook_context_intelligence.config_resolver import _slugify_path
 
 
 # ---------------------------------------------------------------------------
@@ -594,3 +595,16 @@ class TestSettingsYamlFallback:
         resolver = ConfigResolver(config={}, coordinator=_make_coordinator(config={}))
 
         assert resolver.context_intelligence_server_url is None
+
+
+class TestSlugifyPath:
+    """_slugify_path function — module-level helper for workspace slug derivation."""
+
+    def test_unix_path_produces_expected_slug(self) -> None:
+        assert _slugify_path("/home/user/project") == "-home-user-project"
+
+    def test_unix_path_matches_workspace_slug(self) -> None:
+        from context_intelligence.reconstruct.discover import workspace_slug
+
+        path = "/home/user/project"
+        assert _slugify_path(path) == workspace_slug(path)
