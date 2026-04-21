@@ -501,3 +501,27 @@ class TestAdditionalEvents:
         second = resolver.additional_events
 
         assert first is second
+
+
+class TestSettingsYamlFallback:
+    """settings.yaml as lowest-priority fallback for server_url and api_key."""
+
+    def test_server_url_falls_back_to_settings_yaml(self, monkeypatch, tmp_path):
+        monkeypatch.delenv("AMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_URL", raising=False)
+
+        settings_file = tmp_path / "settings.yaml"
+        settings_file.write_text(
+            "overrides:\n"
+            "  hook-context-intelligence:\n"
+            "    config:\n"
+            "      context_intelligence_server_url: http://from-settings-yaml\n"
+        )
+
+        monkeypatch.setattr(
+            "amplifier_module_hook_context_intelligence.config_resolver.SETTINGS_PATH",
+            settings_file,
+        )
+
+        resolver = ConfigResolver(config={}, coordinator=_make_coordinator(config={}))
+
+        assert resolver.context_intelligence_server_url == "http://from-settings-yaml"
