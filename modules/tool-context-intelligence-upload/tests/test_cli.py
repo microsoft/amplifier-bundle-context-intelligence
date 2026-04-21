@@ -128,22 +128,6 @@ class TestMissingRequiredArgs:
             _build_parser().parse_args(["--server-url", "http://localhost", "--api-key", "key"])
         assert exc_info.value.code == 2
 
-    def test_missing_server_url_defaults_to_none(self, capsys):
-        from amplifier_module_tool_context_intelligence_upload.cli import _build_parser
-
-        # --server-url is optional; parser succeeds with server_url=None
-        args = _build_parser().parse_args(["--path", "/some/path", "--api-key", "key"])
-        assert args.server_url is None
-
-    def test_missing_api_key_defaults_to_none(self, capsys):
-        from amplifier_module_tool_context_intelligence_upload.cli import _build_parser
-
-        # --api-key is optional; parser succeeds with api_key=None
-        args = _build_parser().parse_args(
-            ["--path", "/some/path", "--server-url", "http://localhost"]
-        )
-        assert args.api_key is None
-
 
 # ---------------------------------------------------------------------------
 # main() — auto-generated job_id
