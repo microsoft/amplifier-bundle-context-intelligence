@@ -583,3 +583,14 @@ class TestSettingsYamlFallback:
         resolver = ConfigResolver(config={}, coordinator=_make_coordinator(config={}))
 
         assert resolver.context_intelligence_api_key == "sk-from-settings-yaml"
+
+    def test_settings_yaml_returns_none_when_file_missing(self, monkeypatch, tmp_path):
+        """When settings.yaml doesn't exist, still returns None gracefully."""
+        monkeypatch.delenv("AMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_URL", raising=False)
+        monkeypatch.setattr(
+            "amplifier_module_hook_context_intelligence.config_resolver.SETTINGS_PATH",
+            tmp_path / "nonexistent.yaml",
+        )
+        resolver = ConfigResolver(config={}, coordinator=_make_coordinator(config={}))
+
+        assert resolver.context_intelligence_server_url is None
