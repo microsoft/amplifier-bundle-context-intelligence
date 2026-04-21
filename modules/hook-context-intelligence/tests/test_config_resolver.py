@@ -466,3 +466,38 @@ class TestCloseDrainTimeout:
         resolver = ConfigResolver(config={"close_drain_timeout": "1.25"}, coordinator=coordinator)
 
         assert resolver.close_drain_timeout == 1.25
+
+
+class TestAdditionalEvents:
+    def test_defaults_to_empty_set(self) -> None:
+        """additional_events returns an empty frozenset when not set in config."""
+        coordinator = _make_coordinator(config={})
+        resolver = ConfigResolver(config={}, coordinator=coordinator)
+
+        assert resolver.additional_events == frozenset()
+
+    def test_returns_frozenset_from_list(self) -> None:
+        """additional_events converts a list from config to a frozenset."""
+        coordinator = _make_coordinator(config={})
+        resolver = ConfigResolver(
+            config={"additional_events": ["delegate:agent_spawned", "delegate:agent_completed"]},
+            coordinator=coordinator,
+        )
+
+        result = resolver.additional_events
+
+        assert result == {"delegate:agent_spawned", "delegate:agent_completed"}
+        assert isinstance(result, frozenset)
+
+    def test_cached_after_first_access(self) -> None:
+        """additional_events returns the same object on repeated access (cached)."""
+        coordinator = _make_coordinator(config={})
+        resolver = ConfigResolver(
+            config={"additional_events": ["delegate:agent_spawned"]},
+            coordinator=coordinator,
+        )
+
+        first = resolver.additional_events
+        second = resolver.additional_events
+
+        assert first is second

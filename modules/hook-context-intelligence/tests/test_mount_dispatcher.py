@@ -255,6 +255,56 @@ class TestEventDiscovery:
         assert "custom:contrib_event" in registered_events
         assert "custom:legacy_event" in registered_events
 
+    async def test_additional_events_registered_regardless_of_capability_order(self) -> None:
+        """additional_events from config are registered even without observability contributions.
+
+        Regression test: delegate:agent_spawned is NOT in ALL_EVENTS and is NOT
+        contributed by any module at mount time (simulating the hook mounting before
+        tool-delegate). With additional_events configured, it must still appear
+        in the registered events.
+        """
+        from amplifier_module_hook_context_intelligence import mount
+
+        # No contributed events, no capability events — only ALL_EVENTS base
+        coordinator = _make_coordinator()
+        config = {"additional_events": ["delegate:agent_spawned", "delegate:agent_completed"]}
+        await mount(coordinator, config=config)
+
+        registered_events = set()
+        for call in coordinator.hooks.register.call_args_list:
+            if call.kwargs.get("name") == "LoggingHandler":
+                registered_events.add(call.args[0])
+
+        assert "delegate:agent_spawned" in registered_events, (
+            "delegate:agent_spawned should be registered via additional_events config"
+        )
+        assert "delegate:agent_completed" in registered_events, (
+            "delegate:agent_completed should be registered via additional_events config"
+        )
+
+    async def test_additional_events_can_be_excluded(self) -> None:
+        """exclude_events filter applies to additional_events entries too."""
+        from amplifier_module_hook_context_intelligence import mount
+
+        coordinator = _make_coordinator()
+        config = {
+            "additional_events": ["delegate:agent_spawned", "delegate:agent_completed"],
+            "exclude_events": ["delegate:*"],
+        }
+        await mount(coordinator, config=config)
+
+        registered_events = set()
+        for call in coordinator.hooks.register.call_args_list:
+            if call.kwargs.get("name") == "LoggingHandler":
+                registered_events.add(call.args[0])
+
+        assert "delegate:agent_spawned" not in registered_events, (
+            "delegate:agent_spawned should be excluded by delegate:* pattern"
+        )
+        assert "delegate:agent_completed" not in registered_events, (
+            "delegate:agent_completed should be excluded by delegate:* pattern"
+        )
+
 
 # ---------------------------------------------------------------------------
 # TestModuleContract

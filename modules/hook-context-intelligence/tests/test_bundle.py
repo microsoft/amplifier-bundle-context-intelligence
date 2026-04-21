@@ -46,9 +46,19 @@ class TestBundleRoot:
             "context-intelligence:behaviors/context-intelligence" in ref for ref in bundle_refs
         )
 
-    def test_no_root_pyproject_toml(self):
-        """Bundles are configuration, not Python packages — no root pyproject.toml."""
-        assert not (REPO_ROOT / "pyproject.toml").exists()
+    def test_root_pyproject_toml_is_for_library(self):
+        """Bundle root pyproject.toml belongs to the context_intelligence library, not a bare bundle."""
+        pyproject = REPO_ROOT / "pyproject.toml"
+        assert pyproject.exists(), "Root pyproject.toml must exist for context_intelligence library"
+        import tomllib
+
+        data = tomllib.loads(pyproject.read_text())
+        assert data["project"]["name"] == "amplifier-bundle-context-intelligence"
+        packages = (
+            data.get("tool", {}).get("hatch", {}).get("build", {}).get("targets", {})
+            .get("wheel", {}).get("packages", [])
+        )
+        assert "context_intelligence" in packages
 
 
 class TestBehaviorYaml:

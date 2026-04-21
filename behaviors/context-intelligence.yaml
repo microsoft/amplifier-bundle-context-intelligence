@@ -31,6 +31,12 @@ hooks:
       log_level: "${AMPLIFIER_CONTEXT_INTELLIGENCE_LOG_LEVEL:INFO}"
       dispatch_timeout: "${AMPLIFIER_CONTEXT_INTELLIGENCE_DISPATCH_TIMEOUT:30}"
       dispatch_failure_threshold: "${AMPLIFIER_CONTEXT_INTELLIGENCE_DISPATCH_FAILURE_THRESHOLD:3}"
+      additional_events:
+        - delegate:agent_spawned
+        - delegate:agent_resumed
+        - delegate:agent_completed
+        - delegate:agent_cancelled
+        - delegate:error
       # base_path: ~/.amplifier/projects  (auto-resolved; uncomment to override)
       # project_slug: (auto-resolved from working directory; uncomment to override)
       # exclude_events: []  (optional fnmatch patterns; uncomment and list events to suppress)

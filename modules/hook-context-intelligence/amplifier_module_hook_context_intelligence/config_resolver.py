@@ -63,6 +63,7 @@ class ConfigResolver:
         self._project_slug: str | None = None
         self._workspace: str | None = None
         self._exclude_events: frozenset[str] | None = None
+        self._additional_events: frozenset[str] | None = None
 
     # ------------------------------------------------------------------
     # Private helpers
@@ -170,6 +171,18 @@ class ConfigResolver:
         if self._exclude_events is None:
             self._exclude_events = frozenset(self._config.get("exclude_events", []))
         return self._exclude_events
+
+    @property
+    def additional_events(self) -> frozenset[str]:
+        """Events to register for unconditionally, regardless of capability discovery.
+
+        Resolves mount-order race: modules that contribute observability.events after
+        the hook mounts will still be covered if listed here.
+        Reads from config['additional_events'], defaults to empty frozenset.
+        """
+        if self._additional_events is None:
+            self._additional_events = frozenset(self._config.get("additional_events", []))
+        return self._additional_events
 
     @property
     def log_level(self) -> str:

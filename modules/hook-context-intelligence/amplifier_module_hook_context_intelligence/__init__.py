@@ -161,6 +161,7 @@ async def mount(
     log.setLevel(resolver.log_level)
     coordinator.register_capability("context_intelligence.config_resolver", resolver)
     events = await _discover_events(coordinator)
+    events.update(resolver.additional_events)  # static config, no timing dependency
 
     # Skill fetch phase — deferred to skills:discovered event
     server_url = resolver.context_intelligence_server_url
