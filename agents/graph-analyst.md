@@ -49,7 +49,7 @@ tools:
   - module: tool-bash
     source: git+https://github.com/microsoft/amplifier-module-tool-bash@main
   - module: tool-skills
-    source: git+https://github.com/microsoft/amplifier-module-tool-skills@main
+    source: git+https://github.com/microsoft/amplifier-bundle-skills@main#subdirectory=modules/tool-skills
     config:
       skills:
         - "git+https://github.com/microsoft/amplifier-bundle-context-intelligence@main#subdirectory=skills"
