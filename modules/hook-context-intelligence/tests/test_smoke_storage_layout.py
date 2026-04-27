@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
-from amplifier_module_hook_context_intelligence import mount
+from amplifier_module_hook_context_intelligence import mount, on_session_ready
 
 LOGGING_PRIORITY = 100
 
@@ -48,6 +48,7 @@ def _make_coordinator(
     coordinator.config = {}
 
     unregister_fns: list[MagicMock] = []
+    capabilities: dict[str, Any] = {}
 
     def _register(*args: Any, **kwargs: Any) -> MagicMock:
         unreg = MagicMock()
@@ -63,23 +64,40 @@ def _make_coordinator(
         return_value=contributed_events,
     )
 
+    def _register_capability(name: str, value: Any) -> None:
+        capabilities[name] = value
+
+    coordinator.register_capability = MagicMock(side_effect=_register_capability)
+
     def _get_capability(name: str) -> Any:
         if name == "session.working_dir":
             return working_dir
-        return None
+        return capabilities.get(name)
 
     coordinator.get_capability = MagicMock(side_effect=_get_capability)
     return coordinator
 
 
+async def _mount_and_ready(
+    coordinator: MagicMock,
+    config: dict | None = None,
+) -> Any:
+    """Run mount() then on_session_ready() — the normal two-phase lifecycle."""
+    cleanup = await mount(coordinator, config=config or {})
+    await on_session_ready(coordinator)
+    return cleanup
+
+
 def _extract_logging_handler(coordinator: MagicMock) -> Any:
+    """Extract the LoggingHandler instance from registrations.
+
+    Searches by name="LoggingHandler" to avoid false matches with other
+    priority-100 handlers (e.g. SkillFetcher's skill:unloaded handler).
+    """
     for call in coordinator.hooks.register.call_args_list:
-        if (
-            call.kwargs.get("priority") == LOGGING_PRIORITY
-            or call.kwargs.get("name") == "LoggingHandler"
-        ):
+        if call.kwargs.get("name") == "LoggingHandler":
             return call.args[1]
-    msg = "LoggingHandler not found in registrations"
+    msg = "LoggingHandler not found in registrations (name='LoggingHandler' not present)"
     raise AssertionError(msg)
 
 
@@ -123,7 +141,7 @@ class TestStorageDirectoryStructure:
         tmp_path: Path,
     ) -> None:
         coordinator = _make_coordinator()
-        cleanup = await mount(
+        cleanup = await _mount_and_ready(
             coordinator,
             config={"base_path": str(tmp_path), "project_slug": "myproject"},
         )
@@ -139,7 +157,7 @@ class TestStorageDirectoryStructure:
     async def test_no_files_at_session_root(self, tmp_path: Path) -> None:
         """events.jsonl and metadata.json must NOT be at session root level."""
         coordinator = _make_coordinator()
-        cleanup = await mount(
+        cleanup = await _mount_and_ready(
             coordinator,
             config={"base_path": str(tmp_path), "project_slug": "myproject"},
         )
@@ -160,7 +178,7 @@ class TestStorageDirectoryStructure:
         tmp_path: Path,
     ) -> None:
         coordinator = _make_coordinator()
-        cleanup = await mount(
+        cleanup = await _mount_and_ready(
             coordinator,
             config={"base_path": str(tmp_path), "project_slug": "multi"},
         )
@@ -190,7 +208,7 @@ class TestStorageFileContent:
         tmp_path: Path,
     ) -> None:
         coordinator = _make_coordinator()
-        cleanup = await mount(
+        cleanup = await _mount_and_ready(
             coordinator,
             config={"base_path": str(tmp_path), "project_slug": "proj"},
         )
@@ -223,7 +241,7 @@ class TestStorageFileContent:
         tmp_path: Path,
     ) -> None:
         coordinator = _make_coordinator()
-        cleanup = await mount(
+        cleanup = await _mount_and_ready(
             coordinator,
             config={"base_path": str(tmp_path), "project_slug": "proj"},
         )
@@ -248,7 +266,7 @@ class TestStorageFileContent:
         tmp_path: Path,
     ) -> None:
         coordinator = _make_coordinator()
-        cleanup = await mount(
+        cleanup = await _mount_and_ready(
             coordinator,
             config={"base_path": str(tmp_path), "project_slug": "proj"},
         )

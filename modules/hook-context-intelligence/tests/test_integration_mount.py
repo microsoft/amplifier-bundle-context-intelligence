@@ -12,7 +12,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 from amplifier_core.events import ALL_EVENTS
 
-from amplifier_module_hook_context_intelligence import mount
+from amplifier_module_hook_context_intelligence import mount, on_session_ready
 
 # Registration priority used by production code
 LOGGING_PRIORITY = 100
@@ -29,6 +29,7 @@ def _make_coordinator(
     coordinator = MagicMock()
     coordinator.config = {}
     unregister_fns: list[MagicMock] = []
+    capabilities: dict[str, Any] = {}
 
     def _register_side_effect(*args: Any, **kwargs: Any) -> MagicMock:
         unreg = MagicMock()
@@ -43,10 +44,15 @@ def _make_coordinator(
         contributed_events = []
     coordinator.collect_contributions = AsyncMock(return_value=contributed_events)
 
+    def _register_capability(name: str, value: Any) -> None:
+        capabilities[name] = value
+
+    coordinator.register_capability = MagicMock(side_effect=_register_capability)
+
     def _get_capability(name: str) -> Any:
         if name == "session.working_dir":
             return working_dir
-        return None
+        return capabilities.get(name)
 
     coordinator.get_capability = MagicMock(side_effect=_get_capability)
 
@@ -68,18 +74,18 @@ class TestLoggingOnlyIntegration:
         config = {"base_path": str(tmp_path), "project_slug": "test-project"}
         cleanup = await mount(coordinator, config=config)
         assert callable(cleanup)
+        # on_session_ready() registers the LoggingHandler (two-phase lifecycle)
+        await on_session_ready(coordinator)
 
-        # Extract LoggingHandler from registrations (find by priority or name).
+        # Extract LoggingHandler from registrations by name (canonical identifier).
+        # Priority alone is not unique — SkillFetcher also uses priority=100.
         # register() positional args: (event, handler) — index [1] is the handler callable.
         handler = None
         for call in coordinator.hooks.register.call_args_list:
-            if (
-                call.kwargs.get("priority") == LOGGING_PRIORITY
-                or call.kwargs.get("name") == "LoggingHandler"
-            ):
+            if call.kwargs.get("name") == "LoggingHandler":
                 handler = call.args[1]
                 break
-        assert handler is not None, "LoggingHandler not found in registrations"
+        assert handler is not None, "LoggingHandler not found in registrations (name='LoggingHandler' missing)"
 
         # Simulate session:start -> tool:pre -> session:end
         session_id = "int-sess-001"
@@ -134,9 +140,11 @@ class TestLoggingOnlyIntegration:
         await cleanup()
 
     async def test_logging_handler_registers_for_all_events(self) -> None:
-        """LoggingHandler registers for ALL_EVENTS base."""
+        """LoggingHandler registers for ALL_EVENTS base after on_session_ready()."""
         coordinator = _make_coordinator()
         await mount(coordinator, config={})
+        # on_session_ready() triggers event registration (two-phase lifecycle)
+        await on_session_ready(coordinator)
 
         logging_regs = [
             c

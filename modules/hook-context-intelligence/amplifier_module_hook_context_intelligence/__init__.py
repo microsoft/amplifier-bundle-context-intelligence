@@ -164,10 +164,10 @@ async def mount(
     resolver = ConfigResolver(config, coordinator)
     log.setLevel(resolver.log_level)
     coordinator.register_capability("context_intelligence.config_resolver", resolver)
-    events = await _discover_events(coordinator)
-    events.update(resolver.additional_events)  # static config, no timing dependency
 
     unregister_fns: list[Callable[[], None]] = []
+
+    logging_handler = LoggingHandler(resolver)
 
     # Skill fetch phase — deferred to skills:discovered event
     server_url = resolver.context_intelligence_server_url
@@ -215,16 +215,6 @@ async def mount(
                 )
                 await _refresh_watched_skills(coordinator, fetcher, skills_capable)
 
-    exclude = resolver.exclude_events
-    active_events = {e for e in events if not any(fnmatch.fnmatch(e, p) for p in exclude)}
-
-    logging_handler = LoggingHandler(resolver)
-    for event in active_events:
-        unreg = coordinator.hooks.register(
-            event, logging_handler, priority=100, name="LoggingHandler"
-        )
-        unregister_fns.append(unreg)
-
     # skill:unloaded handler — re-fetches watched skills when they are reloaded
     if fetcher is not None:
 
@@ -237,14 +227,21 @@ async def mount(
         )
         unregister_fns.append(unreg_skill)
 
+    # Share mutable state with on_session_ready via a private capability.
+    # The cleanup closure closes over unregister_fns by reference — any entries
+    # appended by on_session_ready() will be torn down automatically.
+    _hook_state = {
+        "unregister_fns": unregister_fns,
+        "logging_handler": logging_handler,
+        "resolver": resolver,
+    }
+    coordinator.register_capability("context_intelligence._hook_state", _hook_state)
+
     async def cleanup() -> None:
-        # Drain pending dispatch tasks and close the HTTP client *before*
-        # unregistering hooks — this gives in-flight POSTs a chance to land.
         try:
             await logging_handler.close()
         except Exception:
             log.debug("LoggingHandler.close() failed during cleanup")
-
         for unreg in unregister_fns:
             try:
                 unreg()
@@ -254,5 +251,54 @@ async def mount(
             coordinator.register_capability("context_intelligence.config_resolver", None)
         except Exception:
             pass
+        try:
+            coordinator.register_capability("context_intelligence._hook_state", None)
+        except Exception:
+            pass
 
     return cleanup
+
+
+async def on_session_ready(coordinator: Any) -> None:
+    """Called after all modules mount — finalize event subscription.
+
+    Discovers the full event set (ALL_EVENTS + module contributions +
+    legacy capability + additional_events config) and registers the
+    LoggingHandler for every active event. Runs after every module has
+    mounted, so late-contributed events are captured.
+    """
+    state = coordinator.get_capability("context_intelligence._hook_state")
+    if state is None:
+        log.warning(
+            "on_session_ready: hook state not found — mount() may not have run"
+        )
+        return
+
+    resolver = state["resolver"]
+    logging_handler = state["logging_handler"]
+    unregister_fns = state["unregister_fns"]
+
+    # Step 1: canonical kernel events + all module contributions
+    # _discover_events returns: set(ALL_EVENTS) + collect_contributions
+    #                           + legacy get_capability("observability.events")
+    events = await _discover_events(coordinator)
+
+    # Step 2: static additional_events from config (backward compat)
+    events.update(resolver.additional_events)
+
+    # Step 3: conditional exclude filter
+    exclude = resolver.exclude_events
+    active = (
+        {e for e in events if not any(fnmatch.fnmatch(e, p) for p in exclude)}
+        if exclude
+        else events
+    )
+
+    # Step 4: register LoggingHandler for every active event
+    for event in sorted(active):
+        unreg = coordinator.hooks.register(
+            event, logging_handler, priority=100, name="LoggingHandler"
+        )
+        unregister_fns.append(unreg)
+
+    log.info("on_session_ready: registered %d events", len(active))

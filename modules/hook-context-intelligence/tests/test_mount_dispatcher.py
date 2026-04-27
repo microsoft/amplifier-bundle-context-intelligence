@@ -26,6 +26,7 @@ def _make_coordinator(
     coordinator = MagicMock()
     coordinator.config = {}
     unregister_fns: list[MagicMock] = []
+    capabilities: dict[str, Any] = {}
 
     def _register_side_effect(*args: Any, **kwargs: Any) -> MagicMock:
         unreg = MagicMock()
@@ -43,18 +44,33 @@ def _make_coordinator(
     # mount() is async — must be an AsyncMock so it can be awaited
     coordinator.mount = AsyncMock()
 
+    def _register_capability(name: str, value: Any) -> None:
+        capabilities[name] = value
+
+    coordinator.register_capability = MagicMock(side_effect=_register_capability)
+
     # Build get_capability side_effect that handles both
-    # 'session.working_dir' and 'observability.events'
+    # 'session.working_dir' and 'observability.events', and stored capabilities
     def _get_capability(name: str) -> Any:
         if name == "session.working_dir" and working_dir is not None:
             return working_dir
         if name == "observability.events" and capability_events is not None:
             return lambda: capability_events
-        return None
+        return capabilities.get(name)
 
     coordinator.get_capability = MagicMock(side_effect=_get_capability)
 
     return coordinator
+
+
+async def _mount_and_ready(
+    coordinator: MagicMock, config: dict | None = None
+) -> Any:
+    """Run mount() then on_session_ready() — the normal two-phase lifecycle."""
+    from amplifier_module_hook_context_intelligence import mount, on_session_ready
+    cleanup = await mount(coordinator, config=config or {})
+    await on_session_ready(coordinator)
+    return cleanup
 
 
 # ---------------------------------------------------------------------------
@@ -73,11 +89,9 @@ class TestLoggingOnlyPath:
         assert callable(result)
 
     async def test_logging_handler_registered_for_all_events(self) -> None:
-        from amplifier_module_hook_context_intelligence import mount
-
         events = ["session:start", "session:end", "tool:pre"]
         coordinator = _make_coordinator(contributed_events=[events])
-        await mount(coordinator, config={})
+        await _mount_and_ready(coordinator)
 
         # LoggingHandler should be registered for ALL_EVENTS (base) plus any custom events
         register_calls = coordinator.hooks.register.call_args_list
@@ -85,12 +99,10 @@ class TestLoggingOnlyPath:
         assert len(logging_calls) >= len(ALL_EVENTS)
 
     async def test_logging_handler_registered_at_priority_100(self) -> None:
-        from amplifier_module_hook_context_intelligence import mount
-
         coordinator = _make_coordinator(
             contributed_events=[["session:start"]],
         )
-        await mount(coordinator, config={})
+        await _mount_and_ready(coordinator)
 
         register_calls = coordinator.hooks.register.call_args_list
         logging_calls = [c for c in register_calls if c.kwargs.get("name") == "LoggingHandler"]
@@ -137,11 +149,9 @@ class TestEventDiscovery:
 
     async def test_discovery_includes_all_events_base(self) -> None:
         """ALL_EVENTS must be the base — even with empty discovery channels, all 51+ events register."""
-        from amplifier_module_hook_context_intelligence import mount
-
         # No contributed events, no capability events — only ALL_EVENTS base
         coordinator = _make_coordinator()
-        await mount(coordinator, config={})
+        await _mount_and_ready(coordinator)
 
         registered_events = set()
         for call in coordinator.hooks.register.call_args_list:
@@ -157,11 +167,9 @@ class TestEventDiscovery:
 
     async def test_discovery_extends_with_contributions_channel(self) -> None:
         """Custom events from collect_contributions extend the ALL_EVENTS base."""
-        from amplifier_module_hook_context_intelligence import mount
-
         custom_event = "custom:module:event"
         coordinator = _make_coordinator(contributed_events=[[custom_event]])
-        await mount(coordinator, config={})
+        await _mount_and_ready(coordinator)
 
         registered_events = set()
         for call in coordinator.hooks.register.call_args_list:
@@ -175,11 +183,9 @@ class TestEventDiscovery:
 
     async def test_discovery_extends_with_legacy_capability_channel(self) -> None:
         """Custom events from get_capability extend the ALL_EVENTS base."""
-        from amplifier_module_hook_context_intelligence import mount
-
         custom_event = "legacy:custom:event"
         coordinator = _make_coordinator(capability_events=[custom_event])
-        await mount(coordinator, config={})
+        await _mount_and_ready(coordinator)
 
         registered_events = set()
         for call in coordinator.hooks.register.call_args_list:
@@ -193,12 +199,10 @@ class TestEventDiscovery:
 
     async def test_discovery_deduplicates_overlapping_events(self) -> None:
         """If a channel contributes an event already in ALL_EVENTS, it appears once."""
-        from amplifier_module_hook_context_intelligence import mount
-
         # Contribute an event that's already in ALL_EVENTS
         duplicate_event = ALL_EVENTS[0]  # e.g. 'session:start'
         coordinator = _make_coordinator(contributed_events=[[duplicate_event]])
-        await mount(coordinator, config={})
+        await _mount_and_ready(coordinator)
 
         registered_events = []
         for call in coordinator.hooks.register.call_args_list:
@@ -210,12 +214,10 @@ class TestEventDiscovery:
 
     async def test_discovery_applies_exclusion_filter(self) -> None:
         """Exclusion patterns suppress events from registration."""
-        from amplifier_module_hook_context_intelligence import mount
-
         coordinator = _make_coordinator()
         # Exclude all session:* events
         config = {"exclude_events": ["session:*"]}
-        await mount(coordinator, config=config)
+        await _mount_and_ready(coordinator, config=config)
 
         registered_events = set()
         for call in coordinator.hooks.register.call_args_list:
@@ -239,13 +241,11 @@ class TestEventDiscovery:
 
     async def test_union_of_all_three_layers(self) -> None:
         """Discovery returns ALL_EVENTS ∪ contributions ∪ legacy capability."""
-        from amplifier_module_hook_context_intelligence import mount
-
         coordinator = _make_coordinator(
             contributed_events=[["custom:contrib_event"]],
             capability_events=["custom:legacy_event"],
         )
-        await mount(coordinator, config={})
+        await _mount_and_ready(coordinator)
 
         registered_events = set()
         for call in coordinator.hooks.register.call_args_list:
@@ -263,12 +263,10 @@ class TestEventDiscovery:
         tool-delegate). With additional_events configured, it must still appear
         in the registered events.
         """
-        from amplifier_module_hook_context_intelligence import mount
-
         # No contributed events, no capability events — only ALL_EVENTS base
         coordinator = _make_coordinator()
         config = {"additional_events": ["delegate:agent_spawned", "delegate:agent_completed"]}
-        await mount(coordinator, config=config)
+        await _mount_and_ready(coordinator, config=config)
 
         registered_events = set()
         for call in coordinator.hooks.register.call_args_list:
@@ -284,14 +282,12 @@ class TestEventDiscovery:
 
     async def test_additional_events_can_be_excluded(self) -> None:
         """exclude_events filter applies to additional_events entries too."""
-        from amplifier_module_hook_context_intelligence import mount
-
         coordinator = _make_coordinator()
         config = {
             "additional_events": ["delegate:agent_spawned", "delegate:agent_completed"],
             "exclude_events": ["delegate:*"],
         }
-        await mount(coordinator, config=config)
+        await _mount_and_ready(coordinator, config=config)
 
         registered_events = set()
         for call in coordinator.hooks.register.call_args_list:
@@ -353,8 +349,9 @@ class TestCapabilityRegistration:
         assert isinstance(cap_calls[0].args[1], ConfigResolver)
 
     async def test_cleanup_vacates_capability(self) -> None:
-        """Cleanup callable vacates the capability by registering None."""
+        """Cleanup callable vacates both capabilities by registering None for each."""
         from amplifier_module_hook_context_intelligence import mount
+        from unittest.mock import call
 
         coordinator = _make_coordinator()
         cleanup = await mount(coordinator, config={})
@@ -362,6 +359,6 @@ class TestCapabilityRegistration:
 
         await cleanup()
 
-        coordinator.register_capability.assert_called_once_with(
-            "context_intelligence.config_resolver", None
-        )
+        # cleanup() must null out both registered capabilities
+        assert call("context_intelligence.config_resolver", None) in coordinator.register_capability.call_args_list
+        assert call("context_intelligence._hook_state", None) in coordinator.register_capability.call_args_list
