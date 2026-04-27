@@ -1,7 +1,12 @@
 ---
 name: context-intelligence-graph-query
 version: 2.0.0
-description: Cypher query patterns for the context-intelligence graph store via graph_query tool
+description: >
+  Use when querying the context-intelligence property graph for session history,
+  tool call traces, LLM iteration analysis, execution scale metrics, agent
+  delegation trees, skill loading, and recipe orchestration. Covers all graph
+  layers, cross-layer SOURCED_FROM joins, SST navigation, blob handling, and
+  verified Cypher patterns.
 license: MIT
 ---
 

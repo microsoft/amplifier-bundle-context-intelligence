@@ -1,8 +1,9 @@
-# Graph Model Reference — Data Layer 1
+# Graph Model Reference
 
-> **Scope:** This document describes **Data Layer 1** — the only schema that is actually
-> implemented and queryable today. See the [Data Layer 2 Warning](#data-layer-2-warning)
-> section before writing any Cypher queries.
+> **Scope:** This document covers the raw event stream (Layer 1) — node types, edge types,
+> event labels, field lifters, and node ID formats. For semantic layer navigation (Layer 2
+> runtime entities and foundation layer delegation, skills, and recipe orchestration), load
+> the `context-intelligence-graph-query` skill.
 
 ---
 
@@ -31,41 +32,20 @@ Data Layer 1 contains exactly **three** edge types.
 
 ---
 
-## Data Layer 2 Warning
+## Semantic Layers
 
-> ⚠️ **Do not write queries using any of the following labels or relationships.**
-> They are either stub labels with no connected edges, or relationship types that
-> do not exist in the graph. Queries referencing them will silently return no results.
+The raw event stream described in this document is the foundation. Two additional
+layers assemble these events into queryable semantic entities:
 
-### Labels That Exist But Have No Connected Edges
+- **Kernel layer** — Session, OrchestratorRun, Iteration, ContentBlock, ToolCall,
+  Prompt, and more. Connected by typed relationships (`HAS_EXECUTION`, `HAS_PART`,
+  `HAS_TOOL_CALL`, `TRIGGERED`, `SOURCED_FROM`, etc.).
+- **Foundation layer** — Delegation, Agent, SkillLoad, RecipeRun, RecipeStep, Recipe.
+  Connected by `HAS_AGENT`, `ENCOMPASSES`, `TRIGGERED`, `HAS_SKILL_LOAD`,
+  `HAS_RECIPE_RUN`, `HAS_STEP`, `HAS_RECIPE`.
 
-The following node labels may appear as orphan nodes in the database but are not
-connected to the rest of the graph via any traversable relationship:
-
-- `OrchestratorRun`
-- `Step`
-- `ToolExecution`
-- `Delegation`
-- `RecipeRun`
-
-These are Data Layer 2 concepts that were planned but whose edge relationships
-were never implemented. **Do not write queries that traverse to or from these labels.**
-
-### Relationship Types That Do Not Exist
-
-The following relationship types are referenced in older documentation or planning
-documents but are **not present** in the graph:
-
-- `HAS_RUN`
-- `HAS_STEP`
-- `TRIGGERED`
-- `SPAWNED`
-- `SUBSESSION_OF`
-- `PARALLEL_WITH`
-- `NEXT`
-
-**Do not write queries using any of these relationship types.** They will match
-nothing and silently produce empty result sets with no error.
+For the full schema, node_id formats, edge semantics, and verified Cypher patterns
+covering all layers, load the `context-intelligence-graph-query` skill.
 
 ---
 
