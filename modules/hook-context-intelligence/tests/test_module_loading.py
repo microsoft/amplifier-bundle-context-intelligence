@@ -33,6 +33,30 @@ class TestModuleTypeClassification:
 
         assert amplifier_module_hook_context_intelligence.__amplifier_module_type__ == "hook"
 
+    def test_on_session_ready_exists_and_is_valid(self):
+        """Module must expose on_session_ready as an async function with coordinator param."""
+        import inspect
+        import amplifier_module_hook_context_intelligence as mod
+
+        fn = getattr(mod, "on_session_ready", None)
+        assert fn is not None, "Module must define on_session_ready"
+        assert inspect.iscoroutinefunction(fn), "on_session_ready must be async"
+
+        sig = inspect.signature(fn)
+        params = list(sig.parameters.values())
+        required = [
+            p for p in params
+            if p.kind in (
+                inspect.Parameter.POSITIONAL_OR_KEYWORD,
+                inspect.Parameter.POSITIONAL_ONLY,
+            )
+            and p.default is inspect.Parameter.empty
+        ]
+        assert len(required) >= 1, (
+            "on_session_ready must have at least one required positional param (coordinator)"
+        )
+        assert params[0].name == "coordinator"
+
 
 class TestBundleYamlEntryPointConsistency:
     def _load_behavior_yaml(self) -> dict:
