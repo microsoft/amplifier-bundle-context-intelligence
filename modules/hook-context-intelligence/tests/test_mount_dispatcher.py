@@ -63,11 +63,10 @@ def _make_coordinator(
     return coordinator
 
 
-async def _mount_and_ready(
-    coordinator: MagicMock, config: dict | None = None
-) -> Any:
+async def _mount_and_ready(coordinator: MagicMock, config: dict | None = None) -> Any:
     """Run mount() then on_session_ready() — the normal two-phase lifecycle."""
     from amplifier_module_hook_context_intelligence import mount, on_session_ready
+
     cleanup = await mount(coordinator, config=config or {})
     await on_session_ready(coordinator)
     return cleanup
@@ -79,13 +78,11 @@ async def _mount_and_ready(
 class TestLoggingOnlyPath:
     """LoggingHandler is always registered; no graph handlers exist."""
 
-    async def test_mount_returns_cleanup_callable(self) -> None:
-        from amplifier_module_hook_context_intelligence import mount
-
+    async def test_mount_and_ready_returns_cleanup_callable(self) -> None:
         coordinator = _make_coordinator(
             contributed_events=[["session:start", "session:end", "tool:pre"]],
         )
-        result = await mount(coordinator, config={})
+        result = await _mount_and_ready(coordinator)
         assert callable(result)
 
     async def test_logging_handler_registered_for_all_events(self) -> None:
@@ -126,13 +123,11 @@ class TestCleanup:
         cleanup = await mount(coordinator, config={})
         assert callable(cleanup)
 
-    async def test_cleanup_unregisters_logging_handler(self) -> None:
-        from amplifier_module_hook_context_intelligence import mount
-
+    async def test_cleanup_unregisters_all_handlers(self) -> None:
         coordinator = _make_coordinator(
             contributed_events=[["session:start", "session:end"]],
         )
-        cleanup = await mount(coordinator, config={})
+        cleanup = await _mount_and_ready(coordinator)
         assert cleanup is not None
         await cleanup()
 
@@ -333,7 +328,7 @@ class TestModuleContract:
 class TestCapabilityRegistration:
     """Hook registers ConfigResolver as a coordinator capability."""
 
-    async def test_capability_registered_on_mount(self) -> None:
+    async def test_config_resolver_capability_registered_on_mount(self) -> None:
         """mount() registers the config_resolver capability with a ConfigResolver instance."""
         from amplifier_module_hook_context_intelligence import mount
         from amplifier_module_hook_context_intelligence.config_resolver import ConfigResolver
@@ -348,10 +343,27 @@ class TestCapabilityRegistration:
         )
         assert isinstance(cap_calls[0].args[1], ConfigResolver)
 
-    async def test_cleanup_vacates_capability(self) -> None:
+    async def test_hook_state_capability_registered_on_mount(self) -> None:
+        """mount() registers the _hook_state capability as a dict with required keys."""
+        from amplifier_module_hook_context_intelligence import mount
+
+        coordinator = _make_coordinator()
+        await mount(coordinator, config={})
+
+        reg_calls = coordinator.register_capability.call_args_list
+        state_calls = [c for c in reg_calls if c.args[0] == "context_intelligence._hook_state"]
+        assert len(state_calls) == 1, (
+            "register_capability should be called once with 'context_intelligence._hook_state'"
+        )
+        state_value = state_calls[0].args[1]
+        assert isinstance(state_value, dict)
+        assert "logging_handler" in state_value
+        assert "unregister_fns" in state_value
+        assert "resolver" in state_value
+
+    async def test_cleanup_vacates_both_capabilities(self) -> None:
         """Cleanup callable vacates both capabilities by registering None for each."""
         from amplifier_module_hook_context_intelligence import mount
-        from unittest.mock import call
 
         coordinator = _make_coordinator()
         cleanup = await mount(coordinator, config={})
@@ -359,6 +371,9 @@ class TestCapabilityRegistration:
 
         await cleanup()
 
-        # cleanup() must null out both registered capabilities
-        assert call("context_intelligence.config_resolver", None) in coordinator.register_capability.call_args_list
-        assert call("context_intelligence._hook_state", None) in coordinator.register_capability.call_args_list
+        # Build a map of capability name -> value from cleanup's register_capability calls
+        null_calls: dict[str, Any] = {
+            c.args[0]: c.args[1] for c in coordinator.register_capability.call_args_list
+        }
+        assert null_calls["context_intelligence.config_resolver"] is None
+        assert null_calls["context_intelligence._hook_state"] is None

@@ -17,9 +17,9 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import MagicMock
 
-from amplifier_module_hook_context_intelligence import mount, on_session_ready
+from tests.helpers import make_lifecycle_coordinator, mount_and_ready  # type: ignore[import-not-found]
 
 LOGGING_PRIORITY = 100
 
@@ -29,6 +29,9 @@ LOGGING_PRIORITY = 100
 # ---------------------------------------------------------------------------
 
 
+# Default event set for smoke tests — needs real events so the handler has
+# something to log.  Differs from helpers.make_lifecycle_coordinator's default
+# (empty list) because smoke tests exercise file I/O, not just lifecycle shape.
 _DEFAULT_EVENTS = [
     "session:start",
     "session:end",
@@ -44,48 +47,26 @@ def _make_coordinator(
     contributed_events: list[list[str]] | None = None,
     working_dir: str = "/home/user/project",
 ) -> MagicMock:
-    coordinator = MagicMock()
-    coordinator.config = {}
+    """Thin alias delegating to shared helper with smoke-test defaults.
 
-    unregister_fns: list[MagicMock] = []
-    capabilities: dict[str, Any] = {}
-
-    def _register(*args: Any, **kwargs: Any) -> MagicMock:
-        unreg = MagicMock()
-        unregister_fns.append(unreg)
-        return unreg
-
-    coordinator.hooks = MagicMock()
-    coordinator.hooks.register = MagicMock(side_effect=_register)
-    coordinator._unregister_fns = unregister_fns
+    The default for ``contributed_events`` is ``[_DEFAULT_EVENTS]`` (not the
+    empty list used by helpers.make_lifecycle_coordinator) because smoke tests
+    exercise file I/O and need real events to write.
+    """
     if contributed_events is None:
         contributed_events = [_DEFAULT_EVENTS]
-    coordinator.collect_contributions = AsyncMock(
-        return_value=contributed_events,
+    return make_lifecycle_coordinator(
+        contributed_events=contributed_events,
+        working_dir=working_dir,
     )
-
-    def _register_capability(name: str, value: Any) -> None:
-        capabilities[name] = value
-
-    coordinator.register_capability = MagicMock(side_effect=_register_capability)
-
-    def _get_capability(name: str) -> Any:
-        if name == "session.working_dir":
-            return working_dir
-        return capabilities.get(name)
-
-    coordinator.get_capability = MagicMock(side_effect=_get_capability)
-    return coordinator
 
 
 async def _mount_and_ready(
     coordinator: MagicMock,
     config: dict | None = None,
 ) -> Any:
-    """Run mount() then on_session_ready() — the normal two-phase lifecycle."""
-    cleanup = await mount(coordinator, config=config or {})
-    await on_session_ready(coordinator)
-    return cleanup
+    """Run mount() then on_session_ready() — delegates to shared helper."""
+    return await mount_and_ready(coordinator, config=config)
 
 
 def _extract_logging_handler(coordinator: MagicMock) -> Any:

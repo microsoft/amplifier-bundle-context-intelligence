@@ -45,8 +45,10 @@ class TestModuleTypeClassification:
         sig = inspect.signature(fn)
         params = list(sig.parameters.values())
         required = [
-            p for p in params
-            if p.kind in (
+            p
+            for p in params
+            if p.kind
+            in (
                 inspect.Parameter.POSITIONAL_OR_KEYWORD,
                 inspect.Parameter.POSITIONAL_ONLY,
             )
@@ -127,14 +129,6 @@ class TestPyprojectStructure:
     def test_uv_package_true(self):
         data = self._load_pyproject()
         assert data["tool"]["uv"]["package"] is True
-
-    def test_runtime_dependencies_amplifier_core_min_version(self):
-        """amplifier-core>=1.4.1 must be in production deps (loader + new ALL_EVENTS)."""
-        data = self._load_pyproject()
-        deps = data["project"].get("dependencies", [])
-        assert any(
-            d.startswith("amplifier-core") and "1.4.1" in d for d in deps
-        ), f"Expected amplifier-core>=1.4.1 in runtime dependencies, got: {deps}"
 
 
 class TestBehaviorYamlConfigShape:

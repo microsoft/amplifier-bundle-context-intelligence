@@ -7,67 +7,38 @@ after all modules have mounted, not during mount().
 from __future__ import annotations
 
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import MagicMock
 
-from amplifier_core.events import ALL_EVENTS
+from amplifier_core.events import ALL_EVENTS  # type: ignore[import-not-found]
+
+from tests.helpers import make_lifecycle_coordinator, mount_and_ready
 
 
 # ---------------------------------------------------------------------------
-# Mock coordinator helper
+# Local aliases for backward-compatible test readability
 # ---------------------------------------------------------------------------
+
 
 def _make_coordinator(
     contributed_events: list[list[str]] | None = None,
     capability_events: list[str] | None = None,
     working_dir: str | None = None,
 ) -> MagicMock:
-    """Build a mock coordinator that captures register_capability values."""
-    coordinator = MagicMock()
-    coordinator.config = {}
-    unregister_fns: list[MagicMock] = []
-    capabilities: dict[str, Any] = {}
-
-    def _register_side_effect(*args: Any, **kwargs: Any) -> MagicMock:
-        unreg = MagicMock()
-        unregister_fns.append(unreg)
-        return unreg
-
-    coordinator.hooks = MagicMock()
-    coordinator.hooks.register = MagicMock(side_effect=_register_side_effect)
-    coordinator._unregister_fns = unregister_fns
-
-    if contributed_events is None:
-        contributed_events = []
-    coordinator.collect_contributions = AsyncMock(return_value=contributed_events)
-
-    def _register_capability(name: str, value: Any) -> None:
-        capabilities[name] = value
-
-    coordinator.register_capability = MagicMock(side_effect=_register_capability)
-
-    def _get_capability(name: str) -> Any:
-        if name == "session.working_dir" and working_dir is not None:
-            return working_dir
-        if name == "observability.events" and capability_events is not None:
-            return lambda: capability_events
-        return capabilities.get(name)
-
-    coordinator.get_capability = MagicMock(side_effect=_get_capability)
-
-    return coordinator
+    return make_lifecycle_coordinator(
+        contributed_events=contributed_events,
+        capability_events=capability_events,
+        working_dir=working_dir,
+    )
 
 
 async def _mount_and_ready(coordinator: MagicMock, config: dict | None = None) -> Any:
-    """Run mount() then on_session_ready() — the normal two-phase lifecycle."""
-    from amplifier_module_hook_context_intelligence import mount, on_session_ready
-    cleanup = await mount(coordinator, config=config or {})
-    await on_session_ready(coordinator)
-    return cleanup
+    return await mount_and_ready(coordinator, config=config)
 
 
 # ---------------------------------------------------------------------------
 # TestOnSessionReadyRegistration
 # ---------------------------------------------------------------------------
+
 
 class TestOnSessionReadyRegistration:
     """LoggingHandler is registered only after on_session_ready(), not mount()."""
@@ -80,7 +51,8 @@ class TestOnSessionReadyRegistration:
         await mount(coordinator, config={})
 
         logging_calls = [
-            c for c in coordinator.hooks.register.call_args_list
+            c
+            for c in coordinator.hooks.register.call_args_list
             if c.kwargs.get("name") == "LoggingHandler"
         ]
         assert len(logging_calls) == 0, (
@@ -112,6 +84,7 @@ class TestOnSessionReadyRegistration:
 # ---------------------------------------------------------------------------
 # TestOnSessionReadyEventDiscovery
 # ---------------------------------------------------------------------------
+
 
 class TestOnSessionReadyEventDiscovery:
     """on_session_ready() picks up contributions from late-mounting modules."""
@@ -184,6 +157,7 @@ class TestOnSessionReadyEventDiscovery:
 # TestOnSessionReadyExcludeFilter
 # ---------------------------------------------------------------------------
 
+
 class TestOnSessionReadyExcludeFilter:
     """exclude_events filter is applied only when non-empty."""
 
@@ -232,6 +206,7 @@ class TestOnSessionReadyExcludeFilter:
 # TestOnSessionReadyErrorHandling
 # ---------------------------------------------------------------------------
 
+
 class TestOnSessionReadyErrorHandling:
     """Edge cases and defensive behavior."""
 
@@ -257,6 +232,7 @@ class TestOnSessionReadyErrorHandling:
 # ---------------------------------------------------------------------------
 # TestOnSessionReadyCleanup
 # ---------------------------------------------------------------------------
+
 
 class TestOnSessionReadyCleanup:
     """Handlers registered in on_session_ready() are torn down by cleanup()."""

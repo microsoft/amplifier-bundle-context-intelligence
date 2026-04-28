@@ -7,56 +7,28 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import MagicMock
 
-from amplifier_core.events import ALL_EVENTS
+from amplifier_core.events import ALL_EVENTS  # type: ignore[import-not-found]
 
-from amplifier_module_hook_context_intelligence import mount, on_session_ready
+from amplifier_module_hook_context_intelligence import mount, on_session_ready  # type: ignore[import-not-found]
+from tests.helpers import make_lifecycle_coordinator
 
 # Registration priority used by production code
 LOGGING_PRIORITY = 100
 
 
 # ---------------------------------------------------------------------------
-# Mock coordinator helper
+# Mock coordinator helper — thin alias delegating to shared helper
 # ---------------------------------------------------------------------------
 def _make_coordinator(
     contributed_events: list[list[str]] | None = None,
     working_dir: str = "/home/user/test-project",
 ) -> MagicMock:
-    """Build a mock coordinator for integration tests."""
-    coordinator = MagicMock()
-    coordinator.config = {}
-    unregister_fns: list[MagicMock] = []
-    capabilities: dict[str, Any] = {}
-
-    def _register_side_effect(*args: Any, **kwargs: Any) -> MagicMock:
-        unreg = MagicMock()
-        unregister_fns.append(unreg)
-        return unreg
-
-    coordinator.hooks = MagicMock()
-    coordinator.hooks.register = MagicMock(side_effect=_register_side_effect)
-    coordinator._unregister_fns = unregister_fns
-
-    if contributed_events is None:
-        contributed_events = []
-    coordinator.collect_contributions = AsyncMock(return_value=contributed_events)
-
-    def _register_capability(name: str, value: Any) -> None:
-        capabilities[name] = value
-
-    coordinator.register_capability = MagicMock(side_effect=_register_capability)
-
-    def _get_capability(name: str) -> Any:
-        if name == "session.working_dir":
-            return working_dir
-        return capabilities.get(name)
-
-    coordinator.get_capability = MagicMock(side_effect=_get_capability)
-
-    return coordinator
+    return make_lifecycle_coordinator(
+        contributed_events=contributed_events,
+        working_dir=working_dir,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -85,7 +57,9 @@ class TestLoggingOnlyIntegration:
             if call.kwargs.get("name") == "LoggingHandler":
                 handler = call.args[1]
                 break
-        assert handler is not None, "LoggingHandler not found in registrations (name='LoggingHandler' missing)"
+        assert handler is not None, (
+            "LoggingHandler not found in registrations (name='LoggingHandler' missing)"
+        )
 
         # Simulate session:start -> tool:pre -> session:end
         session_id = "int-sess-001"
@@ -165,7 +139,15 @@ class TestCleanupIntegration:
         events = ["session:start", "session:end", "tool:pre"]
         coordinator = _make_coordinator(contributed_events=[events])
         cleanup = await mount(coordinator, config={})
+        # on_session_ready() populates coordinator._unregister_fns with LoggingHandler entries.
+        # Without this call the list is empty and the for-loops below are vacuous.
+        await on_session_ready(coordinator)
         assert callable(cleanup)
+
+        # coordinator._unregister_fns now has LoggingHandler unregister entries
+        assert len(coordinator._unregister_fns) > 0, (
+            "on_session_ready() must register LoggingHandler handlers so cleanup has something to tear down"
+        )
 
         # Verify all unregister fns uncalled before cleanup()
         for unreg in coordinator._unregister_fns:

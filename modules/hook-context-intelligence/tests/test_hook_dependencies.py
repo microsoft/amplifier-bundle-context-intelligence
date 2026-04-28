@@ -39,7 +39,9 @@ class TestHookDependencies:
         assert entry.get("path") == "../..", f"Expected path = '../..', got: {entry}"
 
     def test_dependencies_list_has_httpx_and_bundle(self) -> None:
-        """The full dependencies list must be exactly [httpx>=0.28.1, amplifier-bundle-context-intelligence]."""
+        """The production dependencies must be exactly httpx and amplifier-bundle-context-intelligence.
+        amplifier-core is NOT a production dep — it is runtime-provided by the Amplifier CLI.
+        """
         data = _load_pyproject()
         deps: list[str] = data["project"]["dependencies"]
         assert len(deps) == 2, f"Expected 2 dependencies, got {len(deps)}: {deps}"  # noqa: PLR2004

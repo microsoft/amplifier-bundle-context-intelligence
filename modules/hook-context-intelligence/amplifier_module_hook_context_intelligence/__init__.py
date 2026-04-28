@@ -269,9 +269,7 @@ async def on_session_ready(coordinator: Any) -> None:
     """
     state = coordinator.get_capability("context_intelligence._hook_state")
     if state is None:
-        log.warning(
-            "on_session_ready: hook state not found — mount() may not have run"
-        )
+        log.warning("on_session_ready: hook state not found — mount() may not have run")
         return
 
     resolver = state["resolver"]
