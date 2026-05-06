@@ -19,6 +19,8 @@ Two agents are included for querying session data:
 - **`graph-analyst`** — primary entry point. Queries the context-intelligence property graph using Cypher, resolves `ci-blob://` URIs, and automatically delegates to `session-navigator` when the graph server is unreachable or returns 0 sessions.
 - **`session-navigator`** — local fallback agent. Navigates session data via flat JSONL files using safe `bash`/`jq`/`grep` extraction patterns when the server is unavailable. Invoked only by `graph-analyst` via the delegation chain — external callers should use `graph-analyst` as the entry point.
 
+A **`/context-intelligence-design` mode** is also included for building new context intelligence-aware tooling. Activate it to enter a design workspace where you can investigate session data, explore the graph model, and produce reusable Amplifier components (skills, agents, context files, recipes, CLIs) for your project.
+
 ---
 
 ## Understanding workspace
@@ -36,7 +38,7 @@ Two agents are included for querying session data:
 
 **`metadata.json`** — session-level record:
 ```json
-{"format":"context-intelligence","version":"1.0.0","session_id":"abc-123","workspace":"my-project","parent_id":"","started_at":"2026-01-15T10:23:44.123Z","status":"completed","ended_at":"2026-01-15T10:24:01.456Z","working_dir":"/home/user/myapp"}
+{"format":"context-intelligence","version":"1.0.0","session_id":"abc-123","workspace":"my-project","parent_id":"","started_at":"2026-01-15T10:23:44.123Z","last_event_at":"2026-01-15T10:23:59.789Z","status":"completed","ended_at":"2026-01-15T10:24:01.456Z","working_dir":"/home/user/myapp"}
 ```
 
 **Server POST** (`POST /events`) — forwarded to the CI server:
@@ -298,14 +300,61 @@ See [`context/graph-model-reference.md`](context/graph-model-reference.md) for t
 
 ## Agents
 
-| Agent | Tools | Role |
-|-------|-------|------|
-| `graph-analyst` | `graph_query`, `blob_read`, `tool-filesystem`, `tool-bash`, `tool-skills` | Primary entry point — graph-powered analysis via Cypher, blob resolution |
-| `session-navigator` | `tool-filesystem`, `tool-search`, `tool-bash`, `tool-skills` | Local fallback — safe JSONL navigation via bash/jq/grep |
+| Agent | Available | Tools | Role |
+|-------|-----------|-------|------|
+| `graph-analyst` | Always | `graph_query`, `blob_read`, `tool-filesystem`, `tool-bash`, `tool-skills` | Primary entry point — graph-powered analysis via Cypher across all three data layers, blob resolution, automatic fallback |
+| `session-navigator` | Always (via delegation) | `tool-filesystem`, `tool-search`, `tool-bash`, `tool-skills` | Local fallback — safe JSONL navigation via bash/jq/grep; invoked by graph-analyst when the server is unreachable |
+| `context-intelligence-design-facilitator` | `/context-intelligence-design` mode only | `tool-skills` | Design guide — domain elicitation and component design facilitation for building new context intelligence-aware tooling |
 
 **Delegation chain:** External callers always invoke `graph-analyst`. If the server is unreachable or the workspace contains 0 sessions, it delegates to `session-navigator`, which navigates local JSONL files using safe extraction patterns. `session-navigator` is never invoked directly.
 
+The `context-intelligence-design-facilitator` is a conversational design guide available only when the `/context-intelligence-design` mode is active. It asks questions to understand the user's domain, maps that domain to context intelligence data layers, and helps design the right Amplifier component shape (skill, agent, recipe, CLI, etc.) for the investigation findings. It delegates investigation to `graph-analyst` and component authoring mechanics to ecosystem experts (`foundation:foundation-expert`, `recipes:recipe-author`).
+
 See [`context/safe-extraction-patterns.md`](context/safe-extraction-patterns.md) for JSONL navigation patterns.
+
+---
+
+## Context Intelligence Design Mode
+
+Activate with `/context-intelligence-design` (or `/mode context-intelligence-design`).
+
+The design mode is an opt-in workspace for building new context intelligence-aware Amplifier components and standalone tools. It adds the `context-intelligence-design-facilitator` agent on top of the always-active bundle capabilities — nothing existing is removed or hidden.
+
+### What it does
+
+The mode supports an investigate → design → produce lifecycle:
+
+1. **Investigate** — use `graph-analyst` (graph-powered, all three data layers) and `session-navigator` (local JSONL fallback) to understand what context intelligence can already observe about the target runtime
+2. **Design** — the facilitator asks domain questions (what events does the runtime emit? what behaviors are invisible today? what would be valuable to observe?), maps findings to data layers, and recommends the right output shape
+3. **Produce** — create reusable components: skills, context files, agents, recipes, docs, agent tool modules, or standalone CLI tools
+
+### Tool policies in the mode
+
+| Tool | Policy |
+|------|--------|
+| `graph_query`, `blob_read`, `read_file`, `glob`, `grep` | Safe — always allowed |
+| `write_file`, `edit_file` | Warn — first call blocked with a reminder; retry proceeds |
+| `bash` | Blocked — the mode processes potentially untrusted session data |
+
+### What the mode produces
+
+The output shape depends on the user's needs. Anything produced is **vendored into the consuming project** — not shipped in this bundle. The consuming project owns updates when the context intelligence schema changes.
+
+| Shape | When to use |
+|-------|-------------|
+| Skill | Reusable Cypher query pattern or JSONL extraction pattern |
+| Context file | Domain-specific awareness injected into project agents |
+| Agent | Specialist that investigates a specific runtime |
+| Recipe | Repeatable multi-step investigation or analysis workflow |
+| CLI tool | Standalone investigation utility outside Amplifier sessions |
+| Agent tool module | Production Amplifier tool wrapping a verified pattern |
+| Docs | Captured forensic findings, query guides, schema notes |
+
+### Accumulating project context
+
+Save investigation findings to `.amplifier/context-intelligence/` in your project. The mode auto-scans `.md` files there (up to 50KB) on entry, making accumulated project-specific knowledge available across sessions.
+
+See [`context/dual-path-library-template.md`](context/dual-path-library-template.md) for the library template that every generated tool should follow, and [`context/jsonl-event-schema.md`](context/jsonl-event-schema.md) for the events.jsonl schema contract.
 
 ---
 
@@ -314,9 +363,12 @@ See [`context/safe-extraction-patterns.md`](context/safe-extraction-patterns.md)
 ```
 amplifier-bundle-context-intelligence/
 ├── bundle.md                           ← root bundle definition
+├── modes/
+│   └── context-intelligence-design.md  ← design-time mode
 ├── agents/
 │   ├── graph-analyst.md  ← primary entry point agent
-│   └── session-navigator.md      ← local fallback agent
+│   ├── session-navigator.md      ← local fallback agent
+│   └── context-intelligence-design-facilitator.md  ← design guide agent (mode only)
 ├── context/
 │   ├── event-schema.md                 ← all 51+ Amplifier events
 │   ├── graph-model-reference.md        ← Neo4j graph model for Cypher queries
@@ -324,8 +376,10 @@ amplifier-bundle-context-intelligence/
 │   ├── config-resolution.dot           ← ConfigResolver fallback chain diagram
 │   ├── session-disk-layout.dot         ← on-disk session directory structure
 │   ├── delegation-strategy.dot         ← graph-analyst → session-navigator delegation logic
-│   └── agents/
-│       └── session-storage-knowledge.md
+│   ├── agents/
+│   │   └── session-storage-knowledge.md
+│   ├── dual-path-library-template.md      ← copy-paste library template for dual-path tools
+│   └── jsonl-event-schema.md               ← events.jsonl schema contract
 ├── modules/
 │   ├── hook-context-intelligence/      ← the Python hook module
 │   ├── tool-graph-query/               ← graph_query tool module

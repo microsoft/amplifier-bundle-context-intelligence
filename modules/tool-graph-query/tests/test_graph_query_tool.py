@@ -312,3 +312,69 @@ class TestGraphQueryErrors:
         assert result.success is True
         call_kwargs = mock_cls.call_args.kwargs
         assert call_kwargs.get("api_key") == ""
+
+
+# ---------------------------------------------------------------------------
+# TestGraphQueryParamsForwarding — regression for params wiring bug
+# ---------------------------------------------------------------------------
+
+
+class TestGraphQueryParamsForwarding:
+    """Regression: user-supplied params reach AsyncCIClient.cypher()."""
+
+    async def test_params_are_forwarded_to_async_client_cypher(self) -> None:
+        """params={...} from tool input must be forwarded as a kwarg to cypher()."""
+        from amplifier_module_tool_graph_query.graph_query_tool import GraphQueryTool
+
+        resolver = _make_resolver()
+        coordinator = _make_coordinator(resolver=resolver)
+        tool = GraphQueryTool(coordinator=coordinator)
+
+        mock_instance, mock_cls = _make_mock_async_ci_client()
+        with patch("amplifier_module_tool_graph_query.graph_query_tool.AsyncCIClient", mock_cls):
+            result = await tool.execute(
+                {
+                    "query": "MATCH (s:Session {id: $session_id}) RETURN s",
+                    "params": {"session_id": "abc"},
+                }
+            )
+
+        assert result.success is True
+        cypher_call = mock_instance.cypher.call_args
+        assert cypher_call is not None
+        # params must arrive as the 'params' keyword argument
+        assert cypher_call.kwargs.get("params") == {"session_id": "abc"}
+
+    async def test_none_params_sends_empty_dict_to_cypher(self) -> None:
+        """Omitting params from tool input must default to {} at cypher()."""
+        from amplifier_module_tool_graph_query.graph_query_tool import GraphQueryTool
+
+        resolver = _make_resolver()
+        coordinator = _make_coordinator(resolver=resolver)
+        tool = GraphQueryTool(coordinator=coordinator)
+
+        mock_instance, mock_cls = _make_mock_async_ci_client()
+        with patch("amplifier_module_tool_graph_query.graph_query_tool.AsyncCIClient", mock_cls):
+            await tool.execute({"query": "MATCH (n) RETURN n"})
+
+        cypher_call = mock_instance.cypher.call_args
+        assert cypher_call is not None
+        assert cypher_call.kwargs.get("params") == {}
+
+    async def test_non_dict_params_returns_validation_error(self) -> None:
+        """Passing params as a non-dict must return a validation_error ToolResult."""
+        from amplifier_module_tool_graph_query.graph_query_tool import GraphQueryTool
+
+        resolver = _make_resolver()
+        coordinator = _make_coordinator(resolver=resolver)
+        tool = GraphQueryTool(coordinator=coordinator)
+
+        _, mock_cls = _make_mock_async_ci_client()
+        with patch("amplifier_module_tool_graph_query.graph_query_tool.AsyncCIClient", mock_cls):
+            result = await tool.execute(
+                {"query": "MATCH (n) RETURN n", "params": "not-a-dict"}
+            )
+
+        assert result.success is False
+        assert result.error is not None
+        assert result.error["type"] == "validation_error"

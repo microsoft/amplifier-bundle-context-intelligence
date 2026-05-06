@@ -37,7 +37,6 @@ version = "0.1.1"
 source = { editable = "." }
 dependencies = [
     { name = "amplifier-bundle-context-intelligence" },
-    { name = "amplifier-core" },
     { name = "httpx" },
 ]
 
@@ -54,7 +53,6 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "amplifier-bundle-context-intelligence", directory = "../../" },
-    { name = "amplifier-core", git = "https://github.com/microsoft/amplifier-core?rev=v1.4.1" },
     { name = "httpx", specifier = ">=0.28.1" },
 ]
 

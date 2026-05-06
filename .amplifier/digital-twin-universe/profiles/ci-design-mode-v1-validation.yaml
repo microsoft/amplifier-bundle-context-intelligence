@@ -1,0 +1,106 @@
+# Validates context-intelligence-design mode V1
+#
+# Tests local changes to amplifier-bundle-context-intelligence:
+#   - new mode: modes/context-intelligence-design.md
+#   - new agent: agents/context-intelligence-design-facilitator.md (mode-only)
+#   - new context: context/dual-path-library-template.md, context/jsonl-event-schema.md
+#   - graph_query params bug fix
+#   - hook last_event_at field in metadata.json
+#
+# 7-point smoke test (most parts run as validation_cmds):
+#   1. graph-analyst + session-navigator visible WITHOUT mode active
+#   2. mode active -> facilitator agent visible
+#   3. mode tool policies: safe / warn / block declared correctly
+#   4. mode default_action: deny (write_file warn, bash block)
+#   5. existing behavior unchanged (behaviors/context-intelligence.yaml untouched)
+#   6. mode cleared -> facilitator no longer visible
+#   7. hook writes last_event_at to metadata.json after events
+#
+# The bundle is consumed from a Gitea mirror that holds a snapshot of the
+# developer's working tree (committed + staged + unstaged + untracked files).
+# Launched via:
+#   amplifier-digital-twin launch \
+#     .amplifier/digital-twin-universe/profiles/ci-design-mode-v1-validation.yaml \
+#     --var GITEA_URL=http://localhost:<port> \
+#     --var GITEA_TOKEN=<token> \
+#     --name ci-design-mode-v1
+name: ci-design-mode-v1-validation
+description: >
+  Validates context-intelligence-design mode V1 changes in the
+  amplifier-bundle-context-intelligence bundle: new mode, new
+  facilitator agent, new context files, graph_query params fix, and
+  hook last_event_at field.
+
+base:
+  image: ubuntu:24.04
+
+# Redirect the bundle's GitHub clone URL (and any module subdirectory pulls)
+# to the Gitea mirror that holds the developer's working-tree snapshot.
+url_rewrites:
+  auth:
+    username: admin
+    token_var: GITEA_TOKEN
+  rules:
+    - match: github.com/microsoft/amplifier-bundle-context-intelligence
+      target: ${GITEA_URL}/admin/amplifier-bundle-context-intelligence
+
+passthrough:
+  allow_external: true
+  services:
+    - name: anthropic
+      key_env: ANTHROPIC_API_KEY
+
+provision:
+  setup_cmds:
+    # System dependencies
+    - apt-get update && apt-get install -y git curl python3 python3-venv jq
+
+    # Install uv
+    - curl -LsSf https://astral.sh/uv/install.sh | sh
+
+    # Install Amplifier CLI (uv tool installs into its own isolated venv)
+    - |
+      export PATH="/root/.local/bin:$PATH"
+      uv tool install git+https://github.com/microsoft/amplifier@main
+
+    # Configure Amplifier provider (Anthropic via passthrough)
+    - |
+      mkdir -p /root/.amplifier
+      cat > /root/.amplifier/settings.yaml << 'EOF'
+      config:
+        providers:
+          - module: provider-anthropic
+            source: git+https://github.com/microsoft/amplifier-module-provider-anthropic@main
+            config:
+              api_key_env: ANTHROPIC_API_KEY
+      EOF
+
+    # Add the context-intelligence bundle (URL is rewritten to Gitea by the
+    # mitm proxy via url_rewrites above).
+    - |
+      export PATH="/root/.local/bin:$PATH"
+      amplifier bundle add git+https://github.com/microsoft/amplifier-bundle-context-intelligence@main --app
+
+    # Verify Amplifier is working
+    - |
+      export PATH="/root/.local/bin:$PATH"
+      amplifier --version
+
+    # Persist PATH for interactive shells and exec commands
+    - |
+      echo 'export PATH="/root/.local/bin:$PATH"' >> /root/.bashrc
+      echo 'PATH=/root/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin' >> /etc/environment
+
+    # Workspace for the user
+    - mkdir -p /home/user/project
+
+readiness:
+  - name: amplifier-installed
+    command: 'PATH=/root/.local/bin:$PATH amplifier --version'
+
+# update step lets us re-test after pushing more changes to the Gitea snapshot
+update:
+  cmds:
+    - |
+      export PATH="/root/.local/bin:$PATH"
+      amplifier update --yes --force

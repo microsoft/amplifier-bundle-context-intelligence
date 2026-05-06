@@ -320,7 +320,12 @@ class AsyncCIClient:
     # Public API
     # ------------------------------------------------------------------
 
-    async def cypher(self, query: str, workspace: str = "*") -> list[dict[str, Any]]:
+    async def cypher(
+        self,
+        query: str,
+        workspace: str = "*",
+        params: dict[str, Any] | None = None,
+    ) -> list[dict[str, Any]]:
         """Execute a Cypher query against the graph store (async).
 
         Parameters
@@ -329,6 +334,9 @@ class AsyncCIClient:
             Cypher query string.
         workspace:
             Workspace to scope the query. Defaults to ``"*"`` (all workspaces).
+        params:
+            Named query parameters passed to the Cypher engine. Defaults to
+            an empty dict when ``None``.
 
         Returns
         -------
@@ -338,7 +346,7 @@ class AsyncCIClient:
         url = f"{self._server_url}/cypher"
         body: dict[str, Any] = {
             "query": query,
-            "params": {},
+            "params": params if params is not None else {},
             "workspace": workspace,
         }
         try:

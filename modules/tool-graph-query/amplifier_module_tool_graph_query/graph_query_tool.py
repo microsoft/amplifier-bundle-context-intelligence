@@ -99,7 +99,23 @@ class GraphQueryTool:
         ws_override = input.get("workspace")
         effective_workspace = ws_override if ws_override is not None else workspace
 
+        raw_params = input.get("params")
+        if raw_params is None:
+            params: dict = {}
+        elif not isinstance(raw_params, dict):
+            return ToolResult(
+                success=False,
+                error={
+                    "message": (
+                        f"params must be a dict, got {type(raw_params).__name__!r}"
+                    ),
+                    "type": "validation_error",
+                },
+            )
+        else:
+            params = raw_params
+
         api_key = self._resolver.context_intelligence_api_key
         async_client = AsyncCIClient(server_url=server_url, api_key=api_key or "")
-        result = await async_client.cypher(query, effective_workspace)
+        result = await async_client.cypher(query, effective_workspace, params=params)
         return ToolResult(success=True, output=result)
