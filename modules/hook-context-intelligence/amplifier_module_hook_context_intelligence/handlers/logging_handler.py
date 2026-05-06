@@ -133,6 +133,7 @@ class LoggingHandler:
                 self._finalize_metadata(session_dir, sanitized_data)
 
             self._append_event(session_dir, event, sanitized_data, self._workspace)
+            self._touch_last_event_at(session_dir, sanitized_data.get("timestamp", ""))
         except Exception:
             logger.warning("LoggingHandler disk write error processing %s", event, exc_info=True)
 
@@ -160,6 +161,7 @@ class LoggingHandler:
             "workspace": self._workspace or "",
             "parent_id": data.get("parent_id") or data.get("parent") or "",
             "started_at": data.get("timestamp", ""),
+            "last_event_at": data.get("timestamp", ""),
             "status": "running",
             "working_dir": data.get("working_dir", ""),
         }
@@ -338,6 +340,25 @@ class LoggingHandler:
                     " — dispatch disabled for this session. Local JSONL capture continues.",
                     self._consecutive_failures,
                 )
+
+    # -- metadata freshness update ------------------------------------------
+    def _touch_last_event_at(self, session_dir: Path, timestamp: str) -> None:
+        """Update last_event_at in metadata.json after each event append.
+
+        Best-effort: catches OSError and json.JSONDecodeError, logs a warning,
+        and never raises. A failure here must never block event capture.
+        """
+        try:
+            meta_path = session_dir / "metadata.json"
+            meta = json.loads(meta_path.read_text())
+            meta["last_event_at"] = timestamp
+            meta_path.write_text(json.dumps(meta, separators=(",", ":")))
+        except (OSError, json.JSONDecodeError):
+            logger.warning(
+                "LoggingHandler failed to update last_event_at for %s",
+                session_dir,
+                exc_info=True,
+            )
 
     # -- shared JSONL appender ----------------------------------------------
     @staticmethod
