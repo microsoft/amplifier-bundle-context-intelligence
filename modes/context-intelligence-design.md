@@ -2,84 +2,119 @@
 mode:
   name: context-intelligence-design
   description: >
-    Design-time mode for building context intelligence-aware artifacts.
-    Exposes the context-intelligence-design-facilitator agent plus the
-    design guidance context, skills, and tool policies for producing
-    skills, context files, agents, recipes, CLIs, and other components
-    that leverage context intelligence capabilities.
-
-  agents:
-    include:
-      - context-intelligence:context-intelligence-design-facilitator
+    Investigation, evidence gathering, and design artifact production for
+    context intelligence-aware components. Covers Cypher query design, JSONL
+    navigation patterns, domain signal interpretation, and design document
+    production.
+  default_action: block
 
   tools:
-    default_action: deny
     safe:
       - graph_query
       - blob_read
       - read_file
       - glob
       - grep
+      - delegate
+      - load_skill
+      - todo
     warn:
+      - bash
       - write_file
       - edit_file
-    block:
-      - bash
-
-  context:
-    include:
-      - context-intelligence:context/dual-path-library-template.md
-      - context-intelligence:context/jsonl-event-schema.md
-    scan:
-      - path: .amplifier/context-intelligence/
-        glob: "*.md"
-        max_total_bytes: 51200
-        on_overflow: truncate_and_warn
 ---
 
 # Context Intelligence Design Mode
 
-This mode is a design-time workshop for building context intelligence-aware Amplifier components and standalone tools. Enter it when you want to understand what context intelligence can observe about a specific runtime, identify gaps, and design artifacts that capture those observations.
+This mode is for investigation, evidence gathering, and design artifact production for context intelligence-aware components. Use it to design Cypher queries, explore JSONL patterns, interpret domain signals, and produce design documents. Iteration is normal — expect to cycle through investigation, design, and refinement multiple times before producing final artifacts.
 
-## Lifecycle: Investigate → Design → Produce
+## On Mode Entry
 
-Three-phase loop: **Investigate** — use `graph-analyst` and `session-navigator` to understand the current event surface and query patterns; **Design** — work with the `context-intelligence-design-facilitator` to map findings to component shapes; **Produce** — write the artifact and vendor it into the consuming project. Iterate as needed.
+Run the following immediately on entering this mode:
 
-## What the Mode Adds
+1. Create the investigation folder structure:
+   ```bash
+   mkdir -p .context-intelligence-investigation/queries .context-intelligence-investigation/diagrams
+   ```
 
-The mode adds the `context-intelligence-design-facilitator` agent and design-time guidance on top of the existing always-available context intelligence agents and tools (`graph-analyst`, `session-navigator`, `graph_query`, `blob_read`); nothing existing is removed or hidden.
+2. Read all `.md` files in `.context-intelligence-investigation/` via `read_file` before doing anything else — these files contain prior investigation findings, verified Cypher snippets, and domain signals accumulated from previous sessions.
 
-## Graph Access and the `[]` Ambiguity
+## Investigation Tools
 
-Both `graph_query` and `AsyncCIClient.cypher()` return `[]` for both "no rows" and "server unreachable" — a `[]` result is **always ambiguous**. Resolve the ambiguity with a probe (`RETURN 1 AS ok`, 2-second timeout, 60-second TTL cache) before trusting any empty result. The dual-path library template implements this correctly; always use it, never trust a raw `[]`.
+| Tool | Purpose |
+|------|---------|
+| `graph_query` | Run Cypher queries against the context intelligence property graph |
+| `blob_read` | Resolve `ci-blob://` URIs returned by graph queries |
+| `delegate` → `context-intelligence:graph-analyst` | Graph-powered session and event analysis; automatically falls back to `session-navigator` when the graph server is unreachable |
+| `bash` *(warn)* | Shell operations — file inspection, JSONL grep, environment checks |
+| `read_file` / `glob` / `grep` | Navigate local JSONL files and session artifacts |
+| `load_skill` | Load context intelligence query patterns and JSONL navigation skills |
 
-## Data Layers
+### Block 4 — Mandatory facilitator gate
 
-**Data Layer 1** — raw event JSONL on disk — is always available and is the baseline. **Data Layer 2** (`Session`, `OrchestratorRun`, `Iteration`, `ContentBlock`, `ToolCall`, `Prompt`) and the **Foundation Layer** (`Delegation`, `Agent`, `SkillLoad`, `RecipeRun`, `RecipeStep`, `Recipe`) enrich via the graph server when configured and reachable. The two tiers are **not equivalent**: the graph paths return semantic grouping, delegation trees, and cross-session aggregation that cannot be reconstructed from JSONL grep alone.
+Before writing any artifact, delegate to the facilitator. This is MANDATORY — do not write any file without running the facilitator first.
 
-## Output Shapes
+```python
+delegate(
+    agent="context-intelligence:context-intelligence-design-facilitator",
+    instruction="""
+Synthesize the investigation findings gathered so far.
 
-The output of a design session can be any Amplifier component or a standalone tool: skill (reusable query or extraction pattern), context file (domain awareness injected into agents), agent (specialist investigator for a specific runtime), recipe (repeatable multi-step workflow), docs (captured forensic findings), agent tool module (productized verified pattern), or CLI tool (standalone utility outside Amplifier sessions). The shape follows from what the investigation found and what the consuming project needs.
+Output all design artifacts to .context-intelligence-investigation/ in the workspace root.
 
-## Dual-Path Pattern
+Investigation findings:
+[paste your findings here]
+""",
+    context_depth="recent",
+    context_scope="agents",
+)
+```
 
-Every tool produced in this mode must implement both a graph path (preferred when the server is available, targeting Data Layer 2 / Foundation Layer) and a Data Layer 1 JSONL fallback (always available on disk). The two paths are not required to return identical results — JSONL is a graceful Data Layer 1 baseline; the graph path returns more. See `context/dual-path-library-template.md` for the complete implementation template.
+The facilitator will:
+1. Review and validate your investigation findings
+2. Identify gaps or ambiguities in the evidence
+3. Propose the correct artifact shapes and file structure
+4. Draft initial content for `.md`, `.cypher`, and `.dot` files
 
-## Vendoring Contract
+Do NOT write `.md`, `.cypher`, or `.dot` files yourself before the facilitator has run.
 
-Every artifact produced is **vendored into the consuming project**, never into the context intelligence bundle itself — the consuming project's owner is responsible for updating the artifact when the context intelligence schema changes. Every probe must read `metadata.json` first and assert `format == "context-intelligence"` and `version == "1.0.0"`, failing loudly on mismatch so stale copies cannot silently return wrong answers.
+## What This Mode Produces
 
-## Project Context
+This mode produces only design artifacts — no implementation code:
 
-`.amplifier/context-intelligence/` in the workspace is auto-scanned on mode entry (`.md` files only, 50 KB cap, truncate-and-warn on overflow); save investigation findings, verified Cypher snippets, and runtime-specific event schemas there to accumulate project-specific context intelligence knowledge across design sessions.
+- `.md` — findings, domain signals, JSONL navigation approaches, design documents
+- `.cypher` — verified Cypher query files
+- `.dot` — architecture and data flow diagrams
 
-## Resolver Post-Run Scenario
+**Never** produce Python, YAML, TOML, shell scripts, or other implementation code in this mode.
 
-`[BLOCKED: requires Resolver SDK begin_phase(label) / end_phase(label) primitive]` — the Resolver SDK does not currently emit phase transition events needed for phase-level analysis; documented in scenarios but not deliverable in V1.
+Output folder: `.context-intelligence-investigation/` at the workspace root.
 
-## Reference
+```
+.context-intelligence-investigation/
+├── findings.md
+├── domain-signals.md
+├── jsonl-approaches.md
+├── design.md
+├── queries/
+│   └── *.cypher
+└── diagrams/
+    └── *.dot
+```
 
-- `context/dual-path-library-template.md` — complete dual-path Python library template with probe, schema check, and dispatcher
-- `context/jsonl-event-schema.md` — context intelligence JSONL schema contract, `metadata.json` fields, and version check pattern
-- Skill `context-intelligence-graph-query` — Data Layer 2 / Foundation Layer Cypher query patterns
-- Skill `context-intelligence-session-navigation` — Data Layer 1 JSONL navigation patterns
+`design.md` follows the upload tool pattern: shared core library + agent tool wrapper + CLI wrapper, with dependencies on `context_intelligence.client` and `context_intelligence.config`.
+
+@context-intelligence:context/dual-path-library-template.md
+
+@context-intelligence:context/jsonl-event-schema.md
+
+## When Ready to Build
+
+Once investigation and design artifacts are complete:
+
+1. Save all final artifacts to `.context-intelligence-investigation/` before exiting this mode.
+2. Exit this mode.
+3. Start `/brainstorm` to design the final output shape — only after brainstorm does the implementation plan make sense.
+
+- If superpowers is available: suggest `/brainstorm`
+- If systems-design mode is available: suggest `/systems-design` as an alternative
