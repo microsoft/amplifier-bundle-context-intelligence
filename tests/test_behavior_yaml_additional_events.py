@@ -108,3 +108,18 @@ class TestAdditionalEventsPosition:
         assert pos_additional < pos_base_path, (
             "additional_events must appear BEFORE the # base_path: comment"
         )
+
+
+class TestFacilitatorAgentRegistered:
+    '''The context-intelligence-design-facilitator must be registered in
+    behavior.agents.include so it is reachable via delegate.'''
+
+    def test_facilitator_in_agents_include(self, behavior_yaml_content: str) -> None:
+        import yaml
+
+        data = yaml.safe_load(behavior_yaml_content)
+        agents = data.get('agents', {})
+        include = agents.get('include', [])
+        assert 'context-intelligence:context-intelligence-design-facilitator' in include, (
+            f'facilitator missing from agents.include: {include}'
+        )
