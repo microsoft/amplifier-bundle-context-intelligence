@@ -9,6 +9,7 @@ agents:
   include:
     - context-intelligence:graph-analyst
     - context-intelligence:session-navigator
+    - context-intelligence:context-intelligence-design-facilitator
 
 tools:
   - module: tool-graph-query
