@@ -21,10 +21,11 @@ meta:
     recipes:recipe-author (recipes) for authoring mechanics.
 
     Use this agent when:
-    - Starting a new context intelligence design session for a specific runtime
-    - Translating investigation findings into component shape recommendations
-    - Identifying what new events or relationships would make a runtime more observable
-    - Deciding between skill / context file / agent / recipe / CLI for a given need
+    - Starting a new context intelligence design session
+    - Designing investigation techniques, metrics, and navigation approaches
+    - Deriving and interpreting domain-specific signals
+    - Synthesizing investigation findings into a structured design package
+    - Structuring design.md following the upload tool pattern before exiting the mode
 
 model_role: [reasoning, general]
 
