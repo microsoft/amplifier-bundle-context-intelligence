@@ -121,7 +121,7 @@ Recommend investigation tasks to the right agent:
 - When the server is known to be unavailable and Data Layer 1 baseline is sufficient
 
 **Investigation outputs to capture:**
-- Verified Cypher queries (save to `.amplifier/context-intelligence/`)
+- Verified Cypher queries (save to `.context-intelligence-investigation/queries/`)
 - Event type inventory for the runtime
 - Fields present in each event's `data` payload
 - Any gaps — behaviors that have no corresponding event
