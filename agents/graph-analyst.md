@@ -121,6 +121,68 @@ jq '{event, session_id, agent_name}' /path/to/blob/file
 
 ---
 
+## ⛔ CRITICAL: Query Result Size Management
+
+**Apply these rules to every Cypher query. Large unbounded result sets consume context tokens and will degrade or crash your session.**
+
+### Rules
+
+- **ALWAYS use LIMIT** — default to 25 rows. Never run a query without LIMIT unless you have first counted the result set and confirmed it is small.
+- **Count before fetching** — when you don't know how many rows a query will return, run `RETURN count(*) AS total` first. If total > 50, paginate.
+- **Paginate with SKIP + LIMIT** — for large result sets, fetch in pages. Never try to pull everything in one call.
+- **Bound all path traversals** — use `*1..3` (or explicit depth), never `*` (unbounded). Unbounded traversals on large graphs return every reachable node.
+- **Project specific fields, not full nodes** — `RETURN tc.tool_name, tc.result_success` instead of `RETURN tc`. Full node objects include all properties and inflate token cost significantly.
+- **Prefer aggregations over full scans** — when you need distribution or counts, use `count()`, `collect()` with `LIMIT`, or `avg()`/`max()` rather than returning all rows.
+
+### Token budget reference
+
+| What you return | Approximate token cost |
+|-----------------|----------------------|
+| 1 full node object (ToolCall, Iteration, etc.) | 50–150 tokens |
+| 1 projected row (3–4 fields) | 15–30 tokens |
+| 25 projected rows | ~500 tokens (safe) |
+| 100 full node objects | 5,000–15,000 tokens (dangerous) |
+| Unbounded traversal on large session | context overflow |
+
+### Safe pagination pattern
+
+```cypher
+-- Step 1: Count first
+MATCH (s:Session {workspace: $workspace, node_id: $session_id})
+      -[:HAS_EXECUTION]->(run:OrchestratorRun)
+      -[:HAS_PART]->(iter:Iteration)
+      -[:HAS_TOOL_CALL]->(tc:ToolCall)
+RETURN count(tc) AS total
+
+-- Step 2: Fetch page 1 (project fields, not full nodes)
+MATCH (s:Session {workspace: $workspace, node_id: $session_id})
+      -[:HAS_EXECUTION]->(run:OrchestratorRun)
+      -[:HAS_PART]->(iter:Iteration)
+      -[:HAS_TOOL_CALL]->(tc:ToolCall)
+RETURN tc.tool_name, tc.result_success, tc.started_at, tc.result_error
+ORDER BY tc.started_at
+SKIP 0 LIMIT 25
+
+-- Step 3: Fetch page 2 if needed
+... SKIP 25 LIMIT 25
+```
+
+### What NOT to do
+
+```cypher
+-- ❌ FATAL: no LIMIT, full node, unbounded traversal
+MATCH (s:Session {workspace: $workspace})-[:HAS_EXECUTION|HAS_PART*]->(n)
+RETURN n
+
+-- ✅ SAFE: bounded traversal, projected fields, LIMIT
+MATCH (s:Session {workspace: $workspace})-[:HAS_EXECUTION|HAS_PART*1..3]->(tc:ToolCall)
+RETURN tc.tool_name, tc.result_success
+ORDER BY tc.started_at
+LIMIT 25
+```
+
+---
+
 ## Section 1: Graph-Powered Analysis
 
 ### Load the Graph Query Skill
