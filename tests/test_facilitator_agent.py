@@ -7,6 +7,7 @@ Verifies that:
 - Section 5 contains transition guidance pointing to /brainstorm and warning
   against suggesting /write-plan directly
 """
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -27,7 +28,9 @@ class TestMetaDescriptionBullets:
         assert "Starting a new context intelligence design session" in agent_text
 
     def test_designing_investigation_techniques_bullet(self, agent_text: str) -> None:
-        assert "Designing investigation techniques, metrics, and navigation approaches" in agent_text
+        assert (
+            "Designing investigation techniques, metrics, and navigation approaches" in agent_text
+        )
 
     def test_deriving_domain_signals_bullet(self, agent_text: str) -> None:
         assert "Deriving and interpreting domain-specific signals" in agent_text
@@ -40,9 +43,18 @@ class TestMetaDescriptionBullets:
 
     def test_old_bullets_removed(self, agent_text: str) -> None:
         # The four old bullets must be replaced, not augmented
-        assert "Translating investigation findings into component shape recommendations" not in agent_text
-        assert "Identifying what new events or relationships would make a runtime more observable" not in agent_text
-        assert "Deciding between skill / context file / agent / recipe / CLI for a given need" not in agent_text
+        assert (
+            "Translating investigation findings into component shape recommendations"
+            not in agent_text
+        )
+        assert (
+            "Identifying what new events or relationships would make a runtime more observable"
+            not in agent_text
+        )
+        assert (
+            "Deciding between skill / context file / agent / recipe / CLI for a given need"
+            not in agent_text
+        )
 
 
 class TestFolderConvention:

@@ -9,6 +9,7 @@ any write; The new output folder convention (.context-intelligence-investigation
 is referenced; The old folder convention (.amplifier/context-intelligence/) is NOT
 referenced; Transition guidance points to /brainstorm (not /write-plan).
 """
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -37,7 +38,7 @@ def frontmatter_dict(mode_text: str) -> dict:
 def mode_body(mode_text: str) -> str:
     assert mode_text.startswith("---\n")
     end = mode_text.index("\n---\n", 4)
-    return mode_text[end + 5:]
+    return mode_text[end + 5 :]
 
 
 class TestFrontmatterStructure:
