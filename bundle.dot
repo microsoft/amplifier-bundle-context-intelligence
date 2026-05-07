@@ -1,89 +1,90 @@
-// Context Intelligence: a bundle that gives Amplifier sessions memory and self-awareness, so agents can look back at past work and navigate their own history.
+// Context Intelligence — a bundle that gives Amplifier a memory of past sessions, letting agents query and learn from prior work.
 digraph context_intelligence {
     rankdir=LR
     fontname="Helvetica"
     fontsize=12
-    label="Context Intelligence\nGiving Amplifier a Memory of Its Own Sessions — v0.1.0"
+    label="Context Intelligence\nA Memory Layer for Amplifier Sessions (v0.1.0)"
     labelloc=t
     labeljust=c
     nodesep=0.6
     ranksep=0.7
     bgcolor="white"
-    source_hash="512676d2d45f4850680ac451408ff58449b4ba8d42330625255b5f3c237ead1a"
+    source_hash="07ebeabdf3c0c81a31b7e56b096713b660894f454c6b037bbaef4b963d022e73"
 
     node [fontname="Helvetica", fontsize=11, style="filled,rounded"]
     edge [fontname="Helvetica", fontsize=9]
 
-    root_context_intelligence [label="Context Intelligence Bundle v0.1.0\nThe main package that ties everything together\n0 tools · 0 agents\n~98 tok aggregate", shape=box, fillcolor="#80cbc4", style="filled,rounded,bold", penwidth=2]
+    root_context_intelligence [label="Context Intelligence Bundle\nThe Whole Package (v0.1.0)\n0 tools · 0 agents\n~98 tok aggregate", shape=box, fillcolor="#80cbc4", style="filled,rounded,bold", penwidth=2]
 
     subgraph cluster_behaviors {
-        label="Behaviors — What the Bundle Knows How to Do"
+        label="Behaviors — How the Bundle Acts"
         style="filled"
         fillcolor="#f9f9f9"
         color="#999999"
 
-        beh_context_intelligence_behavior [label="Session Memory & Awareness\nTeaches agents to look back at past work\n4 tools · 1 ctx\n~2292 tok", shape=box, fillcolor="#e0f2f1", style="filled,rounded"]
+        beh_context_intelligence_behavior [label="Session Memory Behavior\nTeaches agents to recall past work\n3 tools · 1 ctx\n~2519 tok", shape=box, fillcolor="#e0f2f1", style="filled,rounded"]
     }
 
     subgraph cluster_agents {
-        label="Agents — The Specialists You Can Talk To"
+        label="Agents — Specialized Helpers"
         style="filled"
         fillcolor="#f9f9f9"
         color="#999999"
 
-        agt_context_intelligence_design_facilitator [label="Design Facilitator\nHelps you plan how to use session memory\n~246 tok desc", shape=box, fillcolor="#c8e6c9", style="filled,rounded"]
-        agt_graph_analyst [label="Graph Analyst\nFinds patterns across all your past sessions\n~543 tok desc", shape=box, fillcolor="#c8e6c9", style="filled,rounded"]
-        agt_session_navigator [label="Session Navigator\nWalks you through what happened in a session\n~366 tok desc", shape=box, fillcolor="#c8e6c9", style="filled,rounded"]
+        agt_context_intelligence_design_facilitator [label="Design Facilitator\nGuides you through planning sessions\n~250 tok desc", shape=box, fillcolor="#c8e6c9", style="filled,rounded"]
+        agt_graph_analyst [label="Graph Analyst\nAnswers questions about session history\n~543 tok desc", shape=box, fillcolor="#c8e6c9", style="filled,rounded"]
+        agt_session_navigator [label="Session Navigator\nFinds and explores past sessions\n~366 tok desc", shape=box, fillcolor="#c8e6c9", style="filled,rounded"]
     }
 
     subgraph cluster_modules {
-        label="Modules — The Building Blocks Under the Hood"
+        label="Modules — The Working Parts"
         style="filled"
         fillcolor="#f9f9f9"
         color="#999999"
 
-        mod_hook_context_intelligence [label="Session Recorder\n(hook-context-intelligence)\nQuietly captures session activity as it happens", shape=box, fillcolor="#bbdefb", style="filled,rounded"]
-        mod_tool_blob_read [label="Saved-Data Reader\n(tool-blob-read)\nFetches large stored items by reference", shape=box, fillcolor="#bbdefb", style="filled,rounded"]
-        mod_tool_context_intelligence_upload [label="Memory Uploader\n(tool-context-intelligence-upload)\nSends new session data into long-term memory", shape=box, fillcolor="#bbdefb", style="filled,rounded"]
-        mod_tool_graph_query [label="History Search\n(tool-graph-query)\nLets agents ask questions about past sessions", shape=box, fillcolor="#bbdefb", style="filled,rounded"]
+        mod_hook_context_intelligence [label="Session Recorder Hook\n(captures what happens)\nhook-context-intelligence", shape=box, fillcolor="#bbdefb", style="filled,rounded"]
+        mod_tool_blob_read [label="Memory File Reader\n(opens stored content)\ntool-blob-read", shape=box, fillcolor="#bbdefb", style="filled,rounded"]
+        mod_tool_context_intelligence_upload [label="Memory Uploader\n(sends data to memory store)\ntool-context-intelligence-upload", shape=box, fillcolor="#bbdefb", style="filled,rounded"]
+        mod_tool_graph_query [label="Memory Search Tool\n(asks questions of the memory)\ntool-graph-query", shape=box, fillcolor="#bbdefb", style="filled,rounded"]
     }
 
     subgraph cluster_context {
-        label="Context Files — Background Knowledge for Agents"
+        label="Context Files — Knowledge Given to Agents"
         style="filled"
         fillcolor="#f9f9f9"
         color="#999999"
 
-        ctx_context_intelligence_awareness_md [label="How to Use Session Memory\n(context-intelligence-awareness.md)\n~861 tok", shape=box, fillcolor="#e1bee7", style="filled,rounded"]
+        ctx_context_intelligence_awareness_md [label="How-To-Use-Memory Guide\ncontext-intelligence-awareness.md\n~861 tok", shape=box, fillcolor="#e1bee7", style="filled,rounded"]
     }
 
     subgraph cluster_legend {
-        label="Legend — How to Read This Diagram"
+        label="Legend — What the Colors Mean"
         style="filled"
         fillcolor="white"
         color="#cccccc"
         fontsize=9
 
-        leg_root [label="main bundle", shape=box, fillcolor="#80cbc4", style="filled,rounded,bold", fontsize=9]
-        leg_behavior [label="behavior (a capability)", shape=box, fillcolor="#e0f2f1", style="filled,rounded", fontsize=9]
-        leg_agent [label="agent (a specialist)", shape=box, fillcolor="#c8e6c9", style="filled,rounded", fontsize=9]
-        leg_module [label="module (a building block)", shape=box, fillcolor="#bbdefb", style="filled,rounded", fontsize=9]
-        leg_provider [label="provider (an AI service)", shape=box, fillcolor="#e0e0e0", style="filled,rounded", fontsize=9]
-        leg_context [label="context (background info)", shape=box, fillcolor="#e1bee7", style="filled,rounded", fontsize=9]
-        leg_standalone [label="standalone piece", shape=box, fillcolor="#80cbc4", style="filled,rounded", fontsize=9]
-        leg_experiment [label="experimental", shape=box, fillcolor="#e1bee7", style="filled,rounded", fontsize=9]
-        leg_ext_cost [label="external — adds cost", shape=box, fillcolor="#80cbc4", style="dashed", color="red", penwidth=2, fontsize=9]
-        leg_ext_muted [label="external — no cost", shape=box, fillcolor="#f5f5f5", style="dashed", fontsize=9]
+        leg_root [label="root bundle", shape=box, fillcolor="#80cbc4", style="filled,rounded,bold", fontsize=9]
+        leg_behavior [label="behavior", shape=box, fillcolor="#e0f2f1", style="filled,rounded", fontsize=9]
+        leg_agent [label="agent", shape=box, fillcolor="#c8e6c9", style="filled,rounded", fontsize=9]
+        leg_module [label="module", shape=box, fillcolor="#bbdefb", style="filled,rounded", fontsize=9]
+        leg_provider [label="provider", shape=box, fillcolor="#e0e0e0", style="filled,rounded", fontsize=9]
+        leg_context [label="context", shape=box, fillcolor="#e1bee7", style="filled,rounded", fontsize=9]
+        leg_standalone [label="standalone", shape=box, fillcolor="#80cbc4", style="filled,rounded", fontsize=9]
+        leg_experiment [label="experiment", shape=box, fillcolor="#e1bee7", style="filled,rounded", fontsize=9]
+        leg_ext_cost [label="ext+cost", shape=box, fillcolor="#80cbc4", style="dashed", color="red", penwidth=2, fontsize=9]
+        leg_ext_muted [label="ext+no-cost", shape=box, fillcolor="#f5f5f5", style="dashed", fontsize=9]
     }
 
-    disclaimer [label="About the numbers:\nToken estimates use ~4 chars per token\nSolid border = part of this bundle (counted)\nDashed + red = brought in from outside, adds cost\nDashed + grey = brought in from outside, no cost\nNot included: child sessions, runtime-only items", shape=note, fillcolor="#eceff1", style="filled", fontsize=9]
+    disclaimer [label="Token estimates: ~4 chars/token\nSolid border = local (counted)\nDashed + red = external, hidden cost (not counted)\nDashed + muted = external, no cost\nExcludes: sub-session costs, runtime-dynamic", shape=note, fillcolor="#eceff1", style="filled", fontsize=9]
 
-    ext_githttps___github_com_microsoft_amplifier_foundation_main [label="Amplifier Foundation\nThe shared base every bundle builds on\n(external, adds cost)", shape=box, fillcolor="#80cbc4", style="dashed", color="red", penwidth=2]
+    ext_githttps___github_com_microsoft_amplifier_foundation_main [label="Amplifier Foundation\n(shared base — pulled in from outside)\n(external, cost)", shape=box, fillcolor="#80cbc4", style="dashed", color="red", penwidth=2]
 
     root_context_intelligence -> ext_githttps___github_com_microsoft_amplifier_foundation_main [style=dashed]
-    root_context_intelligence -> beh_context_intelligence_behavior [label="includes"]
-    beh_context_intelligence_behavior -> agt_graph_analyst [label="provides"]
-    beh_context_intelligence_behavior -> agt_session_navigator [label="provides"]
+    root_context_intelligence -> beh_context_intelligence_behavior [label="composes"]
+    beh_context_intelligence_behavior -> agt_graph_analyst [label="owns"]
+    beh_context_intelligence_behavior -> agt_session_navigator [label="owns"]
+    beh_context_intelligence_behavior -> agt_context_intelligence_design_facilitator [label="owns"]
     beh_context_intelligence_behavior -> mod_tool_graph_query [label="uses", penwidth=0.8]
     beh_context_intelligence_behavior -> mod_tool_blob_read [label="uses", penwidth=0.8]
     beh_context_intelligence_behavior -> mod_hook_context_intelligence [label="uses", penwidth=0.8]
