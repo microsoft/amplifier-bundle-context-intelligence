@@ -67,7 +67,7 @@ tools:
 
 ## ⛔ CRITICAL: Server Availability Check
 
-**Run this health check BEFORE every analysis.** If the server is unreachable, skip to Section 3 (Fallback) immediately.
+**Run before every analysis. On failure, jump to Section 3 immediately.**
 
 ### Health Check Query
 
@@ -94,21 +94,11 @@ Use `graph_query` with this query. The `$workspace` parameter is auto-injected �
 
 ## ⛔ CRITICAL: Large Blob Safety
 
-**READ THIS BEFORE resolving any blob.**
+`ci-blob://` URIs can be **100,000+ tokens**. Never read without size-checking first — session crash guaranteed.
 
-`ci-blob://` URIs can reference payloads with **100,000+ tokens**. Loading a full blob without size checking WILL:
-
-1. Return megabytes of data as a tool result
-2. Add the entire payload to your context
-3. Push your context over the token limit
-4. **CRASH YOUR SESSION IMMEDIATELY**
-
-### Rules
-
-- **NEVER** `cat` or `read_file` a blob path without checking its size first
-- **ALWAYS** check the file size with `wc -c` or `ls -lh` before reading
-- **ALWAYS** use `jq` to extract only the specific fields you need
-- **NEVER** pass raw blob content to another tool without field extraction first
+- **NEVER** `cat` or `read_file` a blob without `wc -c` / `ls -lh` first
+- **ALWAYS** extract only needed fields with `jq`
+- **NEVER** pass raw blob content to any other tool
 
 ### Safe Blob Extraction Pattern
 
@@ -127,62 +117,23 @@ jq '{event, session_id, agent_name}' /path/to/blob/file
 
 ## ⛔ CRITICAL: Query Result Size Management
 
-**Apply these rules to every Cypher query. Large unbounded result sets consume context tokens and will degrade or crash your session.**
+Apply to every query — unbounded results overflow context.
 
-### Rules
-
-- **ALWAYS use LIMIT** — default to 25 rows. Never run a query without LIMIT unless you have first counted the result set and confirmed it is small.
-- **Count before fetching** — when you don't know how many rows a query will return, run `RETURN count(*) AS total` first. If total > 50, paginate.
-- **Paginate with SKIP + LIMIT** — for large result sets, fetch in pages. Never try to pull everything in one call.
-- **Bound all path traversals** — use `*1..3` (or explicit depth), never `*` (unbounded). Unbounded traversals on large graphs return every reachable node.
-- **Project specific fields, not full nodes** — `RETURN tc.tool_name, tc.result_success` instead of `RETURN tc`. Full node objects include all properties and inflate token cost significantly.
-- **Prefer aggregations over full scans** — when you need distribution or counts, use `count()`, `collect()` with `LIMIT`, or `avg()`/`max()` rather than returning all rows.
-
-### Token budget reference
-
-| What you return | Approximate token cost |
-|-----------------|----------------------|
-| 1 full node object (ToolCall, Iteration, etc.) | 50–150 tokens |
-| 1 projected row (3–4 fields) | 15–30 tokens |
-| 25 projected rows | ~500 tokens (safe) |
-| 100 full node objects | 5,000–15,000 tokens (dangerous) |
-| Unbounded traversal on large session | context overflow |
-
-### Safe pagination pattern
+| Rule | Detail |
+|------|--------|
+| **LIMIT always** | Default 25 rows. No LIMIT without counting first. |
+| **Count before fetching** | `RETURN count(*) AS total` first if unsure. If > 50, paginate with SKIP + LIMIT. |
+| **Bound traversals** | `*1..3` not `*`. Unbounded traversals on large graphs return everything. |
+| **Project fields, not nodes** | `RETURN tc.tool_name, tc.result_success` not `RETURN tc`. Full nodes: 50–150 tok each. Projected rows: 15–30 tok each. |
+| **Aggregate over scan** | Use `count()`, `avg()`, `max()` rather than returning all rows for distribution queries. |
 
 ```cypher
--- Step 1: Count first
-MATCH (s:Session {workspace: $workspace, node_id: $session_id})
-      -[:HAS_EXECUTION]->(run:OrchestratorRun)
-      -[:HAS_PART]->(iter:Iteration)
-      -[:HAS_TOOL_CALL]->(tc:ToolCall)
-RETURN count(tc) AS total
+-- ❌ FATAL
+MATCH (s:Session {workspace: $workspace})-[:HAS_EXECUTION|HAS_PART*]->(n) RETURN n
 
--- Step 2: Fetch page 1 (project fields, not full nodes)
-MATCH (s:Session {workspace: $workspace, node_id: $session_id})
-      -[:HAS_EXECUTION]->(run:OrchestratorRun)
-      -[:HAS_PART]->(iter:Iteration)
-      -[:HAS_TOOL_CALL]->(tc:ToolCall)
-RETURN tc.tool_name, tc.result_success, tc.started_at, tc.result_error
-ORDER BY tc.started_at
-SKIP 0 LIMIT 25
-
--- Step 3: Fetch page 2 if needed
-... SKIP 25 LIMIT 25
-```
-
-### What NOT to do
-
-```cypher
--- ❌ FATAL: no LIMIT, full node, unbounded traversal
-MATCH (s:Session {workspace: $workspace})-[:HAS_EXECUTION|HAS_PART*]->(n)
-RETURN n
-
--- ✅ SAFE: bounded traversal, projected fields, LIMIT
+-- ✅ SAFE
 MATCH (s:Session {workspace: $workspace})-[:HAS_EXECUTION|HAS_PART*1..3]->(tc:ToolCall)
-RETURN tc.tool_name, tc.result_success
-ORDER BY tc.started_at
-LIMIT 25
+RETURN tc.tool_name, tc.result_success ORDER BY tc.started_at LIMIT 25
 ```
 
 ---
@@ -205,13 +156,7 @@ Load skill: context-intelligence-session-navigation
 
 ### Using graph_query
 
-The `graph_query` tool auto-injects `$workspace` — you only need to provide the Cypher query.
-
-For full query patterns, load the skill:
-
-```
-Load skill: context-intelligence-graph-query
-```
+The `graph_query` tool auto-injects `$workspace` — provide only the Cypher query.
 
 ---
 
@@ -225,29 +170,16 @@ Before resolving any `ci-blob://` URI, load the safe extraction patterns:
 Load skill: blob-reading
 ```
 
-When graph query results contain `ci-blob://` URIs, follow this 5-step workflow:
+When graph results contain `ci-blob://` URIs:
 
-**Step 1: Identify blob references** — Inspect query results for `ci-blob://` URIs in any field.
-
-**Step 2: Resolve the blob** — Use the `blob_read` tool (or `tool-blob-read`) to fetch the URI and write it to a local file. The tool returns the local file path.
-
-**Step 3: Check file size** — Before reading, always check:
+1. **Resolve** — `blob_read` fetches the URI and returns a local file path
+2. **Size-check** — `ls -lh` / `wc -c` before reading. If > 50KB, jq-only
+3. **Extract** — pull only needed fields:
 ```bash
-ls -lh /path/to/resolved/blob
-wc -c /path/to/resolved/blob
-```
-If size > 50KB, proceed to Step 4 with jq only. Never read the full content.
-
-**Step 4: Extract with jq** — Pull only the fields you need:
-```bash
-# Extract event summary fields only
 jq -c '{event: .event, ts: .timestamp, tool: .data.tool_name, error: .data.error}' /path/to/blob
-
-# For transcript events, extract content length not content
 jq '{event, ts: .timestamp, content_length: (.data.content | length)}' /path/to/blob
 ```
-
-**Step 5: Synthesize** — Use the extracted fields to answer the user's question. Discard the blob file path after extraction. Never include raw blob content in your response.
+4. **Synthesize** — answer from extracted fields only. Never include raw blob content in your response.
 
 ---
 
