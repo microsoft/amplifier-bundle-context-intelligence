@@ -148,6 +148,8 @@ Once investigation findings are in hand, recommend the right output shape:
 
 **The output never lives in the context intelligence bundle.** Artifacts ship with the consuming project that owns them.
 
+**When the design package is complete**, present the summary of findings and signal the user to exit the mode. The design artifacts (`.context-intelligence-investigation/design.md` and companions) are the inputs to the next stage. Suggest `/brainstorm` to design the final output shape. If `systems-design` mode is available, suggest `/systems-design` as an alternative. Do NOT suggest /write-plan directly — the final output architecture has not been designed yet.
+
 ---
 
 ## Section 6: Skills to Load
