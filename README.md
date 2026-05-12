@@ -19,7 +19,7 @@ Two agents are included for querying session data:
 - **`graph-analyst`** — primary entry point. Queries the context-intelligence property graph using Cypher, resolves `ci-blob://` URIs, and automatically delegates to `session-navigator` when the graph server is unreachable or returns 0 sessions.
 - **`session-navigator`** — local fallback agent. Navigates session data via flat JSONL files using safe `bash`/`jq`/`grep` extraction patterns when the server is unavailable. Invoked only by `graph-analyst` via the delegation chain — external callers should use `graph-analyst` as the entry point.
 
-A **`/context-intelligence-design` mode** is also included for building new context intelligence-aware tooling. Activate it to enter a design workspace where you can investigate session data, explore the graph model, and produce reusable Amplifier components (skills, agents, context files, recipes, CLIs) for your project.
+A **`/context-intelligence` mode** is also included for building new context intelligence-aware tooling. Activate it to enter a design workspace where you can investigate session data, explore the graph model, and produce reusable Amplifier components (skills, agents, context files, recipes, CLIs) for your project.
 
 ---
 
@@ -304,11 +304,11 @@ See [`context/graph-model-reference.md`](context/graph-model-reference.md) for t
 |-------|-----------|-------|------|
 | `graph-analyst` | Always | `graph_query`, `blob_read`, `tool-filesystem`, `tool-bash`, `tool-skills` | Primary entry point — graph-powered analysis via Cypher across all three data layers, blob resolution, automatic fallback |
 | `session-navigator` | Always (via delegation) | `tool-filesystem`, `tool-search`, `tool-bash`, `tool-skills` | Local fallback — safe JSONL navigation via bash/jq/grep; invoked by graph-analyst when the server is unreachable |
-| `context-intelligence-design-facilitator` | `/context-intelligence-design` mode only | `tool-skills` | Design guide — domain elicitation and component design facilitation for building new context intelligence-aware tooling |
+| `context-intelligence-design-facilitator` | `/context-intelligence` mode only | `tool-skills` | Design guide — domain elicitation and component design facilitation for building new context intelligence-aware tooling |
 
 **Delegation chain:** External callers always invoke `graph-analyst`. If the server is unreachable or the workspace contains 0 sessions, it delegates to `session-navigator`, which navigates local JSONL files using safe extraction patterns. `session-navigator` is never invoked directly.
 
-The `context-intelligence-design-facilitator` is a conversational design guide available only when the `/context-intelligence-design` mode is active. It asks questions to understand the user's domain, maps that domain to context intelligence data layers, and helps design the right Amplifier component shape (skill, agent, recipe, CLI, etc.) for the investigation findings. It delegates investigation to `graph-analyst` and component authoring mechanics to ecosystem experts (`foundation:foundation-expert`, `recipes:recipe-author`).
+The `context-intelligence-design-facilitator` is a conversational design guide available only when the `/context-intelligence` mode is active. It asks questions to understand the user's domain, maps that domain to context intelligence data layers, and helps design the right Amplifier component shape (skill, agent, recipe, CLI, etc.) for the investigation findings. It delegates investigation to `graph-analyst` and component authoring mechanics to ecosystem experts (`foundation:foundation-expert`, `recipes:recipe-author`).
 
 See [`context/safe-extraction-patterns.md`](context/safe-extraction-patterns.md) for JSONL navigation patterns.
 
@@ -316,7 +316,7 @@ See [`context/safe-extraction-patterns.md`](context/safe-extraction-patterns.md)
 
 ## Context Intelligence Design Mode
 
-Activate with `/context-intelligence-design` (or `/mode context-intelligence-design`).
+Activate with `/context-intelligence` (or `/mode context-intelligence`).
 
 The design mode is an opt-in workspace for building new context intelligence-aware Amplifier components and standalone tools. It adds the `context-intelligence-design-facilitator` agent on top of the always-active bundle capabilities — nothing existing is removed or hidden.
 
@@ -364,7 +364,7 @@ See [`context/dual-path-library-template.md`](context/dual-path-library-template
 amplifier-bundle-context-intelligence/
 ├── bundle.md                           ← root bundle definition
 ├── modes/
-│   └── context-intelligence-design.md  ← design-time mode
+│   └── context-intelligence.md  ← design-time mode
 ├── agents/
 │   ├── graph-analyst.md  ← primary entry point agent
 │   ├── session-navigator.md      ← local fallback agent

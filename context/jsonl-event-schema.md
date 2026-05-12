@@ -105,7 +105,7 @@ everything the graph provides:
 ## The Two-Tier Contract
 
 JSONL gives you the correct always-available Data Layer 1 baseline. The
-graph gives you more. Tools produced by the context-intelligence-design mode
+graph gives you more. Tools produced by the context-intelligence mode
 must explicitly design which questions are answerable from each tier and
 accept that the answers will differ — the JSONL fallback is graceful
 degradation, not full equivalence.

@@ -1,7 +1,7 @@
-# Validates context-intelligence-design mode V1
+# Validates context-intelligence mode V1
 #
 # Tests local changes to amplifier-bundle-context-intelligence:
-#   - new mode: modes/context-intelligence-design.md
+#   - new mode: modes/context-intelligence.md
 #   - new agent: agents/context-intelligence-design-facilitator.md (mode-only)
 #   - new context: context/dual-path-library-template.md, context/jsonl-event-schema.md
 #   - graph_query params bug fix
@@ -26,7 +26,7 @@
 #     --name ci-design-mode-v1
 name: ci-design-mode-v1-validation
 description: >
-  Validates context-intelligence-design mode V1 changes in the
+  Validates context-intelligence mode V1 changes in the
   amplifier-bundle-context-intelligence bundle: new mode, new
   facilitator agent, new context files, graph_query params fix, and
   hook last_event_at field.

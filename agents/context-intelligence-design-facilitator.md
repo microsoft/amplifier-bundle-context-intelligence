@@ -1,13 +1,13 @@
 ---
 bundle:
   name: context-intelligence-design-facilitator
-  description: Domain elicitation and design facilitation agent for the context-intelligence-design mode.
+  description: Domain elicitation and design facilitation agent for the context-intelligence mode.
 
 meta:
   name: context-intelligence-design-facilitator
   description: |
     Domain elicitation and design facilitation agent for the
-    context-intelligence-design mode. Helps users understand what context
+    context-intelligence mode. Helps users understand what context
     intelligence can observe about their runtime, identify gaps (events or
     relationships that would be valuable to add), and design the right
     Amplifier component or standalone tool to capture the investigation

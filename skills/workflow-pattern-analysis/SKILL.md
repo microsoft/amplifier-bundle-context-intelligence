@@ -6,7 +6,7 @@ description: >
   context-intelligence session data. Use when you want to answer: "How is <workflow>
   failing?", "What does a successful run look like vs a failing one?", "Which steps are
   the most common failure points?", or "What patterns appear consistently across sessions?"
-  Designed to run inside the context-intelligence-design mode. Guides the full
+  Designed to run inside the context-intelligence mode. Guides the full
   investigation lifecycle: corpus enumeration, failure signal detection, JSONL payload
   inspection, and structured findings production via the dual-agent loop
   (context-intelligence:graph-analyst → context-intelligence:context-intelligence-design-facilitator).
