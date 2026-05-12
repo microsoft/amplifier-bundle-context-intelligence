@@ -271,19 +271,30 @@ decisions for the context-intelligence bundle or any downstream action.
    pass through the facilitator before being treated as curated findings. Facilitator calls
    do not need to be 1:1 with analyst calls — consolidate related findings.
 
-8. **Always describe signals in plain language — never use signal codes alone.** In every
+8. **Always describe signals in plain language and explain what they point to.** In every
    report, finding, or summary, signal codes (S1, S3, S9a, etc.) must always be accompanied
-   by their human-readable name and a plain-language explanation of what the signal means
-   and why it matters for this session. The code is a shorthand for cross-reference only.
+   by their human-readable name, a plain-language explanation, AND a causal interpretation
+   of what the signal indicates about session health and what it could be pointing to.
+   The code is a shorthand for cross-reference only.
 
    **Wrong:** "S3 fired at SEVERE. S9a also fired."
 
-   **Correct:** "**S3 — LLM Iteration Runaway (SEVERE):** 316 LLM calls in a single
-   session — 8× the severe threshold of 40. The root agent kept cycling through LLM
-   requests without completing its task, indicating a stuck exploration loop."
+   **Correct:**
+   > **S3 — LLM Iteration Runaway (SEVERE): 316 iterations — 8× the severe threshold of 40.**
+   > The session made 316 separate LLM calls. This is not normal volume for productive work;
+   > it means the agent was looping — repeatedly asking the LLM for the next step without
+   > reaching a conclusion. Common causes: an exploration task with no exit condition
+   > (reading files and looking for something without knowing when to stop), a delegation
+   > chain that keeps spawning new investigations, or a goal too vague to converge on.
+   > At this volume, the session is on a trajectory toward context saturation — each LLM
+   > call adds its response to the accumulated context, and without compaction the window
+   > fills until the session stalls or crashes.
 
    For every signal that fires, include:
    - The signal code and human name (e.g. "S3 — LLM Iteration Runaway")
-   - The severity and measured value (e.g. "SEVERE: 316 iterations")
-   - What it means in plain terms (e.g. "the agent looped repeatedly without finishing")
-   - Why it matters for this specific session (e.g. "main driver of the 412 MB events.jsonl")
+   - The severity and measured value with the threshold (e.g. "SEVERE: 316 iterations — 8× threshold of 40")
+   - What it means in plain terms (e.g. "the agent looped without converging")
+   - **What it points to** — the underlying behaviour or root cause pattern this signal
+     typically indicates (e.g. "exploration without exit condition", "vague goal", "delegation
+     storm accumulating large result payloads")
+   - The risk or consequence if unaddressed (e.g. "trajectory toward context saturation")
