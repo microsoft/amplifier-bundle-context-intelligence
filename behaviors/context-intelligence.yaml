@@ -1,5 +1,5 @@
 bundle:
-  name: context-intelligence
+  name: context-intelligence-behavior
   version: 0.1.0
   description: >
     Context intelligence capability: graph-powered session analysis
