@@ -427,6 +427,7 @@ print('YAML validates OK')
 - [amplifier-app-cli](https://github.com/microsoft/amplifier-app-cli) — CLI that sends `project_slug` used for workspace resolution
 - [amplifier](https://github.com/microsoft/amplifier) — the Amplifier framework
 
+
 ## Contributing
 
 > [!NOTE]
