@@ -61,6 +61,19 @@ grep -c '"context:compaction"' <events.jsonl>
 **Scope**: Root sessions only. Compaction never appears in sub-sessions — they inherit
 fresh context windows and exit before saturating.
 
+**What it points to**: The session accumulated so much content in its context window that
+the system had to force-compress it to continue. This is almost always caused by large
+delegate results returning from sub-agents — each delegation pours its full synthesised
+output back into the root context as a single tool result. After several such rounds the
+window fills to ~80% of the token budget and compaction fires. Each compaction discards
+older messages, so the agent progressively loses its earlier work and may start repeating
+itself or forgetting prior findings.
+
+**Risk trajectory**: Sessions with S1 ≥ 3 frequently spiral — each compaction causes the
+agent to re-investigate things it already covered, generating more tool results, which
+triggers the next compaction sooner. Left unaddressed the session eventually stalls or
+produces incoherent output.
+
 **Etiology split** (determines intervention surface):
 - **P1a — Tool-result accumulation**: `tool_result` share of last `llm:request` before
   compaction ≥ 40%. Delegation is the gating condition — no root session reaches S1 from
@@ -82,6 +95,17 @@ grep -c '"session:resum\|"session:restore' <events.jsonl>
 |---|---|
 | ≥ 3 | Candidate |
 
+**What it points to**: The session was interrupted and resumed multiple times. Each resume
+reloads the prior transcript but without any tool results that were in-flight, creating
+gaps in continuity. Frequent resumes suggest the session was fragile — either the user
+was interrupted, a network connection dropped, or the agent crashed and had to be
+restarted. Sessions with many resumes often produce inconsistent output because each
+resume starts with slightly different context.
+
+**Risk trajectory**: High resume counts compound with S1 (compaction) — each resume adds
+another session:start event and may skip compaction state, leaving the agent unaware of
+how much context has already been consumed.
+
 ---
 
 ### S3 — LLM Iteration Runaway (Pattern: Stuck Sub-Agent)
@@ -96,6 +120,25 @@ grep -c '"orchestrator:iteration\|"llm:response"' <events.jsonl>
 | ≥ 40 | Severe |
 
 **Graph field**: `Event.event_type CONTAINS 'orchestrator:iteration'`
+
+**What it points to**: The session made far more LLM calls than a focused, converging
+workflow requires. A healthy scoped task typically uses 5–15 LLM calls. When S3 fires
+at candidate (≥ 20) the agent is likely exploring without a clear stopping condition —
+reading files, running commands, and asking the LLM for the next step without ever
+declaring "done". At severe (≥ 40) the agent is almost certainly stuck in a loop:
+each LLM response produces a new tool call, whose result produces another LLM call,
+with no convergence toward a deliverable.
+
+Common causes:
+- **Goal too vague**: The agent doesn't know what "done" looks like so it keeps exploring
+- **Exploration without exit**: Searching a codebase without a specific target
+- **Delegation fan-out**: Each sub-agent returns a result that triggers more questions
+- **LLM keeps generating new sub-tasks**: The model keeps elaborating instead of concluding
+
+**Risk trajectory**: S3 co-fires with S1 (compaction) when the high iteration count
+produces large tool results that fill the context window. It co-fires with S8 (bash
+bursts) in the "investigation runaway" pattern. High S3 is the primary leading indicator
+of eventual context saturation even when S1 hasn't fired yet.
 
 ---
 
@@ -175,6 +218,21 @@ grep -c '"session:cancel\|"user:interrupt' <events.jsonl>
 ```
 Threshold: ≥ 1.
 
+**What it points to**: The session was stopped before it finished — either by the user
+pressing Ctrl-C, by a timeout, or by the orchestrator hitting a hard limit. A single
+cancellation (count = 1) is often benign (user interrupted to adjust direction). Multiple
+cancellations (count ≥ 3) suggest a recurring problem: the agent is either taking too
+long on a sub-task, producing output the user doesn't want, or stuck in a state that
+requires manual intervention to recover.
+
+When S6 fires on a *sub-session* and the sub-session was later retried, it typically
+means the parent agent gave the sub-agent a poorly-scoped task (too broad, wrong tools,
+insufficient context) and had to restart it.
+
+**Risk trajectory**: S6 combined with S3 (high iterations) is the classic "I had to kill
+it" pattern — the agent was looping and the user terminated it manually. The session may
+have produced partial results that are inconsistent with the final state.
+
 ---
 
 ### S7 — Shotgun Read Bursts (Secondary)
@@ -198,6 +256,21 @@ Threshold for proxy: ≥ 10 total `read_file` tool:pre = candidate for burst ins
 grep '"tool:pre"' <events.jsonl> | grep -c '"bash"'
 ```
 
+**What it points to**: The session spent a disproportionate amount of time running shell
+commands. This is a secondary signal — bash calls are often legitimate work. But when S8
+fires alongside S3 (high LLM iterations), it reveals the "investigation runaway" pattern:
+the agent repeatedly runs bash commands (find, grep, ls, git log) and feeds the results
+back to the LLM, which generates more bash commands. The session is exploring rather than
+executing — searching for something without a clear target, or profiling a system without
+a concrete question to answer.
+
+When S8 fires *without* S3, the bash calls are more likely to be meaningful work (e.g.,
+a git-ops sub-agent committing changes). Context matters.
+
+**Risk trajectory**: S8 + S3 is the signature of an exploration loop that will either
+resolve (the agent finds what it's looking for) or exhaust the context budget. It is
+not inherently fatal but signals the session may run significantly longer than necessary.
+
 ---
 
 ### S9 — Delegation-Driven Compaction (Leading Indicator for P1a)
@@ -207,6 +280,20 @@ it is a leading indicator, not a lagging one.**
 
 #### S9a — High delegation count
 `count(delegate tool:pre) ≥ 5` in a root session.
+
+**What it points to**: The root session orchestrated many sub-agents. Delegation itself
+is not a problem — it is the intended pattern for complex work. S9a becomes significant
+when combined with S1 or S3, because each delegation pours its full synthesised response
+back into the root session's context as a single large tool result. A root session with
+25 delegations, each returning a 10–30 KB response, accumulates 250–750 KB of tool
+results in its context — enough to trigger compaction even on a large-context model.
+
+S9a is the structural precondition for the Forgetful Marathon (S1). It does not cause
+problems on its own, but it determines the ceiling for how much context can be consumed.
+
+**Risk trajectory**: S9a + large delegate result sizes (S9b) = near-certain compaction
+storm in long sessions. Monitor S9a as an early warning and inspect delegate result sizes
+before the first compaction fires.
 
 ```bash
 grep '"tool:pre"' <events.jsonl> | grep -c '"delegate"'

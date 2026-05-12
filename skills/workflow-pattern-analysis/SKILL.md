@@ -294,7 +294,9 @@ decisions for the context-intelligence bundle or any downstream action.
    - The signal code and human name (e.g. "S3 — LLM Iteration Runaway")
    - The severity and measured value with the threshold (e.g. "SEVERE: 316 iterations — 8× threshold of 40")
    - What it means in plain terms (e.g. "the agent looped without converging")
-   - **What it points to** — the underlying behaviour or root cause pattern this signal
-     typically indicates (e.g. "exploration without exit condition", "vague goal", "delegation
-     storm accumulating large result payloads")
-   - The risk or consequence if unaddressed (e.g. "trajectory toward context saturation")
+   - **What it points to** — the underlying behaviour or root cause pattern. Use the
+     "What it points to" text from `signals-reference.md` for each signal as the source
+     of this interpretation. Do not summarise it away — quote or paraphrase it fully.
+   - **Risk trajectory** — the consequence if unaddressed. Use the "Risk trajectory"
+     text from `signals-reference.md` as the source. This tells the reader why the
+     signal matters beyond its raw count.
