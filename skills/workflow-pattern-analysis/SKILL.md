@@ -270,3 +270,20 @@ decisions for the context-intelligence bundle or any downstream action.
 7. **Facilitator is the mandatory quality gate.** Every wave of raw analyst findings must
    pass through the facilitator before being treated as curated findings. Facilitator calls
    do not need to be 1:1 with analyst calls — consolidate related findings.
+
+8. **Always describe signals in plain language — never use signal codes alone.** In every
+   report, finding, or summary, signal codes (S1, S3, S9a, etc.) must always be accompanied
+   by their human-readable name and a plain-language explanation of what the signal means
+   and why it matters for this session. The code is a shorthand for cross-reference only.
+
+   **Wrong:** "S3 fired at SEVERE. S9a also fired."
+
+   **Correct:** "**S3 — LLM Iteration Runaway (SEVERE):** 316 LLM calls in a single
+   session — 8× the severe threshold of 40. The root agent kept cycling through LLM
+   requests without completing its task, indicating a stuck exploration loop."
+
+   For every signal that fires, include:
+   - The signal code and human name (e.g. "S3 — LLM Iteration Runaway")
+   - The severity and measured value (e.g. "SEVERE: 316 iterations")
+   - What it means in plain terms (e.g. "the agent looped repeatedly without finishing")
+   - Why it matters for this specific session (e.g. "main driver of the 412 MB events.jsonl")
