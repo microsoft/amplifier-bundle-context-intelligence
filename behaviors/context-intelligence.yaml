@@ -11,11 +11,20 @@ agents:
     - context-intelligence:session-navigator
     - context-intelligence:context-intelligence-design-facilitator
 
+modes:
+  include:
+    - context-intelligence:modes/context-intelligence.md
+
 tools:
   - module: tool-graph-query
     source: git+https://github.com/microsoft/amplifier-bundle-context-intelligence@main#subdirectory=modules/tool-graph-query
   - module: tool-blob-read
     source: git+https://github.com/microsoft/amplifier-bundle-context-intelligence@main#subdirectory=modules/tool-blob-read
+  - module: tool-skills
+    source: git+https://github.com/microsoft/amplifier-bundle-skills@main#subdirectory=modules/tool-skills
+    config:
+      skills:
+        - "git+https://github.com/microsoft/amplifier-bundle-context-intelligence@main#subdirectory=skills"
 
 hooks:
   - module: hook-context-intelligence

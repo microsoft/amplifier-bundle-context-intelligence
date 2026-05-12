@@ -1,6 +1,6 @@
 # Dual-Path Library Template
 
-Every tool produced by the context-intelligence-design mode follows this shape.
+Every tool produced by the context-intelligence mode follows this shape.
 The library is the dispatcher; agent tools, CLIs, and embedded hosts are thin
 wrappers that call into it.
 
@@ -18,7 +18,7 @@ answers.
 """
 Dual-path library template — context intelligence-aware tooling.
 
-Every tool produced by the context-intelligence-design mode follows this
+Every tool produced by the context-intelligence mode follows this
 shape. The library is the dispatcher; agent tools, CLIs, and embedded
 hosts are thin wrappers that call into it.
 

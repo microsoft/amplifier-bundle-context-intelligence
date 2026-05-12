@@ -1,6 +1,6 @@
 ---
 mode:
-  name: context-intelligence-design
+  name: context-intelligence
   description: >
     Investigation, evidence gathering, and design artifact production for
     context intelligence-aware components. Covers Cypher query design, JSONL
@@ -24,7 +24,7 @@ mode:
       - edit_file
 ---
 
-# Context Intelligence Design Mode
+# Context Intelligence Mode
 
 This mode is for investigation, evidence gathering, and design artifact production for context intelligence-aware components. Use it to design Cypher queries, explore JSONL patterns, interpret domain signals, and produce design documents. Iteration is normal — expect to cycle through investigation, design, and refinement multiple times before producing final artifacts.
 
