@@ -1,5 +1,5 @@
 bundle:
-  name: context-intelligence-behavior
+  name: context-intelligence
   version: 0.1.0
   description: >
     Context intelligence capability: graph-powered session analysis
@@ -10,6 +10,10 @@ agents:
     - context-intelligence:graph-analyst
     - context-intelligence:session-navigator
     - context-intelligence:context-intelligence-design-facilitator
+
+modes:
+  include:
+    - context-intelligence:modes/context-intelligence.md
 
 tools:
   - module: tool-graph-query
