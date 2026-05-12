@@ -24,7 +24,7 @@ tools:
     source: git+https://github.com/microsoft/amplifier-bundle-skills@main#subdirectory=modules/tool-skills
     config:
       skills:
-        - "@context-intelligence-behavior:skills"
+        - "git+https://github.com/microsoft/amplifier-bundle-context-intelligence@main#subdirectory=skills"
 
 hooks:
   - module: hook-context-intelligence
