@@ -1,0 +1,83 @@
+# Issue #233 end-to-end validation — clean profile using Brian's merged upstream fixes.
+#
+# Uses real GitHub for app-cli, bundle-skills, and foundation (Brian's PRs are on main).
+# Only redirects amplifier-bundle-context-intelligence to Gitea (fix branch not yet on main).
+#
+# Validates the full delegation + handoff protocol between the two mode-gated specialists:
+#   facilitator (Phase 0/1) ↔ tool-designer (Phase 2/3)
+#
+# Launch:
+#   amplifier-digital-twin launch \
+#     .amplifier/digital-twin-universe/profiles/issue-233-e2e-validation.yaml \
+#     --var GITEA_URL=http://10.160.61.25:3000 \
+#     --var GITEA_TOKEN=<token> \
+#     --name ci-issue-233-e2e
+
+name: issue-233-e2e-validation
+description: >
+  End-to-end validation of the specialist-behind-gate handoff protocol with
+  Brian's merged upstream fixes (app-cli#178, bundle-skills#15, foundation#203).
+  Proves both inter-agent delegation and skill loading work correctly in sub-sessions.
+
+base:
+  image: ubuntu:24.04
+
+# Only redirect context-intelligence — it's the one repo not yet on origin/main.
+# app-cli, bundle-skills, and foundation go directly to real GitHub (Brian's fixes merged).
+url_rewrites:
+  auth:
+    username: gitadmin
+    token_var: GITEA_TOKEN
+  rules:
+    - match: github.com/microsoft/amplifier-bundle-context-intelligence
+      target: ${GITEA_URL}/microsoft/amplifier-bundle-context-intelligence
+
+passthrough:
+  allow_external: true
+  services:
+    - name: anthropic
+      key_env: ANTHROPIC_API_KEY
+
+provision:
+  setup_cmds:
+    - apt-get update -qq && apt-get install -y -qq git curl python3 python3-venv jq
+
+    - curl -LsSf https://astral.sh/uv/install.sh | sh
+
+    # Install Amplifier from real GitHub — pulls Brian's fixed app-cli transitively.
+    - |
+      export PATH="/root/.local/bin:$PATH"
+      uv tool install git+https://github.com/microsoft/amplifier@main
+
+    - |
+      mkdir -p /root/.amplifier
+      cat > /root/.amplifier/settings.yaml << 'EOF'
+      config:
+        providers:
+          - module: provider-anthropic
+            source: git+https://github.com/microsoft/amplifier-module-provider-anthropic@main
+            config:
+              api_key_env: ANTHROPIC_API_KEY
+      EOF
+
+    # Install context-intelligence behavior (URL rewritten to Gitea for the fix branch).
+    # tool-skills module is pulled from real GitHub (amplifier-bundle-skills@main = Brian's fix).
+    - |
+      export PATH="/root/.local/bin:$PATH"
+      amplifier bundle add \
+        "git+https://github.com/microsoft/amplifier-bundle-context-intelligence@main#subdirectory=behaviors/context-intelligence.yaml" \
+        --app
+
+    - |
+      export PATH="/root/.local/bin:$PATH"
+      amplifier --version
+
+    - |
+      echo 'export PATH="/root/.local/bin:$PATH"' >> /root/.bashrc
+      echo 'PATH=/root/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin' >> /etc/environment
+
+    - mkdir -p /tmp/ci-workspace
+
+readiness:
+  - name: amplifier-installed
+    command: 'PATH=/root/.local/bin:$PATH amplifier --version'
