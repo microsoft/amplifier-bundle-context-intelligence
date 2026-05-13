@@ -224,7 +224,7 @@ def _iter_events(events_path: pathlib.Path | str):
 
 def score_s1(events_path) -> int:
     """S1: count compaction events."""
-    raise NotImplementedError
+    return sum(1 for ev in _iter_events(events_path) if ev.get("event") == "context:compaction")
 
 
 def score_s1_burst(events_path, *, window_min: int = 5) -> int:

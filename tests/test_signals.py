@@ -379,3 +379,45 @@ class TestScoreS9cSelf:
             encoding="utf-8",
         )
         assert score_s9c_self(p) == 0
+
+
+class TestScoreS1:
+    """Verify score_s1() — compaction event counter."""
+
+    def test_returns_zero_for_clean_session(self):
+        """clean_session.jsonl has no context:compaction events — score must be 0."""
+        from context_intelligence.signals import score_s1
+
+        assert score_s1(FIXTURES / "clean_session.jsonl") == 0
+
+    def test_returns_five_for_s1_session(self):
+        """s1_session.jsonl has exactly 5 context:compaction events — score must be 5."""
+        from context_intelligence.signals import score_s1
+
+        assert score_s1(FIXTURES / "s1_session.jsonl") == 5
+
+    def test_returns_zero_for_nonexistent_path(self):
+        """A non-existent path must not raise and must return 0."""
+        from context_intelligence.signals import score_s1
+
+        result = score_s1(FIXTURES / "nonexistent_s1_file_xyz.jsonl")
+        assert result == 0
+
+    def test_candidate_threshold(self):
+        """s1_session.jsonl score must be >= S1_CANDIDATE_THRESHOLD (3)."""
+        from context_intelligence.signals import S1_CANDIDATE_THRESHOLD, score_s1
+
+        assert score_s1(FIXTURES / "s1_session.jsonl") >= S1_CANDIDATE_THRESHOLD
+
+    def test_does_not_count_other_events(self, tmp_path):
+        """Only context:compaction events are counted; other event types are ignored."""
+        from context_intelligence.signals import score_s1
+
+        p = tmp_path / "mixed.jsonl"
+        p.write_text(
+            '{"event": "session:start", "timestamp": "2026-05-01T10:00:00.000Z", "workspace": "test", "data": {"session_id": "t1"}}\n'
+            '{"event": "context:compaction", "timestamp": "2026-05-01T10:02:00.000Z", "workspace": "test", "data": {"session_id": "t1"}}\n'
+            '{"event": "orchestrator:iteration_start", "timestamp": "2026-05-01T10:01:00.000Z", "workspace": "test", "data": {"session_id": "t1", "iteration": 1}}\n',
+            encoding="utf-8",
+        )
+        assert score_s1(p) == 1

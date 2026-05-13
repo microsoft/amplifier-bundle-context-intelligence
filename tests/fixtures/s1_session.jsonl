@@ -1,0 +1,10 @@
+{"event": "session:start", "timestamp": "2026-05-01T10:00:00.000Z", "workspace": "test", "data": {"session_id": "s1-001"}}
+{"event": "orchestrator:iteration_start", "timestamp": "2026-05-01T10:01:00.000Z", "workspace": "test", "data": {"session_id": "s1-001", "iteration": 1}}
+{"event": "context:compaction", "timestamp": "2026-05-01T10:02:00.000Z", "workspace": "test", "data": {"session_id": "s1-001"}}
+{"event": "session:resume", "timestamp": "2026-05-01T10:02:15.000Z", "workspace": "test", "data": {"session_id": "s1-001"}}
+{"event": "context:compaction", "timestamp": "2026-05-01T10:03:00.000Z", "workspace": "test", "data": {"session_id": "s1-001"}}
+{"event": "session:resume", "timestamp": "2026-05-01T10:03:20.000Z", "workspace": "test", "data": {"session_id": "s1-001"}}
+{"event": "context:compaction", "timestamp": "2026-05-01T10:06:30.000Z", "workspace": "test", "data": {"session_id": "s1-001"}}
+{"event": "session:resume", "timestamp": "2026-05-01T10:25:00.000Z", "workspace": "test", "data": {"session_id": "s1-001"}}
+{"event": "context:compaction", "timestamp": "2026-05-01T10:32:00.000Z", "workspace": "test", "data": {"session_id": "s1-001"}}
+{"event": "context:compaction", "timestamp": "2026-05-01T11:02:00.000Z", "workspace": "test", "data": {"session_id": "s1-001"}}
