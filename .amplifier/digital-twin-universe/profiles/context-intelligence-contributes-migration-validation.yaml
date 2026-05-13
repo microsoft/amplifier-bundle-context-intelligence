@@ -57,8 +57,8 @@ assertions:
   - id: S2-activation-atomic-mount
     description: >
       After /context-intelligence activation: both specialists mount, both design
-      skills discoverable, both context files injected. JSONL mode:context_injected
-      event fires with both context file paths in payload.
+      skills discoverable, both context files injected. JSONL mode:transition_completed
+      event records both context file paths in data.mounted array.
     when:
       mode: active
     expect:
@@ -69,7 +69,8 @@ assertions:
         - context-intelligence-tool-design
         - context-intelligence-eval-design
       jsonl_event:
-        type: "mode:context_injected"
+        type: "mode:transition_completed"
+        payload_path: "data.mounted"
         payload_contains:
           - "context-intelligence:context/jsonl-event-schema.md"
           - "context-intelligence:context/dual-path-library-template.md"
