@@ -101,7 +101,7 @@ The following fields are ready to write into `domain-signals.md`:
 
 - `detection_strategy` — one of: `deterministic` / `probabilistic` / `llm-evaluated` / `hybrid`
 - `detection_notes` — brief rationale for the chosen strategy
-- `ai_dependency` — `none` / `optional` / `required`
+- `ai_dependency` — `none` | `low` | `medium` | `high`
 - `reasoning_requirement` — routing matrix role: `fast` / `general` / `reasoning` / `coding` (omit for deterministic/probabilistic)
 - `suggested_primitive` — complete implementation path or artifact shape
 
@@ -111,14 +111,15 @@ If a signal cannot be classified due to ambiguity (missing definition, unspecifi
 
 **DO NOT investigate or guess.**
 
-Return a structured gap entry with the following fields:
+Return a structured gap entry as a Markdown section in your result:
 
-```yaml
-- Concept: <signal name>
-  Gap type: missing-signal | ambiguous-definition | insufficient-data
-  Question: <specific question that must be answered to proceed>
-  Blocks: <what classification decision is blocked>
-  Resolution: ""
+```markdown
+## Gap [N] — [status: open | resolved]
+Concept:    [name]
+Gap type:   missing-signal | ambiguous-definition | insufficient-data
+Question:   [specific question for facilitator]
+Blocks:     [signal name] | additive
+Resolution: [filled when resolved]
 ```
 
 The tool-designer appends the gap entry to `signal-gaps.md` and continues with other signals. Gaps never block progress.
