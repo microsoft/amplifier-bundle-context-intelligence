@@ -1,0 +1,169 @@
+# Context-intelligence redesigned mode — DTU validation profile.
+#
+# Notes:
+#   Validates 5-phase redesign end-to-end.
+#   Layer 1 — Structural assertions (7 test points).
+#   Layer 2 — Behavioural scenarios (A: concept elicitation, B: signal gap loop).
+#   Run via amplifier-tester:setup-digital-twin with local submodule on current branch.
+
+profile:
+  name: context-intelligence-redesigned-mode-validation
+  version: 1.0.0
+  description: >
+    End-to-end validation of the redesigned context-intelligence mode.
+    Asserts 7 structural test points and runs 2 behavioural scenarios inside
+    a DTU built from the local bundle branch.
+
+# MANDATORY: Gitea url_rewrites are non-optional for this profile.
+#
+# The install command fetches the bundle from GitHub by default. Without these
+# rewrites, Amplifier would install the published main-branch version rather
+# than the developer's local working-tree snapshot, which defeats the entire
+# purpose of this validation profile.
+#
+# amplifier-tester:setup-digital-twin mirrors the local submodule to a Gitea
+# instance and substitutes {gitea_host} at launch time. Every git+ install URL
+# that references amplifier-bundle-context-intelligence MUST be redirected here
+# so the DTU picks up uncommitted/unreleased local changes.
+#
+# Both entries are required:
+#   1. The bare @main URL (used by `amplifier bundle add` for the bundle root)
+#   2. The #subdirectory=skills variant (used when loading skill companions)
+url_rewrites:
+  - from: "git+https://github.com/microsoft/amplifier-bundle-context-intelligence@main"
+    to:   "git+http://{gitea_host}/microsoft/amplifier-bundle-context-intelligence@main"
+  - from: "git+https://github.com/microsoft/amplifier-bundle-context-intelligence@main#subdirectory=skills"
+    to:   "git+http://{gitea_host}/microsoft/amplifier-bundle-context-intelligence@main#subdirectory=skills"
+
+install:
+  # Behaviour-only install: add only the context-intelligence behavior (mode,
+  # agents, tool policies) to the app-level Amplifier config.  This is a
+  # lighter install than the full bundle add used in smoke-test profiles.
+  command: "amplifier bundle add git+https://github.com/microsoft/amplifier-bundle-context-intelligence@main#subdirectory=behaviors/context-intelligence.yaml --app"
+
+assertions:
+  - id: T1-mode-inactive-blocks-delegate
+    description: With mode inactive, `delegate` tool is blocked.
+    when:
+      mode: inactive
+    expect:
+      tool: delegate
+      result: blocked
+
+  - id: T2-mode-activates-policies-and-mentions
+    description: >
+      Entering mode enforces declared tool policies and injects two
+      mode-gated context files via @mentions.
+    when:
+      mode: active
+    expect:
+      tool_policies:
+        safe:
+          - graph_query
+          - blob_read
+          - read_file
+          - glob
+          - grep
+          - delegate
+          - load_skill
+          - todo
+        warn:
+          - bash
+          - write_file
+          - edit_file
+      context_files_injected:
+        - "context-intelligence:context/jsonl-event-schema.md"
+        - "context-intelligence:context/dual-path-library-template.md"
+
+  - id: T3-both-specialists-available-under-mode
+    description: Both facilitator and tool-designer agents are invokable under the mode.
+    when:
+      mode: active
+    expect:
+      agents_available:
+        - context-intelligence:context-intelligence-design-facilitator
+        - context-intelligence:context-intelligence-tool-designer
+
+  - id: T4-tool-designer-not-accessible-without-mode
+    description: Without mode, tool-designer NOT invokable.
+    when:
+      mode: inactive
+    expect:
+      agent_not_available: context-intelligence:context-intelligence-tool-designer
+
+  - id: T5-domain-concepts-exists-after-phase-0
+    description: >
+      After Phase 0, .context-intelligence-investigation/domain-concepts.md
+      exists with all required fields per entry.
+    when:
+      after_phase: 0
+    expect:
+      file_exists: ".context-intelligence-investigation/domain-concepts.md"
+      per_entry_fields:
+        - User intent
+        - Agreed definition
+        - Boundary conditions
+        - Nesting
+        - Data availability
+        - Explicitly excludes
+
+  - id: T6-domain-signals-enriched-after-phase-2
+    description: >
+      After Phase 2, every signal entry in domain-signals.md is enriched
+      with the five Phase 2 fields.
+    when:
+      after_phase: 2
+    expect:
+      file_exists: ".context-intelligence-investigation/domain-signals.md"
+      per_entry_fields:
+        - detection_strategy
+        - detection_notes
+        - ai_dependency
+        - reasoning_requirement
+        - suggested_primitive
+
+  - id: T7-primitives-reference-not-loaded-outside-mode
+    description: >
+      Primitives reference context file NOT in session context when mode
+      inactive — it is a skill companion, not always-on context.
+    when:
+      mode: inactive
+    expect:
+      context_file_not_present: "context-intelligence:context/context-intelligence-primitives-reference.md"
+
+scenarios:
+  - id: scenario-A-concept-elicitation
+    description: >
+      User enters mode and asks to investigate how testing sessions are
+      performing. Facilitator runs Approach C elicitation in Phase 0.
+    user_message: "Investigate how testing sessions are performing."
+    pass_criteria:
+      file_exists: ".context-intelligence-investigation/domain-concepts.md"
+      entry_for_concept: "testing session"
+      non_empty_fields:
+        - Boundary conditions
+        - Data availability
+        - Explicitly excludes
+      # definitions must be behavioural patterns, not Amplifier agent names
+      forbidden_substrings:
+        - graph-analyst
+        - session-navigator
+        - context-intelligence-design-facilitator
+        - context-intelligence-tool-designer
+
+  - id: scenario-B-signal-gap-loop
+    description: >
+      Tool-designer encounters ambiguous concept during Phase 2 and writes
+      signal-gap entry. Facilitator resolves on re-entry.
+    setup:
+      preload_files:
+        - ".context-intelligence-investigation/domain-concepts.md"
+        - ".context-intelligence-investigation/domain-signals.md"
+      seed_ambiguity: "introduce one concept whose definition is too vague for Phase 2 classification"
+    pass_criteria:
+      file_exists: ".context-intelligence-investigation/signal-gaps.md"
+      entry_fields:
+        - Gap type
+        - Question
+        - Blocks
+      eventual_status: "resolved"
