@@ -28,15 +28,15 @@ class TestFilesExist:
 
     def test_reconstruct_init_exists(self):
         """context_intelligence/reconstruct/__init__.py must exist."""
-        assert (
-            CI_ROOT / "reconstruct" / "__init__.py"
-        ).exists(), "context_intelligence/reconstruct/__init__.py not found"
+        assert (CI_ROOT / "reconstruct" / "__init__.py").exists(), (
+            "context_intelligence/reconstruct/__init__.py not found"
+        )
 
     def test_upload_init_exists(self):
         """context_intelligence/upload/__init__.py must exist."""
-        assert (
-            CI_ROOT / "upload" / "__init__.py"
-        ).exists(), "context_intelligence/upload/__init__.py not found"
+        assert (CI_ROOT / "upload" / "__init__.py").exists(), (
+            "context_intelligence/upload/__init__.py not found"
+        )
 
 
 class TestPyTypedIsEmpty:
@@ -83,7 +83,9 @@ class TestDocstrings:
         """context_intelligence must have a module docstring."""
         import context_intelligence
 
-        assert context_intelligence.__doc__ is not None, "context_intelligence must have a docstring"
+        assert context_intelligence.__doc__ is not None, (
+            "context_intelligence must have a docstring"
+        )
         assert len(context_intelligence.__doc__.strip()) > 0, "docstring must not be empty"
 
     def test_context_intelligence_docstring_mentions_levels(self):
