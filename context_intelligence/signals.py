@@ -271,9 +271,12 @@ def score_s5(metadata_path, ref_last_event_ts: str) -> bool:
     raise NotImplementedError
 
 
+_CANCEL_EVENTS: frozenset[str] = frozenset({"session:cancelled", "user:interrupt"})
+
+
 def score_s6(events_path) -> int:
     """S6: cancellation event count."""
-    raise NotImplementedError
+    return sum(1 for ev in _iter_events(events_path) if ev.get("event") in _CANCEL_EVENTS)
 
 
 def score_s7(events_path) -> int:

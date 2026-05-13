@@ -1,0 +1,4 @@
+{"event": "session:start", "timestamp": "2026-05-01T12:00:00.000Z", "workspace": "test", "data": {"session_id": "cancel-001"}}
+{"event": "orchestrator:iteration_start", "timestamp": "2026-05-01T12:00:01.000Z", "workspace": "test", "data": {"session_id": "cancel-001", "iteration": 1}}
+{"event": "user:interrupt", "timestamp": "2026-05-01T12:00:30.000Z", "workspace": "test", "data": {"session_id": "cancel-001"}}
+{"event": "session:cancelled", "timestamp": "2026-05-01T12:00:31.000Z", "workspace": "test", "data": {"session_id": "cancel-001"}}

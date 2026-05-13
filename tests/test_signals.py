@@ -297,3 +297,38 @@ class TestIterEvents:
 
         events = list(_iter_events(str(FIXTURES / "clean_session.jsonl")))
         assert len(events) == 3
+
+
+class TestScoreS6:
+    """Verify score_s6() — cancellation / interrupt event counter."""
+
+    def test_returns_zero_for_clean_session(self):
+        """clean_session.jsonl has no cancel events — score must be 0."""
+        from context_intelligence.signals import score_s6
+
+        assert score_s6(FIXTURES / "clean_session.jsonl") == 0
+
+    def test_returns_two_for_cancel_session(self):
+        """cancel_session.jsonl has one user:interrupt and one session:cancelled — score must be 2."""
+        from context_intelligence.signals import score_s6
+
+        assert score_s6(FIXTURES / "cancel_session.jsonl") == 2
+
+    def test_returns_zero_for_nonexistent_path(self):
+        """A non-existent path must not raise and must return 0."""
+        from context_intelligence.signals import score_s6
+
+        result = score_s6(FIXTURES / "nonexistent_cancel_file_xyz.jsonl")
+        assert result == 0
+
+    def test_counts_only_cancel_events(self, tmp_path):
+        """Only user:interrupt events are counted; other event types are ignored."""
+        from context_intelligence.signals import score_s6
+
+        p = tmp_path / "mixed.jsonl"
+        p.write_text(
+            '{"event": "user:interrupt", "timestamp": "2026-05-01T12:00:00.000Z", "workspace": "test"}\n'
+            '{"event": "tool:pre", "timestamp": "2026-05-01T12:00:01.000Z", "workspace": "test"}\n',
+            encoding="utf-8",
+        )
+        assert score_s6(p) == 1
