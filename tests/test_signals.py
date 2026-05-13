@@ -332,3 +332,50 @@ class TestScoreS6:
             encoding="utf-8",
         )
         assert score_s6(p) == 1
+
+
+class TestScoreS9cSelf:
+    """Verify score_s9c_self() — recursive self-delegation counter."""
+
+    def test_returns_zero_for_clean_session(self):
+        """clean_session.jsonl has no delegate tool:pre events — score must be 0."""
+        from context_intelligence.signals import score_s9c_self
+
+        assert score_s9c_self(FIXTURES / "clean_session.jsonl") == 0
+
+    def test_returns_two_for_s9a_session(self):
+        """s9a_session.jsonl has exactly 2 self-delegation events (d02, d04) — score must be 2."""
+        from context_intelligence.signals import score_s9c_self
+
+        assert score_s9c_self(FIXTURES / "s9a_session.jsonl") == 2
+
+    def test_returns_zero_for_nonexistent_path(self):
+        """A non-existent path must not raise and must return 0."""
+        from context_intelligence.signals import score_s9c_self
+
+        result = score_s9c_self(FIXTURES / "nonexistent_s9c_self_file_xyz.jsonl")
+        assert result == 0
+
+    def test_ignores_non_delegate_tool_pre(self, tmp_path):
+        """tool:pre events with tool_name != 'delegate' must not be counted."""
+        from context_intelligence.signals import score_s9c_self
+
+        p = tmp_path / "bash_only.jsonl"
+        p.write_text(
+            '{"event": "tool:pre", "timestamp": "2026-05-01T11:00:00.000Z", "workspace": "test",'
+            ' "data": {"tool_name": "bash", "tool_input": {"command": "ls"}, "session_id": "t1"}}\n',
+            encoding="utf-8",
+        )
+        assert score_s9c_self(p) == 0
+
+    def test_ignores_delegate_with_other_agent(self, tmp_path):
+        """tool:pre delegate events where agent != 'self' must not be counted."""
+        from context_intelligence.signals import score_s9c_self
+
+        p = tmp_path / "delegate_other.jsonl"
+        p.write_text(
+            '{"event": "tool:pre", "timestamp": "2026-05-01T11:00:00.000Z", "workspace": "test",'
+            ' "data": {"tool_name": "delegate", "tool_input": {"agent": "foundation:explorer"}, "session_id": "t1"}}\n',
+            encoding="utf-8",
+        )
+        assert score_s9c_self(p) == 0

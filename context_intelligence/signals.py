@@ -305,8 +305,23 @@ def score_s9c_size(events_path) -> bool:
 
 
 def score_s9c_self(events_path) -> int:
-    """S9c (self): self-delegation cycle count."""
-    raise NotImplementedError
+    """S9c (self): self-delegation cycle count.
+
+    Counts tool:pre events where tool_name == 'delegate' AND
+    tool_input.agent == 'self'.  The ``(data.get('tool_input') or {})``
+    guard handles the case where tool_input is explicitly None.
+    """
+    count = 0
+    for ev in _iter_events(events_path):
+        if ev.get("event") != "tool:pre":
+            continue
+        data = ev.get("data", {})
+        if (
+            data.get("tool_name") == "delegate"
+            and (data.get("tool_input") or {}).get("agent") == "self"
+        ):
+            count += 1
+    return count
 
 
 def score_s9_combined(events_path) -> bool:

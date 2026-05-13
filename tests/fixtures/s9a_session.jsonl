@@ -1,0 +1,15 @@
+{"event": "session:start", "timestamp": "2026-05-01T11:00:00.000Z", "workspace": "test", "data": {"session_id": "s9a-001"}}
+{"event": "orchestrator:iteration_start", "timestamp": "2026-05-01T11:00:30.000Z", "workspace": "test", "data": {"session_id": "s9a-001", "iteration": 1}}
+{"event": "tool:pre", "timestamp": "2026-05-01T11:01:00.000Z", "workspace": "test", "data": {"session_id": "s9a-001", "tool_name": "delegate", "tool_input": {"agent": "foundation:explorer"}, "tool_call_id": "d01"}}
+{"event": "tool:pre", "timestamp": "2026-05-01T11:01:30.000Z", "workspace": "test", "data": {"session_id": "s9a-001", "tool_name": "delegate", "tool_input": {"agent": "self"}, "tool_call_id": "d02"}}
+{"event": "orchestrator:iteration_start", "timestamp": "2026-05-01T11:02:00.000Z", "workspace": "test", "data": {"session_id": "s9a-001", "iteration": 2}}
+{"event": "tool:pre", "timestamp": "2026-05-01T11:02:30.000Z", "workspace": "test", "data": {"session_id": "s9a-001", "tool_name": "delegate", "tool_input": {"agent": "foundation:git-ops"}, "tool_call_id": "d03"}}
+{"event": "tool:pre", "timestamp": "2026-05-01T11:03:00.000Z", "workspace": "test", "data": {"session_id": "s9a-001", "tool_name": "delegate", "tool_input": {"agent": "self"}, "tool_call_id": "d04"}}
+{"event": "orchestrator:iteration_start", "timestamp": "2026-05-01T11:03:30.000Z", "workspace": "test", "data": {"session_id": "s9a-001", "iteration": 3}}
+{"event": "tool:pre", "timestamp": "2026-05-01T11:04:00.000Z", "workspace": "test", "data": {"session_id": "s9a-001", "tool_name": "delegate", "tool_input": {"agent": "foundation:explorer"}, "tool_call_id": "d05"}}
+{"event": "orchestrator:iteration_start", "timestamp": "2026-05-01T11:04:30.000Z", "workspace": "test", "data": {"session_id": "s9a-001", "iteration": 4}}
+{"event": "tool:pre", "timestamp": "2026-05-01T11:05:00.000Z", "workspace": "test", "data": {"session_id": "s9a-001", "tool_name": "delegate", "tool_input": {"agent": "foundation:explorer"}, "tool_call_id": "d06"}}
+{"event": "orchestrator:iteration_start", "timestamp": "2026-05-01T11:05:30.000Z", "workspace": "test", "data": {"session_id": "s9a-001", "iteration": 5}}
+{"event": "orchestrator:iteration_start", "timestamp": "2026-05-01T11:06:00.000Z", "workspace": "test", "data": {"session_id": "s9a-001", "iteration": 6}}
+{"event": "orchestrator:iteration_start", "timestamp": "2026-05-01T11:06:30.000Z", "workspace": "test", "data": {"session_id": "s9a-001", "iteration": 7}}
+{"event": "orchestrator:iteration_start", "timestamp": "2026-05-01T11:07:00.000Z", "workspace": "test", "data": {"session_id": "s9a-001", "iteration": 8}}
