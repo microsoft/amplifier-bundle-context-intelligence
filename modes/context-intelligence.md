@@ -6,6 +6,7 @@ mode:
     context intelligence-aware components. Covers Cypher query design, JSONL
     navigation patterns, domain signal interpretation, and design document
     production.
+    advertised: false
   default_action: block
 
   tools:
