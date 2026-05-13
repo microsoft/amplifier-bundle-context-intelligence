@@ -10,6 +10,12 @@
 #
 # NO Python unit tests — this profile IS the test suite for this migration.
 
+# TEMPORARY: context-intelligence-design-facilitator and context-intelligence-tool-designer
+# are registered at behavior level (not via contributes.agents) while Core 1.5.2
+# contributes.agents spawn path is incomplete (tracked: microsoft-amplifier/amplifier-support).
+# When the framework gap is resolved, move agents back to contributes.agents and
+# remove them from behaviors/context-intelligence.yaml agents.include.
+
 profile:
   name: context-intelligence-contributes-migration-validation
   version: 1.0.0
@@ -32,15 +38,17 @@ install:
   command: "amplifier bundle add git+https://github.com/microsoft/amplifier-bundle-context-intelligence@main#subdirectory=behaviors/context-intelligence.yaml --app"
 
 assertions:
-  - id: S1-baseline-specialists-absent
+  - id: S1-baseline-mode-inactive
     description: >
-      With mode inactive, specialist design agents NOT in delegate registry,
-      design skills NOT discoverable, context files NOT in session context,
-      mode NOT in mode(list) output (advertised: false). Baseline agents present.
+      With mode inactive: specialist agents ARE present (registered at behavior level,
+      temporary while Core contributes.agents spawn path is incomplete).
+      Design skills NOT discoverable. Context files NOT injected. Mode NOT listed (advertised: false).
     when:
       mode: inactive
     expect:
-      agents_absent:
+      agents_present:
+        - context-intelligence:graph-analyst
+        - context-intelligence:session-navigator
         - context-intelligence:context-intelligence-design-facilitator
         - context-intelligence:context-intelligence-tool-designer
       skills_absent:
@@ -50,9 +58,6 @@ assertions:
         - "context-intelligence:context/jsonl-event-schema.md"
         - "context-intelligence:context/dual-path-library-template.md"
       mode_not_listed: context-intelligence
-      agents_present:
-        - context-intelligence:graph-analyst
-        - context-intelligence:session-navigator
 
   - id: S2-activation-atomic-mount
     description: >
@@ -83,9 +88,6 @@ assertions:
       mode: inactive
       after: activation
     expect:
-      agents_absent:
-        - context-intelligence:context-intelligence-design-facilitator
-        - context-intelligence:context-intelligence-tool-designer
       skills_absent:
         - context-intelligence-tool-design
         - context-intelligence-eval-design

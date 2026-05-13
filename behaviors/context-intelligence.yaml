@@ -9,8 +9,11 @@ agents:
   include:
     - context-intelligence:graph-analyst
     - context-intelligence:session-navigator
-    # context-intelligence-design-facilitator and context-intelligence-tool-designer
-    # removed — now contributed by the context-intelligence mode via contributes.agents
+    - context-intelligence:context-intelligence-design-facilitator
+    - context-intelligence:context-intelligence-tool-designer
+    # NOTE: contributes.agents in the mode is the intended home for these specialists.
+    # Temporarily registered at behavior level while Core contributes.agents spawn
+    # path is incomplete (tracked: microsoft-amplifier/amplifier-support).
 
 modes:
   include:

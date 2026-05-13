@@ -9,11 +9,6 @@ mode:
   default_action: block
 
   contributes:
-    agents:
-      context-intelligence-design-facilitator:
-        source: "@context-intelligence:agents/context-intelligence-design-facilitator"
-      context-intelligence-tool-designer:
-        source: "@context-intelligence:agents/context-intelligence-tool-designer"
     context:
       - "@context-intelligence:context/jsonl-event-schema.md"
       - "@context-intelligence:context/dual-path-library-template.md"
