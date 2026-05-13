@@ -9,8 +9,8 @@ agents:
   include:
     - context-intelligence:graph-analyst
     - context-intelligence:session-navigator
-    - context-intelligence:context-intelligence-design-facilitator
-    - context-intelligence:context-intelligence-tool-designer
+    # context-intelligence-design-facilitator and context-intelligence-tool-designer
+    # removed — now contributed by the context-intelligence mode via contributes.agents
 
 modes:
   include:
@@ -27,7 +27,12 @@ tools:
     source: git+https://github.com/microsoft/amplifier-bundle-skills@main#subdirectory=modules/tool-skills
     config:
       skills:
-        - "git+https://github.com/microsoft/amplifier-bundle-context-intelligence@main#subdirectory=skills"
+        # General context-intelligence skills only — design-phase skills gated behind the context-intelligence mode
+        - "git+https://github.com/microsoft/amplifier-bundle-context-intelligence@main#subdirectory=skills/blob-reading"
+        - "git+https://github.com/microsoft/amplifier-bundle-context-intelligence@main#subdirectory=skills/context-intelligence-graph-query"
+        - "git+https://github.com/microsoft/amplifier-bundle-context-intelligence@main#subdirectory=skills/context-intelligence-session-navigation"
+        - "git+https://github.com/microsoft/amplifier-bundle-context-intelligence@main#subdirectory=skills/context-intelligence-session-reconstruction"
+        - "git+https://github.com/microsoft/amplifier-bundle-context-intelligence@main#subdirectory=skills/workflow-pattern-analysis"
 
 hooks:
   - module: hook-context-intelligence

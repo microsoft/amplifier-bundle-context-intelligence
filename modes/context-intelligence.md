@@ -5,7 +5,22 @@ mode:
     Goal-driven context intelligence design: elicit domain concepts from user intent,
     discover signals, classify detection strategies, select implementation primitives,
     and design evaluation scenarios. All phases are mode-gated.
+  advertised: false
   default_action: block
+
+  contributes:
+    agents:
+      context-intelligence-design-facilitator:
+        source: "@context-intelligence:agents/context-intelligence-design-facilitator"
+      context-intelligence-tool-designer:
+        source: "@context-intelligence:agents/context-intelligence-tool-designer"
+    context:
+      - "@context-intelligence:context/jsonl-event-schema.md"
+      - "@context-intelligence:context/dual-path-library-template.md"
+    skills:
+      - "@context-intelligence:skills/context-intelligence-tool-design"
+      - "@context-intelligence:skills/context-intelligence-eval-design"
+
   tools:
     safe:
       - graph_query
@@ -25,10 +40,6 @@ mode:
 # Context Intelligence Mode
 
 This mode orchestrates a goal-driven design process for context intelligence tooling. It starts from what the user wants to observe, elicits what domain concepts mean in their context, classifies how signals can be detected, selects the right Amplifier primitive, and produces explicit evaluation scenarios. All substantive context is mode-gated. The mode never assumes Amplifier internal vocabulary.
-
-@context-intelligence:context/jsonl-event-schema.md
-
-@context-intelligence:context/dual-path-library-template.md
 
 ## Standing Rules
 

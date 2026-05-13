@@ -1,0 +1,151 @@
+# context-intelligence mode — Modes v1 contributes: migration validation profile.
+#
+# Validates the specialist-behind-gate pattern:
+#   S1 — gated items invisible without mode
+#   S2 — atomic mount + JSONL event proof on activation
+#   S3 — clean unmount, baseline intact on deactivation
+#   S4 — context USED at runtime (schema field question)
+#   S5 — facilitator USED via contributes.agents path
+#   S6 — tool-designer USED via contributes.agents path
+#
+# NO Python unit tests — this profile IS the test suite for this migration.
+
+profile:
+  name: context-intelligence-contributes-migration-validation
+  version: 1.0.0
+  description: >
+    Validates the Modes v1 contributes: migration for the context-intelligence mode.
+    Proves specialist agents, context files, and design skills are gated behind
+    mode activation and genuinely used at runtime.
+
+# MANDATORY: Gitea url_rewrites are non-optional.
+# Both entries are required:
+#   1. The bare @main URL (used by `amplifier bundle add` for the bundle root)
+#   2. The #subdirectory=skills variant (used when loading skill companions)
+url_rewrites:
+  - from: "git+https://github.com/microsoft/amplifier-bundle-context-intelligence@main"
+    to:   "git+http://{gitea_host}/microsoft/amplifier-bundle-context-intelligence@main"
+  - from: "git+https://github.com/microsoft/amplifier-bundle-context-intelligence@main#subdirectory=skills"
+    to:   "git+http://{gitea_host}/microsoft/amplifier-bundle-context-intelligence@main#subdirectory=skills"
+
+install:
+  command: "amplifier bundle add git+https://github.com/microsoft/amplifier-bundle-context-intelligence@main#subdirectory=behaviors/context-intelligence.yaml --app"
+
+assertions:
+  - id: S1-baseline-specialists-absent
+    description: >
+      With mode inactive, specialist design agents NOT in delegate registry,
+      design skills NOT discoverable, context files NOT in session context,
+      mode NOT in mode(list) output (advertised: false). Baseline agents present.
+    when:
+      mode: inactive
+    expect:
+      agents_absent:
+        - context-intelligence:context-intelligence-design-facilitator
+        - context-intelligence:context-intelligence-tool-designer
+      skills_absent:
+        - context-intelligence-tool-design
+        - context-intelligence-eval-design
+      context_absent:
+        - "context-intelligence:context/jsonl-event-schema.md"
+        - "context-intelligence:context/dual-path-library-template.md"
+      mode_not_listed: context-intelligence
+      agents_present:
+        - context-intelligence:graph-analyst
+        - context-intelligence:session-navigator
+
+  - id: S2-activation-atomic-mount
+    description: >
+      After /context-intelligence activation: both specialists mount, both design
+      skills discoverable, both context files injected. JSONL mode:context_injected
+      event fires with both context file paths in payload.
+    when:
+      mode: active
+    expect:
+      agents_present:
+        - context-intelligence:context-intelligence-design-facilitator
+        - context-intelligence:context-intelligence-tool-designer
+      skills_present:
+        - context-intelligence-tool-design
+        - context-intelligence-eval-design
+      jsonl_event:
+        type: "mode:context_injected"
+        payload_contains:
+          - "context-intelligence:context/jsonl-event-schema.md"
+          - "context-intelligence:context/dual-path-library-template.md"
+
+  - id: S3-deactivation-clean-unmount
+    description: >
+      After /mode off: specialists gone, design skills gone, context files gone.
+      Baseline agents and general context-intelligence skills still present.
+    when:
+      mode: inactive
+      after: activation
+    expect:
+      agents_absent:
+        - context-intelligence:context-intelligence-design-facilitator
+        - context-intelligence:context-intelligence-tool-designer
+      skills_absent:
+        - context-intelligence-tool-design
+        - context-intelligence-eval-design
+      agents_present:
+        - context-intelligence:graph-analyst
+        - context-intelligence:session-navigator
+      general_skills_present:
+        - blob-reading
+        - context-intelligence-graph-query
+        - context-intelligence-session-navigation
+
+scenarios:
+  - id: S4-context-used-at-runtime
+    description: >
+      With mode active, ask about tool:pre event fields. Answer must name specific
+      fields from jsonl-event-schema.md, proving injection and consultation.
+    when:
+      mode: active
+    user_message: "What fields are available on a tool:pre event in the context-intelligence JSONL schema?"
+    pass_criteria:
+      response_contains_all:
+        - "tool_name"
+        - "tool_input"
+        - "parallel_group_id"
+
+  - id: S5-facilitator-used-via-contributes
+    description: >
+      With mode active, facilitator responds with goal-anchored elicitation via
+      the contributes.agents registration path.
+    when:
+      mode: active
+    user_message: "Investigate how testing sessions are performing."
+    pass_criteria:
+      agent_delegated_to: context-intelligence:context-intelligence-design-facilitator
+      response_type: goal_anchored_elicitation
+      forbidden_substrings:
+        - graph-analyst
+        - session-navigator
+        - context-intelligence-design-facilitator
+        - context-intelligence-tool-designer
+      delegate_call_present:
+        agent: context-intelligence:graph-analyst
+        context_depth: none
+
+  - id: S6-tool-designer-used-via-contributes
+    description: >
+      With minimal domain-concepts.md and domain-signals.md fixtures preloaded,
+      tool-designer runs Phase 2 classification and loads context-intelligence-tool-design
+      skill via the contributes.agents path.
+    when:
+      mode: active
+    setup:
+      preload_fixtures:
+        - ".context-intelligence-investigation/domain-concepts.md"
+        - ".context-intelligence-investigation/domain-signals.md"
+    user_message: "Run Phase 2 classification on the loaded signals using the tool-designer."
+    pass_criteria:
+      agent_delegated_to: context-intelligence:context-intelligence-tool-designer
+      skill_loaded: context-intelligence-tool-design
+      response_contains_fields:
+        - detection_strategy
+        - ai_dependency
+        - reasoning_requirement
+        - suggested_primitive
