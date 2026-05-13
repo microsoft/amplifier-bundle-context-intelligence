@@ -421,3 +421,46 @@ class TestScoreS1:
             encoding="utf-8",
         )
         assert score_s1(p) == 1
+
+
+class TestScoreS9a:
+    """Verify score_s9a() — delegate call counter."""
+
+    def test_returns_zero_for_clean_session(self):
+        """clean_session.jsonl has only a bash tool:pre, not delegate — score must be 0."""
+        from context_intelligence.signals import score_s9a
+
+        assert score_s9a(FIXTURES / "clean_session.jsonl") == 0
+
+    def test_returns_six_for_s9a_session(self):
+        """s9a_session.jsonl has exactly 6 delegate tool:pre events — score must be 6."""
+        from context_intelligence.signals import score_s9a
+
+        assert score_s9a(FIXTURES / "s9a_session.jsonl") == 6
+
+    def test_fires_threshold(self):
+        """s9a_session.jsonl score (6) must be >= S9A_THRESHOLD (5)."""
+        from context_intelligence.signals import S9A_THRESHOLD, score_s9a
+
+        assert score_s9a(FIXTURES / "s9a_session.jsonl") >= S9A_THRESHOLD
+
+    def test_returns_zero_for_nonexistent_path(self):
+        """A non-existent path must not raise and must return 0."""
+        from context_intelligence.signals import score_s9a
+
+        result = score_s9a(FIXTURES / "nonexistent_s9a_file_xyz.jsonl")
+        assert result == 0
+
+    def test_ignores_non_delegate_tool_pre(self, tmp_path):
+        """tool:pre events with tool_name != 'delegate' must not be counted."""
+        from context_intelligence.signals import score_s9a
+
+        p = tmp_path / "bash_read.jsonl"
+        p.write_text(
+            '{"event": "tool:pre", "timestamp": "2026-05-01T11:00:00.000Z", "workspace": "test",'
+            ' "data": {"tool_name": "bash", "tool_input": {"command": "ls"}, "session_id": "t1"}}\n'
+            '{"event": "tool:pre", "timestamp": "2026-05-01T11:00:01.000Z", "workspace": "test",'
+            ' "data": {"tool_name": "read_file", "tool_input": {"file_path": "/tmp/x"}, "session_id": "t1"}}\n',
+            encoding="utf-8",
+        )
+        assert score_s9a(p) == 0

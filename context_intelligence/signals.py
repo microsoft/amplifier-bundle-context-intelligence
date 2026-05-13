@@ -291,7 +291,11 @@ def score_s8(events_path) -> int:
 
 def score_s9a(events_path) -> int:
     """S9a: delegate call count."""
-    raise NotImplementedError
+    return sum(
+        1
+        for ev in _iter_events(events_path)
+        if ev.get("event") == "tool:pre" and ev.get("data", {}).get("tool_name") == "delegate"
+    )
 
 
 def score_s9b(events_path) -> int:
