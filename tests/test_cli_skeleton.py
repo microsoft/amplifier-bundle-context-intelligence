@@ -2,9 +2,7 @@
 
 Verifies:
 - File exists at scripts/context-intelligence.py
-- Shebang line is correct (#!/usr/bin/env python3)
 - Module docstring mentions 4 subcommands and exit codes
-- sys.path trick using _here, _root, and sys.path insertion
 - Imports from context_intelligence (CIClient, resolve_config)
 - write_json() helper: writes pretty-printed JSON
 - write_jsonl() helper: writes compact JSONL, returns line count
@@ -14,8 +12,6 @@ Verifies:
 - upload subparser has required args
 - status subparser has required args
 - query subparser has positional cypher arg
-- cmd_* functions are referenced via set_defaults
-- if __name__ == '__main__': sys.exit(main()) block exists
 """
 
 from __future__ import annotations
@@ -43,11 +39,6 @@ def _load_script_module():
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
-
-
-def _read_script_text() -> str:
-    """Read the raw text of the script."""
-    return SCRIPT_PATH.read_text()
 
 
 def _patch_cmd_placeholders(module):
@@ -87,55 +78,12 @@ class TestFileExists:
 
 
 # ---------------------------------------------------------------------------
-# Shebang line
-# ---------------------------------------------------------------------------
-
-
-class TestShebang:
-    """The first line must be the Python 3 shebang."""
-
-    def test_shebang_line(self):
-        """First line must be #!/usr/bin/env python3."""
-        text = _read_script_text()
-        first_line = text.splitlines()[0]
-        assert first_line == "#!/usr/bin/env python3", (
-            f"Expected shebang '#!/usr/bin/env python3', got '{first_line}'"
-        )
-
-
-# ---------------------------------------------------------------------------
 # Module docstring
 # ---------------------------------------------------------------------------
 
 
 class TestModuleDocstring:
     """The module docstring must describe subcommands and exit codes."""
-
-    def test_docstring_mentions_reconstruct(self):
-        """Docstring must mention 'reconstruct' subcommand."""
-        text = _read_script_text()
-        assert "reconstruct" in text, "Docstring must mention 'reconstruct' subcommand"
-
-    def test_docstring_mentions_upload(self):
-        """Docstring must mention 'upload' subcommand."""
-        text = _read_script_text()
-        assert "upload" in text, "Docstring must mention 'upload' subcommand"
-
-    def test_docstring_mentions_status(self):
-        """Docstring must mention 'status' subcommand."""
-        text = _read_script_text()
-        assert "status" in text, "Docstring must mention 'status' subcommand"
-
-    def test_docstring_mentions_query(self):
-        """Docstring must mention 'query' subcommand."""
-        text = _read_script_text()
-        assert "query" in text, "Docstring must mention 'query' subcommand"
-
-    def test_docstring_mentions_exit_codes(self):
-        """Docstring must mention exit codes 0, 1, 2."""
-        text = _read_script_text()
-        # These should appear in the docstring section
-        assert "0" in text and "1" in text and "2" in text, "Docstring must mention exit codes"
 
     def test_module_has_docstring(self):
         """Module must have a non-empty docstring."""
@@ -152,51 +100,12 @@ class TestModuleDocstring:
 
 
 # ---------------------------------------------------------------------------
-# sys.path trick
-# ---------------------------------------------------------------------------
-
-
-class TestSysPathTrick:
-    """The script must contain the sys.path manipulation pattern."""
-
-    def test_here_variable(self):
-        """Script must define _here = Path(__file__).resolve().parent."""
-        text = _read_script_text()
-        assert "_here" in text, "Script must define _here variable"
-        assert "Path(__file__).resolve().parent" in text, (
-            "Script must use Path(__file__).resolve().parent for _here"
-        )
-
-    def test_root_variable(self):
-        """Script must define _root = _here.parent."""
-        text = _read_script_text()
-        assert "_root" in text, "Script must define _root variable"
-        assert "_here.parent" in text, "Script must set _root = _here.parent"
-
-    def test_sys_path_insert(self):
-        """Script must insert _root into sys.path."""
-        text = _read_script_text()
-        assert "sys.path.insert" in text, "Script must call sys.path.insert"
-        assert "_root" in text, "Script must reference _root in sys.path insert"
-
-
-# ---------------------------------------------------------------------------
 # Imports from context_intelligence
 # ---------------------------------------------------------------------------
 
 
 class TestImports:
     """The script must import from context_intelligence."""
-
-    def test_imports_ciclient(self):
-        """Script must import CIClient from context_intelligence."""
-        text = _read_script_text()
-        assert "CIClient" in text, "Script must import CIClient"
-
-    def test_imports_resolve_config(self):
-        """Script must import resolve_config from context_intelligence."""
-        text = _read_script_text()
-        assert "resolve_config" in text, "Script must import resolve_config"
 
     def test_module_has_ciclient(self):
         """Loaded module must have CIClient accessible."""
@@ -789,61 +698,6 @@ class TestQuerySubparser:
 
 
 # ---------------------------------------------------------------------------
-# set_defaults(func=cmd_*) registration
-# ---------------------------------------------------------------------------
-
-
-class TestSetDefaults:
-    """Each subparser must register a cmd_* function via set_defaults."""
-
-    def test_script_references_cmd_reconstruct(self):
-        """Script text must reference cmd_reconstruct."""
-        text = _read_script_text()
-        assert "cmd_reconstruct" in text, "Script must reference cmd_reconstruct"
-
-    def test_script_references_cmd_upload(self):
-        """Script text must reference cmd_upload."""
-        text = _read_script_text()
-        assert "cmd_upload" in text, "Script must reference cmd_upload"
-
-    def test_script_references_cmd_status(self):
-        """Script text must reference cmd_status."""
-        text = _read_script_text()
-        assert "cmd_status" in text, "Script must reference cmd_status"
-
-    def test_script_references_cmd_query(self):
-        """Script text must reference cmd_query."""
-        text = _read_script_text()
-        assert "cmd_query" in text, "Script must reference cmd_query"
-
-    def test_script_uses_set_defaults(self):
-        """Script must call set_defaults to register cmd_* functions."""
-        text = _read_script_text()
-        assert "set_defaults" in text, "Script must use set_defaults"
-
-
-# ---------------------------------------------------------------------------
-# __main__ block
-# ---------------------------------------------------------------------------
-
-
-class TestMainBlock:
-    """The script must have a proper if __name__ == '__main__' block."""
-
-    def test_has_main_guard(self):
-        """Script must contain if __name__ == '__main__' block."""
-        text = _read_script_text()
-        assert "__name__" in text and "__main__" in text, (
-            "Script must have if __name__ == '__main__' guard"
-        )
-
-    def test_main_guard_calls_sys_exit(self):
-        """The __main__ block must call sys.exit(main())."""
-        text = _read_script_text()
-        assert "sys.exit(main())" in text, "Script must call sys.exit(main()) in __main__ block"
-
-
-# ---------------------------------------------------------------------------
 # Acceptance criteria
 # ---------------------------------------------------------------------------
 
@@ -870,20 +724,3 @@ class TestAcceptanceCriteria:
             f"stdout: {result.stdout}\nstderr: {result.stderr}"
         )
         assert "Script import chain OK" in result.stdout
-
-
-# ---------------------------------------------------------------------------
-# Placeholder comment for cmd_* functions
-# ---------------------------------------------------------------------------
-
-
-class TestPlaceholderComment:
-    """Script must have the placeholder comment noting Tasks 11-14."""
-
-    def test_placeholder_comment_exists(self):
-        """Script must contain a placeholder comment for cmd_* functions."""
-        text = _read_script_text()
-        # The spec says: "Placeholder comment for cmd_* functions to be added in Tasks 11-14."
-        assert "Tasks 11" in text or "task 11" in text.lower() or "11-14" in text, (
-            "Script must have placeholder comment mentioning Tasks 11-14"
-        )

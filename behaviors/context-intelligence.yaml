@@ -10,6 +10,7 @@ agents:
     - context-intelligence:graph-analyst
     - context-intelligence:session-navigator
     - context-intelligence:context-intelligence-design-facilitator
+    - context-intelligence:context-intelligence-tool-designer
 
 modes:
   include:
