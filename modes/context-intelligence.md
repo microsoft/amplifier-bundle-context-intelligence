@@ -41,6 +41,10 @@ mode:
 
 This mode orchestrates a goal-driven design process for context intelligence tooling. It starts from what the user wants to observe, elicits what domain concepts mean in their context, classifies how signals can be detected, selects the right Amplifier primitive, and produces explicit evaluation scenarios. All substantive context is mode-gated. The mode never assumes Amplifier internal vocabulary.
 
+## Mandatory Routing
+
+**When a user provides any goal statement, investigation request, or domain framing — delegate IMMEDIATELY to `context-intelligence:context-intelligence-design-facilitator` with `context_depth="none"`.** The facilitator drives Phase 0 (concept elicitation) and Phase 1 (signal discovery). The orchestrator must NOT delegate directly to `context-intelligence:graph-analyst` until the facilitator has completed at least Phase 0 and written `domain-concepts.md`.
+
 ## Standing Rules
 
 These five rules are non-negotiable for every phase of this mode.
