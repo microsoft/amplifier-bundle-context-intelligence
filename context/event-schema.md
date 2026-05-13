@@ -540,7 +540,7 @@ Emitted by the Orchestrator before tool execution. Carries identifying keys need
 | `tool_name` | string | Name of the tool being invoked |
 | `tool_call_id` | string | Unique ID for this tool call (correlates with `tool:post`) |
 | `parallel_group_id` | string \| absent | UUID shared by all tools in a parallel group |
-| `input` | object | Tool input parameters (size varies by tool) |
+| `tool_input` | object | Tool input parameters (size varies by tool) |
 
 ---
 

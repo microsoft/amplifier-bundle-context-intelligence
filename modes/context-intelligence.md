@@ -2,11 +2,19 @@
 mode:
   name: context-intelligence
   description: >
-    Investigation, evidence gathering, and design artifact production for
-    context intelligence-aware components. Covers Cypher query design, JSONL
-    navigation patterns, domain signal interpretation, and design document
-    production.
+    Goal-driven context intelligence design: elicit domain concepts from user intent,
+    discover signals, classify detection strategies, select implementation primitives,
+    and design evaluation scenarios. All phases are mode-gated.
+  advertised: false
   default_action: block
+
+  contributes:
+    context:
+      - "@context-intelligence:context/jsonl-event-schema.md"
+      - "@context-intelligence:context/dual-path-library-template.md"
+    skills:
+      - "@context-intelligence:skills/context-intelligence-tool-design"
+      - "@context-intelligence:skills/context-intelligence-eval-design"
 
   tools:
     safe:
@@ -26,95 +34,111 @@ mode:
 
 # Context Intelligence Mode
 
-This mode is for investigation, evidence gathering, and design artifact production for context intelligence-aware components. Use it to design Cypher queries, explore JSONL patterns, interpret domain signals, and produce design documents. Iteration is normal — expect to cycle through investigation, design, and refinement multiple times before producing final artifacts.
+This mode orchestrates a goal-driven design process for context intelligence tooling. It starts from what the user wants to observe, elicits what domain concepts mean in their context, classifies how signals can be detected, selects the right Amplifier primitive, and produces explicit evaluation scenarios. All substantive context is mode-gated. The mode never assumes Amplifier internal vocabulary.
 
-## On Mode Entry
+## Mandatory Routing
 
-Run the following immediately on entering this mode:
+**When a user provides any goal statement, investigation request, or domain framing — delegate IMMEDIATELY to `context-intelligence:context-intelligence-design-facilitator` with `context_depth="none"`.** The facilitator drives Phase 0 (concept elicitation) and Phase 1 (signal discovery). The orchestrator must NOT delegate directly to `context-intelligence:graph-analyst` until the facilitator has completed at least Phase 0 and written `domain-concepts.md`.
 
-1. Create the investigation folder structure:
-   ```bash
-   mkdir -p .context-intelligence-investigation/queries .context-intelligence-investigation/diagrams
-   ```
+## Standing Rules
 
-2. Read all `.md` files in `.context-intelligence-investigation/` via `read_file` before doing anything else — these files contain prior investigation findings, verified Cypher snippets, and domain signals accumulated from previous sessions.
+These five rules are non-negotiable for every phase of this mode.
 
-## Investigation Tools
+1. **Delegation is the primary working mode** — no agent accumulates work inline that can be delegated to a focused sub-session with `context_depth="none"`.
+2. **Behavioral patterns only** — no agent-name filters in signals or findings; every signal must be expressible as a JSONL-observable signature.
+3. **Shared library + thin wrapper** — all deterministic detection logic lives in `context_intelligence/`; agent tools and CLI subcommands are wrappers only.
+4. **Cheapest sufficient capability** — `reasoning_requirement` is declared per signal; `reasoning` model role is not a default.
+5. **Always-compressed context** — agents load what they need when they need it; nothing pre-loaded that is not used immediately.
 
-| Tool | Purpose |
-|------|---------|
-| `graph_query` | Run Cypher queries against the context intelligence property graph |
-| `blob_read` | Resolve `ci-blob://` URIs returned by graph queries |
-| `delegate` → `context-intelligence:graph-analyst` | Graph-powered session and event analysis; automatically falls back to `session-navigator` when the graph server is unreachable |
-| `bash` *(warn)* | Shell operations — file inspection, JSONL grep, environment checks |
-| `read_file` / `glob` / `grep` | Navigate local JSONL files and session artifacts |
-| `load_skill` | Load context intelligence query patterns and JSONL navigation skills |
+## Investigation Folder
 
-### Block 4 — Mandatory facilitator gate
-
-Before writing any artifact, delegate to the facilitator. This is MANDATORY — do not write any file without running the facilitator first.
-
-```python
-delegate(
-    agent="context-intelligence:context-intelligence-design-facilitator",
-    instruction="""
-Synthesize the investigation findings gathered so far.
-
-Output all design artifacts to .context-intelligence-investigation/ in the workspace root.
-
-Investigation findings:
-[paste your findings here]
-""",
-    context_depth="recent",
-    context_scope="agents",
-)
-```
-
-The facilitator will:
-1. Review and validate your investigation findings
-2. Identify gaps or ambiguities in the evidence
-3. Propose the correct artifact shapes and file structure
-4. Draft initial content for `.md`, `.cypher`, and `.dot` files
-
-Do NOT write `.md`, `.cypher`, or `.dot` files yourself before the facilitator has run.
-
-## What This Mode Produces
-
-This mode produces only design artifacts — no implementation code:
-
-- `.md` — findings, domain signals, JSONL navigation approaches, design documents
-- `.cypher` — verified Cypher query files
-- `.dot` — architecture and data flow diagrams
-
-**Never** produce Python, YAML, TOML, shell scripts, or other implementation code in this mode.
-
-Output folder: `.context-intelligence-investigation/` at the workspace root.
+All design artifacts live in `.context-intelligence-investigation/` at the workspace root:
 
 ```
 .context-intelligence-investigation/
-├── findings.md
+├── domain-concepts.md
 ├── domain-signals.md
-├── jsonl-approaches.md
-├── design.md
+├── handoff.md
+├── signal-gaps.md
+├── evaluation-scenarios.md
 ├── queries/
 │   └── *.cypher
 └── diagrams/
     └── *.dot
 ```
 
-`design.md` follows the upload tool pattern: shared core library + agent tool wrapper + CLI wrapper, with dependencies on `context_intelligence.client` and `context_intelligence.config`.
+Permitted artifact types in this mode: `.md`, `.cypher`, `.dot` only.
 
-@context-intelligence:context/dual-path-library-template.md
+## Phases
 
-@context-intelligence:context/jsonl-event-schema.md
+### Phase 0 — Concept Elicitation
 
-## When Ready to Build
+- **Owner:** `context-intelligence-design-facilitator`
+- **Trigger:** user enters the mode with a goal statement; `domain-concepts.md` is absent or incomplete.
+- **Produces:** `domain-concepts.md` with one entry per confirmed concept (User intent, Agreed definition, Boundary conditions, Nesting, Data availability, Explicitly excludes).
+- **Transition to Phase 1:** user confirms each concept definition.
 
-Once investigation and design artifacts are complete:
+### Phase 1 — Signal Discovery
 
-1. Save all final artifacts to `.context-intelligence-investigation/` before exiting this mode.
-2. Exit this mode.
-3. Start `/brainstorm` to design the final output shape — only after brainstorm does the implementation plan make sense.
+- **Owner:** `context-intelligence-design-facilitator` (delegates investigation to `graph-analyst` with `context_depth="none"`).
+- **Trigger:** `domain-concepts.md` is confirmed.
+- **Produces:** `domain-signals.md` with initial signal definitions (Concept, JSONL pattern, Threshold, What it points to, Risk trajectory — no detection_strategy yet).
+- **Transition to Phase 2:** user confirms `domain-signals.md`; facilitator writes `handoff.md`.
 
-- If superpowers is available: suggest `/brainstorm`
-- If systems-design mode is available: suggest `/systems-design` as an alternative
+### Phase 2 — Tool Design
+
+- **Owner:** `context-intelligence-tool-designer` (delegates per-signal classification to `self` with `context_depth="none"`).
+- **Trigger:** `handoff.md` exists; `domain-signals.md` is confirmed.
+- **Produces:** enriched `domain-signals.md` (detection_strategy, detection_notes, ai_dependency, reasoning_requirement, suggested_primitive added per signal), and `design.md` capturing the shared library + thin wrapper plan.
+- **Transition to Phase 3:** all signals are classified or routed to `signal-gaps.md`.
+
+### Phase 3 — Evaluation Design
+
+- **Owner:** `context-intelligence-tool-designer` (delegates per-concept scenario design to `self` with `context_depth="none"`).
+- **Trigger:** Phase 2 enrichment is complete.
+- **Produces:** `evaluation-scenarios.md` with one scenario per concept (Derived from, Success criterion, Failing scenario, DTU environment, Pass threshold, Iteration question).
+- **Transition to Phase 4:** `evaluation-scenarios.md` is confirmed.
+
+### Phase 4 — Build + Validate
+
+- **Owner:** mode guidance only (no dedicated agent).
+- **Trigger:** `evaluation-scenarios.md` is confirmed.
+- **Produces:** iteration back to Phase 0 or Phase 2 when evaluation gaps appear.
+- **Transition:** when validation passes, the artifacts in `.context-intelligence-investigation/` are the handoff package and the mode's job ends.
+
+## Handoff Protocols
+
+Three named protocols govern transitions between agents.
+
+### Forward handoff (Facilitator → Tool Designer)
+
+Triggered when the user confirms `domain-signals.md`. The facilitator writes `handoff.md` containing the confirmed concepts, confirmed signals, and any open ambiguities. The user then states "ready for tool design" and the mode delegates to `context-intelligence-tool-designer`. The tool-designer reads `domain-concepts.md`, `domain-signals.md`, and `handoff.md` as its starting context.
+
+### Signal gap (Tool Designer → Facilitator)
+
+Triggered when the tool-designer finds a concept too vague to classify or a signal missing. The tool-designer appends a structured entry to `signal-gaps.md`:
+
+```
+## Gap [N] — [status: open | resolved]
+Concept:    [name]
+Gap type:   missing-signal | ambiguous-definition | insufficient-data
+Question:   [specific question for facilitator]
+Blocks:     [signal name] | additive
+Resolution: [filled when resolved]
+```
+
+The tool-designer continues with other signals — it never blocks on a single gap. On re-entry, the facilitator reads only the open gap entry, delegates a targeted investigation, updates the single affected signal, and marks the gap resolved.
+
+### Validation gap (Phase 4 → Facilitator or Tool Designer)
+
+Triggered when an evaluation scenario fails. Routing rule applied by the user:
+- Signal or concept is wrong → re-enter Phase 0 or 1 via the Facilitator.
+- Detection approach or tool choice is wrong → re-enter Phase 2 or 3 via the Tool Designer.
+
+## Exit Guidance
+
+When `evaluation-scenarios.md` is confirmed, investigation and design are complete. The artifacts in `.context-intelligence-investigation/` are the handoff package. The mode's job ends.
+
+> If you have the superpowers bundle installed, `/write-plan` is a natural next step for turning this design into an implementation plan.
+
+No other bundle dependencies are assumed. The mode does not require `/brainstorm`, `/systems-design`, or any other workflow to follow it — it produces self-contained design artifacts.

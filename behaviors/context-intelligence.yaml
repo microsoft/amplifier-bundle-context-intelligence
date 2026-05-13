@@ -10,12 +10,18 @@ agents:
     - context-intelligence:graph-analyst
     - context-intelligence:session-navigator
     - context-intelligence:context-intelligence-design-facilitator
+    - context-intelligence:context-intelligence-tool-designer
+    # NOTE: contributes.agents in the mode is the intended home for these specialists.
+    # Temporarily registered at behavior level while Core contributes.agents spawn
+    # path is incomplete (tracked: microsoft-amplifier/amplifier-support).
 
 modes:
   include:
     - context-intelligence:modes/context-intelligence.md
 
 tools:
+  - module: tool-delegate
+    source: git+https://github.com/microsoft/amplifier-foundation@main#subdirectory=modules/tool-delegate
   - module: tool-graph-query
     source: git+https://github.com/microsoft/amplifier-bundle-context-intelligence@main#subdirectory=modules/tool-graph-query
   - module: tool-blob-read
@@ -24,7 +30,12 @@ tools:
     source: git+https://github.com/microsoft/amplifier-bundle-skills@main#subdirectory=modules/tool-skills
     config:
       skills:
-        - "git+https://github.com/microsoft/amplifier-bundle-context-intelligence@main#subdirectory=skills"
+        # General context-intelligence skills only — design-phase skills gated behind the context-intelligence mode
+        - "git+https://github.com/microsoft/amplifier-bundle-context-intelligence@main#subdirectory=skills/blob-reading"
+        - "git+https://github.com/microsoft/amplifier-bundle-context-intelligence@main#subdirectory=skills/context-intelligence-graph-query"
+        - "git+https://github.com/microsoft/amplifier-bundle-context-intelligence@main#subdirectory=skills/context-intelligence-session-navigation"
+        - "git+https://github.com/microsoft/amplifier-bundle-context-intelligence@main#subdirectory=skills/context-intelligence-session-reconstruction"
+        - "git+https://github.com/microsoft/amplifier-bundle-context-intelligence@main#subdirectory=skills/workflow-pattern-analysis"
 
 hooks:
   - module: hook-context-intelligence
