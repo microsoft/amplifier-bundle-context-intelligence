@@ -228,8 +228,35 @@ def score_s1(events_path) -> int:
 
 
 def score_s1_burst(events_path, *, window_min: int = 5) -> int:
-    """S1 burst variant: maximum compaction events within a rolling window."""
-    raise NotImplementedError
+    """S1 burst variant: maximum compaction events within a rolling window.
+
+    Uses a two-pointer sweep in O(n) time.  The window is inclusive on both
+    ends — two events exactly *window_min* minutes apart are counted together.
+    """
+    window = timedelta(minutes=window_min)
+    timestamps: list[datetime] = []
+
+    for ev in _iter_events(events_path):
+        if ev.get("event") != "context:compaction":
+            continue
+        ts = ev.get("timestamp")
+        try:
+            timestamps.append(datetime.fromisoformat(ts.replace("Z", "+00:00")))
+        except (ValueError, AttributeError):
+            _LOG.warning("could not parse timestamp %r in context:compaction event", ts)
+            continue
+
+    if not timestamps:
+        return 0
+
+    timestamps.sort()
+    max_count = 0
+    left = 0
+    for right in range(len(timestamps)):
+        while timestamps[right] - timestamps[left] > window:
+            left += 1
+        max_count = max(max_count, right - left + 1)
+    return max_count
 
 
 _RESUME_EVENTS: frozenset[str] = frozenset({"session:resume", "session:restore"})

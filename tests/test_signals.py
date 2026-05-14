@@ -621,3 +621,109 @@ class TestScoreS2:
         )
         count, ratio = score_s2(p)
         assert count == 1
+
+
+class TestScoreS1Burst:
+    """Verify score_s1_burst() — sliding-window compaction burst detector."""
+
+    def test_returns_zero_for_clean_session(self):
+        """clean_session.jsonl has no compaction events — burst score must be 0."""
+        from context_intelligence.signals import score_s1_burst
+
+        assert score_s1_burst(FIXTURES / "clean_session.jsonl") == 0
+
+    def test_returns_three_for_s1_session_default_window(self):
+        """s1_session.jsonl has 3 compactions within 5 min (10:02, 10:03, 10:06:30) — score must be 3."""
+        from context_intelligence.signals import score_s1_burst
+
+        assert score_s1_burst(FIXTURES / "s1_session.jsonl") == 3
+
+    def test_fires_threshold(self):
+        """s1_session.jsonl burst score (3) must be >= S1_BURST_THRESHOLD (3)."""
+        from context_intelligence.signals import S1_BURST_THRESHOLD, score_s1_burst
+
+        assert score_s1_burst(FIXTURES / "s1_session.jsonl") >= S1_BURST_THRESHOLD
+
+    def test_returns_zero_for_nonexistent_path(self):
+        """A non-existent path must not raise and must return 0."""
+        from context_intelligence.signals import score_s1_burst
+
+        result = score_s1_burst(FIXTURES / "nonexistent_s1_burst_file_xyz.jsonl")
+        assert result == 0
+
+    def test_narrow_window_excludes_distant_compactions(self):
+        """window_min=2: only 10:02:00 and 10:03:00 fit (diff=1 min); 10:06:30 is too far — result must be 2."""
+        from context_intelligence.signals import score_s1_burst
+
+        assert score_s1_burst(FIXTURES / "s1_session.jsonl", window_min=2) == 2
+
+    def test_single_compaction_returns_one(self, tmp_path):
+        """A session with exactly one compaction event must return 1."""
+        import json
+
+        from context_intelligence.signals import score_s1_burst
+
+        p = tmp_path / "single.jsonl"
+        p.write_text(
+            json.dumps(
+                {
+                    "event": "context:compaction",
+                    "timestamp": "2026-05-01T10:00:00.000Z",
+                    "workspace": "test",
+                    "data": {"session_id": "t1"},
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        assert score_s1_burst(p) == 1
+
+    def test_window_boundary_inclusive(self, tmp_path):
+        """Two compactions exactly window_min minutes apart must both be counted (window is inclusive)."""
+        import json
+
+        from context_intelligence.signals import score_s1_burst
+
+        p = tmp_path / "boundary.jsonl"
+        lines = [
+            json.dumps(
+                {
+                    "event": "context:compaction",
+                    "timestamp": "2026-05-01T10:00:00.000Z",
+                    "workspace": "test",
+                    "data": {"session_id": "t1"},
+                }
+            ),
+            json.dumps(
+                {
+                    "event": "context:compaction",
+                    "timestamp": "2026-05-01T10:05:00.000Z",
+                    "workspace": "test",
+                    "data": {"session_id": "t1"},
+                }
+            ),
+        ]
+        p.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        # Exactly 5 minutes apart with window_min=5 — inclusive boundary means both fit
+        assert score_s1_burst(p, window_min=5) == 2
+
+    def test_no_compactions_returns_zero(self, tmp_path):
+        """A session with only a session:start event (no compactions) must return 0."""
+        import json
+
+        from context_intelligence.signals import score_s1_burst
+
+        p = tmp_path / "no_compactions.jsonl"
+        p.write_text(
+            json.dumps(
+                {
+                    "event": "session:start",
+                    "timestamp": "2026-05-01T10:00:00.000Z",
+                    "workspace": "test",
+                    "data": {"session_id": "t1"},
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        assert score_s1_burst(p) == 0
