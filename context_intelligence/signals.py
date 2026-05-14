@@ -239,7 +239,9 @@ def score_s2(events_path) -> tuple[int, float]:
 
 def score_s3(events_path) -> int:
     """S3: iteration count."""
-    raise NotImplementedError
+    return sum(
+        1 for ev in _iter_events(events_path) if ev.get("event") == "orchestrator:iteration_start"
+    )
 
 
 def score_s4a(events_path) -> S4aResult:

@@ -464,3 +464,52 @@ class TestScoreS9a:
             encoding="utf-8",
         )
         assert score_s9a(p) == 0
+
+
+class TestScoreS3:
+    """Verify score_s3() — orchestrator:iteration_start event counter."""
+
+    def test_returns_one_for_clean_session(self):
+        """clean_session.jsonl has exactly 1 orchestrator:iteration_start event — score must be 1."""
+        from context_intelligence.signals import score_s3
+
+        assert score_s3(FIXTURES / "clean_session.jsonl") == 1
+
+    def test_returns_eight_for_s9a_session(self):
+        """s9a_session.jsonl has exactly 8 orchestrator:iteration_start events — score must be 8."""
+        from context_intelligence.signals import score_s3
+
+        assert score_s3(FIXTURES / "s9a_session.jsonl") == 8
+
+    def test_does_not_fire_at_eight(self):
+        """s9a_session.jsonl score (8) must be below S3_CANDIDATE_THRESHOLD (20)."""
+        from context_intelligence.signals import S3_CANDIDATE_THRESHOLD, score_s3
+
+        assert score_s3(FIXTURES / "s9a_session.jsonl") < S3_CANDIDATE_THRESHOLD
+
+    def test_returns_zero_for_nonexistent_path(self):
+        """A non-existent path must not raise and must return 0."""
+        from context_intelligence.signals import score_s3
+
+        result = score_s3(FIXTURES / "nonexistent_s3_file_xyz.jsonl")
+        assert result == 0
+
+    def test_does_not_count_other_events(self, tmp_path):
+        """Only orchestrator:iteration_start events are counted; other event types are ignored."""
+        from context_intelligence.signals import score_s3
+
+        p = tmp_path / "mixed.jsonl"
+        p.write_text(
+            '{"event": "orchestrator:iteration_start", "timestamp": "2026-05-01T10:01:00.000Z", "workspace": "test", "data": {"session_id": "t1", "iteration": 1}}\n'
+            '{"event": "session:start", "timestamp": "2026-05-01T10:00:00.000Z", "workspace": "test", "data": {"session_id": "t1"}}\n'
+            '{"event": "orchestrator:iteration_start", "timestamp": "2026-05-01T10:03:00.000Z", "workspace": "test", "data": {"session_id": "t1", "iteration": 2}}\n',
+            encoding="utf-8",
+        )
+        assert score_s3(p) == 2
+
+    def test_candidate_threshold_values(self):
+        """S3_CANDIDATE_THRESHOLD must be 20 and S3_SEVERE_THRESHOLD must be 40."""
+        from context_intelligence.signals import S3_CANDIDATE_THRESHOLD, S3_SEVERE_THRESHOLD
+
+        assert S3_CANDIDATE_THRESHOLD == 20
+        assert S3_SEVERE_THRESHOLD == 40
