@@ -430,13 +430,75 @@ def score_s4a(events_path: pathlib.Path | str) -> S4aResult:
     )
 
 
+def _is_instrumentation(command: str, prefixes: frozenset[str]) -> bool:
+    """Return True if *command* starts with an instrumentation prefix.
+
+    Algorithm:
+    1. Split command on newlines and strip each line.
+    2. Skip blank lines and comment lines (starting with '#').
+    3. Get the first token of the first non-comment line.
+    4. Return True if that token is in *prefixes*.
+    """
+    for raw_line in command.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        if line.startswith("#"):
+            continue
+        # First non-comment, non-blank line found
+        tokens = line.split()
+        first_token = tokens[0] if tokens else ""
+        return first_token in prefixes
+    return False
+
+
 def score_s4b(
     events_path: pathlib.Path | str,
     *,
     prefixes: frozenset[str] = frozenset({"echo", "STEP", "Step", "Check", "Note"}),
 ) -> S4bResult:
-    """S4b: instrumentation bash pattern detection."""
-    raise NotImplementedError
+    """S4b: instrumentation bash pattern detection.
+
+    Python-only signal — fires when ALL three conditions hold:
+      1. total tool:pre count >= S4B_MIN_TOOL_PRE (40)
+      2. instrumentation_ratio >= S4B_MIN_INSTRUMENTATION_RATIO (0.30)
+      3. orchestrator:iteration_start count >= S3_CANDIDATE_THRESHOLD (20)
+
+    Where instrumentation_ratio = instrumentation_count / bash_count
+    (0.0 when bash_count == 0).
+    """
+    total_tool_pre: int = 0
+    bash_count: int = 0
+    instrumentation_count: int = 0
+    iteration_count: int = 0
+
+    for ev in _iter_events(events_path):
+        event_type = ev.get("event")
+        if event_type == "orchestrator:iteration_start":
+            iteration_count += 1
+        elif event_type == "tool:pre":
+            total_tool_pre += 1
+            data = ev.get("data", {})
+            if data.get("tool_name") == "bash":
+                bash_count += 1
+                command = (data.get("tool_input") or {}).get("command", "")
+                if _is_instrumentation(command, prefixes):
+                    instrumentation_count += 1
+
+    instrumentation_ratio: float = instrumentation_count / bash_count if bash_count > 0 else 0.0
+
+    fires = (
+        total_tool_pre >= S4B_MIN_TOOL_PRE
+        and instrumentation_ratio >= S4B_MIN_INSTRUMENTATION_RATIO
+        and iteration_count >= S3_CANDIDATE_THRESHOLD
+    )
+
+    return S4bResult(
+        fires=fires,
+        instrumentation_ratio=instrumentation_ratio,
+        instrumentation_count=instrumentation_count,
+        total_bash_count=bash_count,
+    )
 
 
 def score_s4c(events_path: pathlib.Path | str) -> int:

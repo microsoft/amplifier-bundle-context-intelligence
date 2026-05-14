@@ -1,0 +1,65 @@
+{"event": "orchestrator:iteration_start", "timestamp": "2026-05-01T10:00:01.000Z", "workspace": "test", "data": {"session_id": "s4b-001", "iteration": 1}}
+{"event": "orchestrator:iteration_start", "timestamp": "2026-05-01T10:00:02.000Z", "workspace": "test", "data": {"session_id": "s4b-001", "iteration": 2}}
+{"event": "orchestrator:iteration_start", "timestamp": "2026-05-01T10:00:03.000Z", "workspace": "test", "data": {"session_id": "s4b-001", "iteration": 3}}
+{"event": "orchestrator:iteration_start", "timestamp": "2026-05-01T10:00:04.000Z", "workspace": "test", "data": {"session_id": "s4b-001", "iteration": 4}}
+{"event": "orchestrator:iteration_start", "timestamp": "2026-05-01T10:00:05.000Z", "workspace": "test", "data": {"session_id": "s4b-001", "iteration": 5}}
+{"event": "orchestrator:iteration_start", "timestamp": "2026-05-01T10:00:06.000Z", "workspace": "test", "data": {"session_id": "s4b-001", "iteration": 6}}
+{"event": "orchestrator:iteration_start", "timestamp": "2026-05-01T10:00:07.000Z", "workspace": "test", "data": {"session_id": "s4b-001", "iteration": 7}}
+{"event": "orchestrator:iteration_start", "timestamp": "2026-05-01T10:00:08.000Z", "workspace": "test", "data": {"session_id": "s4b-001", "iteration": 8}}
+{"event": "orchestrator:iteration_start", "timestamp": "2026-05-01T10:00:09.000Z", "workspace": "test", "data": {"session_id": "s4b-001", "iteration": 9}}
+{"event": "orchestrator:iteration_start", "timestamp": "2026-05-01T10:00:10.000Z", "workspace": "test", "data": {"session_id": "s4b-001", "iteration": 10}}
+{"event": "orchestrator:iteration_start", "timestamp": "2026-05-01T10:00:11.000Z", "workspace": "test", "data": {"session_id": "s4b-001", "iteration": 11}}
+{"event": "orchestrator:iteration_start", "timestamp": "2026-05-01T10:00:12.000Z", "workspace": "test", "data": {"session_id": "s4b-001", "iteration": 12}}
+{"event": "orchestrator:iteration_start", "timestamp": "2026-05-01T10:00:13.000Z", "workspace": "test", "data": {"session_id": "s4b-001", "iteration": 13}}
+{"event": "orchestrator:iteration_start", "timestamp": "2026-05-01T10:00:14.000Z", "workspace": "test", "data": {"session_id": "s4b-001", "iteration": 14}}
+{"event": "orchestrator:iteration_start", "timestamp": "2026-05-01T10:00:15.000Z", "workspace": "test", "data": {"session_id": "s4b-001", "iteration": 15}}
+{"event": "orchestrator:iteration_start", "timestamp": "2026-05-01T10:00:16.000Z", "workspace": "test", "data": {"session_id": "s4b-001", "iteration": 16}}
+{"event": "orchestrator:iteration_start", "timestamp": "2026-05-01T10:00:17.000Z", "workspace": "test", "data": {"session_id": "s4b-001", "iteration": 17}}
+{"event": "orchestrator:iteration_start", "timestamp": "2026-05-01T10:00:18.000Z", "workspace": "test", "data": {"session_id": "s4b-001", "iteration": 18}}
+{"event": "orchestrator:iteration_start", "timestamp": "2026-05-01T10:00:19.000Z", "workspace": "test", "data": {"session_id": "s4b-001", "iteration": 19}}
+{"event": "orchestrator:iteration_start", "timestamp": "2026-05-01T10:00:20.000Z", "workspace": "test", "data": {"session_id": "s4b-001", "iteration": 20}}
+{"event": "orchestrator:iteration_start", "timestamp": "2026-05-01T10:00:21.000Z", "workspace": "test", "data": {"session_id": "s4b-001", "iteration": 21}}
+{"event": "orchestrator:iteration_start", "timestamp": "2026-05-01T10:00:22.000Z", "workspace": "test", "data": {"session_id": "s4b-001", "iteration": 22}}
+{"event": "orchestrator:iteration_start", "timestamp": "2026-05-01T10:00:23.000Z", "workspace": "test", "data": {"session_id": "s4b-001", "iteration": 23}}
+{"event": "orchestrator:iteration_start", "timestamp": "2026-05-01T10:00:24.000Z", "workspace": "test", "data": {"session_id": "s4b-001", "iteration": 24}}
+{"event": "orchestrator:iteration_start", "timestamp": "2026-05-01T10:00:25.000Z", "workspace": "test", "data": {"session_id": "s4b-001", "iteration": 25}}
+{"event": "tool:pre", "timestamp": "2026-05-01T10:00:26.000Z", "workspace": "test", "data": {"tool_name": "bash", "tool_input": {"command": "echo Step 1: processing"}, "tool_call_id": "tc-echo-000", "session_id": "s4b-001"}}
+{"event": "tool:pre", "timestamp": "2026-05-01T10:00:27.000Z", "workspace": "test", "data": {"tool_name": "bash", "tool_input": {"command": "echo Step 2: processing"}, "tool_call_id": "tc-echo-001", "session_id": "s4b-001"}}
+{"event": "tool:pre", "timestamp": "2026-05-01T10:00:28.000Z", "workspace": "test", "data": {"tool_name": "bash", "tool_input": {"command": "echo Step 3: processing"}, "tool_call_id": "tc-echo-002", "session_id": "s4b-001"}}
+{"event": "tool:pre", "timestamp": "2026-05-01T10:00:29.000Z", "workspace": "test", "data": {"tool_name": "bash", "tool_input": {"command": "echo Step 4: processing"}, "tool_call_id": "tc-echo-003", "session_id": "s4b-001"}}
+{"event": "tool:pre", "timestamp": "2026-05-01T10:00:30.000Z", "workspace": "test", "data": {"tool_name": "bash", "tool_input": {"command": "echo Step 5: processing"}, "tool_call_id": "tc-echo-004", "session_id": "s4b-001"}}
+{"event": "tool:pre", "timestamp": "2026-05-01T10:00:31.000Z", "workspace": "test", "data": {"tool_name": "bash", "tool_input": {"command": "echo Step 6: processing"}, "tool_call_id": "tc-echo-005", "session_id": "s4b-001"}}
+{"event": "tool:pre", "timestamp": "2026-05-01T10:00:32.000Z", "workspace": "test", "data": {"tool_name": "bash", "tool_input": {"command": "echo Step 7: processing"}, "tool_call_id": "tc-echo-006", "session_id": "s4b-001"}}
+{"event": "tool:pre", "timestamp": "2026-05-01T10:00:33.000Z", "workspace": "test", "data": {"tool_name": "bash", "tool_input": {"command": "echo Step 8: processing"}, "tool_call_id": "tc-echo-007", "session_id": "s4b-001"}}
+{"event": "tool:pre", "timestamp": "2026-05-01T10:00:34.000Z", "workspace": "test", "data": {"tool_name": "bash", "tool_input": {"command": "echo Step 9: processing"}, "tool_call_id": "tc-echo-008", "session_id": "s4b-001"}}
+{"event": "tool:pre", "timestamp": "2026-05-01T10:00:35.000Z", "workspace": "test", "data": {"tool_name": "bash", "tool_input": {"command": "echo Step 10: processing"}, "tool_call_id": "tc-echo-009", "session_id": "s4b-001"}}
+{"event": "tool:pre", "timestamp": "2026-05-01T10:00:36.000Z", "workspace": "test", "data": {"tool_name": "bash", "tool_input": {"command": "echo Step 11: processing"}, "tool_call_id": "tc-echo-010", "session_id": "s4b-001"}}
+{"event": "tool:pre", "timestamp": "2026-05-01T10:00:37.000Z", "workspace": "test", "data": {"tool_name": "bash", "tool_input": {"command": "echo Step 12: processing"}, "tool_call_id": "tc-echo-011", "session_id": "s4b-001"}}
+{"event": "tool:pre", "timestamp": "2026-05-01T10:00:38.000Z", "workspace": "test", "data": {"tool_name": "bash", "tool_input": {"command": "echo Step 13: processing"}, "tool_call_id": "tc-echo-012", "session_id": "s4b-001"}}
+{"event": "tool:pre", "timestamp": "2026-05-01T10:00:39.000Z", "workspace": "test", "data": {"tool_name": "bash", "tool_input": {"command": "grep -r 'pattern' ."}, "tool_call_id": "tc-bash-000", "session_id": "s4b-001"}}
+{"event": "tool:pre", "timestamp": "2026-05-01T10:00:40.000Z", "workspace": "test", "data": {"tool_name": "bash", "tool_input": {"command": "find . -name '*.py'"}, "tool_call_id": "tc-bash-001", "session_id": "s4b-001"}}
+{"event": "tool:pre", "timestamp": "2026-05-01T10:00:41.000Z", "workspace": "test", "data": {"tool_name": "bash", "tool_input": {"command": "grep -r 'pattern' ."}, "tool_call_id": "tc-bash-002", "session_id": "s4b-001"}}
+{"event": "tool:pre", "timestamp": "2026-05-01T10:00:42.000Z", "workspace": "test", "data": {"tool_name": "bash", "tool_input": {"command": "find . -name '*.py'"}, "tool_call_id": "tc-bash-003", "session_id": "s4b-001"}}
+{"event": "tool:pre", "timestamp": "2026-05-01T10:00:43.000Z", "workspace": "test", "data": {"tool_name": "bash", "tool_input": {"command": "grep -r 'pattern' ."}, "tool_call_id": "tc-bash-004", "session_id": "s4b-001"}}
+{"event": "tool:pre", "timestamp": "2026-05-01T10:00:44.000Z", "workspace": "test", "data": {"tool_name": "bash", "tool_input": {"command": "find . -name '*.py'"}, "tool_call_id": "tc-bash-005", "session_id": "s4b-001"}}
+{"event": "tool:pre", "timestamp": "2026-05-01T10:00:45.000Z", "workspace": "test", "data": {"tool_name": "bash", "tool_input": {"command": "grep -r 'pattern' ."}, "tool_call_id": "tc-bash-006", "session_id": "s4b-001"}}
+{"event": "tool:pre", "timestamp": "2026-05-01T10:00:46.000Z", "workspace": "test", "data": {"tool_name": "bash", "tool_input": {"command": "find . -name '*.py'"}, "tool_call_id": "tc-bash-007", "session_id": "s4b-001"}}
+{"event": "tool:pre", "timestamp": "2026-05-01T10:00:47.000Z", "workspace": "test", "data": {"tool_name": "bash", "tool_input": {"command": "grep -r 'pattern' ."}, "tool_call_id": "tc-bash-008", "session_id": "s4b-001"}}
+{"event": "tool:pre", "timestamp": "2026-05-01T10:00:48.000Z", "workspace": "test", "data": {"tool_name": "bash", "tool_input": {"command": "find . -name '*.py'"}, "tool_call_id": "tc-bash-009", "session_id": "s4b-001"}}
+{"event": "tool:pre", "timestamp": "2026-05-01T10:00:49.000Z", "workspace": "test", "data": {"tool_name": "bash", "tool_input": {"command": "grep -r 'pattern' ."}, "tool_call_id": "tc-bash-010", "session_id": "s4b-001"}}
+{"event": "tool:pre", "timestamp": "2026-05-01T10:00:50.000Z", "workspace": "test", "data": {"tool_name": "bash", "tool_input": {"command": "find . -name '*.py'"}, "tool_call_id": "tc-bash-011", "session_id": "s4b-001"}}
+{"event": "tool:pre", "timestamp": "2026-05-01T10:00:51.000Z", "workspace": "test", "data": {"tool_name": "bash", "tool_input": {"command": "grep -r 'pattern' ."}, "tool_call_id": "tc-bash-012", "session_id": "s4b-001"}}
+{"event": "tool:pre", "timestamp": "2026-05-01T10:00:52.000Z", "workspace": "test", "data": {"tool_name": "read_file", "tool_input": {"file_path": "/workspace/file_000.py"}, "tool_call_id": "tc-rf-000", "session_id": "s4b-001"}}
+{"event": "tool:pre", "timestamp": "2026-05-01T10:00:53.000Z", "workspace": "test", "data": {"tool_name": "read_file", "tool_input": {"file_path": "/workspace/file_001.py"}, "tool_call_id": "tc-rf-001", "session_id": "s4b-001"}}
+{"event": "tool:pre", "timestamp": "2026-05-01T10:00:54.000Z", "workspace": "test", "data": {"tool_name": "read_file", "tool_input": {"file_path": "/workspace/file_002.py"}, "tool_call_id": "tc-rf-002", "session_id": "s4b-001"}}
+{"event": "tool:pre", "timestamp": "2026-05-01T10:00:55.000Z", "workspace": "test", "data": {"tool_name": "read_file", "tool_input": {"file_path": "/workspace/file_003.py"}, "tool_call_id": "tc-rf-003", "session_id": "s4b-001"}}
+{"event": "tool:pre", "timestamp": "2026-05-01T10:00:56.000Z", "workspace": "test", "data": {"tool_name": "read_file", "tool_input": {"file_path": "/workspace/file_004.py"}, "tool_call_id": "tc-rf-004", "session_id": "s4b-001"}}
+{"event": "tool:pre", "timestamp": "2026-05-01T10:00:57.000Z", "workspace": "test", "data": {"tool_name": "read_file", "tool_input": {"file_path": "/workspace/file_005.py"}, "tool_call_id": "tc-rf-005", "session_id": "s4b-001"}}
+{"event": "tool:pre", "timestamp": "2026-05-01T10:00:58.000Z", "workspace": "test", "data": {"tool_name": "read_file", "tool_input": {"file_path": "/workspace/file_006.py"}, "tool_call_id": "tc-rf-006", "session_id": "s4b-001"}}
+{"event": "tool:pre", "timestamp": "2026-05-01T10:00:59.000Z", "workspace": "test", "data": {"tool_name": "read_file", "tool_input": {"file_path": "/workspace/file_007.py"}, "tool_call_id": "tc-rf-007", "session_id": "s4b-001"}}
+{"event": "tool:pre", "timestamp": "2026-05-01T10:01:00.000Z", "workspace": "test", "data": {"tool_name": "read_file", "tool_input": {"file_path": "/workspace/file_008.py"}, "tool_call_id": "tc-rf-008", "session_id": "s4b-001"}}
+{"event": "tool:pre", "timestamp": "2026-05-01T10:01:01.000Z", "workspace": "test", "data": {"tool_name": "read_file", "tool_input": {"file_path": "/workspace/file_009.py"}, "tool_call_id": "tc-rf-009", "session_id": "s4b-001"}}
+{"event": "tool:pre", "timestamp": "2026-05-01T10:01:02.000Z", "workspace": "test", "data": {"tool_name": "read_file", "tool_input": {"file_path": "/workspace/file_010.py"}, "tool_call_id": "tc-rf-010", "session_id": "s4b-001"}}
+{"event": "tool:pre", "timestamp": "2026-05-01T10:01:03.000Z", "workspace": "test", "data": {"tool_name": "read_file", "tool_input": {"file_path": "/workspace/file_011.py"}, "tool_call_id": "tc-rf-011", "session_id": "s4b-001"}}
+{"event": "tool:pre", "timestamp": "2026-05-01T10:01:04.000Z", "workspace": "test", "data": {"tool_name": "read_file", "tool_input": {"file_path": "/workspace/file_012.py"}, "tool_call_id": "tc-rf-012", "session_id": "s4b-001"}}
+{"event": "tool:pre", "timestamp": "2026-05-01T10:01:05.000Z", "workspace": "test", "data": {"tool_name": "read_file", "tool_input": {"file_path": "/workspace/file_013.py"}, "tool_call_id": "tc-rf-013", "session_id": "s4b-001"}}

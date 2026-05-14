@@ -1521,3 +1521,153 @@ class TestScoreS4a:
         p.write_text("\n".join(lines) + "\n", encoding="utf-8")
         result = score_s4a(p)
         assert result.fires is False
+
+
+class TestScoreS4b:
+    """Verify score_s4b() — ritual instrumentation volume detector."""
+
+    def test_returns_fires_false_for_clean_session(self):
+        """clean_session.jsonl has too few tool:pre events — fires=False."""
+        from context_intelligence.signals import score_s4b
+
+        result = score_s4b(FIXTURES / "clean_session.jsonl")
+        assert result.fires is False
+
+    def test_fires_for_s4b_session(self):
+        """s4b_session.jsonl meets all S4b conditions — fires=True."""
+        from context_intelligence.signals import score_s4b
+
+        result = score_s4b(FIXTURES / "s4b_session.jsonl")
+        assert result.fires is True
+
+    def test_instrumentation_ratio_above_threshold(self):
+        """s4b_session.jsonl instrumentation_ratio must be >= S4B_MIN_INSTRUMENTATION_RATIO (0.30)."""
+        from context_intelligence.signals import S4B_MIN_INSTRUMENTATION_RATIO, score_s4b
+
+        result = score_s4b(FIXTURES / "s4b_session.jsonl")
+        assert result.instrumentation_ratio >= S4B_MIN_INSTRUMENTATION_RATIO
+
+    def test_instrumentation_count_is_thirteen(self):
+        """s4b_session.jsonl has exactly 13 instrumentation bash calls."""
+        from context_intelligence.signals import score_s4b
+
+        result = score_s4b(FIXTURES / "s4b_session.jsonl")
+        assert result.instrumentation_count == 13
+
+    def test_returns_fires_false_for_nonexistent_path(self):
+        """A non-existent path must not raise, fires=False."""
+        from context_intelligence.signals import score_s4b
+
+        result = score_s4b(FIXTURES / "nonexistent_s4b_file_xyz.jsonl")
+        assert result.fires is False
+
+    def test_to_dict_structure(self):
+        """to_dict() must have keys: fires, instrumentation_ratio, instrumentation_count, total_bash_count."""
+        from context_intelligence.signals import score_s4b
+
+        result = score_s4b(FIXTURES / "s4b_session.jsonl")
+        d = result.to_dict()
+        assert set(d.keys()) == {
+            "fires",
+            "instrumentation_ratio",
+            "instrumentation_count",
+            "total_bash_count",
+        }
+
+    def test_custom_prefix_list(self, tmp_path):
+        """CHECKPOINT not in defaults → no fire; with custom prefixes={'CHECKPOINT'} → fires."""
+        import json
+
+        from context_intelligence.signals import score_s4b
+
+        # Build a session with enough events: 25 iteration_starts (S3>=20), and
+        # 40 tool:pre total with 13+ CHECKPOINT bash calls (>30% of bash events).
+        lines = []
+
+        def make_ts(i):
+            return f"2026-05-01T10:{i // 60:02d}:{i % 60:02d}.000Z"
+
+        session_id = "s4b-custom-001"
+        ts = 0
+
+        # 25 iteration starts
+        for iteration in range(1, 26):
+            ts += 1
+            lines.append(
+                json.dumps(
+                    {
+                        "event": "orchestrator:iteration_start",
+                        "timestamp": make_ts(ts),
+                        "workspace": "test",
+                        "data": {"session_id": session_id, "iteration": iteration},
+                    }
+                )
+            )
+
+        # 13 CHECKPOINT bash calls (instrumentation with custom prefix)
+        for i in range(13):
+            ts += 1
+            lines.append(
+                json.dumps(
+                    {
+                        "event": "tool:pre",
+                        "timestamp": make_ts(ts),
+                        "workspace": "test",
+                        "data": {
+                            "tool_name": "bash",
+                            "tool_input": {"command": f"CHECKPOINT {i + 1}: done"},
+                            "tool_call_id": f"tc-ck-{i:03d}",
+                            "session_id": session_id,
+                        },
+                    }
+                )
+            )
+
+        # 13 non-instrumentation bash calls (grep)
+        for i in range(13):
+            ts += 1
+            lines.append(
+                json.dumps(
+                    {
+                        "event": "tool:pre",
+                        "timestamp": make_ts(ts),
+                        "workspace": "test",
+                        "data": {
+                            "tool_name": "bash",
+                            "tool_input": {"command": "grep -r 'pattern' ."},
+                            "tool_call_id": f"tc-gr-{i:03d}",
+                            "session_id": session_id,
+                        },
+                    }
+                )
+            )
+
+        # 14 read_file events to hit total_tool_pre >= 40
+        for i in range(14):
+            ts += 1
+            lines.append(
+                json.dumps(
+                    {
+                        "event": "tool:pre",
+                        "timestamp": make_ts(ts),
+                        "workspace": "test",
+                        "data": {
+                            "tool_name": "read_file",
+                            "tool_input": {"file_path": f"/workspace/f_{i}.py"},
+                            "tool_call_id": f"tc-rf2-{i:03d}",
+                            "session_id": session_id,
+                        },
+                    }
+                )
+            )
+
+        p = tmp_path / "checkpoint_session.jsonl"
+        p.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+        # Default prefixes do NOT include CHECKPOINT — must not fire
+        result_default = score_s4b(p)
+        assert result_default.fires is False, "CHECKPOINT is not a default prefix; should not fire"
+
+        # Custom prefixes including CHECKPOINT — must fire
+        result_custom = score_s4b(p, prefixes=frozenset({"CHECKPOINT"}))
+        assert result_custom.fires is True, "With CHECKPOINT in prefixes; should fire"
