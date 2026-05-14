@@ -130,7 +130,10 @@ validation_cmds:
           sys.exit(1)
       PYEOF
 
-  # C: score-session returns all zeros/false for clean_session.jsonl
+  # C: score-session returns all zeros/false for minimal_session.jsonl
+  # Note: clean_session.jsonl has 1 iteration + 1 tool:pre, so s3_iteration_count=1
+  # and s4c_max_dup_input=1 (raw counts, not fires). Use minimal_session.jsonl instead —
+  # it has only session:start and produces all zeros across all numeric fields.
   - name: C-score-clean-fixture
     command: |
       set -e
@@ -138,7 +141,7 @@ validation_cmds:
       import json, sys, subprocess
       result = subprocess.run(
           ["/opt/venv/bin/python3", "-m", "context_intelligence.signals",
-           "score-session", "/opt/ci-bundle/tests/fixtures/clean_session.jsonl"],
+           "score-session", "/opt/ci-bundle/tests/fixtures/minimal_session.jsonl"],
           capture_output=True, text=True
       )
       if result.returncode != 0:
