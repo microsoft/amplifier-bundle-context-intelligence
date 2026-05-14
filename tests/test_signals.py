@@ -2067,3 +2067,99 @@ class TestScore41:
         assert result["any_signal_rate"] == 1.0
         assert result["compound_rate"] == 1.0
         assert result["triple_rate"] == 1.0
+
+
+class TestCLI:
+    """Test suite for the _cli_main() CLI entry point."""
+
+    def test_score_session_prints_json(self, capsys):
+        """score-session command prints JSON with s1_compaction_count == 0 for clean session."""
+        import json
+        from unittest.mock import patch
+
+        from context_intelligence.signals import _cli_main
+
+        with patch(
+            "sys.argv", ["signals.py", "score-session", str(FIXTURES / "clean_session.jsonl")]
+        ):
+            _cli_main()
+
+        captured = capsys.readouterr()
+        data = json.loads(captured.out)
+        assert data["s1_compaction_count"] == 0
+
+    def test_score_pressure_prints_json(self, capsys):
+        """score-pressure command prints JSON containing s1 and s9_combined keys."""
+        import json
+        from unittest.mock import patch
+
+        from context_intelligence.signals import _cli_main
+
+        with patch(
+            "sys.argv", ["signals.py", "score-pressure", str(FIXTURES / "clean_session.jsonl")]
+        ):
+            _cli_main()
+
+        captured = capsys.readouterr()
+        data = json.loads(captured.out)
+        assert "s1" in data
+        assert "s9_combined" in data
+
+    def test_score_iteration_prints_json(self, capsys):
+        """score-iteration command prints JSON containing s3 and s4a keys."""
+        import json
+        from unittest.mock import patch
+
+        from context_intelligence.signals import _cli_main
+
+        with patch(
+            "sys.argv", ["signals.py", "score-iteration", str(FIXTURES / "clean_session.jsonl")]
+        ):
+            _cli_main()
+
+        captured = capsys.readouterr()
+        data = json.loads(captured.out)
+        assert "s3" in data
+        assert "s4a" in data
+
+    def test_unknown_command_exits_nonzero(self):
+        """Unknown command causes SystemExit with code != 0."""
+        from unittest.mock import patch
+
+        from context_intelligence.signals import _cli_main
+
+        raised: SystemExit | None = None
+        try:
+            with patch("sys.argv", ["signals.py", "unknown-command"]):
+                _cli_main()
+        except SystemExit as exc:
+            raised = exc
+        assert raised is not None, "Expected SystemExit to be raised"
+        assert raised.code != 0
+
+    def test_no_args_exits_nonzero(self):
+        """No arguments causes SystemExit with code != 0."""
+        from unittest.mock import patch
+
+        from context_intelligence.signals import _cli_main
+
+        raised: SystemExit | None = None
+        try:
+            with patch("sys.argv", ["signals.py"]):
+                _cli_main()
+        except SystemExit as exc:
+            raised = exc
+        assert raised is not None, "Expected SystemExit to be raised"
+        assert raised.code != 0
+
+    def test_render_findings_stub_exits_zero(self, capsys):
+        """render-findings prints 'not yet implemented' to stderr and returns without error."""
+        from unittest.mock import patch
+
+        from context_intelligence.signals import _cli_main
+
+        with patch("sys.argv", ["signals.py", "render-findings"]):
+            _cli_main()  # must not raise
+
+        captured = capsys.readouterr()
+        assert "not yet implemented" in captured.err

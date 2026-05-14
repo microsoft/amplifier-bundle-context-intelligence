@@ -34,6 +34,7 @@ import json
 import logging
 import pathlib
 import re
+import sys
 from collections import Counter, defaultdict  # noqa: F401 – available for scoring implementations
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta  # noqa: F401 – available for scoring implementations
@@ -932,3 +933,75 @@ def score_session(events_path: pathlib.Path | str) -> SignalScores:
         s9c_self_count=score_s9c_self(events_path),
         s9_combined_fires=score_s9_combined(events_path),
     )
+
+
+# ---------------------------------------------------------------------------
+# CLI entry point
+# ---------------------------------------------------------------------------
+
+_USAGE = """\
+Usage: python -m context_intelligence.signals <command> [args]
+
+Commands:
+  score-session <events.jsonl>    Compute all signal scores; print JSON
+  score-pressure <events.jsonl>   Compute pressure signals (S1/S2/S9); print JSON
+  score-iteration <events.jsonl>  Compute iteration signals (S3/S4/S7/S8); print JSON
+  render-findings                 (Phase 2 stub)
+"""
+
+
+def _cli_main() -> None:
+    """CLI entry point — invoked via ``python -m context_intelligence.signals``."""
+    args = sys.argv[1:]
+
+    if not args:
+        print(_USAGE, file=sys.stderr, end="")
+        sys.exit(1)
+
+    command = args[0]
+
+    if command == "score-session":
+        path = args[1]
+        scores = score_session(path)
+        print(json.dumps(scores.to_dict(), indent=2))
+
+    elif command == "score-pressure":
+        path = args[1]
+        s2_count, s2_ratio = score_s2(path)
+        data = {
+            "s1": score_s1(path),
+            "s1_burst": score_s1_burst(path),
+            "s2_count": s2_count,
+            "s2_ratio": s2_ratio,
+            "s9a": score_s9a(path),
+            "s9b": score_s9b(path),
+            "s9c_size": score_s9c_size(path),
+            "s9c_self": score_s9c_self(path),
+            "s9_combined": score_s9_combined(path),
+        }
+        print(json.dumps(data, indent=2))
+
+    elif command == "score-iteration":
+        path = args[1]
+        data = {
+            "s3": score_s3(path),
+            "s4a": score_s4a(path).to_dict(),
+            "s4b": score_s4b(path).to_dict(),
+            "s4c": score_s4c(path),
+            "s4d": score_s4d(path),
+            "s7": score_s7(path),
+            "s8": score_s8(path),
+        }
+        print(json.dumps(data, indent=2))
+
+    elif command == "render-findings":
+        print("not yet implemented (Phase 2)", file=sys.stderr)
+
+    else:
+        print(f"Unknown command: {command!r}", file=sys.stderr)
+        print(_USAGE, file=sys.stderr, end="")
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    _cli_main()
