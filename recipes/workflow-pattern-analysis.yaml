@@ -1,0 +1,369 @@
+name: workflow-pattern-analysis
+description: >-
+  Deterministic failure-signal analysis across Amplifier session corpora.
+  Scores all 18 signals without LLM reasoning for detection. Uses
+  context_intelligence.signals Python library (graph-absent) or Cypher
+  graph_query acceleration (graph-present) automatically.
+version: 1.0.0
+tags:
+  - context-intelligence
+  - signals
+  - analysis
+
+context:
+  defaults:
+    # Scope
+    session_ids: []
+    workspace: ''
+    date_from: ''
+    date_to: ''
+    status: ''
+    session_type: ''
+    prescope: ''
+    # Detection
+    signals: []
+    behavioural_selector: ''
+    signal_set: default
+    # Execution
+    max_sessions: 500
+    etiology_mode: auto
+    # Output
+    output_path: .analysis/workflow-pattern-analysis
+    format: markdown
+
+stages:
+  - name: detection
+    steps:
+      - name: probe-graph
+        type: bash
+        command: |
+          if [ -z "$AMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_URL" ]; then
+            echo '{"graph_available": "false", "reason": "AMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_URL not set"}'
+          else
+            URL="$AMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_URL"
+            python3 -c "
+          import urllib.request, json, sys, os
+          url = os.environ.get('AMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_URL', '')
+          try:
+              req = urllib.request.Request(
+                  url + '/query',
+                  data=json.dumps({'query': 'RETURN 1 AS n LIMIT 1', 'workspace': '*'}).encode(),
+                  headers={'Content-Type': 'application/json'},
+                  method='POST'
+              )
+              urllib.request.urlopen(req, timeout=5)
+              print(json.dumps({'graph_available': 'true'}))
+          except Exception as e:
+              print(json.dumps({'graph_available': 'false', 'reason': str(e)}))
+          "
+          fi
+        output: graph_probe
+        parse_json: true
+
+      - name: prescope-filter
+        type: bash
+        when: "{{prescope}} != ''"
+        command: |
+          python3 -c "
+          import json, glob, os
+          paths = glob.glob(
+              os.path.expanduser('~/.amplifier/projects/**/context-intelligence/events.jsonl'),
+              recursive=True
+          )
+          workspace = '{{workspace}}'
+          prescope = '{{prescope}}'
+          if workspace:
+              paths = [p for p in paths if workspace in p]
+          candidates = []
+          total_scanned = len(paths)
+          for p in paths:
+              try:
+                  lines = open(p).readlines()
+                  if prescope == 's1':
+                      count = sum(1 for l in lines if 'context:compaction' in l)
+                      if count >= 3:
+                          candidates.append(p)
+                  elif prescope == 's9a':
+                      n = sum(1 for l in lines if 'tool:pre' in l and 'delegate' in l)
+                      if n >= 5:
+                          candidates.append(p)
+                  elif prescope == 's6':
+                      n = sum(1 for l in lines if 'session:cancelled' in l or 'user:interrupt' in l)
+                      if n >= 1:
+                          candidates.append(p)
+                  else:
+                      candidates.append(p)
+              except Exception:
+                  pass
+          print(json.dumps({'candidates': candidates, 'total_scanned': total_scanned}))
+          "
+        output: prescope_result
+        parse_json: true
+
+      - name: enumerate-graph
+        type: agent
+        agent: context-intelligence:graph-analyst
+        when: "{{graph_probe.graph_available}} == 'true'"
+        prompt: |
+          Enumerate sessions matching the current scope filters and return their
+          events.jsonl paths for local scoring.
+
+          Scope parameters:
+          - workspace: {{workspace}}
+          - status: {{status}}
+          - session_type: {{session_type}}
+          - date_from: {{date_from}}
+          - date_to: {{date_to}}
+          - session_ids (explicit list, empty = all): {{session_ids}}
+          - max_sessions: {{max_sessions}}
+
+          Use the Q1 Cypher pattern from skills/workflow-pattern-analysis/cypher-patterns.md
+          to enumerate sessions. For each session_id returned, map the path as:
+          ~/.amplifier/projects/{{workspace}}/{session_id}/context-intelligence/events.jsonl
+
+          Return a JSON object with exactly these keys:
+          {
+            "session_paths": [<list of absolute path strings>],
+            "total": <integer count>
+          }
+        output: corpus_data
+        parse_json: true
+
+      - name: enumerate-disk
+        type: bash
+        when: "{{graph_probe.graph_available}} != 'true'"
+        command: |
+          python3 -c "
+          import json, glob, os
+          paths = glob.glob(
+              os.path.expanduser('~/.amplifier/projects/**/context-intelligence/events.jsonl'),
+              recursive=True
+          )
+          workspace = '{{workspace}}'
+          max_sessions = {{max_sessions}}
+          if workspace:
+              paths = [p for p in paths if workspace in p]
+          session_ids_str = '{{session_ids}}'
+          try:
+              session_ids = json.loads(session_ids_str)
+          except Exception:
+              session_ids = []
+          if session_ids:
+              paths = [p for p in paths if any(sid in p for sid in session_ids)]
+          paths = paths[:max_sessions]
+          print(json.dumps({'session_paths': paths, 'total': len(paths)}))
+          "
+        output: corpus_data
+        parse_json: true
+
+      - name: score-lifecycle
+        type: bash
+        command: |
+          python3 -c "
+          import json, subprocess, sys
+          session_paths = json.loads('''{{corpus_data.session_paths}}''')
+          results = []
+          for path in session_paths:
+              parts = path.rstrip('/').replace('/events.jsonl', '').split('/')
+              session_id = parts[-3] if len(parts) >= 3 else path
+              try:
+                  r = subprocess.run(
+                      [sys.executable, '-m', 'context_intelligence.signals', 'score-session', path],
+                      capture_output=True, text=True, timeout=30
+                  )
+                  data = json.loads(r.stdout) if r.stdout.strip() else {}
+                  data['session_id'] = session_id
+                  results.append(data)
+              except Exception as e:
+                  results.append({'session_id': session_id, 'error': str(e)})
+          print(json.dumps(results))
+          "
+        output: lifecycle_scores
+        parse_json: true
+
+      - name: score-pressure
+        type: bash
+        command: |
+          python3 -c "
+          import json, subprocess, sys
+          session_paths = json.loads('''{{corpus_data.session_paths}}''')
+          results = []
+          for path in session_paths:
+              parts = path.rstrip('/').replace('/events.jsonl', '').split('/')
+              session_id = parts[-3] if len(parts) >= 3 else path
+              try:
+                  r = subprocess.run(
+                      [sys.executable, '-m', 'context_intelligence.signals', 'score-pressure', path],
+                      capture_output=True, text=True, timeout=30
+                  )
+                  data = json.loads(r.stdout) if r.stdout.strip() else {}
+                  data['session_id'] = session_id
+                  results.append(data)
+              except Exception as e:
+                  results.append({'session_id': session_id, 'error': str(e)})
+          print(json.dumps(results))
+          "
+        output: pressure_scores
+        parse_json: true
+
+      - name: score-iteration
+        type: bash
+        command: |
+          python3 -c "
+          import json, subprocess, sys
+          session_paths = json.loads('''{{corpus_data.session_paths}}''')
+          results = []
+          for path in session_paths:
+              parts = path.rstrip('/').replace('/events.jsonl', '').split('/')
+              session_id = parts[-3] if len(parts) >= 3 else path
+              try:
+                  r = subprocess.run(
+                      [sys.executable, '-m', 'context_intelligence.signals', 'score-iteration', path],
+                      capture_output=True, text=True, timeout=30
+                  )
+                  data = json.loads(r.stdout) if r.stdout.strip() else {}
+                  data['session_id'] = session_id
+                  results.append(data)
+              except Exception as e:
+                  results.append({'session_id': session_id, 'error': str(e)})
+          print(json.dumps(results))
+          "
+        output: iteration_scores
+        parse_json: true
+
+      - name: build-signal-table
+        type: bash
+        command: |
+          python3 -c "
+          import json
+          lifecycle = json.loads('''{{lifecycle_scores}}''')
+          pressure = json.loads('''{{pressure_scores}}''')
+          iteration = json.loads('''{{iteration_scores}}''')
+          total = {{corpus_data.total}}
+          if total == 0:
+              print('No sessions found matching scope.')
+          else:
+              n = total
+              def rate(c): return f'{c/n*100:.1f}%' if n > 0 else '0.0%'
+              rows = []
+              s1 = sum(1 for p in pressure if p.get('s1_count', 0) >= 3)
+              if s1 > 0: rows.append(('S1', 'Tool-error burst', s1, rate(s1)))
+              s2 = sum(1 for p in pressure if p.get('s2_count', 0) >= 3)
+              if s2 > 0: rows.append(('S2', 'Retry spiral', s2, rate(s2)))
+              s3 = sum(1 for i in iteration if i.get('s3_count', 0) >= 20)
+              if s3 > 0: rows.append(('S3', 'Runaway iteration', s3, rate(s3)))
+              s4c = sum(1 for i in iteration if i.get('s4c_count', 0) >= 4)
+              if s4c > 0: rows.append(('S4c', 'Clarification loop', s4c, rate(s4c)))
+              s4d = sum(1 for i in iteration if i.get('s4d_count', 0) >= 3)
+              if s4d > 0: rows.append(('S4d', 'Contradictory instruction', s4d, rate(s4d)))
+              s5 = sum(1 for l in lifecycle if l.get('s5_stale', False))
+              if s5 > 0: rows.append(('S5', 'Stale context', s5, rate(s5)))
+              s6 = sum(1 for l in lifecycle if l.get('s6_cancel_count', 0) >= 1)
+              if s6 > 0: rows.append(('S6', 'User cancel', s6, rate(s6)))
+              s7 = sum(1 for p in pressure if p.get('s7_count', 0) >= 5)
+              if s7 > 0: rows.append(('S7', 'Delegation explosion', s7, rate(s7)))
+              s8 = sum(1 for p in pressure if p.get('s8_count', 0) >= 5)
+              if s8 > 0: rows.append(('S8', 'Tool thrash', s8, rate(s8)))
+              s9a = sum(1 for p in pressure if p.get('s9a_count', 0) >= 5)
+              if s9a > 0: rows.append(('S9a', 'Context delegation', s9a, rate(s9a)))
+              s9b = sum(1 for p in pressure if p.get('s9b_tokens', 0) >= 20000)
+              if s9b > 0: rows.append(('S9b', 'Token pressure', s9b, rate(s9b)))
+              s9 = sum(1 for p in pressure if p.get('s9_combined', False))
+              if s9 > 0: rows.append(('S9', 'Context pressure combined', s9, rate(s9)))
+              header = '| Signal | Name | Sessions | Rate |'
+              sep = '|--------|------|----------|------|'
+              if not rows:
+                  lines = [header, sep, '| \u2014 | No signals fired | 0 | 0.0% |']
+              else:
+                  lines = [header, sep] + [f'| {r[0]} | {r[1]} | {r[2]} | {r[3]} |' for r in rows]
+              print('\n'.join(lines))
+          "
+        output: signal_table
+        parse_json: false
+
+    approval:
+      required: true
+      prompt: |
+        ## Signal Analysis Complete — {{corpus_data.total}} sessions scored
+
+        {{signal_table}}
+
+        ---
+        To request deep inspection of specific sessions, type their IDs
+        (comma-separated) in your approval message.
+        Leave blank to proceed directly to findings output.
+      timeout: 0
+      default: deny
+
+  - name: findings
+    steps:
+      - name: parse-inspect-list
+        type: bash
+        command: |
+          MSG="{{_approval_message}}"
+          if [ -z "$MSG" ]; then
+            echo '[]'
+          else
+            python3 -c "
+          import json, sys
+          msg = '{{_approval_message}}'
+          ids = [s.strip() for s in msg.split(',') if s.strip()]
+          print(json.dumps(ids))
+          "
+          fi
+        output: deep_inspect_ids
+        parse_json: true
+
+      - name: write-score-files
+        type: bash
+        command: |
+          mkdir -p {{output_path}}
+          python3 -c "
+          import json
+          lifecycle = json.loads('''{{lifecycle_scores}}''')
+          pressure = json.loads('''{{pressure_scores}}''')
+          iteration = json.loads('''{{iteration_scores}}''')
+          with open('{{output_path}}/lifecycle-scores.json', 'w') as f:
+              json.dump(lifecycle, f, indent=2)
+          with open('{{output_path}}/pressure-scores.json', 'w') as f:
+              json.dump(pressure, f, indent=2)
+          with open('{{output_path}}/iteration-scores.json', 'w') as f:
+              json.dump(iteration, f, indent=2)
+          print('Score files written to {{output_path}}/')
+          "
+        output: write_result
+        parse_json: false
+
+      - name: render-findings
+        type: bash
+        command: >-
+          python3 -m context_intelligence.signals render-findings
+          --lifecycle {{output_path}}/lifecycle-scores.json
+          --pressure {{output_path}}/pressure-scores.json
+          --iteration {{output_path}}/iteration-scores.json
+          --output {{output_path}}/findings.md
+        output: render_result
+        parse_json: false
+
+      - name: deep-inspect
+        type: agent
+        agent: context-intelligence:graph-analyst
+        when: "{{_approval_message}} != ''"
+        prompt: |
+          Perform deep inspection of the following session IDs: {{deep_inspect_ids}}
+
+          For each session ID:
+          1. Locate the events.jsonl file at the standard path
+          2. Identify the dominant failure pattern (P1a / P1b / P2 / P3 / P4 / P5 / P6)
+             using the Parallax pattern taxonomy
+          3. Write 2-3 sentences explaining what happened and why it matters
+
+          Append your findings under a '## Deep Inspection Notes' heading in:
+          {{output_path}}/findings.md
+
+          Format each entry as:
+          ### {session_id}
+          **Pattern**: {P-code} — {pattern name}
+          {2-3 sentence explanation}
+        output: deep_inspect_result
+        parse_json: false

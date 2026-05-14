@@ -1,0 +1,199 @@
+digraph workflow_pattern_analysis {
+    rankdir=TB
+    compound=true
+    graph [fontname="Helvetica" fontsize=12 splines=ortho]
+    node  [fontname="Helvetica" fontsize=11 style=filled fillcolor=white]
+    edge  [fontname="Helvetica" fontsize=9]
+
+    // -----------------------------------------------------------------------
+    // Stage 1 — detection
+    // -----------------------------------------------------------------------
+    subgraph cluster_detection {
+        label="Stage 1 — detection"
+        style=dashed
+        color="#4a90d9"
+        fontcolor="#4a90d9"
+        fontsize=13
+        bgcolor="#f7faff"
+
+        probe [
+            label="probe-graph\n(bash)"
+            shape=box
+            fillcolor="#e8f4fd"
+        ]
+
+        prescope [
+            label="prescope-filter\n(bash, conditional)"
+            shape=box
+            style="dashed,filled"
+            fillcolor="#e8f4fd"
+            color="#4a90d9"
+        ]
+
+        enum_g [
+            label="enumerate-graph\n(agent: graph-analyst)"
+            shape=box
+            fillcolor="#dbeeff"
+            color="#1a5fa8"
+        ]
+
+        enum_d [
+            label="enumerate-disk\n(bash)"
+            shape=box
+            fillcolor="#e8f4fd"
+        ]
+
+        s_lc [
+            label="score-lifecycle\n(bash)"
+            shape=box
+            fillcolor="#eef7ee"
+        ]
+
+        s_pr [
+            label="score-pressure\n(bash)"
+            shape=box
+            fillcolor="#eef7ee"
+        ]
+
+        s_it [
+            label="score-iteration\n(bash)"
+            shape=box
+            fillcolor="#eef7ee"
+        ]
+
+        s_tbl [
+            label="build-signal-table\n(bash)"
+            shape=box
+            fillcolor="#fff8e8"
+        ]
+    }
+
+    // -----------------------------------------------------------------------
+    // Approval gate (outside both clusters)
+    // -----------------------------------------------------------------------
+    gate [
+        label="Approval Gate\n(required · default: deny)"
+        shape=diamond
+        fillcolor="#fff3cd"
+        color="#e0a800"
+        fontcolor="#7d5500"
+        width=2.5
+        height=1.2
+    ]
+
+    // -----------------------------------------------------------------------
+    // Stage 2 — findings
+    // -----------------------------------------------------------------------
+    subgraph cluster_findings {
+        label="Stage 2 — findings"
+        style=solid
+        color="#2e8b57"
+        fontcolor="#2e8b57"
+        fontsize=13
+        bgcolor="#f2fff5"
+
+        parse_ids [
+            label="parse-inspect-list\n(bash)"
+            shape=box
+            fillcolor="#e2f5e9"
+        ]
+
+        write_f [
+            label="write-score-files\n(bash)"
+            shape=box
+            fillcolor="#e2f5e9"
+        ]
+
+        render_f [
+            label="render-findings\n(bash)"
+            shape=box
+            fillcolor="#c9efd6"
+        ]
+
+        deep_i [
+            label="deep-inspect\n(agent: graph-analyst, conditional)"
+            shape=box
+            style="dashed,filled"
+            fillcolor="#d4edda"
+            color="#2e8b57"
+        ]
+    }
+
+    // -----------------------------------------------------------------------
+    // Output nodes
+    // -----------------------------------------------------------------------
+    out_md [
+        label="findings.md\n(output)"
+        shape=note
+        fillcolor="#f0f8ff"
+        color="#5b9bd5"
+    ]
+
+    out_deep [
+        label="findings.md + Deep Notes\n(output)"
+        shape=note
+        fillcolor="#e8f5e9"
+        color="#2e8b57"
+    ]
+
+    // -----------------------------------------------------------------------
+    // Edges — Stage 1: detection flow
+    // -----------------------------------------------------------------------
+
+    // Probe → conditional branches
+    probe -> prescope [
+        style=dashed
+        label="if prescope≠''"
+        fontcolor="#888888"
+    ]
+    probe -> enum_g [
+        label="graph=true"
+        color="#1a5fa8"
+    ]
+    probe -> enum_d [
+        label="graph=false"
+        color="#555555"
+    ]
+
+    // Prescope narrows the corpus candidates (feeds back into enum paths)
+    prescope -> enum_g [style=dashed color="#4a90d9"]
+    prescope -> enum_d [style=dashed color="#4a90d9"]
+
+    // Scoring pipeline
+    enum_g -> s_lc [lhead=cluster_detection]
+    enum_d -> s_lc
+
+    s_lc -> s_pr
+    s_pr -> s_it
+    s_it -> s_tbl
+
+    // Signal table → approval gate
+    s_tbl -> gate
+
+    // -----------------------------------------------------------------------
+    // Edges — Stage 2: findings flow
+    // -----------------------------------------------------------------------
+
+    gate -> parse_ids [
+        label="approved"
+        color="#2e8b57"
+        fontcolor="#2e8b57"
+        ltail=gate
+        lhead=cluster_findings
+    ]
+
+    parse_ids -> write_f
+    write_f  -> render_f
+
+    // render_f → deep_i only when approval message contains session IDs
+    render_f -> deep_i [
+        style=dashed
+        label="if approval_message≠''"
+        fontcolor="#888888"
+        color="#2e8b57"
+    ]
+
+    // Outputs
+    render_f -> out_md
+    deep_i   -> out_deep
+}
