@@ -1908,3 +1908,85 @@ class TestScoreS9Combined:
             score_s9_combined(p, s9a_threshold=1, s9b_threshold=400, s9c_size_threshold=400)
             is False
         )
+
+
+class TestScore41:
+    """Verify score_4_1() — agent-class compound failure aggregate."""
+
+    def _make_scores(self, compound: int):
+        """Build SignalScores with a controlled compound_score().
+
+        compound >= 1 → s6_cancel_count = 1   (S6 fires)
+        compound >= 2 → s3_iteration_count = 25  (S3 fires, >= S3_CANDIDATE_THRESHOLD=20)
+        compound >= 3 → s9a_delegate_count = 6   (S9a fires, >= S9A_THRESHOLD=5)
+        """
+        from context_intelligence.signals import SignalScores
+
+        return SignalScores(
+            s6_cancel_count=1 if compound >= 1 else 0,
+            s3_iteration_count=25 if compound >= 2 else 0,
+            s9a_delegate_count=6 if compound >= 3 else 0,
+        )
+
+    def test_returns_zero_rates_for_empty_list(self):
+        """Empty list must return all rates as 0.0 and total_sessions=0."""
+        from context_intelligence.signals import score_4_1
+
+        result = score_4_1([])
+        assert result["total_sessions"] == 0
+        assert result["any_signal_rate"] == 0.0
+        assert result["compound_rate"] == 0.0
+        assert result["triple_rate"] == 0.0
+
+    def test_any_signal_rate_correct(self):
+        """2 sessions with compound>=1 out of 4 total → any_signal_rate=0.5."""
+        from context_intelligence.signals import score_4_1
+
+        sessions = [
+            ("s1", self._make_scores(1)),
+            ("s2", self._make_scores(1)),
+            ("s3", self._make_scores(0)),
+            ("s4", self._make_scores(0)),
+        ]
+        result = score_4_1(sessions)
+        assert result["any_signal_rate"] == 0.5
+
+    def test_compound_rate_correct(self):
+        """4 sessions with compound scores [1, 2, 3, 0]:
+        - compound_rate (>=2) = 2/4 = 0.5
+        - triple_rate  (>=3) = 1/4 = 0.25
+        """
+        from context_intelligence.signals import score_4_1
+
+        sessions = [
+            ("s1", self._make_scores(1)),
+            ("s2", self._make_scores(2)),
+            ("s3", self._make_scores(3)),
+            ("s4", self._make_scores(0)),
+        ]
+        result = score_4_1(sessions)
+        assert result["compound_rate"] == 0.5
+        assert result["triple_rate"] == 0.25
+
+    def test_returns_output_dict_with_correct_keys(self):
+        """Result dict must have exactly the 4 expected keys."""
+        from context_intelligence.signals import score_4_1
+
+        result = score_4_1([("s1", self._make_scores(0))])
+        assert set(result.keys()) == {
+            "total_sessions",
+            "any_signal_rate",
+            "compound_rate",
+            "triple_rate",
+        }
+
+    def test_all_sessions_have_signals(self):
+        """5 sessions all with compound=3 → all rates=1.0."""
+        from context_intelligence.signals import score_4_1
+
+        sessions = [("s{}".format(i), self._make_scores(3)) for i in range(5)]
+        result = score_4_1(sessions)
+        assert result["total_sessions"] == 5
+        assert result["any_signal_rate"] == 1.0
+        assert result["compound_rate"] == 1.0
+        assert result["triple_rate"] == 1.0

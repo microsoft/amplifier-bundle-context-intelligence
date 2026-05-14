@@ -857,9 +857,50 @@ def score_s9_combined(
     return s9c
 
 
-def score_4_1(scores: list[SignalScores]) -> dict:
-    """Aggregate: produce a summary dict from a list of SignalScores."""
-    raise NotImplementedError
+def score_4_1(
+    session_scores: list[tuple[str, SignalScores]],
+    *,
+    compound_threshold: int = 2,
+    volume_threshold: int = SCORE_4_1_VOLUME_THRESHOLD,
+) -> dict:
+    """Aggregate: produce a summary dict from a list of (session_id, SignalScores) pairs.
+
+    Returns a dict with keys:
+    - total_sessions: int
+    - any_signal_rate: float  (fraction of sessions with compound_score >= 1)
+    - compound_rate: float    (fraction of sessions with compound_score >= compound_threshold)
+    - triple_rate: float      (fraction of sessions with compound_score >= 3)
+
+    If total_sessions == 0, all rates are 0.0.
+    """
+    total = len(session_scores)
+    if total == 0:
+        return {
+            "total_sessions": 0,
+            "any_signal_rate": 0.0,
+            "compound_rate": 0.0,
+            "triple_rate": 0.0,
+        }
+
+    any_count = 0
+    compound_count = 0
+    triple_count = 0
+
+    for _session_id, scores in session_scores:
+        k = scores.compound_score()
+        if k >= 1:
+            any_count += 1
+        if k >= compound_threshold:
+            compound_count += 1
+        if k >= 3:
+            triple_count += 1
+
+    return {
+        "total_sessions": total,
+        "any_signal_rate": any_count / total,
+        "compound_rate": compound_count / total,
+        "triple_rate": triple_count / total,
+    }
 
 
 def score_session(events_path: pathlib.Path | str) -> SignalScores:

@@ -830,3 +830,136 @@ The JSONL fallback is the only path that can detect sessions where S9c fires
 via the size+density mechanism (S9c-size).  The Cypher query above covers only
 the S9c-self sub-path and will under-report S9-combined prevalence in corpora
 where large-prose delegate responses (without code fences) are common.
+
+---
+
+## Q-4.1 — Agent-Class Compound Failure Scoring
+
+Computes compound failure rates across a session corpus scoped to a **behavioural
+class** selected by an observable signal expression.  A compound failure is a
+session where multiple independent stress signals fire simultaneously.
+
+The query uses a **parameterised behavioural selector** — expressed as a
+measurable signal condition (e.g. `delegate_calls >= 5` to isolate heavy-delegation
+sessions) — rather than hardcoding agent names or workflow labels.  Selectors must
+be observable signal expressions; agent name filters are not stable across
+bundle versions and must never appear in the WHERE clause.
+
+**Scoring notation (graph-available signals only):**
+- `sig_s9a = 1` when delegate call count ≥ `$s9a_threshold` (default 5)
+- `sig_compaction = 1` when compaction event count ≥ 3 (`S1_CANDIDATE_THRESHOLD`)
+- `sig_iteration = 1` when iteration count ≥ 20 (`S3_CANDIDATE_THRESHOLD`)
+
+`compound_score = sig_s9a + sig_compaction + sig_iteration`
+
+> **⚠️ Signals not available in Cypher:**
+> S4a, S4b (parallel-shape analysis), S9c-size (narrative density), and
+> S8 (consecutive bash streak) all require Python pre-scoring via their
+> respective JSONL fallback functions.  The compound scores produced by
+> this query are a **lower bound** — use `score_session()` + `score_4_1()`
+> for the authoritative multi-signal aggregate.
+
+**Parameters:**
+- `$workspace_hint` — workspace identifier substring to scope the query
+- `$s9a_threshold` — delegate calls threshold for behavioural selector and S9a signal (default: `5`)
+- `$compaction_threshold` — compaction count threshold for S1 signal (default: `3`)
+- `$iteration_threshold` — iteration count threshold for S3 signal (default: `20`)
+- `$compound_threshold` — minimum compound score to count as a compound failure (default: `2`)
+
+```cypher
+// Q-4.1: Compound failure rates for a behavioural class (delegate-heavy sessions)
+// Behavioural selector: delegate_calls >= $s9a_threshold
+// Signals: sig_s9a + sig_compaction + sig_iteration
+MATCH (s:Session)
+WHERE s.workspace CONTAINS $workspace_hint
+
+// Behavioural selector — observable signal expression (do NOT filter on agent_name)
+MATCH (s)-[:HAS_TOOL_CALL]->(tc_del:ToolCall)
+  WHERE tc_del.tool_name = 'delegate'
+WITH s, count(tc_del) AS delegate_calls
+WHERE delegate_calls >= $s9a_threshold
+
+// Signal: S9a (delegate calls)
+WITH s, delegate_calls,
+     1 AS sig_s9a
+
+// Signal: S1 (compaction count)
+OPTIONAL MATCH (s)-[:HAS_EVENT]->(ec:Event)
+  WHERE ec.event_type = 'context:compaction'
+WITH s, delegate_calls, sig_s9a,
+     count(ec) AS compaction_count,
+     CASE WHEN count(ec) >= $compaction_threshold THEN 1 ELSE 0 END AS sig_compaction
+
+// Signal: S3 (iteration count)
+OPTIONAL MATCH (s)-[:HAS_EVENT]->(ei:Event)
+  WHERE ei.event_type = 'orchestrator:iteration_start'
+WITH s, delegate_calls, sig_s9a, compaction_count, sig_compaction,
+     count(ei) AS iteration_count,
+     CASE WHEN count(ei) >= $iteration_threshold THEN 1 ELSE 0 END AS sig_iteration
+
+// Compound score per session
+WITH s,
+     delegate_calls,
+     compaction_count,
+     iteration_count,
+     sig_s9a + sig_compaction + sig_iteration AS compound_score
+
+// Aggregate across all sessions in the behavioural class
+WITH
+  count(DISTINCT s)                                                         AS total_sessions,
+  count(DISTINCT CASE WHEN compound_score >= 1 THEN s END)                 AS any_signal_count,
+  count(DISTINCT CASE WHEN compound_score >= $compound_threshold THEN s END) AS compound_count,
+  count(DISTINCT CASE WHEN compound_score >= 3 THEN s END)                 AS triple_count
+
+RETURN
+  total_sessions,
+  round(100.0 * any_signal_count / total_sessions, 1)  AS any_signal_rate_pct,
+  round(100.0 * compound_count   / total_sessions, 1)  AS compound_rate_pct,
+  round(100.0 * triple_count     / total_sessions, 1)  AS triple_rate_pct
+```
+
+```cypher
+// Q-4.1b: Per-session breakdown — compound scores for individual sessions in the class
+// (run before the aggregate to inspect distribution before summarising)
+MATCH (s:Session)
+WHERE s.workspace CONTAINS $workspace_hint
+
+MATCH (s)-[:HAS_TOOL_CALL]->(tc_del:ToolCall)
+  WHERE tc_del.tool_name = 'delegate'
+WITH s, count(tc_del) AS delegate_calls
+WHERE delegate_calls >= $s9a_threshold
+
+OPTIONAL MATCH (s)-[:HAS_EVENT]->(ec:Event)
+  WHERE ec.event_type = 'context:compaction'
+WITH s, delegate_calls, count(ec) AS compaction_count
+
+OPTIONAL MATCH (s)-[:HAS_EVENT]->(ei:Event)
+  WHERE ei.event_type = 'orchestrator:iteration_start'
+WITH s, delegate_calls, compaction_count, count(ei) AS iteration_count
+
+WITH s, delegate_calls, compaction_count, iteration_count,
+     (CASE WHEN delegate_calls >= $s9a_threshold THEN 1 ELSE 0 END
+      + CASE WHEN compaction_count >= $compaction_threshold THEN 1 ELSE 0 END
+      + CASE WHEN iteration_count >= $iteration_threshold THEN 1 ELSE 0 END) AS compound_score
+
+RETURN
+  s.session_id    AS session_id,
+  s.status        AS status,
+  delegate_calls,
+  compaction_count,
+  iteration_count,
+  compound_score
+ORDER BY compound_score DESC, delegate_calls DESC
+LIMIT 25
+```
+
+**Python aggregate fallback** (authoritative — includes all signals, not just graph-available ones):
+
+Use `score_4_1(session_scores, *, compound_threshold=2)` from
+`context_intelligence.signals`.  Build `session_scores` as a list of
+`(session_id, SignalScores)` pairs produced by `score_session(events_path)`.
+The function returns `{total_sessions, any_signal_rate, compound_rate, triple_rate}`
+where rates are floats in `[0.0, 1.0]`.  Returns all-zero rates for an empty list.
+
+The Python path includes S4a, S4b, S8, and S9c-size signals that are unavailable
+in Cypher, producing a more complete compound score than the graph query above.
