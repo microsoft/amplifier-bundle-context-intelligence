@@ -951,3 +951,217 @@ class TestScoreS4d:
         p.write_text("\n".join(lines) + "\n", encoding="utf-8")
         # output_a appears 2 times, output_b appears 2 times — max is 2, not 4
         assert score_s4d(p) == 2
+
+
+class TestScoreS7:
+    """Verify score_s7() — maximum read_file tool:pre events per iteration."""
+
+    def test_returns_zero_for_clean_session(self):
+        """clean_session.jsonl has bash in iter1, not read_file — score must be 0."""
+        from context_intelligence.signals import score_s7
+
+        assert score_s7(FIXTURES / "clean_session.jsonl") == 0
+
+    def test_returns_six_for_s4a_session(self):
+        """s4a_session.jsonl has 6 read_file events in iter 1 — score must be 6."""
+        from context_intelligence.signals import score_s7
+
+        assert score_s7(FIXTURES / "s4a_session.jsonl") == 6
+
+    def test_fires_at_threshold(self):
+        """s4a_session.jsonl score (6) must be >= S7_THRESHOLD (5)."""
+        from context_intelligence.signals import S7_THRESHOLD, score_s7
+
+        assert score_s7(FIXTURES / "s4a_session.jsonl") >= S7_THRESHOLD
+
+    def test_returns_zero_for_nonexistent_path(self):
+        """A non-existent path must not raise and must return 0."""
+        from context_intelligence.signals import score_s7
+
+        result = score_s7(FIXTURES / "nonexistent_s7_file_xyz.jsonl")
+        assert result == 0
+
+    def test_counts_only_within_iteration_boundaries(self, tmp_path):
+        """3 read_files before any iter_start not counted; 2 in iter 1, 4 in iter 2 → max=4."""
+        import json
+
+        from context_intelligence.signals import score_s7
+
+        p = tmp_path / "iter_boundary.jsonl"
+        lines = [
+            # 3 read_file events BEFORE any iteration_start — NOT counted
+            json.dumps(
+                {
+                    "event": "tool:pre",
+                    "timestamp": "2026-05-01T10:00:00.000Z",
+                    "workspace": "test",
+                    "data": {
+                        "tool_name": "read_file",
+                        "tool_input": {"file_path": "/tmp/a"},
+                        "tool_call_id": "tc-001",
+                        "session_id": "t1",
+                    },
+                }
+            ),
+            json.dumps(
+                {
+                    "event": "tool:pre",
+                    "timestamp": "2026-05-01T10:00:01.000Z",
+                    "workspace": "test",
+                    "data": {
+                        "tool_name": "read_file",
+                        "tool_input": {"file_path": "/tmp/b"},
+                        "tool_call_id": "tc-002",
+                        "session_id": "t1",
+                    },
+                }
+            ),
+            json.dumps(
+                {
+                    "event": "tool:pre",
+                    "timestamp": "2026-05-01T10:00:02.000Z",
+                    "workspace": "test",
+                    "data": {
+                        "tool_name": "read_file",
+                        "tool_input": {"file_path": "/tmp/c"},
+                        "tool_call_id": "tc-003",
+                        "session_id": "t1",
+                    },
+                }
+            ),
+            # iteration 1 starts — 2 read_file events
+            json.dumps(
+                {
+                    "event": "orchestrator:iteration_start",
+                    "timestamp": "2026-05-01T10:00:03.000Z",
+                    "workspace": "test",
+                    "data": {"session_id": "t1", "iteration": 1},
+                }
+            ),
+            json.dumps(
+                {
+                    "event": "tool:pre",
+                    "timestamp": "2026-05-01T10:00:04.000Z",
+                    "workspace": "test",
+                    "data": {
+                        "tool_name": "read_file",
+                        "tool_input": {"file_path": "/tmp/d"},
+                        "tool_call_id": "tc-004",
+                        "session_id": "t1",
+                    },
+                }
+            ),
+            json.dumps(
+                {
+                    "event": "tool:pre",
+                    "timestamp": "2026-05-01T10:00:05.000Z",
+                    "workspace": "test",
+                    "data": {
+                        "tool_name": "read_file",
+                        "tool_input": {"file_path": "/tmp/e"},
+                        "tool_call_id": "tc-005",
+                        "session_id": "t1",
+                    },
+                }
+            ),
+            # iteration 2 starts — 4 read_file events
+            json.dumps(
+                {
+                    "event": "orchestrator:iteration_start",
+                    "timestamp": "2026-05-01T10:00:06.000Z",
+                    "workspace": "test",
+                    "data": {"session_id": "t1", "iteration": 2},
+                }
+            ),
+            json.dumps(
+                {
+                    "event": "tool:pre",
+                    "timestamp": "2026-05-01T10:00:07.000Z",
+                    "workspace": "test",
+                    "data": {
+                        "tool_name": "read_file",
+                        "tool_input": {"file_path": "/tmp/f"},
+                        "tool_call_id": "tc-006",
+                        "session_id": "t1",
+                    },
+                }
+            ),
+            json.dumps(
+                {
+                    "event": "tool:pre",
+                    "timestamp": "2026-05-01T10:00:08.000Z",
+                    "workspace": "test",
+                    "data": {
+                        "tool_name": "read_file",
+                        "tool_input": {"file_path": "/tmp/g"},
+                        "tool_call_id": "tc-007",
+                        "session_id": "t1",
+                    },
+                }
+            ),
+            json.dumps(
+                {
+                    "event": "tool:pre",
+                    "timestamp": "2026-05-01T10:00:09.000Z",
+                    "workspace": "test",
+                    "data": {
+                        "tool_name": "read_file",
+                        "tool_input": {"file_path": "/tmp/h"},
+                        "tool_call_id": "tc-008",
+                        "session_id": "t1",
+                    },
+                }
+            ),
+            json.dumps(
+                {
+                    "event": "tool:pre",
+                    "timestamp": "2026-05-01T10:00:10.000Z",
+                    "workspace": "test",
+                    "data": {
+                        "tool_name": "read_file",
+                        "tool_input": {"file_path": "/tmp/i"},
+                        "tool_call_id": "tc-009",
+                        "session_id": "t1",
+                    },
+                }
+            ),
+        ]
+        p.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        # pre-iter events not counted, iter1=2, iter2=4 → max=4
+        assert score_s7(p) == 4
+
+    def test_ignores_bash_tool_pre(self, tmp_path):
+        """5 bash events in one iter → 0 (only read_file events are counted)."""
+        import json
+
+        from context_intelligence.signals import score_s7
+
+        p = tmp_path / "bash_only.jsonl"
+        lines = [
+            json.dumps(
+                {
+                    "event": "orchestrator:iteration_start",
+                    "timestamp": "2026-05-01T10:00:00.000Z",
+                    "workspace": "test",
+                    "data": {"session_id": "t1", "iteration": 1},
+                }
+            ),
+        ]
+        for i in range(5):
+            lines.append(
+                json.dumps(
+                    {
+                        "event": "tool:pre",
+                        "timestamp": f"2026-05-01T10:00:0{i + 1}.000Z",
+                        "workspace": "test",
+                        "data": {
+                            "tool_name": "bash",
+                            "tool_input": {"command": "ls"},
+                            "tool_call_id": f"tc-{i:03d}",
+                            "session_id": "t1",
+                        },
+                    }
+                )
+            )
+        p.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        assert score_s7(p) == 0

@@ -471,8 +471,30 @@ def score_s6(events_path: pathlib.Path | str) -> int:
 
 
 def score_s7(events_path: pathlib.Path | str) -> int:
-    """S7: maximum file reads per iteration."""
-    raise NotImplementedError
+    """S7: maximum read_file tool:pre events in any single iteration.
+
+    Iteration boundaries are marked by orchestrator:iteration_start events.
+    Events before the first iteration_start are NOT counted.
+    Returns the maximum count across all iterations (0 if no iterations or no
+    read_file events within any iteration).
+    """
+    max_count: int = 0
+    current_count: int = 0
+    in_iteration: bool = False
+
+    for ev in _iter_events(events_path):
+        event = ev.get("event")
+        if event == "orchestrator:iteration_start":
+            max_count = max(max_count, current_count)
+            current_count = 0
+            in_iteration = True
+        elif event == "tool:pre" and in_iteration:
+            if ev.get("data", {}).get("tool_name") == "read_file":
+                current_count += 1
+
+    # Flush the last iteration
+    max_count = max(max_count, current_count)
+    return max_count
 
 
 def score_s8(events_path: pathlib.Path | str) -> int:

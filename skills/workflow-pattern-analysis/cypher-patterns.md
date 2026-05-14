@@ -506,3 +506,67 @@ algorithm: first collecting input fingerprints from `tool:pre` events keyed by
 (result.success, sha256(str(result.output))[:16]))` pairs.  Returns the maximum
 pair count.  Returns 0 if the file is absent.  Signal fires when the return value
 is ≥ `S4D_THRESHOLD` (3).
+
+---
+
+## Q-S7 — Shotgun read_file Burst (Max Reads Per Iteration)
+
+Detects sessions where the agent issues a large burst of `read_file` calls
+within a single iteration, indicating a "read everything at once" exploration
+pattern that consumes excessive context budget.  Fires when the maximum count
+of `read_file` tool calls in any single iteration is ≥ `S7_THRESHOLD` (default 5).
+
+**Parameters:**
+- `$workspace_hint` — workspace identifier substring to scope the query
+- `$s7_threshold` — read_file burst threshold (default: `5`)
+
+```cypher
+// Max read_file calls per iteration per session
+MATCH (s:Session)
+WHERE s.workspace CONTAINS $workspace_hint
+MATCH (s)-[:HAS_EVENT]->(iter:Event)
+  WHERE iter.event_type = 'orchestrator:iteration_start'
+MATCH (s)-[:HAS_TOOL_CALL]->(tc:ToolCall)
+  WHERE tc.tool_name = 'read_file'
+    AND tc.iteration = iter.iteration
+WITH s, iter.iteration AS iteration_num, count(tc) AS reads_in_iter
+WITH s, max(reads_in_iter) AS max_reads_per_iter
+WHERE max_reads_per_iter >= $s7_threshold
+RETURN
+  s.session_id       AS session_id,
+  s.status           AS status,
+  max_reads_per_iter,
+  max_reads_per_iter >= $s7_threshold AS s7_fires
+ORDER BY max_reads_per_iter DESC
+LIMIT 25
+```
+
+```cypher
+// Prevalence: percentage of sessions where S7 fires
+MATCH (s:Session)
+WHERE s.workspace CONTAINS $workspace_hint
+OPTIONAL MATCH (s)-[:HAS_EVENT]->(iter:Event)
+  WHERE iter.event_type = 'orchestrator:iteration_start'
+OPTIONAL MATCH (s)-[:HAS_TOOL_CALL]->(tc:ToolCall)
+  WHERE tc.tool_name = 'read_file'
+    AND tc.iteration = iter.iteration
+WITH s, iter.iteration AS iteration_num, count(tc) AS reads_in_iter
+WITH s, max(reads_in_iter) AS max_reads_per_iter
+WITH
+  count(DISTINCT s) AS total_sessions,
+  count(DISTINCT CASE WHEN max_reads_per_iter >= $s7_threshold THEN s END) AS sessions_with_s7
+RETURN
+  total_sessions,
+  sessions_with_s7,
+  round(100.0 * sessions_with_s7 / total_sessions, 1) AS s7_pct
+```
+
+**JSONL fallback** (authoritative path — works without graph schema changes):
+
+Use `score_s7(events_path)` from `context_intelligence.signals`.  Pass the
+absolute path to the session's `events.jsonl`.  The function iterates all events,
+tracking iteration boundaries via `orchestrator:iteration_start` events and counting
+`tool:pre` events with `tool_name='read_file'` within each iteration.  Events before
+the first `orchestrator:iteration_start` are not counted.  Returns the maximum
+`read_file` count across all iterations.  Returns 0 if the file is absent or contains
+no iterations.  Signal fires when the return value is ≥ `S7_THRESHOLD` (5).
