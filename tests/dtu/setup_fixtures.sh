@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Requires bash 4+ (associative arrays). Ubuntu 24.04 provides bash 5.
+# On macOS (bash 3.2), use: brew install bash && /usr/local/bin/bash setup_fixtures.sh
+#
 # Creates fake CI-format session directories from fixture JSONL files
 # so the recipe's disk enumeration can find them.
 #
@@ -17,6 +20,9 @@ WORKSPACE="ci-test-workspace"
 echo "Setting up CI test sessions in $TARGET_DIR/$WORKSPACE/"
 
 # Associative array: session-id → fixture filename
+# Note: minimal_session.jsonl is intentionally excluded — it contains only a
+# session:start event and is used by DTU validation C as an all-zero baseline,
+# not as a realistic corpus session for disk enumeration testing.
 declare -A SESSIONS=(
   ["clean-session-001"]="clean_session.jsonl"
   ["s1-session-001"]="s1_session.jsonl"

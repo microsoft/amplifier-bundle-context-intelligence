@@ -108,7 +108,6 @@ validation_cmds:
   - name: B-score-s1-fixture
     command: |
       set -e
-      EVENTS="/opt/ci-bundle/tests/fixtures/s1_session.jsonl"
       /opt/venv/bin/python3 - << 'PYEOF'
       import json, sys, subprocess
       result = subprocess.run(
@@ -164,7 +163,7 @@ validation_cmds:
               print(f"  {f}")
           sys.exit(1)
       else:
-          print(f"PASS: clean_session returns all zeros/false ({len(d)} fields checked)")
+          print(f"PASS: minimal_session returns all zeros/false ({len(d)} fields checked)")
       PYEOF
 
   # D: render-findings produces findings.md with Signal Prevalence table
