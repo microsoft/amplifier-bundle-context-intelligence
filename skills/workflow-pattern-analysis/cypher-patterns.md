@@ -339,3 +339,49 @@ The final query set should answer at minimum:
 - **Q-signals**: The top 3 discriminating signals (highest delta)
 - **Q-risk**: In-progress sessions at risk
 - **Q-points**: Failure point localisation (which tools appear before failure)
+
+---
+
+## Q-S5 — Stale-Running Session Detection
+
+Identifies sessions that are still in `running` state but have not produced a
+new event for more than `$stale_hours` hours (default: 2).  These are likely
+crashed, zombie, or abandoned sessions.
+
+**Parameters:**
+- `$workspace_hint` — workspace identifier substring to scope the query
+- `$stale_hours` — staleness threshold in hours (default: `2`)
+
+```cypher
+// Stale-running sessions: status='running' but last_event_at is stale
+MATCH (s:RootSession)
+WHERE s.workspace CONTAINS $workspace_hint
+  AND s.status = 'running'
+  AND s.last_event_at < datetime() - duration('PT' + toString($stale_hours) + 'H')
+RETURN
+  s.session_id                                               AS session_id,
+  s.status                                                   AS status,
+  s.last_event_at                                            AS last_event_at,
+  duration.between(s.last_event_at, datetime()).hours        AS hours_stale,
+  'stale_running'                                            AS s5_signal
+ORDER BY s.last_event_at ASC
+LIMIT 25
+```
+
+```cypher
+// Count of stale-running sessions (pagination planning)
+MATCH (s:RootSession)
+WHERE s.workspace CONTAINS $workspace_hint
+  AND s.status = 'running'
+  AND s.last_event_at < datetime() - duration('PT' + toString($stale_hours) + 'H')
+RETURN count(s) AS stale_count
+```
+
+**JSONL fallback** (when the graph server is unavailable):
+
+Use `score_s5(metadata_path, ref_last_event_ts)` from
+`context_intelligence.signals`.  Pass the absolute path to the session's
+`metadata.json` and a reference datetime (typically `datetime.now(tz=UTC)`).
+The function reads `metadata['status']` and compares the last parseable
+timestamp in the sibling `events.jsonl` against the reference, returning
+`True` if the gap exceeds `_STALE_HOURS` (2 h) and the status is `'running'`.

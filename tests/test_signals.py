@@ -727,3 +727,73 @@ class TestScoreS1Burst:
             encoding="utf-8",
         )
         assert score_s1_burst(p) == 0
+
+
+METADATA_FIXTURES = FIXTURES / "metadata"
+
+
+class TestScoreS5:
+    """Verify score_s5() — stale session detector."""
+
+    def test_returns_true_for_stale_running_fixture(self):
+        """s5_stale fixture has status='running' and last event 2026-01-01T08:01:05Z.
+        Any ref_ts well after that (e.g. 2026-01-01T12:00:00Z) must return True.
+        """
+        from context_intelligence.signals import score_s5
+
+        metadata_path = METADATA_FIXTURES / "s5_stale" / "metadata.json"
+        ref_ts = "2026-01-01T12:00:00.000Z"
+        assert score_s5(metadata_path, ref_ts) is True
+
+    def test_returns_false_for_completed_session(self):
+        """s5_active fixture has status='completed' — must return False regardless of timestamps."""
+        from context_intelligence.signals import score_s5
+
+        metadata_path = METADATA_FIXTURES / "s5_active" / "metadata.json"
+        ref_ts = "2026-01-01T12:00:00.000Z"
+        assert score_s5(metadata_path, ref_ts) is False
+
+    def test_returns_false_when_gap_under_threshold(self, tmp_path):
+        """status='running' but last event only 30 min before ref_ts — must return False."""
+        import json
+
+        from context_intelligence.signals import score_s5
+
+        meta = tmp_path / "metadata.json"
+        meta.write_text(
+            json.dumps({"session_id": "t1", "status": "running", "workspace": "test"}),
+            encoding="utf-8",
+        )
+        events = tmp_path / "events.jsonl"
+        events.write_text(
+            json.dumps(
+                {
+                    "event": "tool:pre",
+                    "timestamp": "2026-06-01T10:30:00.000Z",
+                    "workspace": "test",
+                    "data": {"session_id": "t1"},
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        # ref_ts is 30 min after last event — gap is 30 min, below 2h threshold
+        ref_ts = "2026-06-01T11:00:00.000Z"
+        assert score_s5(meta, ref_ts) is False
+
+    def test_returns_false_for_nonexistent_metadata(self, tmp_path):
+        """A metadata_path that does not exist must return False without raising."""
+        from context_intelligence.signals import score_s5
+
+        meta = tmp_path / "nonexistent_metadata.json"
+        ref_ts = "2026-01-01T12:00:00.000Z"
+        assert score_s5(meta, ref_ts) is False
+
+    def test_accepts_string_ref_timestamp(self):
+        """score_s5 must accept ref_last_event_ts as an ISO-8601 string."""
+        from context_intelligence.signals import score_s5
+
+        metadata_path = METADATA_FIXTURES / "s5_stale" / "metadata.json"
+        # Pass as string (not datetime)
+        result = score_s5(metadata_path, "2026-12-01T12:00:00.000Z")
+        assert result is True

@@ -29,9 +29,12 @@ Internal helpers:
 
 from __future__ import annotations
 
+import hashlib  # noqa: F401 – available for scoring implementations
 import json
 import logging
 import pathlib
+import re  # noqa: F401 – available for scoring implementations
+from collections import Counter, defaultdict  # noqa: F401 – available for scoring implementations
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta  # noqa: F401 – available for scoring implementations
 from typing import Any  # noqa: F401 – available for scoring implementations
@@ -54,6 +57,18 @@ S3_CANDIDATE_THRESHOLD: int = 20
 S3_SEVERE_THRESHOLD: int = 40
 
 S9A_THRESHOLD: int = 5
+
+# Phase 1b threshold constants
+S4A_MIN_TOOL_PRE: int = 20
+S4A_MIN_MULTI_TOOL_RATIO: float = 0.30
+S4A_MIN_TOP_SHAPE_SHARE: float = 0.15
+S4B_MIN_TOOL_PRE: int = 40
+S4B_MIN_INSTRUMENTATION_RATIO: float = 0.30
+S4C_THRESHOLD: int = 4
+S4D_THRESHOLD: int = 3
+S7_THRESHOLD: int = 5
+S8_THRESHOLD: int = 5
+SCORE_4_1_VOLUME_THRESHOLD: int = 5
 
 # ---------------------------------------------------------------------------
 # Result dataclasses
@@ -330,9 +345,64 @@ def score_s4d(events_path: pathlib.Path | str) -> int:
     raise NotImplementedError
 
 
-def score_s5(metadata_path, ref_last_event_ts: str) -> bool:
-    """S5: stale session detection."""
-    raise NotImplementedError
+_STALE_HOURS: int = 2
+
+
+def score_s5(metadata_path, ref_last_event_ts) -> bool:
+    """S5: stale session detection (metadata timestamp lag).
+
+    Returns True when:
+      - metadata.json exists and is parseable
+      - metadata['status'] == 'running'
+      - the last parseable timestamp in the sibling events.jsonl is more than
+        _STALE_HOURS hours before *ref_last_event_ts*
+
+    Returns False for any other condition (missing file, parse error, non-running
+    status, gap under threshold, or no parseable events).
+
+    *ref_last_event_ts* may be a :class:`datetime` or an ISO-8601 :class:`str`.
+    """
+    meta_path = pathlib.Path(metadata_path)
+
+    # Guard: metadata must exist and be parseable
+    if not meta_path.exists():
+        return False
+    try:
+        with meta_path.open(encoding="utf-8") as fh:
+            meta = json.load(fh)
+    except (json.JSONDecodeError, OSError):
+        return False
+
+    # Guard: session must be in 'running' state
+    if meta.get("status") != "running":
+        return False
+
+    # Parse ref_last_event_ts
+    if isinstance(ref_last_event_ts, str):
+        try:
+            ref_dt = datetime.fromisoformat(ref_last_event_ts.replace("Z", "+00:00"))
+        except ValueError:
+            _LOG.warning("could not parse ref_last_event_ts %r", ref_last_event_ts)
+            return False
+    else:
+        ref_dt = ref_last_event_ts
+
+    # Find the last parseable timestamp in sibling events.jsonl
+    events_path = meta_path.parent / "events.jsonl"
+    last_event_dt: datetime | None = None
+    for ev in _iter_events(events_path):
+        ts = ev.get("timestamp")
+        try:
+            event_dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+            last_event_dt = event_dt
+        except (ValueError, AttributeError):
+            continue
+
+    if last_event_dt is None:
+        return False
+
+    gap = ref_dt - last_event_dt
+    return gap.total_seconds() > _STALE_HOURS * 3600
 
 
 _CANCEL_EVENTS: frozenset[str] = frozenset({"session:cancelled", "user:interrupt"})
