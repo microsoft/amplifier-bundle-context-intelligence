@@ -33,7 +33,7 @@ import hashlib  # noqa: F401 – available for scoring implementations
 import json
 import logging
 import pathlib
-import re  # noqa: F401 – available for scoring implementations
+import re
 from collections import Counter, defaultdict  # noqa: F401 – available for scoring implementations
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta  # noqa: F401 – available for scoring implementations
@@ -752,9 +752,59 @@ def score_s9b(events_path: pathlib.Path | str, *, size_threshold: int = 20_000) 
     return max_size
 
 
-def score_s9c_size(events_path: pathlib.Path | str) -> bool:
-    """S9c (size): fires when result payload exceeds threshold."""
-    raise NotImplementedError
+_CODE_FENCE_RE: re.Pattern = re.compile(r"```.*?```", re.DOTALL)
+_MAX_DENSITY: float = 0.05
+
+
+def score_s9c_size(
+    events_path: pathlib.Path | str,
+    *,
+    size_threshold: int = 30_000,
+) -> bool:
+    """S9c (size): synthesis-output narrative density check (Python-only).
+
+    Fires when ANY ``tool:post`` event with ``tool_name == 'delegate'`` has a
+    response text longer than *size_threshold* characters AND a code-fence
+    character density below ``_MAX_DENSITY`` (5 %).
+
+    Response text extraction follows the same envelope convention as
+    :func:`score_s9b`:
+
+    - If ``result.output`` is a dict containing a ``'response'`` key, use
+      ``output['response']``.
+    - Otherwise stringify ``output``.
+
+    Code-fence density is computed as::
+
+        fence_chars / len(text)
+
+    where ``fence_chars`` is the sum of the lengths of all sub-strings matched
+    by ``_CODE_FENCE_RE`` (i.e. the full fence block including the backtick
+    delimiters and the body).
+
+    Returns ``True`` as soon as a qualifying event is found; ``False`` if no
+    such event exists.
+    """
+    for ev in _iter_events(events_path):
+        if ev.get("event") != "tool:post":
+            continue
+        data = ev.get("data", {})
+        if data.get("tool_name") != "delegate":
+            continue
+        result = data.get("result") or {}
+        output = result.get("output")
+        if isinstance(output, dict) and "response" in output:
+            text = output["response"]
+        else:
+            text = str(output) if output is not None else ""
+        if len(text) <= size_threshold:
+            continue
+        fence_bodies = _CODE_FENCE_RE.findall(text)
+        fence_chars = sum(len(fb) for fb in fence_bodies)
+        density = fence_chars / len(text)
+        if density < _MAX_DENSITY:
+            return True
+    return False
 
 
 def score_s9c_self(events_path: pathlib.Path | str) -> int:

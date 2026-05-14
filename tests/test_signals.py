@@ -1671,3 +1671,111 @@ class TestScoreS4b:
         # Custom prefixes including CHECKPOINT — must fire
         result_custom = score_s4b(p, prefixes=frozenset({"CHECKPOINT"}))
         assert result_custom.fires is True, "With CHECKPOINT in prefixes; should fire"
+
+
+class TestScoreS9cSize:
+    """Verify score_s9c_size() — synthesis-output narrative density check."""
+
+    def test_returns_false_for_clean_session(self):
+        """clean_session.jsonl has no delegate tool:post events — must return False."""
+        from context_intelligence.signals import score_s9c_size
+
+        assert score_s9c_size(FIXTURES / "clean_session.jsonl") is False
+
+    def test_returns_true_for_s9b_session_at_low_threshold(self):
+        """s9b_session.jsonl has a ~516-char prose response; at size_threshold=400 it exceeds
+        the size gate and has no code fences (density=0.0 < 0.05) — must return True."""
+        from context_intelligence.signals import score_s9c_size
+
+        assert score_s9c_size(FIXTURES / "s9b_session.jsonl", size_threshold=400) is True
+
+    def test_returns_false_above_default_threshold(self):
+        """s9b_session.jsonl response (~506 chars) is well below default 30_000 threshold
+        — size gate is not crossed, must return False."""
+        from context_intelligence.signals import score_s9c_size
+
+        assert score_s9c_size(FIXTURES / "s9b_session.jsonl") is False
+
+    def test_returns_false_for_nonexistent_path(self):
+        """A non-existent path must not raise and must return False."""
+        from context_intelligence.signals import score_s9c_size
+
+        result = score_s9c_size(FIXTURES / "nonexistent_s9c_size_file_xyz.jsonl")
+        assert result is False
+
+    def test_returns_false_when_response_is_mostly_code_fences(self, tmp_path):
+        """~500-char response where ~490 chars are inside a ```python``` fence
+        — density ~0.98 >= 0.05, must return False."""
+        import json
+
+        from context_intelligence.signals import score_s9c_size
+
+        # Build a response with ~490 chars inside a code fence and a little prose
+        fence_body = "x" * 488
+        response_text = "```python\n" + fence_body + "\n```"
+        # Sanity: total length > 400, fence chars >> 5%
+        assert len(response_text) > 400
+
+        p = tmp_path / "code_heavy.jsonl"
+        p.write_text(
+            json.dumps(
+                {
+                    "event": "tool:post",
+                    "timestamp": "2026-05-01T12:00:00.000Z",
+                    "workspace": "test",
+                    "data": {
+                        "session_id": "t1",
+                        "tool_call_id": "d01",
+                        "tool_name": "delegate",
+                        "result": {
+                            "success": True,
+                            "output": {
+                                "agent": "foundation:explorer",
+                                "session_id": "sub-001",
+                                "status": "completed",
+                                "response": response_text,
+                            },
+                        },
+                    },
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        assert score_s9c_size(p, size_threshold=400) is False
+
+    def test_returns_true_for_large_prose_response(self, tmp_path):
+        """500-char pure prose response with no code fences at threshold=400
+        — size gate crossed and density=0.0 < 0.05 — must return True."""
+        import json
+
+        from context_intelligence.signals import score_s9c_size
+
+        prose = "A" * 500
+        p = tmp_path / "large_prose.jsonl"
+        p.write_text(
+            json.dumps(
+                {
+                    "event": "tool:post",
+                    "timestamp": "2026-05-01T12:00:00.000Z",
+                    "workspace": "test",
+                    "data": {
+                        "session_id": "t1",
+                        "tool_call_id": "d01",
+                        "tool_name": "delegate",
+                        "result": {
+                            "success": True,
+                            "output": {
+                                "agent": "foundation:explorer",
+                                "session_id": "sub-001",
+                                "status": "completed",
+                                "response": prose,
+                            },
+                        },
+                    },
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        assert score_s9c_size(p, size_threshold=400) is True
