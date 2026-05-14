@@ -1340,3 +1340,98 @@ class TestScoreS8:
             )
         p.write_text("\n".join(lines) + "\n", encoding="utf-8")
         assert score_s8(p) == 0
+
+
+class TestScoreS9b:
+    """Verify score_s9b() — maximum delegate result payload size."""
+
+    def test_returns_zero_for_clean_session(self):
+        """clean_session.jsonl has no delegate tool:post events — score must be 0."""
+        from context_intelligence.signals import score_s9b
+
+        assert score_s9b(FIXTURES / "clean_session.jsonl") == 0
+
+    def test_returns_response_length_for_s9b_session(self):
+        """s9b_session.jsonl has a delegate response of 506 chars — score must be > 400 and < 20_000."""
+        from context_intelligence.signals import score_s9b
+
+        result = score_s9b(FIXTURES / "s9b_session.jsonl")
+        assert result > 400
+        assert result < 20_000
+
+    def test_exceeds_test_threshold(self):
+        """s9b_session.jsonl score must be >= 400 (test threshold well below 20_000 fire threshold)."""
+        from context_intelligence.signals import score_s9b
+
+        assert score_s9b(FIXTURES / "s9b_session.jsonl") >= 400
+
+    def test_returns_zero_for_nonexistent_path(self):
+        """A non-existent path must not raise and must return 0."""
+        from context_intelligence.signals import score_s9b
+
+        result = score_s9b(FIXTURES / "nonexistent_s9b_file_xyz.jsonl")
+        assert result == 0
+
+    def test_measures_response_field_not_full_output(self, tmp_path):
+        """100-char response inside a structured delegate envelope → score must be 100."""
+        import json
+
+        from context_intelligence.signals import score_s9b
+
+        response_text = "x" * 100
+        p = tmp_path / "structured_output.jsonl"
+        p.write_text(
+            json.dumps(
+                {
+                    "event": "tool:post",
+                    "timestamp": "2026-05-01T12:00:00.000Z",
+                    "workspace": "test",
+                    "data": {
+                        "session_id": "t1",
+                        "tool_call_id": "d01",
+                        "tool_name": "delegate",
+                        "result": {
+                            "success": True,
+                            "output": {
+                                "agent": "foundation:explorer",
+                                "session_id": "sub-001",
+                                "status": "completed",
+                                "response": response_text,
+                            },
+                        },
+                    },
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        assert score_s9b(p) == 100
+
+    def test_ignores_non_delegate_tool_post(self, tmp_path):
+        """bash tool:post with 50_000-char output → score must be 0 (only delegate tool:post counted)."""
+        import json
+
+        from context_intelligence.signals import score_s9b
+
+        p = tmp_path / "bash_only.jsonl"
+        p.write_text(
+            json.dumps(
+                {
+                    "event": "tool:post",
+                    "timestamp": "2026-05-01T12:00:00.000Z",
+                    "workspace": "test",
+                    "data": {
+                        "session_id": "t1",
+                        "tool_call_id": "b01",
+                        "tool_name": "bash",
+                        "result": {
+                            "success": True,
+                            "output": "y" * 50_000,
+                        },
+                    },
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        assert score_s9b(p) == 0

@@ -556,9 +556,34 @@ def score_s9a(events_path: pathlib.Path | str) -> int:
     )
 
 
-def score_s9b(events_path: pathlib.Path | str) -> int:
-    """S9b: maximum delegate result payload size."""
-    raise NotImplementedError
+def score_s9b(events_path: pathlib.Path | str, *, size_threshold: int = 20_000) -> int:
+    """S9b: maximum delegate result payload size.
+
+    Iterates ``tool:post`` events where ``data.tool_name == 'delegate'``.
+
+    For each such event, inspects ``data.result.output``:
+    - If ``output`` is a dict containing a ``'response'`` key (standard delegate
+      envelope), measures ``len(output['response'])``.
+    - Otherwise measures ``len(str(output))``.
+
+    Returns the maximum size found across all matching events (0 if none).
+    The signal fires when the returned value is >= *size_threshold* (default 20,000).
+    """
+    max_size = 0
+    for ev in _iter_events(events_path):
+        if ev.get("event") != "tool:post":
+            continue
+        data = ev.get("data", {})
+        if data.get("tool_name") != "delegate":
+            continue
+        result = data.get("result") or {}
+        output = result.get("output")
+        if isinstance(output, dict) and "response" in output:
+            size = len(output["response"])
+        else:
+            size = len(str(output)) if output is not None else 0
+        max_size = max(max_size, size)
+    return max_size
 
 
 def score_s9c_size(events_path: pathlib.Path | str) -> bool:

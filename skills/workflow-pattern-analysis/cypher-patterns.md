@@ -647,3 +647,70 @@ An iteration qualifies when any single parallel group has ≥ 3 bash calls.  Ret
 the maximum consecutive qualifying-iteration streak.  Returns 0 if the file is
 absent or contains no iterations.  Signal fires when the return value is ≥
 `S8_THRESHOLD` (5).
+
+---
+
+## Q-S9b — Large Delegate Result Size Detection
+
+Detects sessions where the agent receives an oversized response from a delegated
+sub-agent.  Large delegate results inflate the context window and increase the
+probability of compaction, truncation, or loss of detail in subsequent processing.
+Signal fires when the largest delegate result payload measured by `response` field
+length is ≥ `$s9b_threshold` characters (default: 20,000).
+
+**Schema requirement:** This query requires a `result_size` property on `ToolCall`
+nodes, populated at ingestion time with the measured payload size for `tool:post`
+`delegate` events.  When `result_size` is absent, use the JSONL fallback.
+
+**Parameters:**
+- `$workspace_hint` — workspace identifier substring to scope the query
+- `$s9b_threshold` — payload size threshold in characters (default: `20000`)
+
+```cypher
+// Sessions with oversized delegate results (S9b signal)
+MATCH (s:Session)-[:HAS_TOOL_CALL]->(tc:ToolCall)
+WHERE s.workspace CONTAINS $workspace_hint
+  AND tc.tool_name = 'delegate'
+  AND tc.result_size IS NOT NULL
+  AND tc.result_size >= $s9b_threshold
+RETURN
+  s.session_id       AS session_id,
+  s.status           AS status,
+  tc.tool_call_id    AS tool_call_id,
+  tc.result_size     AS result_size,
+  tc.result_size >= $s9b_threshold AS s9b_fires
+ORDER BY tc.result_size DESC
+LIMIT 25
+```
+
+```cypher
+// Corpus prevalence: percentage of sessions where S9b fires
+MATCH (s:Session)
+WHERE s.workspace CONTAINS $workspace_hint
+OPTIONAL MATCH (s)-[:HAS_TOOL_CALL]->(tc:ToolCall)
+  WHERE tc.tool_name = 'delegate'
+    AND tc.result_size IS NOT NULL
+WITH s, max(tc.result_size) AS max_delegate_result_size
+WITH
+  count(DISTINCT s) AS total_sessions,
+  count(DISTINCT CASE WHEN max_delegate_result_size >= $s9b_threshold THEN s END) AS sessions_with_s9b
+RETURN
+  total_sessions,
+  sessions_with_s9b,
+  round(100.0 * sessions_with_s9b / total_sessions, 1) AS s9b_pct
+```
+
+**JSONL fallback** (authoritative path — works without `result_size` graph property):
+
+Use `score_s9b(events_path)` from `context_intelligence.signals`.  Pass the
+absolute path to the session's `events.jsonl`.  The function iterates `tool:post`
+events where `data.tool_name == 'delegate'`.  For each such event it inspects
+`data.result.output`:
+
+- If `output` is a dict with a `'response'` key (standard delegate envelope
+  `{agent, session_id, status, response}`), measures `len(output['response'])`.
+- Otherwise measures `len(str(output))`.
+
+Returns the maximum size found across all matching events.  Returns 0 if the file
+is absent or contains no matching events.  Signal fires when the return value is
+≥ `size_threshold` (default 20,000).
