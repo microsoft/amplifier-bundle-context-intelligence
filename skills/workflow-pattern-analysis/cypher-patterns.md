@@ -570,3 +570,80 @@ tracking iteration boundaries via `orchestrator:iteration_start` events and coun
 the first `orchestrator:iteration_start` are not counted.  Returns the maximum
 `read_file` count across all iterations.  Returns 0 if the file is absent or contains
 no iterations.  Signal fires when the return value is ≥ `S7_THRESHOLD` (5).
+
+---
+
+## Q-S8 — Sustained Bash Burst (Consecutive Parallel Bash Iterations)
+
+Detects sessions where the agent runs sustained bursts of parallel `bash` tool
+calls across multiple consecutive iterations.  A qualifying iteration is one that
+contains at least one parallel group (shared `parallel_group_id`) with ≥ 3 `bash`
+tool calls.  Signal fires when the maximum consecutive-qualifying-iteration streak
+is ≥ `S8_THRESHOLD` (default 5).
+
+**Note on Cypher approximation:** Cypher cannot easily express the consecutive-streak
+requirement without APOC procedures.  Q-S8a below approximates by counting sessions
+that have ≥ `$s8_threshold` iterations each containing a qualifying bash burst —
+false positives are possible when qualifying iterations are not consecutive.  The
+Python `score_s8()` fallback is the authoritative, precise implementation.
+
+**Parameters:**
+- `$workspace_hint` — workspace identifier substring to scope the query
+- `$s8_threshold` — consecutive bash-burst streak threshold (default: `5`)
+
+```cypher
+// Q-S8a: Sessions with long bash-burst streaks (approximate — may include non-consecutive)
+MATCH (s:Session)
+WHERE s.workspace CONTAINS $workspace_hint
+MATCH (s)-[:HAS_EVENT]->(iter:Event)
+  WHERE iter.event_type = 'orchestrator:iteration_start'
+MATCH (s)-[:HAS_TOOL_CALL]->(tc:ToolCall)
+  WHERE tc.tool_name = 'bash'
+    AND tc.parallel_group_id IS NOT NULL
+    AND tc.iteration = iter.iteration
+WITH s, iter.iteration AS iteration_num, tc.parallel_group_id AS pg, count(tc) AS bash_in_pg
+WITH s, iteration_num, max(bash_in_pg) AS max_bash_in_pg
+WHERE max_bash_in_pg >= 3
+WITH s, count(DISTINCT iteration_num) AS qualifying_iter_count
+WHERE qualifying_iter_count >= $s8_threshold
+RETURN
+  s.session_id          AS session_id,
+  s.status              AS status,
+  qualifying_iter_count,
+  qualifying_iter_count >= $s8_threshold AS s8_fires_approx
+ORDER BY qualifying_iter_count DESC
+LIMIT 25
+```
+
+```cypher
+// Q-S8b: Corpus prevalence — percentage of sessions where S8 fires (approximate)
+MATCH (s:Session)
+WHERE s.workspace CONTAINS $workspace_hint
+OPTIONAL MATCH (s)-[:HAS_EVENT]->(iter:Event)
+  WHERE iter.event_type = 'orchestrator:iteration_start'
+OPTIONAL MATCH (s)-[:HAS_TOOL_CALL]->(tc:ToolCall)
+  WHERE tc.tool_name = 'bash'
+    AND tc.parallel_group_id IS NOT NULL
+    AND tc.iteration = iter.iteration
+WITH s, iter.iteration AS iteration_num, tc.parallel_group_id AS pg, count(tc) AS bash_in_pg
+WITH s, iteration_num, max(bash_in_pg) AS max_bash_in_pg
+WITH s, count(DISTINCT CASE WHEN max_bash_in_pg >= 3 THEN iteration_num END) AS qualifying_iter_count
+WITH
+  count(DISTINCT s) AS total_sessions,
+  count(DISTINCT CASE WHEN qualifying_iter_count >= $s8_threshold THEN s END) AS sessions_with_s8
+RETURN
+  total_sessions,
+  sessions_with_s8,
+  round(100.0 * sessions_with_s8 / total_sessions, 1) AS s8_pct
+```
+
+**JSONL fallback** (authoritative path — precise consecutive-streak counting):
+
+Use `score_s8(events_path)` from `context_intelligence.signals`.  Pass the
+absolute path to the session's `events.jsonl`.  The function iterates all events,
+tracking iteration boundaries via `orchestrator:iteration_start` events and
+accumulating `tool:pre` bash calls per `parallel_group_id` within each iteration.
+An iteration qualifies when any single parallel group has ≥ 3 bash calls.  Returns
+the maximum consecutive qualifying-iteration streak.  Returns 0 if the file is
+absent or contains no iterations.  Signal fires when the return value is ≥
+`S8_THRESHOLD` (5).

@@ -497,9 +497,54 @@ def score_s7(events_path: pathlib.Path | str) -> int:
     return max_count
 
 
+_MIN_PARALLEL_BASH: int = 3
+
+
 def score_s8(events_path: pathlib.Path | str) -> int:
-    """S8: maximum consecutive bash burst length."""
-    raise NotImplementedError
+    """S8: maximum consecutive-iteration streak where each iteration has a parallel
+    bash group of >= _MIN_PARALLEL_BASH bash tool:pre events.
+
+    A 'parallel bash group' is defined as multiple tool:pre events sharing the
+    same parallel_group_id all with tool_name='bash'.  An iteration qualifies if
+    any single parallel group in it has >= _MIN_PARALLEL_BASH bash calls.
+
+    Returns the maximum such consecutive streak across the session.
+    """
+    max_streak: int = 0
+    current_streak: int = 0
+    in_iteration: bool = False
+    current_iter_pg_bash: dict[str, int] = {}
+
+    def _iter_qualifies(pg_bash: dict[str, int]) -> bool:
+        return any(count >= _MIN_PARALLEL_BASH for count in pg_bash.values())
+
+    for ev in _iter_events(events_path):
+        event = ev.get("event")
+        if event == "orchestrator:iteration_start":
+            if in_iteration:
+                if _iter_qualifies(current_iter_pg_bash):
+                    current_streak += 1
+                else:
+                    max_streak = max(max_streak, current_streak)
+                    current_streak = 0
+            in_iteration = True
+            current_iter_pg_bash = {}
+        elif event == "tool:pre" and in_iteration:
+            data = ev.get("data", {})
+            if data.get("tool_name") == "bash":
+                pg_id = data.get("parallel_group_id")
+                if pg_id:
+                    current_iter_pg_bash[pg_id] = current_iter_pg_bash.get(pg_id, 0) + 1
+
+    # Flush the last iteration
+    if in_iteration:
+        if _iter_qualifies(current_iter_pg_bash):
+            current_streak += 1
+        else:
+            max_streak = max(max_streak, current_streak)
+            current_streak = 0
+
+    return max(max_streak, current_streak)
 
 
 def score_s9a(events_path: pathlib.Path | str) -> int:

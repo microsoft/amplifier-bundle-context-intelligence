@@ -1165,3 +1165,178 @@ class TestScoreS7:
             )
         p.write_text("\n".join(lines) + "\n", encoding="utf-8")
         assert score_s7(p) == 0
+
+
+class TestScoreS8:
+    """Verify score_s8() — maximum consecutive bash burst streak."""
+
+    def test_returns_zero_for_clean_session(self):
+        """clean_session.jsonl has no parallel bash groups — score must be 0."""
+        from context_intelligence.signals import score_s8
+
+        assert score_s8(FIXTURES / "clean_session.jsonl") == 0
+
+    def test_returns_six_for_s8_session(self):
+        """s8_session.jsonl has 6 consecutive qualifying iterations (iters 3-8) — score must be 6."""
+        from context_intelligence.signals import score_s8
+
+        assert score_s8(FIXTURES / "s8_session.jsonl") == 6
+
+    def test_fires_at_threshold(self):
+        """s8_session.jsonl score (6) must be >= S8_THRESHOLD (5)."""
+        from context_intelligence.signals import S8_THRESHOLD, score_s8
+
+        assert score_s8(FIXTURES / "s8_session.jsonl") >= S8_THRESHOLD
+
+    def test_returns_zero_for_nonexistent_path(self):
+        """A non-existent path must not raise and must return 0."""
+        from context_intelligence.signals import score_s8
+
+        result = score_s8(FIXTURES / "nonexistent_s8_file_xyz.jsonl")
+        assert result == 0
+
+    def test_streak_breaks_on_non_qualifying_iteration(self, tmp_path):
+        """3 qualifying iters, 1 non-qualifying, 2 qualifying → max streak = 3."""
+        import json
+
+        from context_intelligence.signals import score_s8
+
+        p = tmp_path / "streak_break.jsonl"
+        lines = []
+        ts_counter = [0]
+
+        def make_ts():
+            ts_counter[0] += 1
+            return f"2026-05-01T10:{ts_counter[0]:02d}:00.000Z"
+
+        # 3 qualifying iterations (parallel group with 3 bash each)
+        for q in range(1, 4):
+            lines.append(
+                json.dumps(
+                    {
+                        "event": "orchestrator:iteration_start",
+                        "timestamp": make_ts(),
+                        "workspace": "test",
+                        "data": {"session_id": "t1", "iteration": q},
+                    }
+                )
+            )
+            pg = f"pg-break-q{q}"
+            for _ in range(3):
+                lines.append(
+                    json.dumps(
+                        {
+                            "event": "tool:pre",
+                            "timestamp": make_ts(),
+                            "workspace": "test",
+                            "data": {
+                                "tool_name": "bash",
+                                "tool_input": {"command": "ls"},
+                                "tool_call_id": f"tc-q{q}-{_}",
+                                "parallel_group_id": pg,
+                                "session_id": "t1",
+                            },
+                        }
+                    )
+                )
+
+        # 1 non-qualifying iteration (single bash in its own group)
+        lines.append(
+            json.dumps(
+                {
+                    "event": "orchestrator:iteration_start",
+                    "timestamp": make_ts(),
+                    "workspace": "test",
+                    "data": {"session_id": "t1", "iteration": 4},
+                }
+            )
+        )
+        lines.append(
+            json.dumps(
+                {
+                    "event": "tool:pre",
+                    "timestamp": make_ts(),
+                    "workspace": "test",
+                    "data": {
+                        "tool_name": "bash",
+                        "tool_input": {"command": "echo hi"},
+                        "tool_call_id": "tc-nonq",
+                        "parallel_group_id": "pg-break-nonq",
+                        "session_id": "t1",
+                    },
+                }
+            )
+        )
+
+        # 2 more qualifying iterations
+        for q in range(5, 7):
+            lines.append(
+                json.dumps(
+                    {
+                        "event": "orchestrator:iteration_start",
+                        "timestamp": make_ts(),
+                        "workspace": "test",
+                        "data": {"session_id": "t1", "iteration": q},
+                    }
+                )
+            )
+            pg = f"pg-break-q{q}"
+            for _ in range(3):
+                lines.append(
+                    json.dumps(
+                        {
+                            "event": "tool:pre",
+                            "timestamp": make_ts(),
+                            "workspace": "test",
+                            "data": {
+                                "tool_name": "bash",
+                                "tool_input": {"command": "ls"},
+                                "tool_call_id": f"tc-q{q}-{_}",
+                                "parallel_group_id": pg,
+                                "session_id": "t1",
+                            },
+                        }
+                    )
+                )
+
+        p.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        # First streak = 3, break, second streak = 2 → max = 3
+        assert score_s8(p) == 3
+
+    def test_single_bash_not_parallel_does_not_qualify(self, tmp_path):
+        """3 bash events each in a different parallel_group_id → max pg bash count = 1 → score = 0."""
+        import json
+
+        from context_intelligence.signals import score_s8
+
+        p = tmp_path / "scattered_bash.jsonl"
+        lines = [
+            json.dumps(
+                {
+                    "event": "orchestrator:iteration_start",
+                    "timestamp": "2026-05-01T10:01:00.000Z",
+                    "workspace": "test",
+                    "data": {"session_id": "t1", "iteration": 1},
+                }
+            ),
+        ]
+        # 3 bash calls, each in its own parallel group → no group has >= 3 bash
+        for i in range(3):
+            lines.append(
+                json.dumps(
+                    {
+                        "event": "tool:pre",
+                        "timestamp": f"2026-05-01T10:01:0{i + 1}.000Z",
+                        "workspace": "test",
+                        "data": {
+                            "tool_name": "bash",
+                            "tool_input": {"command": "ls"},
+                            "tool_call_id": f"tc-scatter-{i:03d}",
+                            "parallel_group_id": f"pg-scatter-{i}",
+                            "session_id": "t1",
+                        },
+                    }
+                )
+            )
+        p.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        assert score_s8(p) == 0
