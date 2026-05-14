@@ -336,13 +336,70 @@ def score_s4b(
 
 
 def score_s4c(events_path: pathlib.Path | str) -> int:
-    """S4c: duplicate tool-call input detection."""
-    raise NotImplementedError
+    """S4c: duplicate tool-call input detection.
+
+    Counts occurrences of each unique tool input fingerprint (md5 of tool_name + tool_input).
+    Returns the maximum count across all fingerprints (0 if no tool:pre events).
+    Fires when the maximum count is >= S4C_THRESHOLD (4).
+    """
+    counts: Counter = Counter()
+    for ev in _iter_events(events_path):
+        if ev.get("event") != "tool:pre":
+            continue
+        data = ev.get("data", {})
+        tool_name = data.get("tool_name", "")
+        tool_input = data.get("tool_input") or {}
+        input_identity = hashlib.md5(
+            (tool_name + ":" + json.dumps(tool_input, sort_keys=True)).encode(),
+            usedforsecurity=False,
+        ).hexdigest()
+        counts[input_identity] += 1
+    return max(counts.values(), default=0)
 
 
 def score_s4d(events_path: pathlib.Path | str) -> int:
-    """S4d: duplicate tool-call input-pair detection."""
-    raise NotImplementedError
+    """S4d: duplicate tool-call input-pair detection.
+
+    Two-pass algorithm:
+    1. Collect input fingerprints from tool:pre events, keyed by tool_call_id.
+    2. Join with tool:post events on tool_call_id and compute (input_fp, output_identity) pairs.
+
+    Returns the maximum count of any single (input, output) pair.
+    Fires when the maximum count is >= S4D_THRESHOLD (3).
+    """
+    # First pass: collect tool:pre input fingerprints keyed by tool_call_id
+    pre_fingerprints: dict[str, str] = {}
+    for ev in _iter_events(events_path):
+        if ev.get("event") != "tool:pre":
+            continue
+        data = ev.get("data", {})
+        tool_call_id = data.get("tool_call_id")
+        if not tool_call_id:
+            continue
+        tool_name = data.get("tool_name", "")
+        tool_input = data.get("tool_input") or {}
+        input_identity = hashlib.md5(
+            (tool_name + ":" + json.dumps(tool_input, sort_keys=True)).encode(),
+            usedforsecurity=False,
+        ).hexdigest()
+        pre_fingerprints[tool_call_id] = input_identity
+
+    # Second pass: join with tool:post on tool_call_id, compute pair identity
+    counts: Counter = Counter()
+    for ev in _iter_events(events_path):
+        if ev.get("event") != "tool:post":
+            continue
+        data = ev.get("data", {})
+        tool_call_id = data.get("tool_call_id")
+        if not tool_call_id or tool_call_id not in pre_fingerprints:
+            continue
+        result = data.get("result") or {}
+        success = result.get("success", False)
+        output_hash = hashlib.sha256(str(result.get("output", "")).encode()).hexdigest()[:16]
+        output_identity = (success, output_hash)
+        pair_identity = (pre_fingerprints[tool_call_id], output_identity)
+        counts[pair_identity] += 1
+    return max(counts.values(), default=0)
 
 
 _STALE_HOURS: int = 2

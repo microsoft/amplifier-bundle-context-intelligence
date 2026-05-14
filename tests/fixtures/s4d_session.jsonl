@@ -1,0 +1,10 @@
+{"event": "session:start", "timestamp": "2026-05-01T13:00:00.000Z", "workspace": "test", "data": {"session_id": "s4d-001"}}
+{"event": "orchestrator:iteration_start", "timestamp": "2026-05-01T13:00:01.000Z", "workspace": "test", "data": {"session_id": "s4d-001", "iteration": 1}}
+{"event": "tool:pre", "timestamp": "2026-05-01T13:00:02.000Z", "workspace": "test", "data": {"session_id": "s4d-001", "tool_name": "bash", "tool_input": {"command": "cat /nonexistent"}, "tool_call_id": "td-001"}}
+{"event": "tool:post", "timestamp": "2026-05-01T13:00:03.000Z", "workspace": "test", "data": {"session_id": "s4d-001", "tool_call_id": "td-001", "result": {"success": false, "output": "cat: /nonexistent: No such file or directory"}}}
+{"event": "tool:pre", "timestamp": "2026-05-01T13:00:04.000Z", "workspace": "test", "data": {"session_id": "s4d-001", "tool_name": "bash", "tool_input": {"command": "cat /nonexistent"}, "tool_call_id": "td-002"}}
+{"event": "tool:post", "timestamp": "2026-05-01T13:00:05.000Z", "workspace": "test", "data": {"session_id": "s4d-001", "tool_call_id": "td-002", "result": {"success": false, "output": "cat: /nonexistent: No such file or directory"}}}
+{"event": "tool:pre", "timestamp": "2026-05-01T13:00:06.000Z", "workspace": "test", "data": {"session_id": "s4d-001", "tool_name": "bash", "tool_input": {"command": "cat /nonexistent"}, "tool_call_id": "td-003"}}
+{"event": "tool:post", "timestamp": "2026-05-01T13:00:07.000Z", "workspace": "test", "data": {"session_id": "s4d-001", "tool_call_id": "td-003", "result": {"success": false, "output": "cat: /nonexistent: No such file or directory"}}}
+{"event": "tool:pre", "timestamp": "2026-05-01T13:00:08.000Z", "workspace": "test", "data": {"session_id": "s4d-001", "tool_name": "bash", "tool_input": {"command": "cat /nonexistent"}, "tool_call_id": "td-004"}}
+{"event": "tool:post", "timestamp": "2026-05-01T13:00:09.000Z", "workspace": "test", "data": {"session_id": "s4d-001", "tool_call_id": "td-004", "result": {"success": false, "output": "cat: /nonexistent: No such file or directory"}}}

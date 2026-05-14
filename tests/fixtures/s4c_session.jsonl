@@ -1,0 +1,8 @@
+{"event": "session:start", "timestamp": "2026-05-01T12:00:00.000Z", "workspace": "test", "data": {"session_id": "s4c-001"}}
+{"event": "orchestrator:iteration_start", "timestamp": "2026-05-01T12:00:01.000Z", "workspace": "test", "data": {"session_id": "s4c-001", "iteration": 1}}
+{"event": "tool:pre", "timestamp": "2026-05-01T12:00:02.000Z", "workspace": "test", "data": {"session_id": "s4c-001", "tool_name": "bash", "tool_input": {"command": "ls -la /workspace"}, "tool_call_id": "tc-001"}}
+{"event": "tool:pre", "timestamp": "2026-05-01T12:00:03.000Z", "workspace": "test", "data": {"session_id": "s4c-001", "tool_name": "bash", "tool_input": {"command": "ls -la /workspace"}, "tool_call_id": "tc-002"}}
+{"event": "tool:pre", "timestamp": "2026-05-01T12:00:04.000Z", "workspace": "test", "data": {"session_id": "s4c-001", "tool_name": "bash", "tool_input": {"command": "ls -la /workspace"}, "tool_call_id": "tc-003"}}
+{"event": "tool:pre", "timestamp": "2026-05-01T12:00:05.000Z", "workspace": "test", "data": {"session_id": "s4c-001", "tool_name": "bash", "tool_input": {"command": "ls -la /workspace"}, "tool_call_id": "tc-004"}}
+{"event": "tool:pre", "timestamp": "2026-05-01T12:00:06.000Z", "workspace": "test", "data": {"session_id": "s4c-001", "tool_name": "bash", "tool_input": {"command": "ls -la /workspace"}, "tool_call_id": "tc-005"}}
+{"event": "tool:pre", "timestamp": "2026-05-01T12:00:07.000Z", "workspace": "test", "data": {"session_id": "s4c-001", "tool_name": "bash", "tool_input": {"command": "pwd"}, "tool_call_id": "tc-006"}}

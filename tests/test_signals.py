@@ -797,3 +797,157 @@ class TestScoreS5:
         # Pass as string (not datetime)
         result = score_s5(metadata_path, "2026-12-01T12:00:00.000Z")
         assert result is True
+
+
+class TestScoreS4c:
+    """Verify score_s4c() — exact-duplicate tool input fingerprint counter."""
+
+    def test_returns_zero_for_clean_session(self):
+        """clean_session.jsonl has all unique tool inputs — score must be below S4C_THRESHOLD."""
+        from context_intelligence.signals import S4C_THRESHOLD, score_s4c
+
+        # clean_session has only 1 unique bash tool:pre — no duplicates, score is below threshold
+        result = score_s4c(FIXTURES / "clean_session.jsonl")
+        assert result < S4C_THRESHOLD
+
+    def test_returns_five_for_s4c_session(self):
+        """s4c_session.jsonl has 5 identical 'ls -la /workspace' inputs — score must be 5."""
+        from context_intelligence.signals import score_s4c
+
+        assert score_s4c(FIXTURES / "s4c_session.jsonl") == 5
+
+    def test_fires_at_threshold(self):
+        """s4c_session.jsonl score (5) must be >= S4C_THRESHOLD (4)."""
+        from context_intelligence.signals import S4C_THRESHOLD, score_s4c
+
+        assert score_s4c(FIXTURES / "s4c_session.jsonl") >= S4C_THRESHOLD
+
+    def test_returns_zero_for_nonexistent_path(self):
+        """A non-existent path must not raise and must return 0."""
+        from context_intelligence.signals import score_s4c
+
+        result = score_s4c(FIXTURES / "nonexistent_s4c_file_xyz.jsonl")
+        assert result == 0
+
+    def test_different_inputs_not_counted_together(self):
+        """Different tool inputs must each have their own count (not summed together)."""
+        from context_intelligence.signals import score_s4c
+
+        # s4c_session has 5 identical 'ls -la /workspace' + 1 'pwd' — max is 5, not 6
+        assert score_s4c(FIXTURES / "s4c_session.jsonl") == 5
+
+    def test_ignores_tool_post_events(self, tmp_path):
+        """tool:post events must not be counted — only tool:pre events are fingerprinted."""
+        from context_intelligence.signals import score_s4c
+
+        import json
+
+        p = tmp_path / "with_post.jsonl"
+        lines = []
+        # 3 identical tool:pre events
+        for i in range(3):
+            lines.append(
+                json.dumps(
+                    {
+                        "event": "tool:pre",
+                        "timestamp": f"2026-05-01T12:00:0{i}.000Z",
+                        "workspace": "test",
+                        "data": {
+                            "tool_name": "bash",
+                            "tool_input": {"command": "ls"},
+                            "tool_call_id": f"tc-{i:03d}",
+                            "session_id": "t1",
+                        },
+                    }
+                )
+            )
+            # Corresponding tool:post — should be ignored
+            lines.append(
+                json.dumps(
+                    {
+                        "event": "tool:post",
+                        "timestamp": f"2026-05-01T12:00:0{i}.500Z",
+                        "workspace": "test",
+                        "data": {
+                            "tool_call_id": f"tc-{i:03d}",
+                            "session_id": "t1",
+                            "result": {"success": True, "output": "file.txt"},
+                        },
+                    }
+                )
+            )
+        p.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        # Only 3 tool:pre events counted; tool:post events ignored → max count is 3
+        assert score_s4c(p) == 3
+
+
+class TestScoreS4d:
+    """Verify score_s4d() — no-progress (input, output) pair repetition counter."""
+
+    def test_returns_zero_for_clean_session(self):
+        """clean_session.jsonl has no tool:post events — score must be 0."""
+        from context_intelligence.signals import score_s4d
+
+        assert score_s4d(FIXTURES / "clean_session.jsonl") == 0
+
+    def test_returns_four_for_s4d_session(self):
+        """s4d_session.jsonl has 4 identical (input, output) pairs — score must be 4."""
+        from context_intelligence.signals import score_s4d
+
+        assert score_s4d(FIXTURES / "s4d_session.jsonl") == 4
+
+    def test_fires_at_threshold(self):
+        """s4d_session.jsonl score (4) must be >= S4D_THRESHOLD (3)."""
+        from context_intelligence.signals import S4D_THRESHOLD, score_s4d
+
+        assert score_s4d(FIXTURES / "s4d_session.jsonl") >= S4D_THRESHOLD
+
+    def test_returns_zero_for_nonexistent_path(self):
+        """A non-existent path must not raise and must return 0."""
+        from context_intelligence.signals import score_s4d
+
+        result = score_s4d(FIXTURES / "nonexistent_s4d_file_xyz.jsonl")
+        assert result == 0
+
+    def test_same_input_different_outputs_not_counted(self, tmp_path):
+        """Same tool input but different outputs must NOT be grouped into the same count."""
+        from context_intelligence.signals import score_s4d
+
+        import json
+
+        p = tmp_path / "mixed_outputs.jsonl"
+        lines = []
+        outputs = ["output_a", "output_b", "output_a", "output_b"]
+        for i, out in enumerate(outputs):
+            lines.append(
+                json.dumps(
+                    {
+                        "event": "tool:pre",
+                        "timestamp": f"2026-05-01T13:00:0{i * 2}.000Z",
+                        "workspace": "test",
+                        "data": {
+                            "tool_name": "bash",
+                            "tool_input": {"command": "ls"},
+                            "tool_call_id": f"tx-{i:03d}",
+                            "session_id": "t1",
+                        },
+                    }
+                )
+            )
+            lines.append(
+                json.dumps(
+                    {
+                        "event": "tool:post",
+                        "timestamp": f"2026-05-01T13:00:0{i * 2 + 1}.000Z",
+                        "workspace": "test",
+                        "data": {
+                            "tool_call_id": f"tx-{i:03d}",
+                            "session_id": "t1",
+                            "result": {"success": True, "output": out},
+                        },
+                    }
+                )
+            )
+        p.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        # output_a appears 2 times, output_b appears 2 times — max is 2, not 4
+        assert score_s4d(p) == 2

@@ -385,3 +385,124 @@ Use `score_s5(metadata_path, ref_last_event_ts)` from
 The function reads `metadata['status']` and compares the last parseable
 timestamp in the sibling `events.jsonl` against the reference, returning
 `True` if the gap exceeds `_STALE_HOURS` (2 h) and the status is `'running'`.
+
+---
+
+## Q-S4c — Exact-Duplicate Tool Input Detection
+
+Identifies sessions where the same tool is called with identical inputs repeatedly,
+a strong indicator of a stuck agent loop.  Fires when any single input fingerprint
+appears ≥ 4 times (`S4C_THRESHOLD`).
+
+**Schema requirement:** This query requires a `tool_input_hash` property on
+`ToolCall` nodes.  The CI graph ingestion pipeline must compute and store
+`md5(tool_name + ':' + json.dumps(tool_input, sort_keys=True))` when indexing
+`tool:pre` events.  If this property is absent from your graph, use the JSONL
+fallback (authoritative path).
+
+**Proxy query** (uses `tool_name` frequency as a coarse approximation when
+`tool_input_hash` is unavailable — produces false positives for tools called
+with different inputs):
+
+```cypher
+// Proxy: sessions with high same-tool repetition (coarse S4c approximation)
+MATCH (s:Session)-[:HAS_TOOL_CALL]->(tc:ToolCall)
+WHERE s.workspace CONTAINS $workspace_hint
+WITH s, tc.tool_name AS tool_name, count(tc) AS call_count
+WHERE call_count >= 4
+RETURN
+  s.session_id  AS session_id,
+  tool_name,
+  call_count,
+  call_count >= 4 AS s4c_proxy_fires
+ORDER BY call_count DESC
+LIMIT 25
+```
+
+```cypher
+// Precise query: requires tool_input_hash property on ToolCall nodes
+MATCH (s:Session)-[:HAS_TOOL_CALL]->(tc:ToolCall)
+WHERE s.workspace CONTAINS $workspace_hint
+  AND tc.tool_input_hash IS NOT NULL
+WITH s, tc.tool_input_hash AS input_hash, count(tc) AS dup_count
+WHERE dup_count >= 4
+RETURN
+  s.session_id  AS session_id,
+  input_hash,
+  dup_count,
+  dup_count >= 4 AS s4c_fires
+ORDER BY dup_count DESC
+LIMIT 25
+```
+
+**JSONL fallback** (authoritative path — works without graph schema changes):
+
+Use `score_s4c(events_path)` from `context_intelligence.signals`.  Pass the
+absolute path to the session's `events.jsonl`.  The function iterates `tool:pre`
+events, computes `md5(tool_name + ':' + json.dumps(tool_input, sort_keys=True))`
+for each, and returns the maximum occurrence count.  Returns 0 if the file is
+absent.  Signal fires when the return value is ≥ `S4C_THRESHOLD` (4).
+
+---
+
+## Q-S4d — No-Progress (Input, Output) Pair Repetition
+
+Detects agent loops where the same tool call produces the same result repeatedly,
+indicating the agent is not making progress.  Fires when any single (input, output)
+fingerprint pair appears ≥ 3 times (`S4D_THRESHOLD`).
+
+**Schema requirement:** This query requires both `tool_input_hash` AND
+`tool_output_hash` properties on `ToolCall` nodes.  The CI pipeline must store
+`sha256(str(result.output))[:16]` alongside `result_success` when indexing
+`tool:post` events.  If either property is absent, use the JSONL fallback.
+
+```cypher
+// Sessions with repeated (input, output) pairs — requires tool_input_hash + tool_output_hash
+MATCH (s:Session)-[:HAS_TOOL_CALL]->(tc:ToolCall)
+WHERE s.workspace CONTAINS $workspace_hint
+  AND tc.tool_input_hash IS NOT NULL
+  AND tc.tool_output_hash IS NOT NULL
+WITH
+  s,
+  tc.tool_input_hash  AS input_hash,
+  tc.result_success   AS success,
+  tc.tool_output_hash AS output_hash,
+  count(tc)           AS pair_count
+WHERE pair_count >= 3
+RETURN
+  s.session_id  AS session_id,
+  input_hash,
+  success,
+  output_hash,
+  pair_count,
+  pair_count >= 3 AS s4d_fires
+ORDER BY pair_count DESC
+LIMIT 25
+```
+
+```cypher
+// Count of sessions where S4d fires (for prevalence analysis)
+MATCH (s:Session)-[:HAS_TOOL_CALL]->(tc:ToolCall)
+WHERE s.workspace CONTAINS $workspace_hint
+  AND tc.tool_input_hash IS NOT NULL
+  AND tc.tool_output_hash IS NOT NULL
+WITH
+  s,
+  tc.tool_input_hash  AS input_hash,
+  tc.result_success   AS success,
+  tc.tool_output_hash AS output_hash,
+  count(tc)           AS pair_count
+WITH s, max(pair_count) AS max_pair_count
+WHERE max_pair_count >= 3
+RETURN count(DISTINCT s) AS sessions_with_s4d
+```
+
+**JSONL fallback** (authoritative path — works without graph schema changes):
+
+Use `score_s4d(events_path)` from `context_intelligence.signals`.  Pass the
+absolute path to the session's `events.jsonl`.  The function performs a two-pass
+algorithm: first collecting input fingerprints from `tool:pre` events keyed by
+`tool_call_id`, then joining with `tool:post` events to compute `(input_fp,
+(result.success, sha256(str(result.output))[:16]))` pairs.  Returns the maximum
+pair count.  Returns 0 if the file is absent.  Signal fires when the return value
+is ≥ `S4D_THRESHOLD` (3).
