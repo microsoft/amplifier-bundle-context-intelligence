@@ -29,16 +29,15 @@ Internal helpers:
 
 from __future__ import annotations
 
-import hashlib  # noqa: F401 – available for scoring implementations
+import hashlib
 import json
 import logging
 import pathlib
 import re
 import sys
-from collections import Counter, defaultdict  # noqa: F401 – available for scoring implementations
+from collections import Counter, defaultdict
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta  # noqa: F401 – available for scoring implementations
-from typing import Any  # noqa: F401 – available for scoring implementations
+from datetime import datetime, timedelta
 
 _LOG = logging.getLogger(__name__)
 
@@ -69,6 +68,7 @@ S4C_THRESHOLD: int = 4
 S4D_THRESHOLD: int = 3
 S7_THRESHOLD: int = 5
 S8_THRESHOLD: int = 5
+S9B_SIZE_THRESHOLD: int = 20_000
 SCORE_4_1_VOLUME_THRESHOLD: int = 5
 
 # ---------------------------------------------------------------------------
@@ -187,11 +187,11 @@ class SignalScores:
             count += 1
         if self.s7_max_reads_per_iter >= 5:
             count += 1
-        if self.s8_max_bash_burst_len >= 3:
+        if self.s8_max_bash_burst_len >= S8_THRESHOLD:
             count += 1
         if self.s9a_delegate_count >= S9A_THRESHOLD:
             count += 1
-        if self.s9b_max_delegate_result_size >= 20_000:
+        if self.s9b_max_delegate_result_size >= S9B_SIZE_THRESHOLD:
             count += 1
         if self.s9c_size_fires:
             count += 1
@@ -723,7 +723,7 @@ def score_s9a(events_path: pathlib.Path | str) -> int:
     )
 
 
-def score_s9b(events_path: pathlib.Path | str, *, size_threshold: int = 20_000) -> int:
+def score_s9b(events_path: pathlib.Path | str, *, size_threshold: int = S9B_SIZE_THRESHOLD) -> int:
     """S9b: maximum delegate result payload size.
 
     Iterates ``tool:post`` events where ``data.tool_name == 'delegate'``.
@@ -831,8 +831,8 @@ def score_s9c_self(events_path: pathlib.Path | str) -> int:
 def score_s9_combined(
     events_path: pathlib.Path | str,
     *,
-    s9a_threshold: int = 5,
-    s9b_threshold: int = 20_000,
+    s9a_threshold: int = S9A_THRESHOLD,
+    s9b_threshold: int = S9B_SIZE_THRESHOLD,
     s9c_size_threshold: int = 30_000,
 ) -> bool:
     """S9 combined: fires when S9a, S9b, and S9c (size OR self) all fire together.
@@ -872,12 +872,20 @@ def score_4_1(
     - compound_rate: float    (fraction of sessions with compound_score >= compound_threshold)
     - triple_rate: float      (fraction of sessions with compound_score >= 3)
 
-    If total_sessions == 0, all rates are 0.0.
+    If total_sessions == 0 or total_sessions < volume_threshold, all rates are 0.0.
+    The volume_threshold guard prevents statistically meaningless rates on sparse data.
     """
     total = len(session_scores)
     if total == 0:
         return {
             "total_sessions": 0,
+            "any_signal_rate": 0.0,
+            "compound_rate": 0.0,
+            "triple_rate": 0.0,
+        }
+    if total < volume_threshold:
+        return {
+            "total_sessions": total,
             "any_signal_rate": 0.0,
             "compound_rate": 0.0,
             "triple_rate": 0.0,
@@ -961,11 +969,17 @@ def _cli_main() -> None:
     command = args[0]
 
     if command == "score-session":
+        if len(args) < 2:
+            print("Usage: score-session <events.jsonl>", file=sys.stderr)
+            sys.exit(1)
         path = args[1]
         scores = score_session(path)
         print(json.dumps(scores.to_dict(), indent=2))
 
     elif command == "score-pressure":
+        if len(args) < 2:
+            print("Usage: score-pressure <events.jsonl>", file=sys.stderr)
+            sys.exit(1)
         path = args[1]
         s2_count, s2_ratio = score_s2(path)
         data = {
@@ -982,6 +996,9 @@ def _cli_main() -> None:
         print(json.dumps(data, indent=2))
 
     elif command == "score-iteration":
+        if len(args) < 2:
+            print("Usage: score-iteration <events.jsonl>", file=sys.stderr)
+            sys.exit(1)
         path = args[1]
         data = {
             "s3": score_s3(path),

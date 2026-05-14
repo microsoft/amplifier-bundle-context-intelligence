@@ -2016,7 +2016,11 @@ class TestScore41:
         assert result["triple_rate"] == 0.0
 
     def test_any_signal_rate_correct(self):
-        """2 sessions with compound>=1 out of 4 total → any_signal_rate=0.5."""
+        """2 sessions with compound>=1 out of 4 total → any_signal_rate=0.5.
+
+        volume_threshold=1 disables sparse-data filtering so this test exercises
+        the rate calculation logic in isolation.
+        """
         from context_intelligence.signals import score_4_1
 
         sessions = [
@@ -2025,13 +2029,16 @@ class TestScore41:
             ("s3", self._make_scores(0)),
             ("s4", self._make_scores(0)),
         ]
-        result = score_4_1(sessions)
+        result = score_4_1(sessions, volume_threshold=1)
         assert result["any_signal_rate"] == 0.5
 
     def test_compound_rate_correct(self):
         """4 sessions with compound scores [1, 2, 3, 0]:
         - compound_rate (>=2) = 2/4 = 0.5
         - triple_rate  (>=3) = 1/4 = 0.25
+
+        volume_threshold=1 disables sparse-data filtering so this test exercises
+        the rate calculation logic in isolation.
         """
         from context_intelligence.signals import score_4_1
 
@@ -2041,7 +2048,7 @@ class TestScore41:
             ("s3", self._make_scores(3)),
             ("s4", self._make_scores(0)),
         ]
-        result = score_4_1(sessions)
+        result = score_4_1(sessions, volume_threshold=1)
         assert result["compound_rate"] == 0.5
         assert result["triple_rate"] == 0.25
 
@@ -2163,3 +2170,132 @@ class TestCLI:
 
         captured = capsys.readouterr()
         assert "not yet implemented" in captured.err
+
+
+class TestCLIMissingPathGuards:
+    """Verify CLI subcommands exit cleanly when path argument is missing."""
+
+    def test_score_session_missing_path_exits_nonzero(self):
+        """score-session with no path arg must exit with code != 0, not IndexError."""
+        from unittest.mock import patch
+
+        from context_intelligence.signals import _cli_main
+
+        raised: SystemExit | None = None
+        try:
+            with patch("sys.argv", ["signals.py", "score-session"]):
+                _cli_main()
+        except SystemExit as exc:
+            raised = exc
+        assert raised is not None, "Expected SystemExit to be raised"
+        assert raised.code != 0
+
+    def test_score_pressure_missing_path_exits_nonzero(self):
+        """score-pressure with no path arg must exit with code != 0, not IndexError."""
+        from unittest.mock import patch
+
+        from context_intelligence.signals import _cli_main
+
+        raised: SystemExit | None = None
+        try:
+            with patch("sys.argv", ["signals.py", "score-pressure"]):
+                _cli_main()
+        except SystemExit as exc:
+            raised = exc
+        assert raised is not None, "Expected SystemExit to be raised"
+        assert raised.code != 0
+
+    def test_score_iteration_missing_path_exits_nonzero(self):
+        """score-iteration with no path arg must exit with code != 0, not IndexError."""
+        from unittest.mock import patch
+
+        from context_intelligence.signals import _cli_main
+
+        raised: SystemExit | None = None
+        try:
+            with patch("sys.argv", ["signals.py", "score-iteration"]):
+                _cli_main()
+        except SystemExit as exc:
+            raised = exc
+        assert raised is not None, "Expected SystemExit to be raised"
+        assert raised.code != 0
+
+
+class TestCompoundScoreThresholds:
+    """Verify compound_score() uses named threshold constants, not magic literals."""
+
+    def test_s8_burst_below_s8_threshold_does_not_fire(self):
+        """s8_max_bash_burst_len=4 (below S8_THRESHOLD=5) must not contribute to compound_score.
+
+        The burst group minimum (_MIN_PARALLEL_BASH=3) qualifies a group for
+        consideration, but the S8 signal only fires when a streak of S8_THRESHOLD=5
+        is reached.  A value of 4 is above the group minimum but below the signal
+        threshold — it must not count toward compound_score.
+        """
+        from context_intelligence.signals import S8_THRESHOLD, SignalScores
+
+        assert 4 < S8_THRESHOLD  # verifies this test uses the correct boundary
+        scores = SignalScores(s8_max_bash_burst_len=4)
+        assert scores.compound_score() == 0
+
+    def test_s8_burst_at_s8_threshold_fires(self):
+        """s8_max_bash_burst_len == S8_THRESHOLD must contribute to compound_score."""
+        from context_intelligence.signals import S8_THRESHOLD, SignalScores
+
+        scores = SignalScores(s8_max_bash_burst_len=S8_THRESHOLD)
+        assert scores.compound_score() >= 1
+
+    def test_s9b_size_threshold_constant_importable(self):
+        """S9B_SIZE_THRESHOLD must be importable and equal 20_000."""
+        from context_intelligence.signals import S9B_SIZE_THRESHOLD
+
+        assert S9B_SIZE_THRESHOLD == 20_000
+
+    def test_s9b_size_below_threshold_does_not_fire(self):
+        """s9b_max_delegate_result_size just below S9B_SIZE_THRESHOLD must not count."""
+        from context_intelligence.signals import S9B_SIZE_THRESHOLD, SignalScores
+
+        scores = SignalScores(s9b_max_delegate_result_size=S9B_SIZE_THRESHOLD - 1)
+        assert scores.compound_score() == 0
+
+    def test_s9b_size_at_threshold_fires(self):
+        """s9b_max_delegate_result_size at S9B_SIZE_THRESHOLD must contribute to compound_score."""
+        from context_intelligence.signals import S9B_SIZE_THRESHOLD, SignalScores
+
+        scores = SignalScores(s9b_max_delegate_result_size=S9B_SIZE_THRESHOLD)
+        assert scores.compound_score() >= 1
+
+
+class TestScore41VolumeThreshold:
+    """Verify score_4_1() volume_threshold filtering behaviour."""
+
+    def _make_scores(self, compound: int):
+        from context_intelligence.signals import SignalScores
+
+        return SignalScores(
+            s6_cancel_count=1 if compound >= 1 else 0,
+            s3_iteration_count=25 if compound >= 2 else 0,
+        )
+
+    def test_volume_threshold_suppresses_rates_for_sparse_sessions(self):
+        """Below volume_threshold, all rates must be 0.0 even if signals fire.
+
+        With 2 sessions (all with compound=3) but volume_threshold=5, the dataset
+        is too sparse — all rates are forced to 0.0.
+        """
+        from context_intelligence.signals import score_4_1
+
+        sessions = [("s1", self._make_scores(3)), ("s2", self._make_scores(3))]
+        result = score_4_1(sessions, volume_threshold=5)
+        assert result["total_sessions"] == 2
+        assert result["any_signal_rate"] == 0.0
+        assert result["compound_rate"] == 0.0
+        assert result["triple_rate"] == 0.0
+
+    def test_volume_threshold_does_not_suppress_adequate_volume(self):
+        """At exactly volume_threshold sessions, rates are calculated normally."""
+        from context_intelligence.signals import score_4_1
+
+        sessions = [(f"s{i}", self._make_scores(3)) for i in range(5)]
+        result = score_4_1(sessions, volume_threshold=5)
+        assert result["any_signal_rate"] == 1.0
