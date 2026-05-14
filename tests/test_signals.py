@@ -2159,17 +2159,20 @@ class TestCLI:
         assert raised is not None, "Expected SystemExit to be raised"
         assert raised.code != 0
 
-    def test_render_findings_stub_exits_zero(self, capsys):
-        """render-findings prints 'not yet implemented' to stderr and returns without error."""
+    def test_render_findings_no_args_exits_nonzero(self):
+        """render-findings with no flags must exit with code != 0 (missing required args)."""
         from unittest.mock import patch
 
         from context_intelligence.signals import _cli_main
 
-        with patch("sys.argv", ["signals.py", "render-findings"]):
-            _cli_main()  # must not raise
-
-        captured = capsys.readouterr()
-        assert "not yet implemented" in captured.err
+        raised: SystemExit | None = None
+        try:
+            with patch("sys.argv", ["signals.py", "render-findings"]):
+                _cli_main()
+        except SystemExit as exc:
+            raised = exc
+        assert raised is not None, "Expected SystemExit to be raised"
+        assert raised.code != 0
 
 
 class TestCLIMissingPathGuards:
@@ -2299,3 +2302,171 @@ class TestScore41VolumeThreshold:
         sessions = [(f"s{i}", self._make_scores(3)) for i in range(5)]
         result = score_4_1(sessions, volume_threshold=5)
         assert result["any_signal_rate"] == 1.0
+
+
+class TestRenderFindings:
+    """End-to-end subprocess tests for the render-findings CLI command."""
+
+    @staticmethod
+    def _write_score_fixtures(tmp_path):
+        """Write lifecycle.json, pressure.json, and iteration.json with one session."""
+        lifecycle = [
+            {
+                "session_id": "s-test-001",
+                "s5_stale": False,
+                "s6_cancel_count": 0,
+            }
+        ]
+        pressure = [
+            {
+                "session_id": "s-test-001",
+                "s1": 5,
+                "s1_burst": 4,
+                "s2_count": 4,
+                "s2_ratio": 0.8,
+                "s9a": 6,
+                "s9b": 0,
+                "s9c_size": False,
+                "s9c_self": 0,
+                "s9_combined": False,
+            }
+        ]
+        iteration = [
+            {
+                "session_id": "s-test-001",
+                "s3": 8,
+                "s4a": {
+                    "fires": False,
+                    "multi_tool_ratio": 0.0,
+                    "top_shape_share": 0.0,
+                    "top_shape": [],
+                },
+                "s4b": {
+                    "fires": False,
+                    "instrumentation_ratio": 0.0,
+                    "instrumentation_count": 0,
+                    "total_bash_count": 0,
+                },
+                "s4c": 0,
+                "s4d": 0,
+                "s7": 0,
+                "s8": 0,
+            }
+        ]
+        import json
+
+        (tmp_path / "lifecycle.json").write_text(json.dumps(lifecycle), encoding="utf-8")
+        (tmp_path / "pressure.json").write_text(json.dumps(pressure), encoding="utf-8")
+        (tmp_path / "iteration.json").write_text(json.dumps(iteration), encoding="utf-8")
+
+    def test_render_findings_writes_file(self, tmp_path):
+        """render-findings with valid inputs writes findings.md with expected content."""
+        import subprocess
+        import sys
+
+        self._write_score_fixtures(tmp_path)
+        output_path = tmp_path / "findings.md"
+
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "context_intelligence.signals",
+                "render-findings",
+                "--lifecycle",
+                str(tmp_path / "lifecycle.json"),
+                "--pressure",
+                str(tmp_path / "pressure.json"),
+                "--iteration",
+                str(tmp_path / "iteration.json"),
+                "--output",
+                str(output_path),
+            ],
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 0, f"stderr: {result.stderr}"
+        assert output_path.exists(), "findings.md was not created"
+        content = output_path.read_text(encoding="utf-8")
+        assert "## Signal Prevalence" in content
+        assert "S1" in content
+
+    def test_render_findings_missing_class_scoring(self, tmp_path):
+        """render-findings without --class flag emits 'Class scoring not available'."""
+        import subprocess
+        import sys
+
+        self._write_score_fixtures(tmp_path)
+        output_path = tmp_path / "findings.md"
+
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "context_intelligence.signals",
+                "render-findings",
+                "--lifecycle",
+                str(tmp_path / "lifecycle.json"),
+                "--pressure",
+                str(tmp_path / "pressure.json"),
+                "--iteration",
+                str(tmp_path / "iteration.json"),
+                "--output",
+                str(output_path),
+            ],
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 0, f"stderr: {result.stderr}"
+        content = output_path.read_text(encoding="utf-8")
+        assert "Class scoring not available" in content
+
+    def test_render_findings_empty_corpus(self, tmp_path):
+        """render-findings with empty JSON arrays produces findings.md mentioning 0 sessions."""
+        import subprocess
+        import sys
+
+        (tmp_path / "lifecycle.json").write_text("[]", encoding="utf-8")
+        (tmp_path / "pressure.json").write_text("[]", encoding="utf-8")
+        (tmp_path / "iteration.json").write_text("[]", encoding="utf-8")
+        output_path = tmp_path / "findings.md"
+
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "context_intelligence.signals",
+                "render-findings",
+                "--lifecycle",
+                str(tmp_path / "lifecycle.json"),
+                "--pressure",
+                str(tmp_path / "pressure.json"),
+                "--iteration",
+                str(tmp_path / "iteration.json"),
+                "--output",
+                str(output_path),
+            ],
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 0, f"stderr: {result.stderr}"
+        assert output_path.exists()
+        content = output_path.read_text(encoding="utf-8")
+        assert "0 sessions" in content
+
+    def test_render_findings_bad_args(self):
+        """render-findings with no flags exits with non-zero return code."""
+        import subprocess
+        import sys
+
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "context_intelligence.signals",
+                "render-findings",
+            ],
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode != 0

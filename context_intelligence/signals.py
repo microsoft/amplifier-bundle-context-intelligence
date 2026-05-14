@@ -29,6 +29,7 @@ Internal helpers:
 
 from __future__ import annotations
 
+import argparse
 import hashlib
 import json
 import logging
@@ -36,6 +37,7 @@ import pathlib
 import re
 import sys
 from collections import Counter, defaultdict
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 
@@ -944,6 +946,230 @@ def score_session(events_path: pathlib.Path | str) -> SignalScores:
 
 
 # ---------------------------------------------------------------------------
+# render-findings helpers
+# ---------------------------------------------------------------------------
+
+
+def _compute_compound_from_parts(pr: dict, it: dict, lc: dict) -> tuple[int, list[str]]:
+    """Return (compound_score, list of firing signal short names).
+
+    Replicates SignalScores.compound_score() logic on flat dicts from
+    the per-command JSON outputs.
+    """
+    count = 0
+    sigs: list[str] = []
+
+    if pr.get("s1", 0) >= S1_CANDIDATE_THRESHOLD:
+        count += 1
+        sigs.append("S1")
+    if pr.get("s1_burst", 0) >= S1_BURST_THRESHOLD:
+        count += 1
+        sigs.append("S1b")
+    if pr.get("s2_count", 0) >= S2_COUNT_THRESHOLD or pr.get("s2_ratio", 0.0) > S2_RATIO_THRESHOLD:
+        count += 1
+        sigs.append("S2")
+    if it.get("s3", 0) >= S3_CANDIDATE_THRESHOLD:
+        count += 1
+        sigs.append("S3")
+    if (it.get("s4a") or {}).get("fires", False):
+        count += 1
+        sigs.append("S4a")
+    if (it.get("s4b") or {}).get("fires", False):
+        count += 1
+        sigs.append("S4b")
+    if it.get("s4c", 0) >= S4C_THRESHOLD:
+        count += 1
+        sigs.append("S4c")
+    if it.get("s4d", 0) >= S4D_THRESHOLD:
+        count += 1
+        sigs.append("S4d")
+    if lc.get("s5_stale", False):
+        count += 1
+        sigs.append("S5")
+    if lc.get("s6_cancel_count", 0) >= 1:
+        count += 1
+        sigs.append("S6")
+    if it.get("s7", 0) >= S7_THRESHOLD:
+        count += 1
+        sigs.append("S7")
+    if it.get("s8", 0) >= S8_THRESHOLD:
+        count += 1
+        sigs.append("S8")
+    if pr.get("s9a", 0) >= S9A_THRESHOLD:
+        count += 1
+        sigs.append("S9a")
+    if pr.get("s9b", 0) >= S9B_SIZE_THRESHOLD:
+        count += 1
+        sigs.append("S9b")
+    if pr.get("s9c_size", False):
+        count += 1
+        sigs.append("S9c-sz")
+    if pr.get("s9c_self", 0) >= 1:
+        count += 1
+        sigs.append("S9c-sf")
+    if pr.get("s9_combined", False):
+        count += 1
+        sigs.append("S9")
+
+    return count, sigs
+
+
+def _merge_scores(lifecycle: list[dict], pressure: list[dict], iteration: list[dict]) -> list[dict]:
+    """Join three per-session score lists by session_id and compute compound_score.
+
+    Builds lc_idx, pr_idx, it_idx dicts keyed by session_id.  Iterates sorted
+    union of all session IDs.  For each: get the three dicts (defaulting to {}),
+    call _compute_compound_from_parts, build row merging all three dicts, set
+    compound_score and signals_fired.  Returns rows sorted by compound_score
+    descending.
+    """
+    lc_idx = {d["session_id"]: d for d in lifecycle if "session_id" in d}
+    pr_idx = {d["session_id"]: d for d in pressure if "session_id" in d}
+    it_idx = {d["session_id"]: d for d in iteration if "session_id" in d}
+
+    all_ids = sorted(set(lc_idx) | set(pr_idx) | set(it_idx))
+    rows: list[dict] = []
+    for sid in all_ids:
+        lc = lc_idx.get(sid, {})
+        pr = pr_idx.get(sid, {})
+        it = it_idx.get(sid, {})
+        compound, signals = _compute_compound_from_parts(pr, it, lc)
+        row: dict = {"session_id": sid}
+        row.update(lc)
+        row.update(pr)
+        row.update(it)
+        row["compound_score"] = compound
+        row["signals_fired"] = signals
+        rows.append(row)
+
+    rows.sort(key=lambda r: r["compound_score"], reverse=True)
+    return rows
+
+
+def _render_findings_md(
+    merged: list[dict], total: int, timestamp: str, class_data: dict | None
+) -> str:
+    """Build findings.md markdown string.
+
+    Sections:
+    1. Header with corpus size and generation timestamp.
+    2. Signal Prevalence table.
+    3. Compound Failure Distribution table.
+    4. Top Failing Sessions table (up to 10).
+    5. Class Scoring section.
+    """
+    lines: list[str] = []
+
+    # 1. Header
+    lines.append("# Workflow Pattern Analysis — Findings")
+    lines.append("")
+    lines.append(f"**Corpus:** {total} sessions")
+    lines.append(f"**Generated:** {timestamp}")
+    lines.append("")
+
+    # 2. Signal Prevalence
+    lines.append("## Signal Prevalence")
+    lines.append("")
+    lines.append("| Signal | Name | Sessions Firing | Rate | Severity |")
+    lines.append("|--------|------|-----------------|------|----------|")
+
+    _signal_checks: list[tuple[str, str, Callable[[dict], bool]]] = [
+        ("S1", "Compaction Count", lambda d: d.get("s1", 0) >= S1_CANDIDATE_THRESHOLD),
+        ("S1b", "Compaction Burst", lambda d: d.get("s1_burst", 0) >= S1_BURST_THRESHOLD),
+        (
+            "S2",
+            "Rapid Resume",
+            lambda d: (
+                d.get("s2_count", 0) >= S2_COUNT_THRESHOLD
+                or d.get("s2_ratio", 0.0) > S2_RATIO_THRESHOLD
+            ),
+        ),
+        ("S3", "Iteration Count", lambda d: d.get("s3", 0) >= S3_CANDIDATE_THRESHOLD),
+        ("S4a", "Multi-Tool Shape", lambda d: bool((d.get("s4a") or {}).get("fires", False))),
+        ("S4b", "Instrumentation Bash", lambda d: bool((d.get("s4b") or {}).get("fires", False))),
+        ("S4c", "Duplicate Input", lambda d: d.get("s4c", 0) >= S4C_THRESHOLD),
+        ("S4d", "Duplicate Input Pair", lambda d: d.get("s4d", 0) >= S4D_THRESHOLD),
+        ("S5", "Stale Session", lambda d: bool(d.get("s5_stale", False))),
+        ("S6", "Cancellation Count", lambda d: d.get("s6_cancel_count", 0) >= 1),
+        ("S7", "Max Reads Per Iter", lambda d: d.get("s7", 0) >= S7_THRESHOLD),
+        ("S8", "Bash Burst", lambda d: d.get("s8", 0) >= S8_THRESHOLD),
+        ("S9a", "Delegate Count", lambda d: d.get("s9a", 0) >= S9A_THRESHOLD),
+        ("S9b", "Delegate Result Size", lambda d: d.get("s9b", 0) >= S9B_SIZE_THRESHOLD),
+        ("S9c-sz", "Narrative Density", lambda d: bool(d.get("s9c_size", False))),
+        ("S9c-sf", "Self-Delegation", lambda d: d.get("s9c_self", 0) >= 1),
+        ("S9", "S9 Combined", lambda d: bool(d.get("s9_combined", False))),
+    ]
+
+    if total == 0:
+        lines.append("| — | No sessions in corpus | 0 | 0.0% | healthy |")
+    else:
+        any_row_written = False
+        for sig, name, predicate in _signal_checks:
+            firing = sum(1 for d in merged if predicate(d))
+            if firing == 0:
+                continue
+            rate = firing / total
+            severity = "candidate" if rate < 0.30 else "severe"
+            lines.append(f"| {sig} | {name} | {firing} | {rate:.1%} | {severity} |")
+            any_row_written = True
+        if not any_row_written:
+            lines.append("| — | No signals fired | 0 | 0.0% | healthy |")
+
+    lines.append("")
+
+    # 3. Compound Failure Distribution
+    lines.append("## Compound Failure Distribution")
+    lines.append("")
+    lines.append("| Compound Score | Sessions | Rate |")
+    lines.append("|----------------|----------|------|")
+
+    if total > 0:
+        healthy = sum(1 for d in merged if d["compound_score"] == 0)
+        degraded = sum(1 for d in merged if d["compound_score"] == 1)
+        compound_2plus = sum(1 for d in merged if d["compound_score"] >= 2)
+        critical = sum(1 for d in merged if d["compound_score"] >= 3)
+        lines.append(f"| 0 (healthy) | {healthy} | {healthy / total:.1%} |")
+        lines.append(f"| 1 (degraded) | {degraded} | {degraded / total:.1%} |")
+        lines.append(f"| 2+ (compound) | {compound_2plus} | {compound_2plus / total:.1%} |")
+        lines.append(f"| 3+ (critical) | {critical} | {critical / total:.1%} |")
+    else:
+        lines.append("| 0 (healthy) | 0 | 0.0% |")
+        lines.append("| 1 (degraded) | 0 | 0.0% |")
+        lines.append("| 2+ (compound) | 0 | 0.0% |")
+        lines.append("| 3+ (critical) | 0 | 0.0% |")
+
+    lines.append("")
+
+    # 4. Top Failing Sessions
+    lines.append("## Top Failing Sessions")
+    lines.append("")
+    lines.append("| Session | Compound Score | Signals |")
+    lines.append("|---------|----------------|---------|")
+
+    for row in merged[:10]:
+        sigs_str = ", ".join(row.get("signals_fired", [])) or "—"
+        lines.append(f"| {row['session_id']} | {row['compound_score']} | {sigs_str} |")
+
+    lines.append("")
+
+    # 5. Class Scoring
+    lines.append("## Class Scoring")
+    lines.append("")
+    if class_data:
+        lines.append(f"- **Total sessions:** {class_data.get('total_sessions', 0)}")
+        any_rate = class_data.get("any_signal_rate", 0.0) * 100
+        compound_rate = class_data.get("compound_rate", 0.0) * 100
+        triple_rate = class_data.get("triple_rate", 0.0) * 100
+        lines.append(f"- **Any signal rate:** {any_rate:.1f}%")
+        lines.append(f"- **Compound rate:** {compound_rate:.1f}%")
+        lines.append(f"- **Triple rate:** {triple_rate:.1f}%")
+    else:
+        lines.append("_Class scoring not available for this run._")
+
+    return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
 # CLI entry point
 # ---------------------------------------------------------------------------
 
@@ -954,7 +1180,13 @@ Commands:
   score-session <events.jsonl>    Compute all signal scores; print JSON
   score-pressure <events.jsonl>   Compute pressure signals (S1/S2/S9); print JSON
   score-iteration <events.jsonl>  Compute iteration signals (S3/S4/S7/S8); print JSON
-  render-findings                 (Phase 2 stub)
+  render-findings --lifecycle PATH --pressure PATH --iteration PATH --output PATH
+                  [--class PATH]
+                    --lifecycle PATH   Path to lifecycle scores JSON file (required)
+                    --pressure PATH    Path to pressure scores JSON file (required)
+                    --iteration PATH   Path to iteration scores JSON file (required)
+                    --class PATH       Path to class scoring JSON file (optional)
+                    --output PATH      Path to write findings.md (required)
 """
 
 
@@ -1012,7 +1244,34 @@ def _cli_main() -> None:
         print(json.dumps(data, indent=2))
 
     elif command == "render-findings":
-        print("not yet implemented (Phase 2)", file=sys.stderr)
+        parser = argparse.ArgumentParser(
+            prog="python -m context_intelligence.signals render-findings"
+        )
+        parser.add_argument("--lifecycle", metavar="PATH", required=True)
+        parser.add_argument("--pressure", metavar="PATH", required=True)
+        parser.add_argument("--iteration", metavar="PATH", required=True)
+        parser.add_argument("--class", dest="class_scoring", metavar="PATH", default=None)
+        parser.add_argument("--output", metavar="PATH", required=True)
+
+        try:
+            rf_args = parser.parse_args(args[1:])
+        except SystemExit:
+            sys.exit(1)
+
+        lifecycle_data = json.loads(pathlib.Path(rf_args.lifecycle).read_text(encoding="utf-8"))
+        pressure_data = json.loads(pathlib.Path(rf_args.pressure).read_text(encoding="utf-8"))
+        iteration_data = json.loads(pathlib.Path(rf_args.iteration).read_text(encoding="utf-8"))
+
+        class_data: dict | None = None
+        if rf_args.class_scoring:
+            class_data = json.loads(pathlib.Path(rf_args.class_scoring).read_text(encoding="utf-8"))
+
+        merged = _merge_scores(lifecycle_data, pressure_data, iteration_data)
+        total = len(merged)
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M UTC")
+
+        md = _render_findings_md(merged, total, timestamp, class_data)
+        pathlib.Path(rf_args.output).write_text(md, encoding="utf-8")
 
     else:
         print(f"Unknown command: {command!r}", file=sys.stderr)
