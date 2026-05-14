@@ -1,0 +1,281 @@
+# ci-signals-validation.yaml
+#
+# End-to-end integration test for context_intelligence.signals library,
+# CLI commands, render-findings output, and recipe YAML structural validity.
+#
+# Does NOT require: Amplifier CLI, LLM API keys, or a graph server endpoint.
+# All detection is deterministic Python + static fixtures.
+#
+# Usage:
+#   export GH_TOKEN=$(gh auth token)
+#   amplifier-digital-twin launch \
+#     .amplifier/digital-twin-universe/profiles/ci-signals-validation.yaml \
+#     --name ci-signals-validation
+#
+# TODO: update --branch to main after feat/improve-geenrated-tools is merged.
+
+name: ci-signals-validation
+description: >
+  Integration test for context_intelligence.signals library and
+  workflow-pattern-analysis recipe. Validates signal scoring,
+  CLI commands, render-findings output, and recipe YAML validity
+  using stable fixture JSONL files. No LLM or graph server required.
+
+base:
+  image: ubuntu:24.04
+
+passthrough:
+  allow_external: true
+  services:
+    - name: github
+      key_env: GH_TOKEN
+
+provision:
+  setup_cmds:
+    # System dependencies
+    - apt-get update && apt-get install -y git curl python3 python3-venv python3-pip
+
+    # Install uv
+    - curl -LsSf https://astral.sh/uv/install.sh | sh
+
+    # Configure git credentials for private GitHub repos
+    - |
+      if [ -n "${GH_TOKEN:-}" ]; then
+        echo "machine github.com login x-token-auth password $GH_TOKEN" > /root/.netrc
+        chmod 600 /root/.netrc
+        git config --global credential.helper 'store'
+      fi
+
+    # Clone the bundle from the working branch
+    # TODO: update --branch to main after feat/improve-geenrated-tools is merged
+    - |
+      export PATH="/root/.local/bin:$PATH"
+      git clone \
+        --depth 1 \
+        --branch feat/improve-geenrated-tools \
+        https://github.com/microsoft/amplifier-bundle-context-intelligence.git \
+        /opt/ci-bundle
+
+    # Create a venv and install the signals library + pyyaml (for validation E)
+    # Note: pyyaml is a dev dependency — not bundled in the wheel, must be explicit.
+    - |
+      export PATH="/root/.local/bin:$PATH"
+      uv venv /opt/venv --python python3
+      export VIRTUAL_ENV=/opt/venv
+      export PATH="/opt/venv/bin:$PATH"
+      uv pip install /opt/ci-bundle/
+      uv pip install pyyaml
+
+    # Quick sanity — signals module importable?
+    - /opt/venv/bin/python3 -c "from context_intelligence.signals import score_session; print('signals importable')"
+
+    # Set up fixture session directories under /root/.amplifier/projects/ci-test-workspace/
+    - |
+      mkdir -p /root/.amplifier/projects
+      bash /opt/ci-bundle/tests/dtu/setup_fixtures.sh /root/.amplifier/projects
+
+    # Persist PATH and VIRTUAL_ENV for exec commands
+    - |
+      echo 'export PATH="/opt/venv/bin:/root/.local/bin:$PATH"' >> /root/.bashrc
+      echo 'export VIRTUAL_ENV=/opt/venv' >> /root/.bashrc
+
+    # Workspace directory
+    - mkdir -p /home/user/project
+
+readiness:
+  - name: signals-importable
+    command: >
+      /opt/venv/bin/python3 -c
+      "from context_intelligence.signals import score_session; print('ready')"
+
+validation_cmds:
+  # A: All public symbols importable
+  - name: A-library-import
+    command: |
+      set -e
+      /opt/venv/bin/python3 -c "
+      from context_intelligence.signals import (
+          score_session, score_s1, score_s9a, score_s4a,
+          SignalScores, S4aResult, S4bResult,
+          S1_CANDIDATE_THRESHOLD, S9A_THRESHOLD
+      )
+      print('PASS: all public symbols importable')
+      print(f'  S1_CANDIDATE_THRESHOLD={S1_CANDIDATE_THRESHOLD}')
+      print(f'  S9A_THRESHOLD={S9A_THRESHOLD}')
+      "
+
+  # B: score-session returns correct S1 count for s1_session.jsonl
+  - name: B-score-s1-fixture
+    command: |
+      set -e
+      EVENTS="/opt/ci-bundle/tests/fixtures/s1_session.jsonl"
+      /opt/venv/bin/python3 - << 'PYEOF'
+      import json, sys, subprocess
+      result = subprocess.run(
+          ["/opt/venv/bin/python3", "-m", "context_intelligence.signals",
+           "score-session", "/opt/ci-bundle/tests/fixtures/s1_session.jsonl"],
+          capture_output=True, text=True
+      )
+      if result.returncode != 0:
+          print("FAIL: score-session exited non-zero")
+          print(result.stderr)
+          sys.exit(1)
+      d = json.loads(result.stdout)
+      s1 = d.get("s1_compaction_count", 0)
+      threshold = 3  # S1_CANDIDATE_THRESHOLD
+      if s1 >= threshold:
+          print(f"PASS: s1_compaction_count={s1} (>= {threshold}, S1 candidate threshold)")
+      else:
+          print(f"FAIL: s1_compaction_count={s1} (expected >= {threshold})")
+          sys.exit(1)
+      PYEOF
+
+  # C: score-session returns all zeros/false for clean_session.jsonl
+  - name: C-score-clean-fixture
+    command: |
+      set -e
+      /opt/venv/bin/python3 - << 'PYEOF'
+      import json, sys, subprocess
+      result = subprocess.run(
+          ["/opt/venv/bin/python3", "-m", "context_intelligence.signals",
+           "score-session", "/opt/ci-bundle/tests/fixtures/clean_session.jsonl"],
+          capture_output=True, text=True
+      )
+      if result.returncode != 0:
+          print("FAIL: score-session exited non-zero")
+          print(result.stderr)
+          sys.exit(1)
+      d = json.loads(result.stdout)
+      failures = []
+      for k, v in d.items():
+          if isinstance(v, dict):
+              if v.get("fires", False):
+                  failures.append(f"{k}.fires=True (expected False)")
+          elif isinstance(v, bool) and v:
+              failures.append(f"{k}=True (expected False)")
+          elif isinstance(v, (int, float)) and v != 0:
+              failures.append(f"{k}={v} (expected 0)")
+      if failures:
+          print("FAIL: non-zero/non-false scores on clean fixture:")
+          for f in failures:
+              print(f"  {f}")
+          sys.exit(1)
+      else:
+          print(f"PASS: clean_session returns all zeros/false ({len(d)} fields checked)")
+      PYEOF
+
+  # D: render-findings produces findings.md with Signal Prevalence table
+  - name: D-render-findings
+    command: |
+      set -e
+      export PATH="/opt/venv/bin:$PATH"
+      mkdir -p /tmp/dtu-findings
+
+      cat > /tmp/dtu-findings/lifecycle.json << 'JEOF'
+      [{"session_id": "s1-001", "s1_compaction_count": 5, "s1_burst_max": 3,
+        "s2_resume_count": 2, "s2_resume_ratio": 0.4, "s3_iteration_count": 10,
+        "s4a": {"fires": false, "multi_tool_ratio": 0.0, "top_shape_share": 0.0, "top_shape": []},
+        "s4b": {"fires": false, "instrumentation_ratio": 0.0, "instrumentation_count": 0, "total_bash_count": 0},
+        "s4c_max_dup_input": 0, "s4d_max_dup_pair": 0,
+        "s5_stale": false, "s6_cancel_count": 0,
+        "s7_max_reads_per_iter": 0, "s8_max_bash_burst_len": 0,
+        "s9a_delegate_count": 0, "s9b_max_delegate_result_size": 0,
+        "s9c_size_fires": false, "s9c_self_count": 0, "s9_combined_fires": false}]
+      JEOF
+
+      cat > /tmp/dtu-findings/pressure.json << 'JEOF'
+      [{"session_id": "s1-001", "s1": 5, "s1_burst": 3,
+        "s2_count": 2, "s2_ratio": 0.4,
+        "s9a": 0, "s9b": 0, "s9c_size": false, "s9c_self": 0, "s9_combined": false}]
+      JEOF
+
+      cat > /tmp/dtu-findings/iteration.json << 'JEOF'
+      [{"session_id": "s1-001", "s3": 10,
+        "s4a": {"fires": false, "multi_tool_ratio": 0.0, "top_shape_share": 0.0, "top_shape": []},
+        "s4b": {"fires": false, "instrumentation_ratio": 0.0, "instrumentation_count": 0, "total_bash_count": 0},
+        "s4c": 0, "s4d": 0, "s7": 0, "s8": 0}]
+      JEOF
+
+      python3 -m context_intelligence.signals render-findings \
+        --lifecycle /tmp/dtu-findings/lifecycle.json \
+        --pressure  /tmp/dtu-findings/pressure.json \
+        --iteration /tmp/dtu-findings/iteration.json \
+        --output    /tmp/dtu-findings/findings.md
+
+      if [ ! -f /tmp/dtu-findings/findings.md ]; then
+        echo "FAIL: findings.md was not created"
+        exit 1
+      fi
+
+      if grep -q "Signal Prevalence" /tmp/dtu-findings/findings.md; then
+        echo "PASS: findings.md contains '## Signal Prevalence' table header"
+      else
+        echo "FAIL: findings.md missing 'Signal Prevalence' header"
+        cat /tmp/dtu-findings/findings.md
+        exit 1
+      fi
+
+      if grep -q "| S1 " /tmp/dtu-findings/findings.md; then
+        echo "PASS: S1 row present in Signal Prevalence table"
+      else
+        echo "FAIL: S1 row missing from findings.md"
+        cat /tmp/dtu-findings/findings.md
+        exit 1
+      fi
+
+  # E: YAML recipe parses, correct stage + step counts
+  - name: E-recipe-yaml-valid
+    command: |
+      set -e
+      /opt/venv/bin/python3 -c "
+      import yaml, pathlib, sys
+      text = pathlib.Path('/opt/ci-bundle/recipes/workflow-pattern-analysis.yaml').read_text()
+      data = yaml.safe_load(text)
+      stages = data.get('stages', [])
+      stage_names = [s['name'] for s in stages]
+      total_steps = sum(len(s.get('steps', [])) for s in stages)
+      print(f'PASS: recipe YAML valid')
+      print(f'  name: {data.get(\"name\")}')
+      print(f'  stages: {stage_names}')
+      print(f'  total steps: {total_steps}')
+      if len(stages) != 2:
+          print(f'FAIL: expected 2 stages, got {len(stages)}')
+          sys.exit(1)
+      if total_steps < 9:
+          print(f'FAIL: expected >= 9 steps, got {total_steps}')
+          sys.exit(1)
+      if stages[0].get('approval', {}).get('required') is not True:
+          print('FAIL: detection stage approval.required != True')
+          sys.exit(1)
+      print('PASS: stage count, step count, and approval block assertions pass')
+      "
+
+  # F: All fixture JSONL files score without crashing
+  - name: F-score-all-fixtures
+    command: |
+      set -e
+      export PATH="/opt/venv/bin:$PATH"
+      FIXTURE_DIR="/opt/ci-bundle/tests/fixtures"
+      PASS_COUNT=0
+      FAIL_COUNT=0
+
+      for jsonl in "$FIXTURE_DIR"/*.jsonl; do
+        BASENAME=$(basename "$jsonl")
+        if python3 -m context_intelligence.signals score-session "$jsonl" \
+            > /dev/null 2>&1; then
+          echo "  PASS: $BASENAME"
+          PASS_COUNT=$(( PASS_COUNT + 1 ))
+        else
+          echo "  FAIL: $BASENAME — score-session exited non-zero"
+          FAIL_COUNT=$(( FAIL_COUNT + 1 ))
+        fi
+      done
+
+      echo ""
+      echo "Results: $PASS_COUNT passed, $FAIL_COUNT failed"
+      if [ "$FAIL_COUNT" -gt 0 ]; then
+        echo "FAIL: one or more fixtures crashed score-session"
+        exit 1
+      else
+        echo "PASS: all $PASS_COUNT fixture files scored without errors"
+      fi
