@@ -321,9 +321,113 @@ def score_s3(events_path: pathlib.Path | str) -> int:
     )
 
 
+def _classify_tool(tool_name: str, tool_input: dict) -> tuple[str, str]:
+    """Classify a tool call into a (tool, cmd) pair for shape analysis.
+
+    Rules:
+    - bash      → ('bash', first_token_of_command)
+    - read_file → ('read_file', file_extension)  e.g. '.py'
+    - grep      → ('grep', type_field or '*')
+    - other     → (tool_name, '*')
+    """
+    if tool_name == "bash":
+        command = (tool_input or {}).get("command", "")
+        tokens = command.split() if command else []
+        first_token = tokens[0] if tokens else "*"
+        return ("bash", first_token)
+    elif tool_name == "read_file":
+        file_path = (tool_input or {}).get("file_path", "")
+        ext = pathlib.Path(file_path).suffix if file_path else ""
+        return ("read_file", ext if ext else "*")
+    elif tool_name == "grep":
+        file_type = (tool_input or {}).get("type") or "*"
+        return ("grep", file_type)
+    else:
+        return (tool_name, "*")
+
+
+_EXPLORATION_CMDS: frozenset[str] = frozenset({"find", "grep", "ls", "rg", "cat", "head", "tail"})
+
+
+def _is_exploration_shape(shape: tuple) -> bool:  # type: ignore[type-arg]
+    """Return True if shape is an exploration shape.
+
+    A shape qualifies if any (tool, cmd) pair in it satisfies:
+    - tool == 'bash' with cmd in _EXPLORATION_CMDS, OR
+    - tool == 'read_file'
+    """
+    for tool, cmd in shape:
+        if tool == "bash" and cmd in _EXPLORATION_CMDS:
+            return True
+        if tool == "read_file":
+            return True
+    return False
+
+
 def score_s4a(events_path: pathlib.Path | str) -> S4aResult:
-    """S4a: multi-tool call shape repetition."""
-    raise NotImplementedError
+    """S4a: multi-tool call shape repetition.
+
+    Python-only signal — parallel_group_id shape multisets cannot be
+    expressed in Cypher.  Fires when ALL four conditions hold:
+      1. count(tool:pre) >= S4A_MIN_TOOL_PRE
+      2. multi_tool_groups / total_groups >= S4A_MIN_MULTI_TOOL_RATIO
+      3. top_shape_share >= S4A_MIN_TOP_SHAPE_SHARE
+      4. top_shape is an exploration shape
+    """
+    # Collect tool:pre events grouped by parallel_group_id
+    groups: dict[str, list[tuple[str, dict]]] = defaultdict(list)
+    total_tool_pre: int = 0
+
+    for ev in _iter_events(events_path):
+        if ev.get("event") != "tool:pre":
+            continue
+        total_tool_pre += 1
+        data = ev.get("data", {})
+        pg_id = data.get("parallel_group_id")
+        if pg_id is None:
+            continue
+        tool_name = data.get("tool_name", "")
+        tool_input = data.get("tool_input") or {}
+        groups[pg_id].append((tool_name, tool_input))
+
+    total_groups = len(groups)
+    if total_groups == 0 or total_tool_pre < S4A_MIN_TOOL_PRE:
+        return S4aResult()
+
+    # Multi-tool groups: groups with more than one event
+    multi_tool_groups = {k: v for k, v in groups.items() if len(v) > 1}
+    multi_tool_ratio = len(multi_tool_groups) / total_groups
+
+    # Build shape counter over multi-tool groups only
+    shape_counter: Counter = Counter()
+    for pg_events in multi_tool_groups.values():
+        tool_classes = [_classify_tool(tn, ti) for tn, ti in pg_events]
+        shape = tuple(sorted(tool_classes))
+        shape_counter[shape] += 1
+
+    if not shape_counter:
+        return S4aResult(
+            fires=False,
+            multi_tool_ratio=multi_tool_ratio,
+            top_shape_share=0.0,
+            top_shape=(),
+        )
+
+    top_shape, top_count = shape_counter.most_common(1)[0]
+    top_shape_share = top_count / total_groups
+
+    fires = (
+        multi_tool_ratio >= S4A_MIN_MULTI_TOOL_RATIO
+        and top_shape_share >= S4A_MIN_TOP_SHAPE_SHARE
+        and _is_exploration_shape(top_shape)
+    )
+
+    return S4aResult(
+        fires=fires,
+        multi_tool_ratio=multi_tool_ratio,
+        top_shape_share=top_shape_share,
+        top_shape=top_shape,
+    )
 
 
 def score_s4b(

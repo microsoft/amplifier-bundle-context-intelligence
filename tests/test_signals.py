@@ -1435,3 +1435,89 @@ class TestScoreS9b:
             encoding="utf-8",
         )
         assert score_s9b(p) == 0
+
+
+class TestScoreS4a:
+    """Verify score_s4a() — parallel-shape concentration detector."""
+
+    def test_returns_fires_false_for_clean_session(self):
+        """clean_session.jsonl has too few tool:pre events and no multi-tool groups — fires=False."""
+        from context_intelligence.signals import score_s4a
+
+        result = score_s4a(FIXTURES / "clean_session.jsonl")
+        assert result.fires is False
+
+    def test_fires_for_s4a_session(self):
+        """s4a_session.jsonl meets all four S4a conditions — fires=True."""
+        from context_intelligence.signals import score_s4a
+
+        result = score_s4a(FIXTURES / "s4a_session.jsonl")
+        assert result.fires is True
+
+    def test_multi_tool_ratio_correct(self):
+        """s4a_session.jsonl has 14 multi-tool groups out of 20 total — ratio ~0.70."""
+        from context_intelligence.signals import score_s4a
+
+        result = score_s4a(FIXTURES / "s4a_session.jsonl")
+        assert abs(result.multi_tool_ratio - 0.70) < 0.01
+
+    def test_top_shape_share_correct(self):
+        """s4a_session.jsonl top shape appears 7/20 = 0.35 of total groups."""
+        from context_intelligence.signals import score_s4a
+
+        result = score_s4a(FIXTURES / "s4a_session.jsonl")
+        assert abs(result.top_shape_share - 0.35) < 0.01
+
+    def test_top_shape_is_exploration(self):
+        """Top shape in s4a_session must be an exploration shape (contains bash or read_file)."""
+        from context_intelligence.signals import score_s4a
+
+        result = score_s4a(FIXTURES / "s4a_session.jsonl")
+        tools = {item[0] for item in result.top_shape}
+        assert "bash" in tools or "read_file" in tools
+
+    def test_returns_fires_false_for_nonexistent_path(self):
+        """A non-existent path must not raise, fires=False, and multi_tool_ratio==0.0."""
+        from context_intelligence.signals import score_s4a
+
+        result = score_s4a(FIXTURES / "nonexistent_s4a_file_xyz.jsonl")
+        assert result.fires is False
+        assert result.multi_tool_ratio == 0.0
+
+    def test_to_dict_structure(self):
+        """to_dict() must have keys fires, multi_tool_ratio, top_shape_share, top_shape; top_shape is list."""
+        from context_intelligence.signals import score_s4a
+
+        result = score_s4a(FIXTURES / "s4a_session.jsonl")
+        d = result.to_dict()
+        assert set(d.keys()) == {"fires", "multi_tool_ratio", "top_shape_share", "top_shape"}
+        assert isinstance(d["top_shape"], list)
+
+    def test_does_not_fire_below_tool_pre_minimum(self, tmp_path):
+        """10 tool:pre events (< S4A_MIN_TOOL_PRE=20) must return fires=False."""
+        import json
+
+        from context_intelligence.signals import score_s4a
+
+        p = tmp_path / "small.jsonl"
+        lines = []
+        for i in range(10):
+            lines.append(
+                json.dumps(
+                    {
+                        "event": "tool:pre",
+                        "timestamp": f"2026-05-01T10:00:{i:02d}.000Z",
+                        "workspace": "test",
+                        "data": {
+                            "tool_name": "bash",
+                            "tool_input": {"command": "find . -name '*.py'"},
+                            "tool_call_id": f"tc-{i:03d}",
+                            "parallel_group_id": f"pg-{i:03d}",
+                            "session_id": "t1",
+                        },
+                    }
+                )
+            )
+        p.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        result = score_s4a(p)
+        assert result.fires is False
