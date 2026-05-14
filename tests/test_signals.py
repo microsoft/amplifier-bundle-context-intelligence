@@ -1779,3 +1779,132 @@ class TestScoreS9cSize:
             encoding="utf-8",
         )
         assert score_s9c_size(p, size_threshold=400) is True
+
+
+class TestScoreS9Combined:
+    """Verify score_s9_combined() — composite S9 predicate."""
+
+    def test_returns_false_for_clean_session(self):
+        """clean_session.jsonl has no delegate events — combined must return False."""
+        from context_intelligence.signals import score_s9_combined
+
+        assert score_s9_combined(FIXTURES / "clean_session.jsonl") is False
+
+    def test_returns_false_when_only_s9a_fires(self):
+        """s9a_session.jsonl has S9a=6 but no tool:post delegate events (S9b=0) — must return False."""
+        from context_intelligence.signals import score_s9_combined
+
+        assert score_s9_combined(FIXTURES / "s9a_session.jsonl") is False
+
+    def test_returns_true_when_all_sub_signals_fire(self, tmp_path):
+        """2 delegate tool:pre (one with agent='self') + 1 tool:post with 500-char prose
+        → S9a >= 1, S9b >= 400, S9c (self) fires → combined returns True."""
+        import json
+
+        from context_intelligence.signals import score_s9_combined
+
+        prose = "A" * 500
+        p = tmp_path / "events.jsonl"
+        lines = [
+            json.dumps(
+                {
+                    "event": "tool:pre",
+                    "timestamp": "2026-05-01T12:00:00.000Z",
+                    "workspace": "test",
+                    "data": {
+                        "session_id": "t1",
+                        "tool_name": "delegate",
+                        "tool_input": {"agent": "foundation:explorer"},
+                        "tool_call_id": "d01",
+                    },
+                }
+            ),
+            json.dumps(
+                {
+                    "event": "tool:pre",
+                    "timestamp": "2026-05-01T12:00:01.000Z",
+                    "workspace": "test",
+                    "data": {
+                        "session_id": "t1",
+                        "tool_name": "delegate",
+                        "tool_input": {"agent": "self"},
+                        "tool_call_id": "d02",
+                    },
+                }
+            ),
+            json.dumps(
+                {
+                    "event": "tool:post",
+                    "timestamp": "2026-05-01T12:01:00.000Z",
+                    "workspace": "test",
+                    "data": {
+                        "session_id": "t1",
+                        "tool_call_id": "d01",
+                        "tool_name": "delegate",
+                        "result": {
+                            "success": True,
+                            "output": {
+                                "agent": "foundation:explorer",
+                                "session_id": "sub-001",
+                                "status": "completed",
+                                "response": prose,
+                            },
+                        },
+                    },
+                }
+            ),
+        ]
+        p.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        assert (
+            score_s9_combined(p, s9a_threshold=1, s9b_threshold=400, s9c_size_threshold=400) is True
+        )
+
+    def test_returns_false_when_s9b_too_small(self, tmp_path):
+        """1 self-delegate tool:pre + tool:post with 'tiny' response
+        → S9a passes (threshold=1), S9b=4 < 400 → early return False."""
+        import json
+
+        from context_intelligence.signals import score_s9_combined
+
+        p = tmp_path / "events.jsonl"
+        lines = [
+            json.dumps(
+                {
+                    "event": "tool:pre",
+                    "timestamp": "2026-05-01T12:00:00.000Z",
+                    "workspace": "test",
+                    "data": {
+                        "session_id": "t1",
+                        "tool_name": "delegate",
+                        "tool_input": {"agent": "self"},
+                        "tool_call_id": "d01",
+                    },
+                }
+            ),
+            json.dumps(
+                {
+                    "event": "tool:post",
+                    "timestamp": "2026-05-01T12:01:00.000Z",
+                    "workspace": "test",
+                    "data": {
+                        "session_id": "t1",
+                        "tool_call_id": "d01",
+                        "tool_name": "delegate",
+                        "result": {
+                            "success": True,
+                            "output": {
+                                "agent": "self",
+                                "session_id": "sub-001",
+                                "status": "completed",
+                                "response": "tiny",
+                            },
+                        },
+                    },
+                }
+            ),
+        ]
+        p.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        assert (
+            score_s9_combined(p, s9a_threshold=1, s9b_threshold=400, s9c_size_threshold=400)
+            is False
+        )

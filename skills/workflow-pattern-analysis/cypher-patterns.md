@@ -714,3 +714,119 @@ events where `data.tool_name == 'delegate'`.  For each such event it inspects
 Returns the maximum size found across all matching events.  Returns 0 if the file
 is absent or contains no matching events.  Signal fires when the return value is
 ≥ `size_threshold` (default 20,000).
+
+---
+
+## Q-S9-combined — Composite Delegation Overload Signal (Partial Cypher Path)
+
+Detects sessions where the agent is running a multi-level delegation pattern with
+overly large responses AND is recursively delegating to itself.  S9-combined fires
+when S9a (delegate count), S9b (maximum delegate result size), and S9c (size OR
+self-delegation) all fire simultaneously in the same session.
+
+> **⚠️ Cypher partial coverage:** This query covers the S9a + S9b + **S9c-self**
+> path only.  The S9c-size sub-path (narrative density check — response length
+> exceeds threshold AND code-fence density < 5 %) has no equivalent Cypher
+> representation because narrative density requires full-text analysis.
+> Sessions where S9c fires via the size+density path alone will be **missed**
+> by this query.  Use the JSONL fallback (`score_s9_combined`) for the
+> authoritative, complete evaluation.
+
+**Parameters:**
+- `$workspace_hint` — workspace identifier substring to scope the query
+- `$s9a_threshold` — minimum delegate call count to trigger S9a (default: `5`)
+- `$s9b_threshold` — minimum delegate result size in characters to trigger S9b (default: `20000`)
+
+```cypher
+// Q-S9-combined: sessions with S9a + S9b + S9c-self all firing
+// NOTE: misses sessions where S9c fires via S9c-size (size+density path) only.
+// Use score_s9_combined() JSONL fallback for complete coverage.
+MATCH (s:Session)
+WHERE s.workspace CONTAINS $workspace_hint
+
+// S9a: delegate call count >= threshold
+MATCH (s)-[:HAS_TOOL_CALL]->(tc_pre:ToolCall)
+  WHERE tc_pre.tool_name = 'delegate'
+WITH s, count(tc_pre) AS delegate_calls
+WHERE delegate_calls >= $s9a_threshold
+
+// S9b: maximum delegate result size >= threshold
+MATCH (s)-[:HAS_TOOL_CALL]->(tc_post:ToolCall)
+  WHERE tc_post.tool_name = 'delegate'
+    AND tc_post.result_size IS NOT NULL
+WITH s, delegate_calls, max(tc_post.result_size) AS max_result_size
+WHERE max_result_size >= $s9b_threshold
+
+// S9c-self: at least one delegate call with agent = 'self'
+MATCH (s)-[:HAS_TOOL_CALL]->(tc_self:ToolCall)
+  WHERE tc_self.tool_name = 'delegate'
+    AND tc_self.agent_name = 'self'
+WITH s, delegate_calls, max_result_size, count(tc_self) AS self_delegate_count
+WHERE self_delegate_count >= 1
+
+RETURN
+  s.session_id        AS session_id,
+  s.status            AS status,
+  delegate_calls,
+  max_result_size,
+  self_delegate_count,
+  true                AS s9_combined_fires
+ORDER BY delegate_calls DESC
+LIMIT 25
+```
+
+```cypher
+// Corpus prevalence: sessions where S9-combined fires (S9c-self path only)
+MATCH (s:Session)
+WHERE s.workspace CONTAINS $workspace_hint
+
+// S9a gate
+MATCH (s)-[:HAS_TOOL_CALL]->(tc_pre:ToolCall)
+  WHERE tc_pre.tool_name = 'delegate'
+WITH s, count(tc_pre) AS delegate_calls
+
+// S9b gate
+OPTIONAL MATCH (s)-[:HAS_TOOL_CALL]->(tc_post:ToolCall)
+  WHERE tc_post.tool_name = 'delegate'
+    AND tc_post.result_size IS NOT NULL
+WITH s, delegate_calls, max(tc_post.result_size) AS max_result_size
+
+// S9c-self gate
+OPTIONAL MATCH (s)-[:HAS_TOOL_CALL]->(tc_self:ToolCall)
+  WHERE tc_self.tool_name = 'delegate'
+    AND tc_self.agent_name = 'self'
+WITH
+  s,
+  delegate_calls,
+  max_result_size,
+  count(tc_self) AS self_delegate_count
+WITH
+  s,
+  (delegate_calls >= $s9a_threshold
+   AND max_result_size >= $s9b_threshold
+   AND self_delegate_count >= 1) AS s9_combined_fires
+WITH
+  count(DISTINCT s)                                        AS total_sessions,
+  count(DISTINCT CASE WHEN s9_combined_fires THEN s END)   AS sessions_with_s9_combined
+RETURN
+  total_sessions,
+  sessions_with_s9_combined,
+  round(100.0 * sessions_with_s9_combined / total_sessions, 1) AS s9_combined_pct
+```
+
+**JSONL fallback** (complete path — authoritative, covers both S9c-size AND S9c-self):
+
+Use `score_s9_combined(events_path, *, s9a_threshold=5, s9b_threshold=20_000, s9c_size_threshold=30_000)`
+from `context_intelligence.signals`.  Pass the absolute path to the session's
+`events.jsonl`.  The function:
+
+1. Returns `False` early if `score_s9a(events_path) < s9a_threshold`.
+2. Returns `False` early if `score_s9b(events_path) < s9b_threshold`.
+3. Evaluates S9c as:
+   `score_s9c_size(events_path, size_threshold=s9c_size_threshold) OR score_s9c_self(events_path) >= 1`
+4. Returns the S9c boolean.
+
+The JSONL fallback is the only path that can detect sessions where S9c fires
+via the size+density mechanism (S9c-size).  The Cypher query above covers only
+the S9c-self sub-path and will under-report S9-combined prevalence in corpora
+where large-prose delegate responses (without code fences) are common.

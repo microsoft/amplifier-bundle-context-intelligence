@@ -827,9 +827,34 @@ def score_s9c_self(events_path: pathlib.Path | str) -> int:
     return count
 
 
-def score_s9_combined(events_path: pathlib.Path | str) -> bool:
-    """S9 combined: fires when multiple S9 sub-signals fire together."""
-    raise NotImplementedError
+def score_s9_combined(
+    events_path: pathlib.Path | str,
+    *,
+    s9a_threshold: int = 5,
+    s9b_threshold: int = 20_000,
+    s9c_size_threshold: int = 30_000,
+) -> bool:
+    """S9 combined: fires when S9a, S9b, and S9c (size OR self) all fire together.
+
+    Returns ``False`` early if either the S9a delegate count or the S9b maximum
+    delegate result size falls below their respective thresholds.  Otherwise
+    evaluates S9c via both sub-paths and returns the result:
+
+    - ``score_s9c_size(events_path, size_threshold=s9c_size_threshold)`` fires, OR
+    - ``score_s9c_self(events_path) >= 1``
+
+    Note: The Cypher template (Q-S9-combined) can only test the S9a + S9b +
+    S9c-self path.  The S9c-size sub-path requires the JSONL fallback because
+    narrative density (code-fence ratio) has no Cypher representation.
+    """
+    if score_s9a(events_path) < s9a_threshold:
+        return False
+    if score_s9b(events_path) < s9b_threshold:
+        return False
+    s9c: bool = score_s9c_size(events_path, size_threshold=s9c_size_threshold) or (
+        score_s9c_self(events_path) >= 1
+    )
+    return s9c
 
 
 def score_4_1(scores: list[SignalScores]) -> dict:
