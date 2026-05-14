@@ -1910,6 +1910,83 @@ class TestScoreS9Combined:
         )
 
 
+class TestScoreSession:
+    """Verify score_session() — full composite scorer that calls all JSONL-path signals."""
+
+    def test_returns_signal_scores_instance(self):
+        """score_session() must return a SignalScores instance."""
+        from context_intelligence.signals import SignalScores, score_session
+
+        result = score_session(FIXTURES / "clean_session.jsonl")
+        assert isinstance(result, SignalScores)
+
+    def test_clean_session_all_zeros(self):
+        """clean_session.jsonl has no signal events — all counted fields must be at zero/False.
+
+        clean_session has one bash tool:pre (ls -la /workspace) so score_s4c returns 1
+        (max count of any fingerprint), which is below S4C_THRESHOLD (4).  We check
+        s4c_max_dup_input < S4C_THRESHOLD rather than == 0 for consistency with the
+        existing TestScoreS4c::test_returns_zero_for_clean_session assertion.
+        """
+        from context_intelligence.signals import S4C_THRESHOLD, score_session
+
+        result = score_session(FIXTURES / "clean_session.jsonl")
+        assert result.s1_compaction_count == 0
+        assert result.s6_cancel_count == 0
+        assert result.s9a_delegate_count == 0
+        assert result.s4c_max_dup_input < S4C_THRESHOLD
+        assert result.s4d_max_dup_pair == 0
+        assert result.s9b_max_delegate_result_size == 0
+        assert result.s9c_size_fires is False
+        assert result.s9c_self_count == 0
+        assert result.s9_combined_fires is False
+
+    def test_s1_session_compaction_count(self):
+        """s1_session.jsonl has 5 context:compaction events — s1_compaction_count must be 5."""
+        from context_intelligence.signals import score_session
+
+        result = score_session(FIXTURES / "s1_session.jsonl")
+        assert result.s1_compaction_count == 5
+
+    def test_s9a_session_delegate_count(self):
+        """s9a_session.jsonl has 6 delegate tool:pre events — s9a_delegate_count must be 6."""
+        from context_intelligence.signals import score_session
+
+        result = score_session(FIXTURES / "s9a_session.jsonl")
+        assert result.s9a_delegate_count == 6
+
+    def test_s4c_session_dup_input(self):
+        """s4c_session.jsonl has 5 identical 'ls -la /workspace' inputs — s4c_max_dup_input must be 5."""
+        from context_intelligence.signals import score_session
+
+        result = score_session(FIXTURES / "s4c_session.jsonl")
+        assert result.s4c_max_dup_input == 5
+
+    def test_s4a_session_fires_s4a(self):
+        """s4a_session.jsonl meets all S4a conditions — result.s4a.fires must be True."""
+        from context_intelligence.signals import score_session
+
+        result = score_session(FIXTURES / "s4a_session.jsonl")
+        assert result.s4a.fires is True
+
+    def test_to_dict_is_json_serializable(self):
+        """score_session().to_dict() must be JSON-serializable via json.dumps."""
+        import json
+
+        from context_intelligence.signals import score_session
+
+        result = score_session(FIXTURES / "clean_session.jsonl")
+        # Must not raise
+        json.dumps(result.to_dict())
+
+    def test_returns_all_zero_for_nonexistent_path(self):
+        """A non-existent path must not raise and compound_score() must be 0."""
+        from context_intelligence.signals import score_session
+
+        result = score_session(FIXTURES / "nonexistent_session_xyz.jsonl")
+        assert result.compound_score() == 0
+
+
 class TestScore41:
     """Verify score_4_1() — agent-class compound failure aggregate."""
 

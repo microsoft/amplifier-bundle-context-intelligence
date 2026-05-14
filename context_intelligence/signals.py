@@ -904,5 +904,31 @@ def score_4_1(
 
 
 def score_session(events_path: pathlib.Path | str) -> SignalScores:
-    """Compute all signal scores for a session, returning a SignalScores instance."""
-    raise NotImplementedError
+    """Compute all signal scores for a session, returning a SignalScores instance.
+
+    Calls every JSONL-path signal function and populates a SignalScores.
+    Does NOT call score_s5 (which requires a metadata_path, not events_path);
+    s5_stale is always False.  Callers that need S5 must call score_s5 directly.
+    """
+    s2_count, s2_ratio = score_s2(events_path)
+
+    return SignalScores(
+        s1_compaction_count=score_s1(events_path),
+        s1_burst_max=score_s1_burst(events_path),
+        s2_resume_count=s2_count,
+        s2_resume_ratio=s2_ratio,
+        s3_iteration_count=score_s3(events_path),
+        s4a=score_s4a(events_path),
+        s4b=score_s4b(events_path),
+        s4c_max_dup_input=score_s4c(events_path),
+        s4d_max_dup_pair=score_s4d(events_path),
+        s5_stale=False,
+        s6_cancel_count=score_s6(events_path),
+        s7_max_reads_per_iter=score_s7(events_path),
+        s8_max_bash_burst_len=score_s8(events_path),
+        s9a_delegate_count=score_s9a(events_path),
+        s9b_max_delegate_result_size=score_s9b(events_path),
+        s9c_size_fires=score_s9c_size(events_path),
+        s9c_self_count=score_s9c_self(events_path),
+        s9_combined_fires=score_s9_combined(events_path),
+    )
