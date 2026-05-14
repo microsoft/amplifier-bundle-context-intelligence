@@ -61,7 +61,7 @@ digraph workflow_pattern_analysis {
             fillcolor="#eef7ee"
         ]
 
-        s_tbl [
+        build_signal_table [
             label="build-signal-table\n(bash)"
             shape=box
             fillcolor="#fff8e8"
@@ -92,7 +92,7 @@ digraph workflow_pattern_analysis {
         fontsize=13
         bgcolor="#f2fff5"
 
-        parse_ids [
+        parse_inspect_list [
             label="parse-inspect-list\n(bash)"
             shape=box
             fillcolor="#e2f5e9"
@@ -165,16 +165,16 @@ digraph workflow_pattern_analysis {
 
     s_lc -> s_pr
     s_pr -> s_it
-    s_it -> s_tbl
+    s_it -> build_signal_table
 
     // Signal table → approval gate
-    s_tbl -> gate
+    build_signal_table -> gate
 
     // -----------------------------------------------------------------------
     // Edges — Stage 2: findings flow
     // -----------------------------------------------------------------------
 
-    gate -> parse_ids [
+    gate -> parse_inspect_list [
         label="approved"
         color="#2e8b57"
         fontcolor="#2e8b57"
@@ -182,7 +182,7 @@ digraph workflow_pattern_analysis {
         lhead=cluster_findings
     ]
 
-    parse_ids -> write_f
+    parse_inspect_list -> write_f
     write_f  -> render_f
 
     // render_f → deep_i only when approval message contains session IDs

@@ -231,13 +231,12 @@ class TestDotStructure:
         content = self._dot_content()
         assert "diamond" in content, "DOT must have diamond shape for gate node"
 
-    def test_gate_to_parse_ids_edge(self):
-        """DOT must have edge from gate to parse_ids."""
+    def test_gate_to_write_findings_edge(self):
+        """DOT must have edge from gate into the findings stage (parse_inspect_list)."""
         content = self._dot_content()
-        assert "parse_ids" in content, "DOT must reference 'parse_ids' node"
-        # Check that gate connects to parse_ids
-        assert "gate" in content and "parse_ids" in content, (
-            "DOT must have both gate and parse_ids nodes"
+        assert "parse_inspect_list" in content, "DOT must reference 'parse_inspect_list' node"
+        assert "gate" in content and "parse_inspect_list" in content, (
+            "DOT must have both gate and parse_inspect_list nodes"
         )
 
     def test_has_output_nodes(self):
