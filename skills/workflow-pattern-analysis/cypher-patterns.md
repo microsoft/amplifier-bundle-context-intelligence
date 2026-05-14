@@ -963,3 +963,393 @@ where rates are floats in `[0.0, 1.0]`.  Returns all-zero rates for an empty lis
 
 The Python path includes S4a, S4b, S8, and S9c-size signals that are unavailable
 in Cypher, producing a more complete compound score than the graph query above.
+
+---
+
+## Q-S6 — Explicit Cancel Detector Signal
+
+Identifies sessions that were explicitly cancelled by the user or by an
+interrupt signal.  Fires when at least one event with `event_type` in
+`['session:cancelled', 'user:interrupt']` is present in the session.
+
+**Parameters:**
+- `$workspace_hint` — workspace identifier substring to scope the query
+
+```cypher
+// Sessions with explicit cancel or user interrupt events (S6 signal)
+MATCH (s:Session)
+WHERE s.workspace CONTAINS $workspace_hint
+MATCH (s)-[:HAS_EVENT]->(e:Event)
+  WHERE e.event_type IN ['session:cancelled', 'user:interrupt']
+WITH s, count(e) AS cancel_event_count
+RETURN
+  s.session_id        AS session_id,
+  s.status            AS status,
+  cancel_event_count,
+  true                AS s6_fires
+ORDER BY cancel_event_count DESC
+LIMIT 25
+```
+
+```cypher
+// Corpus prevalence: percentage of sessions where S6 fires
+MATCH (s:Session)
+WHERE s.workspace CONTAINS $workspace_hint
+OPTIONAL MATCH (s)-[:HAS_EVENT]->(e:Event)
+  WHERE e.event_type IN ['session:cancelled', 'user:interrupt']
+WITH s, count(e) AS cancel_event_count
+WITH
+  count(DISTINCT s) AS total_sessions,
+  count(DISTINCT CASE WHEN cancel_event_count >= 1 THEN s END) AS sessions_with_s6
+RETURN
+  total_sessions,
+  sessions_with_s6,
+  round(100.0 * sessions_with_s6 / total_sessions, 1) AS s6_pct
+```
+
+**JSONL fallback** (authoritative path — works without graph schema changes):
+
+Use `score_s6(events_path)` from `context_intelligence.signals`.  Pass the
+absolute path to the session's `events.jsonl`.  The function iterates all
+events and returns the count of events whose `event_type` is in
+`{'session:cancelled', 'user:interrupt'}`.  Returns 0 if the file is absent
+or contains no matching events.  Signal fires when the return value is ≥ 1.
+
+---
+
+## Q-S9a — Delegation Volume per Session
+
+Counts `delegate` tool calls in **root sessions only**.  Delegation chains
+originate at root sessions; sub-sessions inherit delegation context but do not
+independently accumulate delegation counts.  Signal fires when the delegate
+call count for a root session is ≥ `$s9a_threshold` (default: 5).
+
+**Parameters:**
+- `$workspace_hint` — workspace identifier substring to scope the query
+- `$s9a_threshold` — minimum delegate call count to trigger S9a (default: `5`)
+
+```cypher
+// Delegation count per root session (S9a signal — root sessions only)
+MATCH (root:RootSession)
+WHERE root.workspace CONTAINS $workspace_hint
+OPTIONAL MATCH (root)-[:HAS_TOOL_CALL]->(tc:ToolCall)
+  WHERE tc.tool_name = 'delegate'
+WITH root, count(tc) AS delegate_calls
+RETURN
+  root.session_id  AS session_id,
+  root.status      AS status,
+  delegate_calls,
+  delegate_calls >= $s9a_threshold AS s9a_fires
+ORDER BY delegate_calls DESC
+LIMIT 25
+```
+
+```cypher
+// Risk scan: running root sessions with high delegation (S9a leading indicator)
+MATCH (root:RootSession)
+WHERE root.workspace CONTAINS $workspace_hint
+  AND root.status = 'running'
+MATCH (root)-[:HAS_TOOL_CALL]->(tc:ToolCall)
+  WHERE tc.tool_name = 'delegate'
+WITH root, count(tc) AS delegate_calls
+WHERE delegate_calls >= $s9a_threshold
+RETURN
+  root.session_id    AS session_id,
+  delegate_calls,
+  root.last_event_at AS last_active,
+  'delegation_risk'  AS signal
+ORDER BY delegate_calls DESC
+LIMIT 10
+```
+
+**JSONL fallback** (authoritative path — works without graph schema changes):
+
+Use `score_s9a(events_path)` from `context_intelligence.signals`.  Pass the
+absolute path to the session's `events.jsonl`.  The function counts `tool:pre`
+events where `data.tool_name == 'delegate'`.  Returns 0 if the file is absent
+or contains no matching events.  Signal fires when the return value is ≥
+`S9A_THRESHOLD` (5).
+
+---
+
+## Q-S9c-self — Recursive Self-Delegation
+
+Identifies sessions where the agent delegated to itself by passing
+`agent='self'` to the `delegate` tool.  This is detected as a structural
+property on `ToolCall` nodes (`tool_input_agent = 'self'`), not as a
+text-match on the `agent_name` field.
+
+**Schema requirement:** This query requires the `tool_input_agent` property on
+`ToolCall` nodes to be populated at ingestion time from `data.tool_input.agent`
+of `tool:pre` delegate events.  When this property is absent, use the JSONL
+fallback.
+
+```cypher
+// Sessions with at least one self-delegation call (S9c-self signal)
+MATCH (s:Session)
+WHERE s.workspace CONTAINS $workspace_hint
+MATCH (s)-[:HAS_TOOL_CALL]->(tc:ToolCall)
+  WHERE tc.tool_name = 'delegate'
+    AND tc.tool_input_agent = 'self'
+WITH s, count(tc) AS self_delegate_count
+RETURN
+  s.session_id         AS session_id,
+  s.status             AS status,
+  self_delegate_count,
+  self_delegate_count >= 1 AS s9c_self_fires
+ORDER BY self_delegate_count DESC
+LIMIT 25
+```
+
+```cypher
+// Corpus prevalence: percentage of sessions where S9c-self fires
+MATCH (s:Session)
+WHERE s.workspace CONTAINS $workspace_hint
+OPTIONAL MATCH (s)-[:HAS_TOOL_CALL]->(tc:ToolCall)
+  WHERE tc.tool_name = 'delegate'
+    AND tc.tool_input_agent IS NOT NULL
+    AND tc.tool_input_agent = 'self'
+WITH s, count(tc) AS self_delegate_count
+WITH
+  count(DISTINCT s) AS total_sessions,
+  count(DISTINCT CASE WHEN self_delegate_count >= 1 THEN s END) AS sessions_with_s9c_self
+RETURN
+  total_sessions,
+  sessions_with_s9c_self,
+  round(100.0 * sessions_with_s9c_self / total_sessions, 1) AS s9c_self_pct
+```
+
+**JSONL fallback** (authoritative path — current primary path):
+
+Use `score_s9c_self(events_path)` from `context_intelligence.signals`.  Pass
+the absolute path to the session's `events.jsonl`.  The function counts
+`tool:pre` events where `data.tool_name == 'delegate'` AND
+`data.tool_input.get('agent') == 'self'`.  Returns 0 if the file is absent or
+contains no matching events.  Signal fires when the return value is ≥ 1.
+
+---
+
+## Q-S1 — Compaction Count per Session (FUTURE — requires G4 schema lift)
+
+> **⚠️ Schema gap G4:** `ContextCompaction` DL2 nodes are not yet populated by
+> the CI ingestion pipeline.  `context:compaction` events are present in the
+> raw JSONL but have not been promoted to dedicated graph nodes.  Until G4 is
+> resolved, the JSONL fallback is the **current primary path** for this signal.
+
+Counts `context:compaction` events per session and classifies by severity
+(severe ≥ 10, candidate ≥ 3).  Equivalent in intent to Q3 in this file but
+scoped as a standalone signal template with explicit severity tiers matching
+the Python implementation.
+
+**Parameters (post-G4):**
+- `$workspace_hint` — workspace identifier substring to scope the query
+
+```cypher
+// Compaction count per session with severity tiers (S1 signal)
+// NOTE: context:compaction events require G4 schema lift before this query
+// produces meaningful results.  Run score_s1/score-pressure as primary path.
+MATCH (s:Session)
+WHERE s.workspace CONTAINS $workspace_hint
+OPTIONAL MATCH (s)-[:HAS_EVENT]->(e:Event)
+  WHERE e.event_type = 'context:compaction'
+WITH s, count(e) AS compaction_count
+WHERE compaction_count > 0
+RETURN
+  s.session_id     AS session_id,
+  s.status         AS status,
+  compaction_count,
+  CASE
+    WHEN compaction_count >= 10 THEN 'severe'
+    WHEN compaction_count >= 3  THEN 'candidate'
+    ELSE 'low'
+  END AS s1_severity
+ORDER BY compaction_count DESC
+LIMIT 25
+```
+
+```cypher
+// Corpus prevalence: sessions by S1 severity tier
+MATCH (s:Session)
+WHERE s.workspace CONTAINS $workspace_hint
+OPTIONAL MATCH (s)-[:HAS_EVENT]->(e:Event)
+  WHERE e.event_type = 'context:compaction'
+WITH s, count(e) AS compaction_count
+WITH
+  count(DISTINCT s) AS total_sessions,
+  count(DISTINCT CASE WHEN compaction_count >= 10 THEN s END) AS severe_sessions,
+  count(DISTINCT CASE WHEN compaction_count >= 3 AND compaction_count < 10 THEN s END) AS candidate_sessions
+RETURN
+  total_sessions,
+  severe_sessions,
+  candidate_sessions,
+  round(100.0 * (severe_sessions + candidate_sessions) / total_sessions, 1) AS s1_pct
+```
+
+**JSONL fallback** (current primary path — use until G4 is resolved):
+
+```bash
+# Quick prevalence check from raw JSONL
+grep -c '"context:compaction"' /path/to/events.jsonl
+```
+
+Or use the `score-pressure` CLI which calls `score_s1(events_path)` from
+`context_intelligence.signals`.  Pass the absolute path to the session's
+`events.jsonl`.  The function counts lines containing `event_type ==
+'context:compaction'`.  Returns 0 if the file is absent.  Signal fires when
+the return value is ≥ `S1_CANDIDATE_THRESHOLD` (3); severity tiers apply at
+≥ 3 (candidate) and ≥ 10 (severe).
+
+---
+
+## Q-S1-burst — Compaction Burst Window (FUTURE — requires G4 schema lift)
+
+> **⚠️ Schema gap G4:** Same pre-condition as Q-S1.  Additionally, Cypher
+> lacks a native sliding-window aggregate.  The query below uses a self-join
+> approximation to count compaction events within a fixed time window; it may
+> produce inaccurate counts for non-uniform event timestamps.  The Python
+> `score-pressure` (field: `s1_burst`) implementation is the authoritative path.
+
+Detects sessions with a high density of compaction events within a rolling
+time window.  Signal fires when ≥ `$s1_burst_threshold` compaction events
+occur within any `$window_min`-minute window (defaults: 3 events / 5 minutes).
+
+**Parameters (post-G4):**
+- `$workspace_hint` — workspace identifier substring to scope the query
+- `$window_min` — rolling window size in minutes (default: `5`)
+- `$s1_burst_threshold` — minimum compaction events within the window (default: `3`)
+
+```cypher
+// Compaction burst: self-join approximation for sliding-window density
+// NOTE: requires G4 schema lift; self-join may be inaccurate for sparse timestamps.
+// Use score-pressure (s1_burst field) as the authoritative path.
+MATCH (s:Session)
+WHERE s.workspace CONTAINS $workspace_hint
+MATCH (s)-[:HAS_EVENT]->(e1:Event)
+  WHERE e1.event_type = 'context:compaction'
+MATCH (s)-[:HAS_EVENT]->(e2:Event)
+  WHERE e2.event_type = 'context:compaction'
+    AND e2.timestamp >= e1.timestamp
+    AND e2.timestamp <= e1.timestamp + duration('PT' + toString($window_min) + 'M')
+WITH s, e1, count(e2) AS events_in_window
+WITH s, max(events_in_window) AS max_burst
+WHERE max_burst >= $s1_burst_threshold
+RETURN
+  s.session_id AS session_id,
+  s.status     AS status,
+  max_burst,
+  max_burst >= $s1_burst_threshold AS s1_burst_fires
+ORDER BY max_burst DESC
+LIMIT 25
+```
+
+**JSONL fallback** (authoritative path — current primary path):
+
+Use the `score-pressure` CLI or the `score_s1_burst(events_path, window_min=5,
+threshold=3)` helper.  The function parses `context:compaction` event
+timestamps from the raw `events.jsonl`, sorts them, and applies a sliding
+window to find the maximum count within any `window_min`-minute span.  Signal
+fires when the maximum count is ≥ `threshold` (default 3).  Returns 0 if
+fewer than 2 compaction events are present.
+
+---
+
+## Q-S2 — Resume-After-Compaction Ratio (FUTURE — requires G4 schema lift)
+
+> **⚠️ Schema gap G4:** Same pre-condition as Q-S1.  The 30-second co-
+> occurrence window used below relies on event timestamps that are not yet
+> reliably indexed in the DL2 graph.  Use `score-pressure` (fields: `s2_count`,
+> `s2_ratio`) as the current primary path.
+
+Measures what fraction of `context:compaction` events are followed by a
+session resume or restore within 30 seconds.  A high ratio indicates the agent
+is compacting and immediately resuming, which is a strong signal of context
+pressure.  Signal fires when ≥ `$s2_count_threshold` (default 3)
+resume-after-compaction pairs are present AND the resume ratio is ≥
+`$s2_ratio_threshold` (default 0.5).
+
+**Parameters (post-G4):**
+- `$workspace_hint` — workspace identifier substring to scope the query
+- `$s2_count_threshold` — minimum resume-after-compaction pair count (default: `3`)
+- `$s2_ratio_threshold` — minimum resume ratio (default: `0.5`)
+
+```cypher
+// Resume-after-compaction ratio (S2 signal)
+// NOTE: requires G4 schema lift; timestamp co-occurrence relies on DL2 event indexing.
+// Use score-pressure (s2_count, s2_ratio fields) as the authoritative path.
+MATCH (s:Session)
+WHERE s.workspace CONTAINS $workspace_hint
+MATCH (s)-[:HAS_EVENT]->(ec:Event)
+  WHERE ec.event_type = 'context:compaction'
+OPTIONAL MATCH (s)-[:HAS_EVENT]->(er:Event)
+  WHERE er.event_type IN ['session:resume', 'session:restore']
+    AND er.timestamp >= ec.timestamp
+    AND er.timestamp <= ec.timestamp + duration('PT30S')
+WITH
+  s,
+  count(DISTINCT ec) AS compaction_count,
+  count(DISTINCT er) AS resume_after_compaction
+WITH
+  s,
+  compaction_count,
+  resume_after_compaction,
+  CASE WHEN compaction_count > 0
+    THEN round(1.0 * resume_after_compaction / compaction_count, 2)
+    ELSE 0.0
+  END AS s2_ratio
+WHERE resume_after_compaction >= $s2_count_threshold
+  AND s2_ratio >= $s2_ratio_threshold
+RETURN
+  s.session_id            AS session_id,
+  s.status                AS status,
+  compaction_count,
+  resume_after_compaction AS s2_count,
+  s2_ratio,
+  true                    AS s2_fires
+ORDER BY s2_ratio DESC, resume_after_compaction DESC
+LIMIT 25
+```
+
+```cypher
+// Corpus prevalence: sessions where S2 fires
+MATCH (s:Session)
+WHERE s.workspace CONTAINS $workspace_hint
+OPTIONAL MATCH (s)-[:HAS_EVENT]->(ec:Event)
+  WHERE ec.event_type = 'context:compaction'
+WITH s, count(ec) AS compaction_count
+OPTIONAL MATCH (s)-[:HAS_EVENT]->(ec2:Event)
+  WHERE ec2.event_type = 'context:compaction'
+OPTIONAL MATCH (s)-[:HAS_EVENT]->(er:Event)
+  WHERE er.event_type IN ['session:resume', 'session:restore']
+    AND er.timestamp >= ec2.timestamp
+    AND er.timestamp <= ec2.timestamp + duration('PT30S')
+WITH s, compaction_count, count(DISTINCT er) AS resume_after_compaction
+WITH
+  s,
+  compaction_count,
+  resume_after_compaction,
+  CASE WHEN compaction_count > 0
+    THEN 1.0 * resume_after_compaction / compaction_count
+    ELSE 0.0
+  END AS s2_ratio
+WITH
+  count(DISTINCT s) AS total_sessions,
+  count(DISTINCT CASE
+    WHEN resume_after_compaction >= $s2_count_threshold
+     AND s2_ratio >= $s2_ratio_threshold
+    THEN s END) AS sessions_with_s2
+RETURN
+  total_sessions,
+  sessions_with_s2,
+  round(100.0 * sessions_with_s2 / total_sessions, 1) AS s2_pct
+```
+
+**JSONL fallback** (current primary path — use until G4 is resolved):
+
+Use the `score-pressure` CLI which exposes `s2_count` and `s2_ratio` fields.
+Internally calls `score_s2(events_path, count_threshold=3, ratio_threshold=0.5)`
+from `context_intelligence.signals`.  The function parses compaction and
+resume/restore events from the raw `events.jsonl`, pairs each compaction event
+with any resume/restore event within 30 seconds, and returns `(pair_count,
+ratio)`.  Signal fires when `pair_count >= count_threshold` AND
+`ratio >= ratio_threshold`.  Returns `(0, 0.0)` if no compaction events are
+present.
