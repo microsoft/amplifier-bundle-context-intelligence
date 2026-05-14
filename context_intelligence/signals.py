@@ -232,9 +232,44 @@ def score_s1_burst(events_path, *, window_min: int = 5) -> int:
     raise NotImplementedError
 
 
+_RESUME_EVENTS: frozenset[str] = frozenset({"session:resume", "session:restore"})
+_WINDOW: timedelta = timedelta(seconds=S2_RESUME_WINDOW_SECONDS)
+
+
 def score_s2(events_path) -> tuple[int, float]:
-    """S2: rapid resume count and ratio."""
-    raise NotImplementedError
+    """S2: rapid resume count and ratio.
+
+    Returns a tuple (resume_count, ratio) where:
+      - resume_count: total number of session:resume and session:restore events
+      - ratio: fraction of resumes occurring within S2_RESUME_WINDOW_SECONDS after
+               any context:compaction event (each resume counted at most once)
+    """
+    resume_count: int = 0
+    resumes_after_compact: int = 0
+    compaction_timestamps: list[datetime] = []
+
+    for ev in _iter_events(events_path):
+        event_type = ev.get("event")
+        ts = ev.get("timestamp")
+
+        try:
+            event_dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+        except (ValueError, AttributeError):
+            _LOG.warning("could not parse timestamp %r in event %r", ts, event_type)
+            continue
+
+        if event_type == "context:compaction":
+            compaction_timestamps.append(event_dt)
+        elif event_type in _RESUME_EVENTS:
+            resume_count += 1
+            for cts in compaction_timestamps:
+                delta = event_dt - cts
+                if timedelta(0) <= delta <= _WINDOW:
+                    resumes_after_compact += 1
+                    break
+
+    ratio: float = resumes_after_compact / resume_count if resume_count > 0 else 0.0
+    return (resume_count, ratio)
 
 
 def score_s3(events_path) -> int:

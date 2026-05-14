@@ -513,3 +513,111 @@ class TestScoreS3:
 
         assert S3_CANDIDATE_THRESHOLD == 20
         assert S3_SEVERE_THRESHOLD == 40
+
+
+class TestScoreS2:
+    """Verify score_s2() — resume count and post-compaction ratio."""
+
+    def test_returns_zero_count_and_zero_ratio_for_clean_session(self):
+        """clean_session.jsonl has no resume events — score must be (0, 0.0)."""
+        from context_intelligence.signals import score_s2
+
+        count, ratio = score_s2(FIXTURES / "clean_session.jsonl")
+        assert count == 0
+        assert ratio == 0.0
+
+    def test_returns_three_count_for_s1_session(self):
+        """s1_session.jsonl has exactly 3 session:resume events — count must be 3."""
+        from context_intelligence.signals import score_s2
+
+        count, ratio = score_s2(FIXTURES / "s1_session.jsonl")
+        assert count == 3
+
+    def test_count_fires_threshold(self):
+        """s1_session.jsonl count (3) must be >= S2_COUNT_THRESHOLD (3)."""
+        from context_intelligence.signals import S2_COUNT_THRESHOLD, score_s2
+
+        count, ratio = score_s2(FIXTURES / "s1_session.jsonl")
+        assert count >= S2_COUNT_THRESHOLD
+
+    def test_ratio_exceeds_threshold_for_s1_session(self):
+        """s1_session.jsonl ratio must be > S2_RATIO_THRESHOLD (0.5)."""
+        from context_intelligence.signals import S2_RATIO_THRESHOLD, score_s2
+
+        count, ratio = score_s2(FIXTURES / "s1_session.jsonl")
+        assert ratio > S2_RATIO_THRESHOLD
+
+    def test_ratio_approximates_two_thirds(self):
+        """s1_session.jsonl ratio must be approximately 2/3 (within 0.01)."""
+        from context_intelligence.signals import score_s2
+
+        count, ratio = score_s2(FIXTURES / "s1_session.jsonl")
+        assert abs(ratio - 2 / 3) < 0.01
+
+    def test_returns_zero_for_nonexistent_path(self):
+        """A non-existent path must not raise and must return (0, 0.0)."""
+        from context_intelligence.signals import score_s2
+
+        count, ratio = score_s2(FIXTURES / "nonexistent_s2_file_xyz.jsonl")
+        assert count == 0
+        assert ratio == 0.0
+
+    def test_ratio_is_zero_when_no_compactions(self, tmp_path):
+        """3 resume events and no compactions — count=3, ratio=0.0."""
+        import json
+
+        from context_intelligence.signals import score_s2
+
+        p = tmp_path / "resumes_only.jsonl"
+        lines = [
+            json.dumps(
+                {
+                    "event": "session:resume",
+                    "timestamp": "2026-05-01T10:01:00.000Z",
+                    "workspace": "test",
+                    "data": {"session_id": "t1"},
+                }
+            ),
+            json.dumps(
+                {
+                    "event": "session:resume",
+                    "timestamp": "2026-05-01T10:02:00.000Z",
+                    "workspace": "test",
+                    "data": {"session_id": "t1"},
+                }
+            ),
+            json.dumps(
+                {
+                    "event": "session:resume",
+                    "timestamp": "2026-05-01T10:03:00.000Z",
+                    "workspace": "test",
+                    "data": {"session_id": "t1"},
+                }
+            ),
+        ]
+        p.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        count, ratio = score_s2(p)
+        assert count == 3
+        assert ratio == 0.0
+
+    def test_counts_session_restore_events(self, tmp_path):
+        """session:restore events must be counted as resume events — count=1."""
+        import json
+
+        from context_intelligence.signals import score_s2
+
+        p = tmp_path / "restore.jsonl"
+        p.write_text(
+            json.dumps(
+                {
+                    "event": "session:restore",
+                    "timestamp": "2026-05-01T10:01:00.000Z",
+                    "workspace": "test",
+                    "data": {"session_id": "t1"},
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        count, ratio = score_s2(p)
+        assert count == 1
