@@ -222,12 +222,12 @@ def _iter_events(events_path: pathlib.Path | str):
 # ---------------------------------------------------------------------------
 
 
-def score_s1(events_path) -> int:
+def score_s1(events_path: pathlib.Path | str) -> int:
     """S1: count compaction events."""
     return sum(1 for ev in _iter_events(events_path) if ev.get("event") == "context:compaction")
 
 
-def score_s1_burst(events_path, *, window_min: int = 5) -> int:
+def score_s1_burst(events_path: pathlib.Path | str, *, window_min: int = 5) -> int:
     """S1 burst variant: maximum compaction events within a rolling window.
 
     Uses a two-pointer sweep in O(n) time.  The window is inclusive on both
@@ -263,7 +263,7 @@ _RESUME_EVENTS: frozenset[str] = frozenset({"session:resume", "session:restore"}
 _WINDOW: timedelta = timedelta(seconds=S2_RESUME_WINDOW_SECONDS)
 
 
-def score_s2(events_path) -> tuple[int, float]:
+def score_s2(events_path: pathlib.Path | str) -> tuple[int, float]:
     """S2: rapid resume count and ratio.
 
     Returns a tuple (resume_count, ratio) where:
@@ -299,20 +299,20 @@ def score_s2(events_path) -> tuple[int, float]:
     return (resume_count, ratio)
 
 
-def score_s3(events_path) -> int:
+def score_s3(events_path: pathlib.Path | str) -> int:
     """S3: iteration count."""
     return sum(
         1 for ev in _iter_events(events_path) if ev.get("event") == "orchestrator:iteration_start"
     )
 
 
-def score_s4a(events_path) -> S4aResult:
+def score_s4a(events_path: pathlib.Path | str) -> S4aResult:
     """S4a: multi-tool call shape repetition."""
     raise NotImplementedError
 
 
 def score_s4b(
-    events_path,
+    events_path: pathlib.Path | str,
     *,
     prefixes: frozenset[str] = frozenset({"echo", "STEP", "Step", "Check", "Note"}),
 ) -> S4bResult:
@@ -320,12 +320,12 @@ def score_s4b(
     raise NotImplementedError
 
 
-def score_s4c(events_path) -> int:
+def score_s4c(events_path: pathlib.Path | str) -> int:
     """S4c: duplicate tool-call input detection."""
     raise NotImplementedError
 
 
-def score_s4d(events_path) -> int:
+def score_s4d(events_path: pathlib.Path | str) -> int:
     """S4d: duplicate tool-call input-pair detection."""
     raise NotImplementedError
 
@@ -338,22 +338,22 @@ def score_s5(metadata_path, ref_last_event_ts: str) -> bool:
 _CANCEL_EVENTS: frozenset[str] = frozenset({"session:cancelled", "user:interrupt"})
 
 
-def score_s6(events_path) -> int:
+def score_s6(events_path: pathlib.Path | str) -> int:
     """S6: cancellation event count."""
     return sum(1 for ev in _iter_events(events_path) if ev.get("event") in _CANCEL_EVENTS)
 
 
-def score_s7(events_path) -> int:
+def score_s7(events_path: pathlib.Path | str) -> int:
     """S7: maximum file reads per iteration."""
     raise NotImplementedError
 
 
-def score_s8(events_path) -> int:
+def score_s8(events_path: pathlib.Path | str) -> int:
     """S8: maximum consecutive bash burst length."""
     raise NotImplementedError
 
 
-def score_s9a(events_path) -> int:
+def score_s9a(events_path: pathlib.Path | str) -> int:
     """S9a: delegate call count."""
     return sum(
         1
@@ -362,17 +362,17 @@ def score_s9a(events_path) -> int:
     )
 
 
-def score_s9b(events_path) -> int:
+def score_s9b(events_path: pathlib.Path | str) -> int:
     """S9b: maximum delegate result payload size."""
     raise NotImplementedError
 
 
-def score_s9c_size(events_path) -> bool:
+def score_s9c_size(events_path: pathlib.Path | str) -> bool:
     """S9c (size): fires when result payload exceeds threshold."""
     raise NotImplementedError
 
 
-def score_s9c_self(events_path) -> int:
+def score_s9c_self(events_path: pathlib.Path | str) -> int:
     """S9c (self): self-delegation cycle count.
 
     Counts tool:pre events where tool_name == 'delegate' AND
@@ -392,7 +392,7 @@ def score_s9c_self(events_path) -> int:
     return count
 
 
-def score_s9_combined(events_path) -> bool:
+def score_s9_combined(events_path: pathlib.Path | str) -> bool:
     """S9 combined: fires when multiple S9 sub-signals fire together."""
     raise NotImplementedError
 
@@ -402,6 +402,6 @@ def score_4_1(scores: list[SignalScores]) -> dict:
     raise NotImplementedError
 
 
-def score_session(events_path) -> SignalScores:
+def score_session(events_path: pathlib.Path | str) -> SignalScores:
     """Compute all signal scores for a session, returning a SignalScores instance."""
     raise NotImplementedError
