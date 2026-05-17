@@ -12,7 +12,7 @@
 #   amplifier-app-cli: fix/issue-233-agent-propagation
 #     session_spawner.py — propagate agent_configs into child session merged_config
 #   amplifier-bundle-skills: fix/issue-233-skill-search
-#     tool-skills __init__.py — _search_skills checks mode_overlay_skills capability
+#     tool-skills __init__.py — _search_skills checks runtime_skill_overlay capability
 #
 # These fixes are mirrored to Gitea and referenced via url_rewrites below.
 
@@ -153,7 +153,7 @@ scenarios:
     description: >
       With minimal fixtures preloaded, tool-designer runs Phase 2 classification
       and loads context-intelligence-tool-design skill via load_skill(search=...) —
-      proving the mode_overlay_skills search fix in tool-skills is working.
+      proving the runtime_skill_overlay search fix in tool-skills is working.
     when:
       mode: active
     setup:

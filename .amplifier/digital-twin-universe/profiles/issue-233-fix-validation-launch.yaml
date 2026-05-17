@@ -2,7 +2,7 @@
 #
 # Validates the two framework fixes for microsoft-amplifier/amplifier-support#233:
 #   Fix 1 (amplifier-app-cli:  session_spawner.py) — agent_configs propagated to child sessions
-#   Fix 2 (amplifier-bundle-skills: tool-skills)   — load_skill(search=) includes mode_overlay_skills
+#   Fix 2 (amplifier-bundle-skills: tool-skills)   — load_skill(search=) includes runtime_skill_overlay
 #
 # Plus the context-intelligence bundle change:
 #   agents moved from agents.include to contributes.agents (specialists now gated)
@@ -231,10 +231,10 @@ validation_cmds:
         exit 1
       fi
 
-      # Check mode_overlay_skills is referenced
-      if grep -q "mode_overlay_skills" "$TOOL_SKILLS"; then
-        echo "PASS S6-struct: mode_overlay_skills check present in tool-skills"
+      # Check runtime_skill_overlay is referenced
+      if grep -q "runtime_skill_overlay" "$TOOL_SKILLS"; then
+        echo "PASS S6-struct: runtime_skill_overlay check present in tool-skills"
       else
-        echo "FAIL S6-struct: mode_overlay_skills NOT referenced in tool-skills"
+        echo "FAIL S6-struct: runtime_skill_overlay NOT referenced in tool-skills"
         exit 1
       fi
