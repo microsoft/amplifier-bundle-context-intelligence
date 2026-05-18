@@ -10,9 +10,11 @@ mode:
 
   contributes:
     agents:
-      context-intelligence-design-facilitator:
+      # Keys MUST be fully namespaced (namespace:name) to match the agent_name
+      # used by the delegate tool and session_spawner.py lookup.
+      context-intelligence:context-intelligence-design-facilitator:
         source: "@context-intelligence:agents/context-intelligence-design-facilitator"
-      context-intelligence-tool-designer:
+      context-intelligence:context-intelligence-tool-designer:
         source: "@context-intelligence:agents/context-intelligence-tool-designer"
     context:
       - "@context-intelligence:context/jsonl-event-schema.md"

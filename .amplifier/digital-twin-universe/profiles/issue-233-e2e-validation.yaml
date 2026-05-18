@@ -320,3 +320,100 @@ validation_cmds:
       else
         echo "WARN S5-content: No elicitation markers detected — check /tmp/s5-output.log"
       fi
+
+  # --------------------------------------------------------------------------
+  # S6: DEFINITIVE DELEGATION PROOF
+  #
+  # Forces the LLM to explicitly call delegate(agent=design-facilitator, ...).
+  # Checks delegate:agent_COMPLETED (not just spawned) in events.jsonl.
+  # This is the authoritative test that the full pipeline works end-to-end.
+  #
+  # REQUIRES three additional fixes beyond what S3+S4 validate:
+  #
+  #   Fix A (amplifier-bundle-modes — hooks-mode/__init__.py):
+  #     When mode is activated via CLI shortcut (/name as prompt prefix),
+  #     mode:activated event fires BEFORE hooks-mode registers its handlers.
+  #     handle_mode_activated is never called, so contributes.agents is never
+  #     applied to coordinator.config.
+  #     FIX: In handle_provider_request, if the mode is active but
+  #     mode_runtime_overlay is not yet set, call overlay.apply() immediately.
+  #     This is the first safe point: discovery is fully populated by then.
+  #
+  #   Fix B (amplifier-app-cli — session_spawner.py):
+  #     The ValueError check at line ~259 raises before the issue #233 fix
+  #     (lines ~271-294) can run. The fix propagates agents to CHILD sessions
+  #     but not for the FIRST spawn (the root session trying to reach a
+  #     mode-contributed agent).
+  #     FIX: Before raising ValueError, also check parent_session.coordinator
+  #     .config.get("agents") (the live coordinator config, not the static
+  #     snapshot in agent_configs).
+  #
+  #   Fix C (this bundle — modes/context-intelligence.md):
+  #     contributes.agents keys must be FULLY NAMESPACED (namespace:name)
+  #     to match the agent_name used in the delegate tool and spawn lookup.
+  #     Without the namespace prefix, the key lookup fails even if the agent
+  #     is correctly in coordinator.config.
+  #     STATUS: FIXED in this commit (keys now include context-intelligence:
+  #     prefix).
+  #
+  # Until Fix A and Fix B land in their respective repos, S6 will fail with:
+  #   ValueError: Agent 'context-intelligence:context-intelligence-design-facilitator'
+  #               not found in configuration
+  # --------------------------------------------------------------------------
+  - name: S6-definitive-delegation-proof
+    command: |
+      export PATH="/root/.local/bin:$PATH"
+      mkdir -p /tmp/s6-workspace && cd /tmp/s6-workspace
+
+      # Explicit instruction forces the LLM to call delegate with the exact
+      # facilitator agent name — no routing ambiguity.
+      amplifier run \
+        "/context-intelligence
+        SINGLE ACTION: Use the delegate tool exactly once with:
+          agent: context-intelligence:context-intelligence-design-facilitator
+          instruction: \"Confirm your identity and Phase 0 role in one sentence.\"
+        Do NOT use any other tool. Just call delegate and report the result." \
+        --max-tokens 3000 \
+        --output-format json-trace \
+        2>&1 | tee /tmp/s6-output.log || true
+
+      # Check for the ValueError (bug not yet fixed in framework)
+      if grep -qi "ValueError.*not found in configuration" /tmp/s6-output.log; then
+        echo "FAIL S6: ValueError — Fix A (hooks-mode) and/or Fix B (session_spawner) needed"
+        echo "  See profile comments for fix details"
+        # Don't exit 1 here — document as known gap pending framework fixes
+      fi
+
+      # Check events.jsonl for delegate:agent_COMPLETED (proof of success)
+      EVENTS=$(find /root/.amplifier/projects/-tmp-s6-workspace/sessions -maxdepth 2 \
+        -name "events.jsonl" -not -path "*/context-intelligence/*" 2>/dev/null | head -1)
+      python3 - "$EVENTS" <<'S6PYEOF'
+import json, sys
+path = sys.argv[1] if len(sys.argv) > 1 else ""
+if not path:
+    print("WARN S6: no events.jsonl found"); sys.exit(0)
+spawned = []; completed = []; errors = []
+with open(path) as f:
+    for line in f:
+        line = line.strip()
+        if not line: continue
+        try: ev = json.loads(line)
+        except: continue
+        t = ev.get("event","")
+        d = ev.get("data",{})
+        if t == "delegate:agent_spawned": spawned.append(d.get("agent",""))
+        if t == "delegate:agent_completed": completed.append(d.get("agent",""))
+        if t == "delegate:error": errors.append(str(d.get("error",""))[:80])
+print(f"Spawned:   {spawned}")
+print(f"Completed: {completed}")
+print(f"Errors:    {errors}")
+facilitator = "context-intelligence:context-intelligence-design-facilitator"
+if facilitator in completed:
+    print("")
+    print("PASS S6: delegate:agent_completed — FULL END-TO-END DELEGATION WORKS")
+    print("  Fix A (hooks-mode contributes) + Fix B (session_spawner) + Fix C (keys): all applied")
+elif facilitator in spawned:
+    print("FAIL S6: agent spawned but not completed (framework fix A or B missing)")
+else:
+    print("FAIL S6: facilitator not spawned (framework fix A or B missing)")
+S6PYEOF
