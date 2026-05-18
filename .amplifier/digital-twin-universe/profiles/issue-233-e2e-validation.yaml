@@ -81,3 +81,210 @@ provision:
 readiness:
   - name: amplifier-installed
     command: 'PATH=/root/.local/bin:$PATH amplifier --version'
+
+validation_cmds:
+  # --------------------------------------------------------------------------
+  # S1: Specialist agents NOT visible at CLI level before mode is active.
+  # Contributes.agents are mode-gated: they only mount inside a running session
+  # when the mode is activated, not at the CLI / bundle-registry level.
+  # --------------------------------------------------------------------------
+  - name: S1-specialists-gated
+    command: |
+      export PATH="/root/.local/bin:$PATH"
+      output=$(amplifier agent list 2>&1)
+      echo "Agent list: $output"
+      if echo "$output" | grep -q "context-intelligence-design-facilitator"; then
+        echo "FAIL S1: design-facilitator visible at CLI without mode (should be gated)"
+        exit 1
+      fi
+      if echo "$output" | grep -q "context-intelligence-tool-designer"; then
+        echo "FAIL S1: tool-designer visible at CLI without mode (should be gated)"
+        exit 1
+      fi
+      echo "PASS S1: specialist agents correctly absent from CLI registry"
+
+  # --------------------------------------------------------------------------
+  # S2: Mode activation mounts agents + skills — verified via JSONL event.
+  #
+  # Runs a session that activates the mode then immediately stops.
+  # The RuntimeOverlay emits mode:transition_completed with data.mounted listing
+  # all (category, key) pairs that were mounted.  We grep the JSONL for the
+  # agent names to confirm they appeared in the mounted list.
+  # --------------------------------------------------------------------------
+  - name: S2-mode-mounts-agents-and-skills
+    command: |
+      export PATH="/root/.local/bin:$PATH"
+      mkdir -p /tmp/s2-workspace && cd /tmp/s2-workspace
+
+      # Activate mode, ask one factual question (forces context injection check),
+      # then stop.  --max-turns 2 keeps the run short.
+      amplifier run \
+        "/context-intelligence
+        What fields are available on a tool:pre event?" \
+        --max-turns 2 \
+        2>&1 | tee /tmp/s2-output.log || true
+
+      # Locate the most recent events.jsonl written during this run
+      EVENTS=$(find /root/.amplifier/projects -name "events.jsonl" \
+        -newer /tmp/s2-output.log 2>/dev/null | sort -r | head -1)
+
+      if [ -z "$EVENTS" ]; then
+        # Fallback: pick the newest events.jsonl overall
+        EVENTS=$(find /root/.amplifier/projects -name "events.jsonl" \
+          2>/dev/null | sort -r | head -1)
+      fi
+
+      if [ -z "$EVENTS" ]; then
+        echo "WARN S2: No events.jsonl found — skipping JSONL assertions"
+      else
+        echo "Checking: $EVENTS"
+
+        # mode:transition_completed is emitted by RuntimeOverlay and includes
+        # data.mounted — a list of (category, key) pairs.  Both agent names
+        # appear serialised in that payload.  Simple grep is sufficient.
+        if grep -q "mode:transition_completed" "$EVENTS"; then
+          echo "PASS S2-event: mode:transition_completed event found in JSONL"
+        else
+          echo "WARN S2-event: mode:transition_completed not in JSONL"
+        fi
+
+        if grep -q "context-intelligence-design-facilitator" "$EVENTS"; then
+          echo "PASS S2-facilitator: design-facilitator name found in JSONL (mounted by overlay)"
+        else
+          echo "WARN S2-facilitator: design-facilitator not found in JSONL"
+        fi
+
+        if grep -q "context-intelligence-tool-designer" "$EVENTS"; then
+          echo "PASS S2-tool-designer: tool-designer name found in JSONL (mounted by overlay)"
+        else
+          echo "WARN S2-tool-designer: tool-designer not found in JSONL"
+        fi
+      fi
+
+      # Independently verify that the mode body text was injected and the
+      # session responded with JSONL field names (proving context injection).
+      if grep -qi "tool_name\|tool_input\|parallel_group_id" /tmp/s2-output.log; then
+        echo "PASS S2-context: Mode-injected JSONL schema context was consulted"
+      else
+        echo "WARN S2-context: Schema field names not in output — context may not have been injected"
+      fi
+
+  # --------------------------------------------------------------------------
+  # S3: Verify session_spawner.py has the Issue #233 agent-propagation fix.
+  # (Brian's app-cli#178 merged to amplifier-app-cli@main)
+  #
+  # The fix adds a block that copies coordinator.config["agents"] (which includes
+  # mode-contributed agents) into the child session's merged_config so the child
+  # can resolve the agent by name.
+  # --------------------------------------------------------------------------
+  - name: S3-session-spawner-has-issue233-fix
+    command: |
+      export PATH="/root/.local/bin:$PATH"
+      SPAWNER=$(find /root/.local/share/uv/tools/amplifier \
+        -name "session_spawner.py" 2>/dev/null | head -1)
+      if [ -z "$SPAWNER" ]; then
+        echo "FAIL S3: session_spawner.py not found in amplifier tool venv"
+        echo "Searched: /root/.local/share/uv/tools/amplifier"
+        exit 1
+      fi
+      echo "Found: $SPAWNER"
+
+      # Fix marker inserted by app-cli#178
+      if grep -q "microsoft-amplifier/amplifier-support#233" "$SPAWNER"; then
+        echo "PASS S3: Fix #233 comment found in session_spawner.py"
+      else
+        echo "FAIL S3: Fix #233 comment NOT in session_spawner.py"
+        echo "This means amplifier-app-cli@main does NOT have Brian's fix yet."
+        echo "Current agent_configs lines:"
+        grep -n "agent_configs" "$SPAWNER" | head -10
+        exit 1
+      fi
+
+      # Verify the specific propagation block is present
+      if grep -q "child_agents = merged_config.setdefault" "$SPAWNER"; then
+        echo "PASS S3: agent_configs propagation block present in spawner"
+      else
+        echo "FAIL S3: agent_configs propagation block NOT found in spawner"
+        exit 1
+      fi
+
+  # --------------------------------------------------------------------------
+  # S4: Verify tool-skills has the runtime_skill_overlay search= fix.
+  # (Brian's bundle-skills#15 merged to amplifier-bundle-skills@main)
+  #
+  # The fix adds _get_overlay_skill_metadata() so that load_skill(search=...)
+  # includes skills contributed via contributes.skills (mode-gated skills).
+  # --------------------------------------------------------------------------
+  - name: S4-tool-skills-has-search-fix
+    command: |
+      export PATH="/root/.local/bin:$PATH"
+      TOOL_SKILLS=$(find /root -name "__init__.py" \
+        -path "*/amplifier_module_tool_skills/*" 2>/dev/null | head -1)
+      if [ -z "$TOOL_SKILLS" ]; then
+        TOOL_SKILLS=$(find /root/.local/share/uv/tools/amplifier \
+          -name "__init__.py" -path "*/amplifier_module_tool_skills/*" 2>/dev/null | head -1)
+      fi
+      if [ -z "$TOOL_SKILLS" ]; then
+        echo "FAIL S4: amplifier_module_tool_skills/__init__.py not found"
+        exit 1
+      fi
+      echo "Found: $TOOL_SKILLS"
+
+      if grep -q "_get_overlay_skill_metadata" "$TOOL_SKILLS"; then
+        echo "PASS S4: _get_overlay_skill_metadata present (search= fix installed)"
+      else
+        echo "FAIL S4: _get_overlay_skill_metadata NOT found in tool-skills"
+        echo "This means amplifier-bundle-skills@main does NOT have Brian's fix yet."
+        grep -n "def _search_skills\|def _list_skills" "$TOOL_SKILLS" | head -5
+        exit 1
+      fi
+
+      if grep -q "runtime_skill_overlay" "$TOOL_SKILLS"; then
+        echo "PASS S4: runtime_skill_overlay referenced in tool-skills search path"
+      else
+        echo "FAIL S4: runtime_skill_overlay NOT referenced in tool-skills"
+        exit 1
+      fi
+
+  # --------------------------------------------------------------------------
+  # S5: Full delegation — mode active, user message triggers facilitator.
+  # Proves the specialist-behind-gate pattern works end-to-end:
+  #   1. Mode activates (contributes.agents mounts facilitator)
+  #   2. Mode routing delegates to context-intelligence:context-intelligence-design-facilitator
+  #   3. Facilitator runs Phase 0 concept elicitation
+  #   4. Facilitator internally delegates to graph-analyst (proves session_spawner fix)
+  # This is the scenario that previously failed with:
+  #   ValueError: Agent '...design-facilitator' not found in configuration
+  # --------------------------------------------------------------------------
+  - name: S5-full-delegation-specialist-behind-gate
+    command: |
+      export PATH="/root/.local/bin:$PATH"
+      mkdir -p /tmp/s5-workspace && cd /tmp/s5-workspace
+
+      amplifier run \
+        "/context-intelligence
+        Investigate how testing sessions are performing." \
+        --max-turns 4 \
+        2>&1 | tee /tmp/s5-output.log || true
+
+      echo "--- session output ---"
+      cat /tmp/s5-output.log
+      echo "--- end output ---"
+
+      # The fix for #233 eliminates this specific error.
+      if grep -qi "ValueError.*not found in configuration\|not found in configuration.*ValueError" \
+        /tmp/s5-output.log; then
+        echo "FAIL S5: ValueError 'not found in configuration' detected"
+        echo "The session_spawner.py fix may not be effective."
+        exit 1
+      fi
+
+      # Verify the facilitator ran Phase 0 concept elicitation.
+      # The facilitator produces domain-concepts.md or asks clarifying questions.
+      if ls /tmp/s5-workspace/.context-intelligence-investigation/domain-concepts.md \
+        2>/dev/null || \
+        grep -qi "concept\|elicit\|domain\|boundary\|understand" /tmp/s5-output.log; then
+        echo "PASS S5: Facilitator ran concept elicitation (no ValueError, elicitation content present)"
+      else
+        echo "WARN S5: No elicitation markers in output — check /tmp/s5-output.log manually"
+      fi

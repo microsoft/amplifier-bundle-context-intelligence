@@ -1,48 +1,35 @@
 # context-intelligence mode — contributes.agents validation profile.
 #
-# Validates the specialist-behind-gate pattern with the framework bug fixed:
-#   S1 — gated items invisible without mode (agents NOW gated, not at behavior level)
+# Validates the specialist-behind-gate pattern:
+#   S1 — gated items invisible without mode (agents gated, not at behavior level)
 #   S2 — atomic mount + JSONL event proof on activation
 #   S3 — clean unmount, baseline intact on deactivation
 #   S4 — context USED at runtime (schema field question)
 #   S5 — facilitator USED via contributes.agents path + inner delegation works
 #   S6 — tool-designer USED via contributes.agents path + load_skill(search=) works
 #
-# Framework fixes required (both on local branches):
-#   amplifier-app-cli: fix/issue-233-agent-propagation
-#     session_spawner.py — propagate agent_configs into child session merged_config
-#   amplifier-bundle-skills: fix/issue-233-skill-search
-#     tool-skills __init__.py — _search_skills checks runtime_skill_overlay capability
-#
-# These fixes are mirrored to Gitea and referenced via url_rewrites below.
+# Framework fixes (app-cli#178, bundle-skills#15, foundation#203) are merged to
+# their respective main branches — no Gitea redirects needed for framework repos.
+# Only the context-intelligence bundle itself is redirected (not yet on CI main).
 
 profile:
   name: context-intelligence-contributes-migration-validation
-  version: 2.0.0
+  version: 2.1.0
   description: >
-    Validates the Modes v1 contributes: migration for the context-intelligence mode
-    WITH the framework fixes for #233 applied.  Proves specialists ARE gated behind
-    the mode (not at behavior level), and that sub-session delegation + skill search
-    work correctly through the contributes.agents path.
+    Validates the Modes v1 contributes: migration for the context-intelligence mode.
+    Framework fixes for #233 are on GitHub main (app-cli#178, bundle-skills#15,
+    foundation#203) — only amplifier-bundle-context-intelligence is Gitea-redirected.
+    Proves specialists ARE gated behind the mode and that sub-session delegation +
+    skill search work correctly through the contributes.agents path.
 
-# MANDATORY: Gitea url_rewrites redirect all local repo changes to Gitea mirrors.
-#
-# Four entries are required:
-#   1. amplifier-bundle-context-intelligence bare @main URL
-#   2. amplifier-bundle-context-intelligence #subdirectory=skills variant
-#   3. amplifier-app-cli bare @main URL (for the session_spawner fix)
-#   4. amplifier-bundle-skills bare @main URL (for the tool-skills search fix)
+# Only redirect amplifier-bundle-context-intelligence — the framework fixes for
+# issue #233 (app-cli#178, bundle-skills#15, foundation#203) are merged to their
+# respective GitHub main branches and install from real GitHub.
 url_rewrites:
   - from: "git+https://github.com/microsoft/amplifier-bundle-context-intelligence@main"
     to:   "git+http://{gitea_host}/microsoft/amplifier-bundle-context-intelligence@main"
   - from: "git+https://github.com/microsoft/amplifier-bundle-context-intelligence@main#subdirectory=skills"
     to:   "git+http://{gitea_host}/microsoft/amplifier-bundle-context-intelligence@main#subdirectory=skills"
-  - from: "git+https://github.com/microsoft/amplifier-app-cli@main"
-    to:   "git+http://{gitea_host}/microsoft/amplifier-app-cli@main"
-  - from: "git+https://github.com/microsoft/amplifier-bundle-skills@main"
-    to:   "git+http://{gitea_host}/microsoft/amplifier-bundle-skills@main"
-  - from: "git+https://github.com/microsoft/amplifier-bundle-skills@main#subdirectory=modules/tool-skills"
-    to:   "git+http://{gitea_host}/microsoft/amplifier-bundle-skills@main#subdirectory=modules/tool-skills"
 
 install:
   command: "amplifier bundle add git+https://github.com/microsoft/amplifier-bundle-context-intelligence@main#subdirectory=behaviors/context-intelligence.yaml --app"
