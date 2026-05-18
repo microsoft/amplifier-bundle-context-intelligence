@@ -91,7 +91,7 @@ validation_cmds:
   - name: S1-specialists-gated
     command: |
       export PATH="/root/.local/bin:$PATH"
-      output=$(amplifier agent list 2>&1)
+      output=$(amplifier agents list 2>&1)
       echo "Agent list: $output"
       if echo "$output" | grep -q "context-intelligence-design-facilitator"; then
         echo "FAIL S1: design-facilitator visible at CLI without mode (should be gated)"
@@ -116,20 +116,20 @@ validation_cmds:
       export PATH="/root/.local/bin:$PATH"
       mkdir -p /tmp/s2-workspace && cd /tmp/s2-workspace
 
-      # Activate mode, ask one factual question (forces context injection check),
-      # then stop.  --max-turns 2 keeps the run short.
+      # Activate mode, ask one factual question (forces context injection check).
+      # Project dir slug is derived from CWD: /tmp/s2-workspace → -tmp-s2-workspace
       amplifier run \
         "/context-intelligence
         What fields are available on a tool:pre event?" \
-        --max-turns 2 \
+        --max-tokens 4000 \
         2>&1 | tee /tmp/s2-output.log || true
 
-      # Locate the most recent events.jsonl written during this run
-      EVENTS=$(find /root/.amplifier/projects -name "events.jsonl" \
-        -newer /tmp/s2-output.log 2>/dev/null | sort -r | head -1)
+      # Locate events.jsonl for this specific session (CWD-scoped project dir)
+      EVENTS=$(find /root/.amplifier/projects/-tmp-s2-workspace \
+        -name "events.jsonl" 2>/dev/null | sort -r | head -1)
 
       if [ -z "$EVENTS" ]; then
-        # Fallback: pick the newest events.jsonl overall
+        # Fallback: newest events.jsonl across all projects
         EVENTS=$(find /root/.amplifier/projects -name "events.jsonl" \
           2>/dev/null | sort -r | head -1)
       fi
@@ -189,18 +189,18 @@ validation_cmds:
       fi
       echo "Found: $SPAWNER"
 
-      # Fix marker inserted by app-cli#178
-      if grep -q "microsoft-amplifier/amplifier-support#233" "$SPAWNER"; then
-        echo "PASS S3: Fix #233 comment found in session_spawner.py"
+      # Section header added by app-cli#178 — exact string in deployed file
+      if grep -q "Issue #233 fix:" "$SPAWNER"; then
+        echo "PASS S3: 'Issue #233 fix:' section marker found in session_spawner.py"
       else
-        echo "FAIL S3: Fix #233 comment NOT in session_spawner.py"
+        echo "FAIL S3: 'Issue #233 fix:' section marker NOT in session_spawner.py"
         echo "This means amplifier-app-cli@main does NOT have Brian's fix yet."
         echo "Current agent_configs lines:"
-        grep -n "agent_configs" "$SPAWNER" | head -10
+        grep -n "agent_configs\|live_agents\|child_agents" "$SPAWNER" | head -10
         exit 1
       fi
 
-      # Verify the specific propagation block is present
+      # Verify the specific propagation code block is present
       if grep -q "child_agents = merged_config.setdefault" "$SPAWNER"; then
         echo "PASS S3: agent_configs propagation block present in spawner"
       else
@@ -261,30 +261,42 @@ validation_cmds:
       export PATH="/root/.local/bin:$PATH"
       mkdir -p /tmp/s5-workspace && cd /tmp/s5-workspace
 
+      # --output-format json-trace exposes tool calls in output for grep assertions
       amplifier run \
         "/context-intelligence
         Investigate how testing sessions are performing." \
-        --max-turns 4 \
+        --max-tokens 6000 \
+        --output-format json-trace \
         2>&1 | tee /tmp/s5-output.log || true
 
       echo "--- session output ---"
       cat /tmp/s5-output.log
       echo "--- end output ---"
 
-      # The fix for #233 eliminates this specific error.
+      # 1. Hard failure: the exact error that bug #233 caused.
       if grep -qi "ValueError.*not found in configuration\|not found in configuration.*ValueError" \
         /tmp/s5-output.log; then
         echo "FAIL S5: ValueError 'not found in configuration' detected"
         echo "The session_spawner.py fix may not be effective."
         exit 1
       fi
+      echo "PASS S5-no-error: No ValueError from missing agent"
 
-      # Verify the facilitator ran Phase 0 concept elicitation.
-      # The facilitator produces domain-concepts.md or asks clarifying questions.
-      if ls /tmp/s5-workspace/.context-intelligence-investigation/domain-concepts.md \
-        2>/dev/null || \
-        grep -qi "concept\|elicit\|domain\|boundary\|understand" /tmp/s5-output.log; then
-        echo "PASS S5: Facilitator ran concept elicitation (no ValueError, elicitation content present)"
+      # 2. json-trace exposes every delegate tool call — check facilitator was invoked.
+      #    The trace output contains the agent name in delegate calls.
+      if grep -q "context-intelligence-design-facilitator" /tmp/s5-output.log; then
+        echo "PASS S5-delegation: facilitator agent name found in json-trace output"
+        echo "  -> delegate to context-intelligence-design-facilitator succeeded"
+        echo "  -> session_spawner.py agent propagation fix is working"
       else
-        echo "WARN S5: No elicitation markers in output — check /tmp/s5-output.log manually"
+        echo "WARN S5-delegation: facilitator not in json-trace — mode may have used a skill path instead"
+        echo "  (S3 structural check is the authoritative proof that the fix is present)"
+      fi
+
+      # 3. Verify the facilitator produced concept elicitation output or workspace file.
+      if [ -f /tmp/s5-workspace/.context-intelligence-investigation/domain-concepts.md ] || \
+        grep -qi "concept\|elicit\|domain\|boundary\|understand\|phase 0\|phase0" /tmp/s5-output.log; then
+        echo "PASS S5-content: Elicitation content present in output or workspace"
+      else
+        echo "WARN S5-content: No elicitation markers detected — check /tmp/s5-output.log"
       fi
