@@ -13,6 +13,7 @@ agents:
 modes:
   include:
     - context-intelligence:modes/context-intelligence.md
+    - context-intelligence:modes/bundle-usage.md
 
 tools:
   - module: tool-delegate
