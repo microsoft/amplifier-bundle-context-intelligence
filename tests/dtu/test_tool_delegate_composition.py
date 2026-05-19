@@ -44,7 +44,7 @@ def check(label, condition, detail=""):
         print(f"  {FAIL}  {label}" + (f"\n         detail: {detail}" if detail else ""))
         failures.append(label)
 
-cache = Path("/root/.amplifier/cache/amplifier-bundle-context-intelligence-ecd41f3e6fa67bd2")
+cache = Path.home() / ".amplifier/cache/amplifier-bundle-context-intelligence-ecd41f3e6fa67bd2"
 
 def load_frontmatter(rel_path):
     text = (cache / rel_path).read_text()
