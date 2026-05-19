@@ -89,13 +89,17 @@ class TestComputeGap:
             "foundation": {**zero_counts(), "agents": 1, "modes": 0},
         }
         # foundation declares 10 agents, only 1 invocation → < 20% threshold
-        inv = make_inventory(foundation={
-            "scan_source": "cache",
-            "declared": {
-                "agents": [f"agent-{i}" for i in range(10)],
-                "modes": [], "skills": [], "recipes": [],
-            },
-        })
+        inv = make_inventory(
+            foundation={
+                "scan_source": "cache",
+                "declared": {
+                    "agents": [f"agent-{i}" for i in range(10)],
+                    "modes": [],
+                    "skills": [],
+                    "recipes": [],
+                },
+            }
+        )
         result = compute_gap(signals=signals, inventory=inv)
         types = {i["type"] for i in result["improvement"] if i["bundle"] == "foundation"}
         assert "mode-refactor" in types

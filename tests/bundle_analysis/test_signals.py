@@ -29,13 +29,17 @@ class TestRunSignals:
         await run_signals(client=mock_ci_client, workspace="my-workspace")
         # workspace appears as the second positional arg to client.cypher
         calls = mock_ci_client.cypher.await_args_list
-        assert all(c.args[1] == "my-workspace" or c.kwargs.get("workspace") == "my-workspace"
-                   for c in calls)
+        assert all(
+            c.args[1] == "my-workspace" or c.kwargs.get("workspace") == "my-workspace"
+            for c in calls
+        )
 
     async def test_returns_bundle_keyed_dict(self, mock_ci_client):
-        mock_ci_client.cypher = AsyncMock(return_value=[
-            {"bundle": "foundation", "agent": "explorer", "invocations": 1},
-        ])
+        mock_ci_client.cypher = AsyncMock(
+            return_value=[
+                {"bundle": "foundation", "agent": "explorer", "invocations": 1},
+            ]
+        )
         from context_intelligence.bundle_analysis.signals import run_signals
 
         result = await run_signals(client=mock_ci_client, workspace="ws")
@@ -45,10 +49,12 @@ class TestRunSignals:
             assert key in result["foundation"]
 
     async def test_agent_count_aggregated_from_rows(self, mock_ci_client):
-        mock_ci_client.cypher = AsyncMock(return_value=[
-            {"bundle": "foundation", "agent": "explorer", "invocations": 3},
-            {"bundle": "foundation", "agent": "zen-architect", "invocations": 2},
-        ])
+        mock_ci_client.cypher = AsyncMock(
+            return_value=[
+                {"bundle": "foundation", "agent": "explorer", "invocations": 3},
+                {"bundle": "foundation", "agent": "zen-architect", "invocations": 2},
+            ]
+        )
         from context_intelligence.bundle_analysis.signals import run_signals
 
         result = await run_signals(client=mock_ci_client, workspace="ws")
@@ -61,10 +67,7 @@ class TestRunSignals:
         await run_signals(client=mock_ci_client, workspace="ws", session_id="abc-123")
         calls = mock_ci_client.cypher.await_args_list
         # at least one call passes session_id in params
-        assert any(
-            (c.kwargs.get("params") or {}).get("session_id") == "abc-123"
-            for c in calls
-        )
+        assert any((c.kwargs.get("params") or {}).get("session_id") == "abc-123" for c in calls)
 
     async def test_graceful_on_client_exception(self, mock_ci_client):
         mock_ci_client.cypher = AsyncMock(side_effect=RuntimeError("boom"))
