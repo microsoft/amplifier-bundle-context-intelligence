@@ -48,10 +48,12 @@ def test_gap_arithmetic_consistent(dtu_session):
     dtu_session.activate_mode("bundle-usage")
     result = dtu_session.call_tool("bundle_usage", session_id=KNOWN_SESSION_ID)
 
-    assert result.get("success") is True, f"bundle_usage tool call failed. result: {result}"
+    assert "gap" in result, (
+        f"Expected 'gap' key in result. Got keys: {list(result.keys())}. "
+        f"Raw output (if any): {result.get('_raw', 'N/A')[:300]}"
+    )
 
-    out = result.get("output", {})
-    per_bundle = out.get("gap", {}).get("per_bundle", {})
+    per_bundle = result["gap"].get("per_bundle", {})
 
     for bundle_name, pb in per_bundle.items():
         for k in ("agents", "skills", "modes", "recipes"):
@@ -92,14 +94,16 @@ def test_foundation_util_gap_present(dtu_session):
     dtu_session.activate_mode("bundle-usage")
     result = dtu_session.call_tool("bundle_usage", session_id=KNOWN_SESSION_ID)
 
-    assert result.get("success") is True, f"bundle_usage tool call failed. result: {result}"
+    assert "gap" in result, (
+        f"Expected 'gap' key in result. Got keys: {list(result.keys())}. "
+        f"Raw output (if any): {result.get('_raw', 'N/A')[:300]}"
+    )
 
-    out = result.get("output", {})
-    pb = out.get("gap", {}).get("per_bundle", {}).get("foundation")
+    pb = result["gap"].get("per_bundle", {}).get("foundation")
 
     assert pb is not None, (
         "Expected 'foundation' bundle in gap.per_bundle but it was absent. "
-        f"Observed per_bundle keys: {list(out.get('gap', {}).get('per_bundle', {}).keys())}"
+        f"Observed per_bundle keys: {list(result['gap'].get('per_bundle', {}).keys())}"
     )
 
     assert pb["declared"]["agents"] > 1, (
@@ -153,10 +157,12 @@ def test_improvement_entries_well_formed(dtu_session):
     dtu_session.activate_mode("bundle-usage")
     result = dtu_session.call_tool("bundle_usage", session_id=KNOWN_SESSION_ID)
 
-    assert result.get("success") is True, f"bundle_usage tool call failed. result: {result}"
+    assert "gap" in result, (
+        f"Expected 'gap' key in result. Got keys: {list(result.keys())}. "
+        f"Raw output (if any): {result.get('_raw', 'N/A')[:300]}"
+    )
 
-    out = result.get("output", {})
-    imp = out.get("gap", {}).get("improvement")
+    imp = result["gap"].get("improvement")
 
     assert isinstance(imp, list) and imp, (
         "Expected gap.improvement to be a non-empty list. "

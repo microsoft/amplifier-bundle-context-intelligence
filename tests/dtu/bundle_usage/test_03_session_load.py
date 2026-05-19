@@ -28,11 +28,13 @@ def test_session_load_completes_without_error(dtu_session):
     """bundle_usage tool must complete without error for the known session ID.
 
     Activates the bundle-usage mode, then calls the bundle_usage tool scoped to
-    the known ground-truth session.  The tool must return ``success=True`` in
-    both redacted and unredacted cases (S-14 direct OR inference fallback).
+    the known ground-truth session.  The tool must return a result containing
+    the ``"inventory"`` key in both redacted and unredacted cases (S-14 direct
+    OR inference fallback).
 
     Assertions:
-      - The tool call succeeds (``result["success"] is True``).
+      - The result contains an ``"inventory"`` key (or ``_raw`` text with
+        inventory keywords).
 
     Diagnosis checklist on failure:
       - Confirm the ground-truth session exists in the CI graph.
@@ -44,7 +46,10 @@ def test_session_load_completes_without_error(dtu_session):
     dtu_session.activate_mode("bundle-usage")
     result = dtu_session.call_tool("bundle_usage", session_id=KNOWN_SESSION_ID)
 
-    assert result.get("success") is True, f"bundle_usage tool call failed. result: {result}"
+    assert "inventory" in result, (
+        f"Expected 'inventory' key in result. Got keys: {list(result.keys())}. "
+        f"Raw output (if any): {result.get('_raw', 'N/A')[:300]}"
+    )
 
 
 def test_session_load_recall_against_used_subset(dtu_session):
@@ -58,7 +63,7 @@ def test_session_load_recall_against_used_subset(dtu_session):
     used_bundles is the set of bundle names where any invocation count is > 0
     across agents, skills, modes, recipes, or tools.
 
-    inventory_bundles is ``set(out["inventory"]) - {"_meta"}``.
+    inventory_bundles is ``set(result["inventory"]) - {"_meta"}``.
 
     Assertions:
       - ``missing = used_bundles - inventory_bundles`` must be empty.
@@ -73,10 +78,13 @@ def test_session_load_recall_against_used_subset(dtu_session):
     dtu_session.activate_mode("bundle-usage")
     result = dtu_session.call_tool("bundle_usage", session_id=KNOWN_SESSION_ID)
 
-    assert result.get("success") is True, f"bundle_usage tool call failed. result: {result}"
+    assert "signals" in result and "inventory" in result, (
+        f"Expected 'signals' and 'inventory' keys in result. "
+        f"Got keys: {list(result.keys())}. "
+        f"Raw output (if any): {result.get('_raw', 'N/A')[:300]}"
+    )
 
-    out = result.get("output", {})
-    signals = out.get("signals", {})
+    signals = result["signals"]
 
     used_bundles = {
         name
@@ -84,7 +92,7 @@ def test_session_load_recall_against_used_subset(dtu_session):
         if any(counts.get(k, 0) > 0 for k in ("agents", "skills", "modes", "recipes", "tools"))
     }
 
-    inventory_bundles = set(out.get("inventory", {})) - {"_meta"}
+    inventory_bundles = set(result["inventory"]) - {"_meta"}
 
     missing = used_bundles - inventory_bundles
     assert not missing, (
@@ -116,10 +124,12 @@ def test_inventory_meta_reports_scan_source(dtu_session):
     dtu_session.activate_mode("bundle-usage")
     result = dtu_session.call_tool("bundle_usage", session_id=KNOWN_SESSION_ID)
 
-    assert result.get("success") is True, f"bundle_usage tool call failed. result: {result}"
+    assert "inventory" in result, (
+        f"Expected 'inventory' key in result. Got keys: {list(result.keys())}. "
+        f"Raw output (if any): {result.get('_raw', 'N/A')[:300]}"
+    )
 
-    out = result.get("output", {})
-    meta = out.get("inventory", {}).get("_meta", {})
+    meta = result["inventory"].get("_meta", {})
 
     assert meta.get("scan_source") in ("cache", "absent", "stale"), (
         f"inventory._meta.scan_source must be one of {{cache, absent, stale}}. "

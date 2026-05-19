@@ -37,7 +37,8 @@ def test_detects_foundation_explorer_only(dtu_session):
     agent invocation: ``foundation:explorer``.
 
     Assertions:
-      - The tool call succeeds (``result["success"] is True``).
+      - The tool call returns a result with a ``"signals"`` key (or ``_raw``
+        text containing signal keywords).
       - The ``signals`` dict contains a ``"foundation"`` key.
       - ``signals["foundation"]["agents"] >= 1`` (at least one agent invocation
         for the foundation bundle).
@@ -51,9 +52,12 @@ def test_detects_foundation_explorer_only(dtu_session):
     dtu_session.activate_mode("bundle-usage")
     result = dtu_session.call_tool("bundle_usage", session_id=KNOWN_SESSION_ID)
 
-    assert result.get("success") is True, f"bundle_usage tool call failed. result: {result}"
+    assert "signals" in result, (
+        f"Expected 'signals' key in result. Got keys: {list(result.keys())}. "
+        f"Raw output (if any): {result.get('_raw', 'N/A')[:300]}"
+    )
 
-    signals = result.get("output", {}).get("signals", {})
+    signals = result["signals"]
 
     assert "foundation" in signals, (
         "Expected 'foundation' bundle in signals but it was absent. "
@@ -91,9 +95,12 @@ def test_no_false_positive_invocations(dtu_session):
     dtu_session.activate_mode("bundle-usage")
     result = dtu_session.call_tool("bundle_usage", session_id=KNOWN_SESSION_ID)
 
-    assert result.get("success") is True, f"bundle_usage tool call failed. result: {result}"
+    assert "signals" in result, (
+        f"Expected 'signals' key in result. Got keys: {list(result.keys())}. "
+        f"Raw output (if any): {result.get('_raw', 'N/A')[:300]}"
+    )
 
-    signals = result.get("output", {}).get("signals", {})
+    signals = result["signals"]
 
     other_agents = sum(b["agents"] for name, b in signals.items() if name != "foundation")
     assert other_agents == 0, (

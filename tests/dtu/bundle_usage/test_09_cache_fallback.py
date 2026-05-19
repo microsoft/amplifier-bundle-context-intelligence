@@ -74,8 +74,8 @@ def test_fresh_cache_marked_fresh(dtu_session):
     and its ``scan_source`` field must indicate a fresh cache read.
 
     Assertions:
-      - The tool call succeeds (``result["success"] is True``).
-      - ``out["inventory"].get("foundation")`` is not None.
+      - The result contains an ``"inventory"`` key.
+      - ``result["inventory"].get("foundation")`` is not None.
       - ``fnd["scan_source"] in ("cache", "fresh")``.
 
     Diagnosis checklist on failure:
@@ -91,16 +91,16 @@ def test_fresh_cache_marked_fresh(dtu_session):
     dtu_session.activate_mode("bundle-usage")
     result = dtu_session.call_tool("bundle_usage")
 
-    assert result.get("success") is True, (
-        f"bundle_usage workspace-scope call failed. result: {result}"
+    assert "inventory" in result, (
+        f"Expected 'inventory' key in result. Got keys: {list(result.keys())}. "
+        f"Raw output (if any): {result.get('_raw', 'N/A')[:300]}"
     )
 
-    out = result.get("output", {})
-    fnd = out.get("inventory", {}).get("foundation")
+    fnd = result["inventory"].get("foundation")
 
     assert fnd is not None, (
         "Expected 'foundation' entry in inventory but it was absent. "
-        f"Inventory keys: {list(out.get('inventory', {}).keys())}. "
+        f"Inventory keys: {list(result['inventory'].keys())}. "
         "Verify that the foundation bundle cache directory exists under "
         "~/.amplifier/cache and that the workspace-scope inventory scan "
         "includes it."
@@ -153,8 +153,7 @@ def test_renamed_cache_visible_in_output(dtu_session):
         result = dtu_session.call_tool("bundle_usage")
 
         # Tool call may succeed or gracefully degrade; extract inventory either way.
-        out = result.get("output", {})
-        fnd = out.get("inventory", {}).get("foundation")
+        fnd = result.get("inventory", {}).get("foundation")
 
         absent = fnd is None
         flagged = bool(fnd) and fnd.get("scan_source") in ("stale", "absent")
@@ -182,8 +181,8 @@ def test_cache_restored_returns_to_fresh(dtu_session):
     'fresh' for the foundation bundle.
 
     Assertions:
-      - The tool call succeeds (``result["success"] is True``).
-      - ``out["inventory"].get("foundation")`` is not None.
+      - The result contains an ``"inventory"`` key.
+      - ``result["inventory"].get("foundation")`` is not None.
       - ``fnd["scan_source"] in ("cache", "fresh")``.
 
     Diagnosis checklist on failure:
@@ -196,17 +195,18 @@ def test_cache_restored_returns_to_fresh(dtu_session):
     dtu_session.activate_mode("bundle-usage")
     result = dtu_session.call_tool("bundle_usage")
 
-    assert result.get("success") is True, (
-        f"bundle_usage workspace-scope call failed after cache restoration. result: {result}"
+    assert "inventory" in result, (
+        f"Expected 'inventory' key in result after cache restoration. "
+        f"Got keys: {list(result.keys())}. "
+        f"Raw output (if any): {result.get('_raw', 'N/A')[:300]}"
     )
 
-    out = result.get("output", {})
-    fnd = out.get("inventory", {}).get("foundation")
+    fnd = result["inventory"].get("foundation")
 
     assert fnd is not None, (
         "Expected 'foundation' entry in inventory after cache restoration but "
         "it was absent. "
-        f"Inventory keys: {list(out.get('inventory', {}).keys())}. "
+        f"Inventory keys: {list(result['inventory'].keys())}. "
         "Verify that the foundation bundle cache directory was restored by "
         "the previous test's finally block."
     )

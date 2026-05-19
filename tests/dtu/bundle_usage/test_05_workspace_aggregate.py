@@ -56,9 +56,9 @@ def test_workspace_aggregate_covers_all_installed(dtu_session):
     the ``_meta`` key).
 
     Assertions:
-      - The tool call succeeds (``result["success"] is True``).
+      - The result contains an ``"inventory"`` key.
       - ``inventory_count >= 30`` where
-        ``inventory_count = len([k for k in out["inventory"] if k != "_meta"])``.
+        ``inventory_count = len([k for k in result["inventory"] if k != "_meta"])``.
 
     Diagnosis checklist on failure:
       - If inventory_count is 0 or very small, the workspace-scope path may
@@ -67,25 +67,25 @@ def test_workspace_aggregate_covers_all_installed(dtu_session):
       - If inventory_count is > 0 but < 30, the bundle cache may be
         incomplete.  Check ``~/.amplifier/cache`` to confirm that 30+
         bundle directories are present.
-      - A tool failure (``success != True``) means the workspace-scope path
-        is broken; check the bundle_usage tool implementation for the
+      - A missing ``"inventory"`` key means the workspace-scope path is
+        broken; check the bundle_usage tool implementation for the
         ``session_id`` omitted code path.
     """
     dtu_session.activate_mode("bundle-usage")
     result = dtu_session.call_tool("bundle_usage")
 
-    assert result.get("success") is True, (
-        f"bundle_usage workspace-scope call failed. result: {result}"
+    assert "inventory" in result, (
+        f"Expected 'inventory' key in result. Got keys: {list(result.keys())}. "
+        f"Raw output (if any): {result.get('_raw', 'N/A')[:300]}"
     )
 
-    out = result.get("output", {})
-    inventory_count = len([k for k in out.get("inventory", {}) if k != "_meta"])
+    inventory_count = len([k for k in result["inventory"] if k != "_meta"])
 
     assert inventory_count >= 30, (
         f"Expected workspace inventory to contain >= 30 installed bundles "
         f"but found {inventory_count}. "
         f"Inventory keys (excluding _meta): "
-        f"{[k for k in out.get('inventory', {}) if k != '_meta']}. "
+        f"{[k for k in result['inventory'] if k != '_meta']}. "
         "Verify that the workspace-scope path performs a full bundle cache scan "
         "and that ~/.amplifier/cache contains at least 30 bundle directories."
     )
@@ -126,12 +126,12 @@ def test_aggregate_matches_known_active_bundles(dtu_session):
     dtu_session.activate_mode("bundle-usage")
     result = dtu_session.call_tool("bundle_usage")
 
-    assert result.get("success") is True, (
-        f"bundle_usage workspace-scope call failed. result: {result}"
+    assert "signals" in result, (
+        f"Expected 'signals' key in result. Got keys: {list(result.keys())}. "
+        f"Raw output (if any): {result.get('_raw', 'N/A')[:300]}"
     )
 
-    out = result.get("output", {})
-    sig = out.get("signals", {})
+    sig = result["signals"]
 
     known_active = [
         ("foundation", 42),
@@ -188,12 +188,12 @@ def test_dormant_bundles_have_zero_invocations(dtu_session):
     dtu_session.activate_mode("bundle-usage")
     result = dtu_session.call_tool("bundle_usage")
 
-    assert result.get("success") is True, (
-        f"bundle_usage workspace-scope call failed. result: {result}"
+    assert "signals" in result, (
+        f"Expected 'signals' key in result. Got keys: {list(result.keys())}. "
+        f"Raw output (if any): {result.get('_raw', 'N/A')[:300]}"
     )
 
-    out = result.get("output", {})
-    sig = out.get("signals", {})
+    sig = result["signals"]
 
     dormant_with_invocations = {
         name: counts
