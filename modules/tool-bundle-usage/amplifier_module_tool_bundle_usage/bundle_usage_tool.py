@@ -99,6 +99,7 @@ class BundleUsageTool:
                 client=client,
                 workspace=effective_workspace,
                 session_id=input.get("session_id"),
+                base_path=self._resolver.base_path,
             )
         except Exception as exc:
             return ToolResult(

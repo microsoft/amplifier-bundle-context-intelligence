@@ -10,7 +10,8 @@ signals.py must:
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock
+import json
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -83,6 +84,84 @@ class TestRunSignals:
         from context_intelligence.bundle_analysis.signals import run_signals
 
         result = await run_signals(client=mock_ci_client, workspace="ws")
+        assert result == {}
+
+    async def test_fallback_to_jsonl_when_all_queries_fail(
+        self, mock_ci_client, monkeypatch, tmp_path
+    ):
+        """When every Cypher query raises, run_signals falls back to JSONL extraction."""
+        from context_intelligence.bundle_analysis import signals
+
+        # All Cypher calls raise ConnectionError (server unreachable)
+        mock_ci_client.cypher = AsyncMock(side_effect=ConnectionError("no server"))
+
+        # Seed a real events.jsonl so the JSONL path returns something
+        session_dir = tmp_path / "ws" / "sessions" / "s1" / "context-intelligence"
+        session_dir.mkdir(parents=True)
+        (session_dir / "events.jsonl").write_text(
+            json.dumps(
+                {"event": "delegate:agent_spawned", "data": {"agent": "foundation:explorer"}}
+            )
+            + "\n"
+        )
+
+        # Patch the queries directory so it contains at least one file for the map
+        q_dir = tmp_path / "queries"
+        q_dir.mkdir()
+        for _component, (stem, _bk, _ck) in signals._SESSION_QUERY_MAP.items():
+            (q_dir / f"{stem}.cypher").write_text("MATCH (n) RETURN n LIMIT 1\n")
+        monkeypatch.setattr(signals, "_queries_dir", lambda: q_dir)
+
+        result = await signals.run_signals(
+            client=mock_ci_client,
+            workspace="ws",
+            session_id="s1",
+            base_path=tmp_path,
+        )
+
+        # JSONL fallback should have found the foundation:explorer agent
+        assert "foundation" in result
+        assert result["foundation"]["agents"] == 1
+
+    async def test_no_fallback_when_server_returns_empty(
+        self, mock_ci_client, monkeypatch, tmp_path
+    ):
+        """When the server responds (even with empty rows), JSONL fallback is NOT used."""
+        from context_intelligence.bundle_analysis import signals
+
+        # Client succeeds but returns no rows
+        mock_ci_client.cypher = AsyncMock(return_value=[])
+
+        # Seed a JSONL file that WOULD produce results if fallback ran
+        session_dir = tmp_path / "ws" / "sessions" / "s1" / "context-intelligence"
+        session_dir.mkdir(parents=True)
+        (session_dir / "events.jsonl").write_text(
+            json.dumps(
+                {"event": "delegate:agent_spawned", "data": {"agent": "foundation:explorer"}}
+            )
+            + "\n"
+        )
+
+        # Patch queries dir
+        q_dir = tmp_path / "queries"
+        q_dir.mkdir()
+        for _component, (stem, _bk, _ck) in signals._SESSION_QUERY_MAP.items():
+            (q_dir / f"{stem}.cypher").write_text("MATCH (n) RETURN n LIMIT 1\n")
+        monkeypatch.setattr(signals, "_queries_dir", lambda: q_dir)
+
+        with patch(
+            "context_intelligence.bundle_analysis.jsonl_signals.run_signals_from_jsonl"
+        ) as mock_jsonl:
+            result = await signals.run_signals(
+                client=mock_ci_client,
+                workspace="ws",
+                session_id="s1",
+                base_path=tmp_path,
+            )
+
+        # JSONL function must NOT have been called
+        mock_jsonl.assert_not_called()
+        # Server returned empty → result is empty dict
         assert result == {}
 
 

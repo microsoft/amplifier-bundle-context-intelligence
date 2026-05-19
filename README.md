@@ -391,7 +391,16 @@ The analysis runs three deterministic layers, in order:
 
 ### Requirements
 
-The **Signals** layer requires a configured CI graph server (see [Configuration reference](#configuration-reference)). If the server is unreachable, signals are empty — the Inventory and Gap layers still run against the local cache and produce useful output.
+The **Signals** layer uses a **dual-path fallback**:
+
+| Path | When used | Coverage |
+|------|----------|---------|
+| CI graph server (Cypher queries) | Server URL configured and reachable | Full — agents, skills, modes, recipes, tools |
+| Local JSONL files (`events.jsonl`) | Server unreachable or not configured | Partial — agents (full) and skills (best-effort); modes, recipes, tools not attributable |
+
+**Without a server** the analysis still produces useful output: the Inventory and Gap layers always run against the local bundle cache, and JSONL extraction covers agent delegation signals. The gap analysis will flag tree-shake candidates and config-gap entries regardless.
+
+To enable full signals coverage, configure the CI server (see [Configuration reference](#configuration-reference)).
 
 ### Usage
 

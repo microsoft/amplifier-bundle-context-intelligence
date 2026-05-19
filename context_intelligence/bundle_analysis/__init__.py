@@ -45,6 +45,7 @@ async def run_bundle_analysis(
     workspace: str,
     session_id: str | None = None,
     cache_root: Path | None = None,
+    base_path: Path | None = None,
 ) -> dict[str, Any]:
     """Run the full bundle analysis pipeline.
 
@@ -59,6 +60,9 @@ async def run_bundle_analysis(
     cache_root:
         Root of the local Amplifier bundle cache.  Defaults to
         ``~/.amplifier/cache``.
+    base_path:
+        Root of the Amplifier projects directory used by the JSONL fallback
+        in the signals layer.  Defaults to ``~/.amplifier/projects``.
 
     Returns
     -------
@@ -78,6 +82,7 @@ async def run_bundle_analysis(
         client=client,
         workspace=workspace,
         session_id=session_id,
+        base_path=base_path,
     )
     inventory = scan_cache(cache_root=cache_root)
     gap = compute_gap(signals=signals, inventory=inventory)
