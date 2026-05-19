@@ -42,7 +42,8 @@ class TestRunSignals:
         )
         from context_intelligence.bundle_analysis.signals import run_signals
 
-        result = await run_signals(client=mock_ci_client, workspace="ws")
+        # Use session_id so the session map is selected; it uses "invocations" as count key
+        result = await run_signals(client=mock_ci_client, workspace="ws", session_id="test-session")
         assert "foundation" in result
         assert isinstance(result["foundation"], dict)
         for key in ("agents", "skills", "modes", "recipes", "tools"):
@@ -57,7 +58,8 @@ class TestRunSignals:
         )
         from context_intelligence.bundle_analysis.signals import run_signals
 
-        result = await run_signals(client=mock_ci_client, workspace="ws")
+        # Use session_id so the session map is selected; it uses "invocations" as count key
+        result = await run_signals(client=mock_ci_client, workspace="ws", session_id="test-session")
         # 5 total agent invocations across two agents for foundation
         assert result["foundation"]["agents"] == 5
 
@@ -84,153 +86,86 @@ class TestRunSignals:
         assert result == {}
 
 
-class TestSelectQuery:
-    """Unit tests for _select_query and _extract_cypher helpers."""
+class TestQueryFiles:
+    """Tests for the individual query files in bundle_analysis/queries/."""
 
-    _FAKE_CYPHER = """\
-// =============================================================================
-// Fake query file for testing
-// =============================================================================
-
-// -----------------------------------------------------------------------------
-// QUERY: fake_query_in_session
-// Signal: S-X — single-session variant
-// Parameters: $session_id
-// -----------------------------------------------------------------------------
-MATCH (s:Session {session_id: $session_id})
-      -[:HAS_EVENT]->(e:SomeEvent)
-RETURN s.session_id, count(e) AS n
-ORDER BY n DESC;
-
-// -----------------------------------------------------------------------------
-// QUERY: fake_query_cross_session
-// Signal: S-X — workspace-wide variant
-// Parameters: $workspace
-// -----------------------------------------------------------------------------
-MATCH (s:Session {workspace: $workspace})
-      -[:HAS_EVENT]->(e:SomeEvent)
-RETURN count(e) AS n;
-"""
-
-    def test_select_in_session_when_session_id_given(self):
-        """_select_query returns the _in_session query when session_id is provided."""
-        from context_intelligence.bundle_analysis.signals import _select_query
-
-        result = _select_query(self._FAKE_CYPHER, session_id="abc-123")
-
-        assert result is not None, "Expected a query to be selected but got None"
-        assert "$session_id" in result, (
-            "Expected the _in_session query (which uses $session_id) to be "
-            f"selected. Got:\n{result}"
-        )
-        assert "$workspace" not in result, (
-            f"Expected only the _in_session query but got one containing $workspace. Got:\n{result}"
+    def test_expected_query_files_exist(self):
+        """Every file stem in both query maps resolves to an existing .cypher file."""
+        from context_intelligence.bundle_analysis.signals import (
+            _SESSION_QUERY_MAP,
+            _WORKSPACE_QUERY_MAP,
+            _queries_dir,
         )
 
-    def test_select_cross_session_when_no_session_id(self):
-        """_select_query returns the _cross_session query when session_id is None."""
-        from context_intelligence.bundle_analysis.signals import _select_query
+        qdir = _queries_dir()
+        missing: list[str] = []
+        for query_map in (_SESSION_QUERY_MAP, _WORKSPACE_QUERY_MAP):
+            for _component, (stem, _bk, _ck) in query_map.items():
+                f = qdir / f"{stem}.cypher"
+                if not f.exists():
+                    missing.append(str(f))
 
-        result = _select_query(self._FAKE_CYPHER, session_id=None)
-
-        assert result is not None, "Expected a query to be selected but got None"
-        assert "$workspace" in result, (
-            "Expected the _cross_session query (which uses $workspace) to be "
-            f"selected. Got:\n{result}"
-        )
-        assert "$session_id" not in result, (
-            "Expected only the _cross_session query but got one containing $session_id. "
-            f"Got:\n{result}"
+        assert not missing, (
+            "Expected all map-referenced query files to exist. Missing:\n" + "\n".join(missing)
         )
 
-    def test_returns_none_when_no_matching_suffix(self):
-        """_select_query returns None when the file has no query matching the suffix."""
-        from context_intelligence.bundle_analysis.signals import _select_query
+    def test_each_cypher_file_has_no_query_markers(self):
+        """No .cypher file in queries/ may contain a // QUERY: delimiter marker.
 
-        cypher_no_cross = """\
-// QUERY: only_in_session_query
-MATCH (s:Session {session_id: $session_id}) RETURN s;
-"""
-        result = _select_query(cypher_no_cross, session_id=None)
-        assert result is None, (
-            f"Expected None when no _cross_session query exists but got: {result!r}"
-        )
+        These markers were used only in the old multi-query files to separate
+        named sections.  Each file now contains exactly one statement.
+        """
+        from context_intelligence.bundle_analysis.signals import _queries_dir
 
-    def test_extract_cypher_strips_header_comments(self):
-        """_extract_cypher strips leading doc-comment lines before the statement."""
-        from context_intelligence.bundle_analysis.signals import _extract_cypher
+        qdir = _queries_dir()
+        violations: list[str] = []
+        for f in sorted(qdir.glob("*.cypher")):
+            if "// QUERY:" in f.read_text(encoding="utf-8"):
+                violations.append(f.name)
 
-        body = """\
-
-// Signal: S-X
-// Parameters: $session_id
-// Output: n
-// -----------------------------------------------------------------------------
-MATCH (s:Session {session_id: $session_id}) RETURN count(s) AS n;
-
-// trailing comment after statement
-"""
-        result = _extract_cypher(body)
-
-        assert result.startswith("MATCH"), (
-            f"Expected extracted Cypher to start with MATCH but got: {result[:80]!r}"
-        )
-        assert "$session_id" in result
-        assert result.endswith(";"), (
-            "Expected extracted Cypher to end with ';' (statement terminator)"
+        assert not violations, (
+            "Expected no // QUERY: markers in individual query files. "
+            "Found in:\n" + "\n".join(violations)
         )
 
     @pytest.mark.asyncio
-    async def test_run_signals_sends_single_query_not_whole_file(
+    async def test_run_signals_sends_one_query_per_component(
         self, mock_ci_client, monkeypatch, tmp_path
     ):
-        """run_signals must send one query at a time, not the full multi-query file.
+        """run_signals sends exactly one call per component — one file, one query.
 
-        When session_id is provided, every call to client.cypher must contain
-        only the _in_session query (uses $session_id), never the full file.
+        With one .cypher file per query there is no selection logic; run_signals
+        reads the file and sends its content directly.  No // QUERY: markers
+        should appear in any transmitted query string.
         """
         from context_intelligence.bundle_analysis import signals
 
-        # Point _queries_dir at a controlled directory
-        q_dir = tmp_path / "_queries"
+        # Build a controlled query directory: one file per stem in the session map
+        q_dir = tmp_path / "queries"
         q_dir.mkdir()
-        fake = """\
-// QUERY: test_in_session
-MATCH (s:Session {session_id: $session_id}) RETURN count(s) AS invocations, 'bundle' AS bundle;
-
-// QUERY: test_cross_session
-MATCH (s:Session {workspace: $workspace}) RETURN count(s) AS invocations, 'bundle' AS bundle;
-"""
-        for stem in [
-            "s01-s02-agents",
-            "s04-s05-s09-s12-s13-skills-modes",
-            "s03-s10-s11-recipes",
-            "s08-s15-coverage-tools",
-        ]:
-            (q_dir / f"{stem}.cypher").write_text(fake)
+        for _component, (stem, _bk, _ck) in signals._SESSION_QUERY_MAP.items():
+            (q_dir / f"{stem}.cypher").write_text(
+                "MATCH (s:Session {session_id: $session_id})"
+                " RETURN 'bundle' AS bundle, 1 AS invocations;\n"
+            )
 
         monkeypatch.setattr(signals, "_queries_dir", lambda: q_dir)
 
-        captured_queries: list[str] = []
-        original_cypher = mock_ci_client.cypher
+        captured: list[str] = []
 
         async def capturing_cypher(query: str, workspace: str, *, params=None):
-            captured_queries.append(query)
-            return await original_cypher(query, workspace, params=params)
+            captured.append(query)
+            return []
 
         mock_ci_client.cypher.side_effect = capturing_cypher
 
-        from context_intelligence.bundle_analysis.signals import run_signals
+        await signals.run_signals(client=mock_ci_client, workspace="ws", session_id="abc-123")
 
-        await run_signals(client=mock_ci_client, workspace="ws", session_id="abc-123")
-
-        assert captured_queries, "Expected at least one Cypher call but got zero"
-        for q in captured_queries:
-            assert "$session_id" in q, (
-                "Expected only _in_session queries to be sent when session_id "
-                f"is provided, but got a query without $session_id:\n{q}"
-            )
-            assert "$workspace" not in q, (
-                "Expected no _cross_session queries when session_id is provided, "
-                f"but got a query containing $workspace:\n{q}"
+        assert len(captured) == len(signals._SESSION_QUERY_MAP), (
+            f"Expected one Cypher call per component "
+            f"({len(signals._SESSION_QUERY_MAP)}), got {len(captured)}"
+        )
+        for q in captured:
+            assert "// QUERY:" not in q, (
+                f"Expected no // QUERY: markers in transmitted queries, but got:\n{q}"
             )
