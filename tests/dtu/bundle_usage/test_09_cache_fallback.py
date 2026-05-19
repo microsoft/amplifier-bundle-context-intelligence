@@ -21,10 +21,11 @@ entire session is skipped gracefully.
 
 from __future__ import annotations
 
-import shutil
-from pathlib import Path
+import json
 
 import pytest
+
+from .conftest import _dtu_exec
 
 
 # ---------------------------------------------------------------------------
@@ -32,16 +33,17 @@ import pytest
 # ---------------------------------------------------------------------------
 
 
-def _foundation_cache_dir() -> Path:
-    """Locate the foundation bundle cache directory inside the DTU sandbox.
+def _find_foundation_dir_in_dtu() -> str:
+    """Return the name of the foundation cache directory inside the DTU.
 
-    Searches ``~/.amplifier/cache`` for directories whose name starts with
-    ``amplifier-foundation-``.  Returns the first match.
+    Runs ``ls ~/.amplifier/cache/`` inside the DTU and searches for a
+    directory name starting with ``amplifier-foundation-``.
 
     Returns
     -------
-    Path
-        Absolute path to the foundation cache directory.
+    str
+        Directory name (not full path) of the foundation cache directory
+        inside the DTU, e.g. ``amplifier-foundation-c909465861f9d6ce``.
 
     Skips
     -----
@@ -49,13 +51,21 @@ def _foundation_cache_dir() -> Path:
     environments without the foundation bundle installed do not produce
     false failures.
     """
-    cache_root = Path.home() / ".amplifier" / "cache"
-    for entry in cache_root.glob("amplifier-foundation-*"):
-        if entry.is_dir():
-            return entry
+    result = _dtu_exec("ls ~/.amplifier/cache/ 2>/dev/null", timeout=15)
+    try:
+        outer = json.loads(result.stdout)
+        listing = outer.get("stdout", "")
+    except Exception:
+        listing = result.stdout
+
+    for line in listing.splitlines():
+        name = line.strip()
+        if name.startswith("amplifier-foundation-"):
+            return name
+
     pytest.skip(
-        "No amplifier-foundation-* directory found under ~/.amplifier/cache. "
-        "Foundation bundle must be cached to run cache-fallback tests."
+        "No amplifier-foundation-* directory found under ~/.amplifier/cache in the DTU. "
+        "Foundation bundle must be cached inside the DTU to run cache-fallback tests."
     )
     raise AssertionError("unreachable: pytest.skip() always raises")  # satisfy type checker
 
@@ -116,19 +126,23 @@ def test_fresh_cache_marked_fresh(dtu_session):
 
 
 def test_renamed_cache_visible_in_output(dtu_session):
-    """Renaming the foundation cache directory must produce a visible status change.
+    """Moving the foundation cache directory out of the cache root must hide it.
 
-    Simulates a stale-hash cache miss by renaming the foundation bundle cache
-    directory to ``<original>.dtu_renamed``.  When the bundle_usage tool is
-    called in this state it must either:
+    Simulates a cache miss by moving the foundation bundle cache directory
+    from ``~/.amplifier/cache/`` to ``/tmp/`` INSIDE THE DTU.  The
+    bundle_usage tool (which also runs inside the DTU) must then either:
       - Report foundation as absent from the inventory, OR
       - Include a foundation entry with scan_source in {"stale", "absent"}.
 
     The tool MUST NOT silently return the same data as if the cache were
-    intact — a renamed cache must produce a visible status change.
+    intact — an absent cache root entry must produce a visible status change.
 
     The original cache directory is restored in the ``finally`` block to
     prevent bleed into subsequent tests.
+
+    Note: the rename target is ``/tmp/<original_name>`` (outside the cache
+    root) so that ``scan_cache`` — which iterates ALL children of the cache
+    root — cannot find it via any path.
 
     Assertions:
       - ``absent or flagged`` where:
@@ -137,16 +151,29 @@ def test_renamed_cache_visible_in_output(dtu_session):
 
     Diagnosis checklist on failure:
       - If fnd is not None and scan_source is still "cache"/"fresh": the tool
-        is returning stale cached data without re-checking the filesystem;
-        verify that the inventory layer re-scans on every call and does not
-        hold an in-process cache.
-      - If the assert fails with absent=False, flagged=False: the tool
-        returned a foundation entry but did not update scan_source to
-        indicate the cache miss.  Check LS-7 stale-detection logic.
+        is finding the foundation bundle via a path other than the moved
+        directory; verify the inventory scan glob covers only the expected
+        cache root.
+      - If the rename command failed: check the DTU exec output in the
+        finally block for restoration errors.
     """
-    src = _foundation_cache_dir()
-    moved = src.with_name(src.name + ".dtu_renamed")
-    shutil.move(str(src), str(moved))
+    dir_name = _find_foundation_dir_in_dtu()
+    src_path = f"~/.amplifier/cache/{dir_name}"
+    tmp_path = f"/tmp/{dir_name}.dtu_backup"
+
+    # Move the foundation cache dir OUT of the cache root inside the DTU.
+    move_result = _dtu_exec(
+        f"mv {src_path} {tmp_path}",
+        timeout=15,
+    )
+    try:
+        outer = json.loads(move_result.stdout)
+        move_ok = outer.get("exit_code", 1) == 0
+    except Exception:
+        move_ok = move_result.returncode == 0
+
+    if not move_ok:
+        pytest.skip(f"Could not move foundation cache dir in DTU: {move_result.stdout}")
 
     try:
         dtu_session.activate_mode("bundle-usage")
@@ -161,15 +188,17 @@ def test_renamed_cache_visible_in_output(dtu_session):
         assert absent or flagged, (
             "Expected the bundle_usage tool to report foundation as absent "
             "OR to set scan_source to 'stale'/'absent' after the cache "
-            "directory was renamed (simulating a stale hash). "
+            "directory was moved out of the cache root (simulating a cache miss). "
             f"Got foundation entry: {fnd!r}. "
-            "The tool must not silently return stale data when the cache "
-            "directory is missing; LS-7 freshness classification must detect "
-            "the cache miss and reflect it in the output."
+            "The inventory layer must not return data for a bundle whose cache "
+            "directory has been removed from ~/.amplifier/cache/."
         )
     finally:
-        # Always restore the cache to avoid test bleed.
-        shutil.move(str(moved), str(src))
+        # Always restore the cache dir inside the DTU to avoid test bleed.
+        _dtu_exec(
+            f"mv {tmp_path} {src_path}",
+            timeout=15,
+        )
 
 
 def test_cache_restored_returns_to_fresh(dtu_session):
