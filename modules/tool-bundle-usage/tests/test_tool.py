@@ -78,9 +78,11 @@ class TestExecute:
     async def test_execute_constructs_async_client_from_resolver(self):
         from amplifier_module_tool_bundle_usage.bundle_usage_tool import BundleUsageTool
 
-        coord = make_coordinator(resolver_value=make_resolver(
-            server_url="http://example:7474", api_key="secret", workspace="my-ws"
-        ))
+        coord = make_coordinator(
+            resolver_value=make_resolver(
+                server_url="http://example:7474", api_key="secret", workspace="my-ws"
+            )
+        )
         tool = BundleUsageTool(coordinator=coord)
 
         captured = {}
@@ -99,6 +101,7 @@ class TestExecute:
 
         # Client constructed from resolver values
         from context_intelligence.client import AsyncCIClient
+
         assert isinstance(captured["client"], AsyncCIClient)
         assert captured["workspace"] == "my-ws"
 
