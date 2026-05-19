@@ -597,6 +597,72 @@ class TestSettingsYamlFallback:
         assert resolver.context_intelligence_server_url is None
 
 
+class TestParentId:
+    """parent_id property — config-only, no coordinator fallback, no env fallback.
+
+    Empty string means absent / root session (preserves existing semantics).
+    This is a per-session hook-config value supplied by the resolver via
+    SessionFactory.create_phase_session (CR-1).
+    """
+
+    def test_parent_id_from_config(self) -> None:
+        """ConfigResolver.parent_id reads from hook config['parent_id']."""
+        cr = ConfigResolver({"parent_id": "parent-abc-123"}, _make_coordinator())
+        assert cr.parent_id == "parent-abc-123"
+
+    def test_parent_id_empty_when_absent(self) -> None:
+        """ConfigResolver.parent_id returns empty string when config has no parent_id key."""
+        cr = ConfigResolver({}, _make_coordinator())
+        assert cr.parent_id == ""
+
+    def test_parent_id_empty_when_none(self) -> None:
+        """ConfigResolver.parent_id returns empty string when config has parent_id=None."""
+        cr = ConfigResolver({"parent_id": None}, _make_coordinator())
+        assert cr.parent_id == ""
+
+    def test_parent_id_returns_str_type(self) -> None:
+        """ConfigResolver.parent_id always returns a str."""
+        cr = ConfigResolver({"parent_id": "abc"}, _make_coordinator())
+        assert isinstance(cr.parent_id, str)
+
+    def test_no_coordinator_fallback(self) -> None:
+        """ConfigResolver.parent_id does NOT fall back to coordinator.config.
+
+        parent_id is a per-session value stamped by the resolver; it must not
+        bleed from a coordinator-level config that spans multiple sessions.
+        """
+        coordinator = _make_coordinator(config={"parent_id": "from-coordinator"})
+        cr = ConfigResolver({}, coordinator)
+        assert cr.parent_id == ""
+
+
+class TestResolveInstanceId:
+    """resolve_instance_id property — config-only, no coordinator fallback.
+
+    Resolver instance ID supplied via SessionFactory. Empty string if absent.
+    """
+
+    def test_resolve_instance_id_from_config(self) -> None:
+        """ConfigResolver.resolve_instance_id reads from hook config['resolve_instance_id']."""
+        cr = ConfigResolver({"resolve_instance_id": "abc-def-123"}, _make_coordinator())
+        assert cr.resolve_instance_id == "abc-def-123"
+
+    def test_resolve_instance_id_empty_when_absent(self) -> None:
+        """ConfigResolver.resolve_instance_id returns empty string when absent."""
+        cr = ConfigResolver({}, _make_coordinator())
+        assert cr.resolve_instance_id == ""
+
+    def test_resolve_instance_id_empty_when_none(self) -> None:
+        """ConfigResolver.resolve_instance_id returns empty string when config has None."""
+        cr = ConfigResolver({"resolve_instance_id": None}, _make_coordinator())
+        assert cr.resolve_instance_id == ""
+
+    def test_resolve_instance_id_returns_str_type(self) -> None:
+        """ConfigResolver.resolve_instance_id always returns a str."""
+        cr = ConfigResolver({"resolve_instance_id": "xyz"}, _make_coordinator())
+        assert isinstance(cr.resolve_instance_id, str)
+
+
 class TestSlugifyPath:
     """_slugify_path function — module-level helper for workspace slug derivation."""
 
