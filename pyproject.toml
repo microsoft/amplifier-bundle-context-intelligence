@@ -18,6 +18,9 @@ packages = [
     "context_intelligence",
 ]
 
+[tool.hatch.build.targets.wheel.force-include]
+"queries" = "context_intelligence/_queries"
+
 [tool.hatch.metadata]
 allow-direct-references = true
 
