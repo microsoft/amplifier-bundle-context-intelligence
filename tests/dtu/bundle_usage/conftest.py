@@ -82,7 +82,7 @@ def dtu_bootstrap():
       - the CI graph is unreachable (exit 2)
       - the ground-truth session is absent (exit 3)
     """
-    result = _run(["bash", str(HERE / "dtu_setup.sh")])
+    result = _run(["bash", str(HERE / "dtu_setup.sh")], timeout=300)
     if result.returncode != 0:
         pytest.skip(
             f"DTU bootstrap failed (exit {result.returncode}).\n"
@@ -142,7 +142,12 @@ class DTUSession:
                 "context-intelligence",
             ]
         )
-        result.check_returncode()
+        if result.returncode != 0:
+            pytest.fail(
+                f"amplifier-tester session spawn failed:\n"
+                f"stdout: {result.stdout}\n"
+                f"stderr: {result.stderr}"
+            )
         session_dir = result.stdout.strip()
         return cls(session_dir=session_dir)
 
@@ -161,7 +166,12 @@ class DTUSession:
                 self.session_dir,
             ]
         )
-        result.check_returncode()
+        if result.returncode != 0:
+            pytest.fail(
+                f"amplifier-tester session list-tools failed:\n"
+                f"stdout: {result.stdout}\n"
+                f"stderr: {result.stderr}"
+            )
         return [line.strip() for line in result.stdout.splitlines() if line.strip()]
 
     def activate_mode(self, name: str) -> None:
@@ -175,13 +185,18 @@ class DTUSession:
                 "amplifier-tester",
                 "session",
                 "tool",
+                "--dir",
+                self.session_dir,
                 "--name",
                 "mode",
                 "--input",
                 payload,
             ]
         )
-        result.check_returncode()
+        if result.returncode != 0:
+            pytest.fail(
+                f"activate_mode({name!r}) failed:\nstdout: {result.stdout}\nstderr: {result.stderr}"
+            )
 
     def call_tool(self, name: str, **kwargs) -> dict:
         """Call a named tool inside the session.
@@ -213,7 +228,12 @@ class DTUSession:
             ],
             timeout=180,
         )
-        result.check_returncode()
+        if result.returncode != 0:
+            pytest.fail(
+                f"amplifier-tester session tool {name!r} failed:\n"
+                f"stdout: {result.stdout}\n"
+                f"stderr: {result.stderr}"
+            )
         try:
             return json.loads(result.stdout)
         except json.JSONDecodeError:
@@ -248,7 +268,12 @@ class DTUSession:
             ],
             timeout=600,
         )
-        result.check_returncode()
+        if result.returncode != 0:
+            pytest.fail(
+                f"amplifier-tester session delegate {agent!r} failed:\n"
+                f"stdout: {result.stdout}\n"
+                f"stderr: {result.stderr}"
+            )
         return result.stdout
 
     def close(self) -> None:

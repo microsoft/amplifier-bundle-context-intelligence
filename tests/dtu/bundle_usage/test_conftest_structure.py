@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import importlib.util
 import inspect
+import os
 from pathlib import Path
 
 import pytest
@@ -161,8 +162,6 @@ class TestDtuSetupSh:
         assert self.SCRIPT.exists(), "dtu_setup.sh must exist"
 
     def test_script_is_executable(self):
-        import os
-
         assert self.SCRIPT.exists(), "dtu_setup.sh must exist"
         assert os.access(str(self.SCRIPT), os.X_OK), "dtu_setup.sh must be executable"
 
