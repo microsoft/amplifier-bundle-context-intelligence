@@ -84,6 +84,8 @@ class LoggingHandler:
         )
         self._api_key: str | None = getattr(resolver, "context_intelligence_api_key", None) or None
         self._workspace: str | None = getattr(resolver, "workspace", None) or None
+        self._parent_id: str = getattr(resolver, "parent_id", "") or ""
+        self._resolve_instance_id: str = getattr(resolver, "resolve_instance_id", "") or ""
         self._client: httpx.AsyncClient | None = None
         self._dispatch_timeout: float = getattr(resolver, "dispatch_timeout", 10.0)
         self._consecutive_failures: int = 0
@@ -159,7 +161,7 @@ class LoggingHandler:
             "version": _METADATA_VERSION,
             "session_id": session_id,
             "workspace": self._workspace or "",
-            "parent_id": data.get("parent_id") or data.get("parent") or "",
+            "parent_id": data.get("parent_id") or data.get("parent") or self._parent_id or "",
             "started_at": data.get("timestamp", ""),
             "last_event_at": data.get("timestamp", ""),
             "status": "running",
@@ -191,7 +193,10 @@ class LoggingHandler:
         meta["version"] = _METADATA_VERSION
 
         # Overwrite with authoritative values from session init
-        meta["parent_id"] = data.get("parent_id") or data.get("parent") or meta.get("parent_id", "")
+        meta["parent_id"] = (
+            data.get("parent_id") or data.get("parent")
+            or self._parent_id or meta.get("parent_id", "")
+        )
         meta["started_at"] = data.get("timestamp", "") or meta.get("started_at", "")
         meta["working_dir"] = data.get("working_dir", "") or meta.get("working_dir", "")
 

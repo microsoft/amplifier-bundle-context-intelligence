@@ -567,3 +567,84 @@ class TestRecordFormat:
         jsonl_path = tmp_path / "proj" / "sessions" / "s1" / "context-intelligence" / "events.jsonl"
         record = json.loads(jsonl_path.read_text().strip())
         assert record["workspace"] == ""
+
+
+# ---------------------------------------------------------------------------
+# TestConfigParentId — CR-1: config-supplied parent_id fallback
+# ---------------------------------------------------------------------------
+class TestConfigParentId:
+    """CR-1: LoggingHandler uses config-supplied parent_id as fallback when event data lacks it.
+
+    Resolver-spawned phase sessions (via SessionFactory.create_phase_session) emit
+    session:start without a parent_id in event data.  The resolver supplies parent_id
+    through the hook config dict instead.  LoggingHandler must propagate that value
+    into metadata.json whenever event data does not carry its own parent_id.
+
+    Precedence: event-data parent_id > config parent_id.
+    Existing event-data tests in TestSessionStart / TestSessionFork are unchanged.
+    """
+
+    class _FakeResolverWithParentId(_FakeResolver):
+        """Minimal resolver that also exposes a parent_id attribute (CR-1)."""
+
+        def __init__(self, base_path: Path, project_slug: str, parent_id: str = "") -> None:
+            super().__init__(base_path, project_slug)
+            self.parent_id = parent_id
+
+    async def test_uses_config_parent_id_when_event_data_lacks_it(
+        self, tmp_path: Path
+    ) -> None:
+        """Resolver-spawned phase session: event data has no parent_id, hook config does.
+
+        _ensure_metadata and _enrich_metadata_from_session_init must both fall back
+        to self._parent_id when event data provides no parent_id / parent key.
+        """
+        from amplifier_module_hook_context_intelligence.handlers.logging_handler import (
+            LoggingHandler,
+        )
+
+        resolver = self._FakeResolverWithParentId(tmp_path, "proj", parent_id="parent-abc")
+        handler = LoggingHandler(resolver)
+        await handler(
+            "session:start",
+            {
+                "session_id": "s1",
+                "timestamp": "2026-01-15T10:00:00Z",
+                "working_dir": "/w",
+                # No parent_id in event data — resolver supplied it via hook config instead.
+            },
+        )
+        meta = json.loads(
+            (
+                tmp_path / "proj" / "sessions" / "s1" / "context-intelligence" / "metadata.json"
+            ).read_text()
+        )
+        assert meta["parent_id"] == "parent-abc"
+
+    async def test_event_data_parent_id_wins_over_config(self, tmp_path: Path) -> None:
+        """Precedence: event data parent_id beats config-supplied parent_id.
+
+        This preserves the existing delegate/sub-session flow where the kernel emits
+        parent_id in event data.  The config-supplied value is only the fallback.
+        """
+        from amplifier_module_hook_context_intelligence.handlers.logging_handler import (
+            LoggingHandler,
+        )
+
+        resolver = self._FakeResolverWithParentId(tmp_path, "proj", parent_id="from-config")
+        handler = LoggingHandler(resolver)
+        await handler(
+            "session:start",
+            {
+                "session_id": "s1",
+                "timestamp": "2026-01-15T10:00:00Z",
+                "working_dir": "/w",
+                "parent_id": "from-event",  # Event data has its own parent_id.
+            },
+        )
+        meta = json.loads(
+            (
+                tmp_path / "proj" / "sessions" / "s1" / "context-intelligence" / "metadata.json"
+            ).read_text()
+        )
+        assert meta["parent_id"] == "from-event"

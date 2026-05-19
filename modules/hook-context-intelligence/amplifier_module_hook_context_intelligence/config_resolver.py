@@ -238,6 +238,24 @@ class ConfigResolver:
         """
         return float(self._config.get("close_drain_timeout", 0.5))
 
+    @property
+    def parent_id(self) -> str:
+        """Parent session ID supplied by a resolver via SessionFactory.create_phase_session.
+
+        Empty string means absent / root session (preserves existing semantics).
+        No coordinator fallback, no env fallback — this is a per-session hook-config value
+        stamped by the resolver for each spawned phase session (CR-1).
+        """
+        return str(self._config.get("parent_id", "") or "")
+
+    @property
+    def resolve_instance_id(self) -> str:
+        """Resolver instance ID supplied via SessionFactory.create_phase_session.
+
+        Empty string if absent. No coordinator fallback, no env fallback.
+        """
+        return str(self._config.get("resolve_instance_id", "") or "")
+
     # ------------------------------------------------------------------
     # Methods
     # ------------------------------------------------------------------
