@@ -181,11 +181,13 @@ class TestYamlMetadata:
         assert "description" in data, "YAML must have 'description' field"
 
     def test_has_context(self):
-        """YAML must have context block with defaults."""
+        """YAML must have a flat context block with required variables."""
         data = self._load()
         assert "context" in data, "YAML must have 'context' block"
         ctx = data["context"]
-        assert "defaults" in ctx, "context must have 'defaults' section"
+        assert isinstance(ctx, dict), "context must be a flat dict (not nested under 'defaults')"
+        assert "output_path" in ctx, "context must declare 'output_path' variable"
+        assert "max_sessions" in ctx, "context must declare 'max_sessions' variable"
 
 
 # ---------------------------------------------------------------------------

@@ -49,9 +49,7 @@ class TestLastEventAt:
             },
         )
 
-        meta_path = (
-            tmp_path / "proj" / "sessions" / "s1" / "context-intelligence" / "metadata.json"
-        )
+        meta_path = tmp_path / "proj" / "sessions" / "s1" / "context-intelligence" / "metadata.json"
         meta = json.loads(meta_path.read_text())
         assert "last_event_at" in meta
         assert meta["last_event_at"] == "2026-01-15T10:00:00Z"
@@ -80,16 +78,12 @@ class TestLastEventAt:
             },
         )
 
-        meta_path = (
-            tmp_path / "proj" / "sessions" / "s1" / "context-intelligence" / "metadata.json"
-        )
+        meta_path = tmp_path / "proj" / "sessions" / "s1" / "context-intelligence" / "metadata.json"
         meta = json.loads(meta_path.read_text())
         # last_event_at must reflect the second event, not the first
         assert meta["last_event_at"] == "2026-01-15T10:00:05Z"
 
-    async def test_last_event_at_failure_does_not_block_event_capture(
-        self, tmp_path: Path
-    ) -> None:
+    async def test_last_event_at_failure_does_not_block_event_capture(self, tmp_path: Path) -> None:
         """Failure in _touch_last_event_at must not prevent events.jsonl capture."""
         from amplifier_module_hook_context_intelligence.handlers.logging_handler import (
             LoggingHandler,
@@ -115,9 +109,7 @@ class TestLastEventAt:
         assert result.action == "continue"
 
         # The event line must be present in events.jsonl despite the meta failure
-        jsonl_path = (
-            tmp_path / "proj" / "sessions" / "s1" / "context-intelligence" / "events.jsonl"
-        )
+        jsonl_path = tmp_path / "proj" / "sessions" / "s1" / "context-intelligence" / "events.jsonl"
         assert jsonl_path.exists(), "events.jsonl must exist even when metadata write fails"
         lines = jsonl_path.read_text().strip().splitlines()
         assert len(lines) == 1

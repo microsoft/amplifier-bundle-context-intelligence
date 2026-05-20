@@ -1,0 +1,99 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# Minimal read-only token — no secrets needed or exposed.
+# Safe for Dependabot PRs and external fork contributors.
+permissions:
+  contents: read
+
+jobs:
+  # ──────────────────────────────────────────────────────────────────────────
+  # Code quality checks — ruff format + lint on the root package
+  # ──────────────────────────────────────────────────────────────────────────
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v4
+        with:
+          enable-caching: true
+
+      - name: Install dev dependencies
+        run: uv sync --frozen --only-group dev
+
+      - name: Check formatting
+        run: uv run ruff format --check .
+
+      - name: Lint
+        run: uv run ruff check .
+
+  # ──────────────────────────────────────────────────────────────────────────
+  # Root package tests across supported Python versions
+  # ──────────────────────────────────────────────────────────────────────────
+  test-root:
+    name: Tests — root (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - uses: astral-sh/setup-uv@v4
+        with:
+          enable-caching: true
+
+      - name: Install dependencies
+        # --frozen: use the lockfile exactly as committed; fail if it would
+        # need updating. This ensures Dependabot bumps are tested as-proposed.
+        run: uv sync --frozen
+
+      - name: Run tests
+        # Skip tests/dtu — those require live Digital Twin Universe infrastructure
+        run: uv run pytest tests/ -q --tb=short --ignore=tests/dtu
+
+  # ──────────────────────────────────────────────────────────────────────────
+  # Per-module tests — each module owns its own uv.lock, so each gets
+  # its own job. Dependabot bumps a single module's lockfile; this matrix
+  # ensures the affected module is always tested.
+  # ──────────────────────────────────────────────────────────────────────────
+  test-modules:
+    name: Tests — ${{ matrix.module }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        module:
+          - hook-context-intelligence
+          - tool-blob-read
+          - tool-context-intelligence-upload
+          - tool-graph-query
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v4
+        with:
+          enable-caching: true
+
+      - name: Install dependencies
+        working-directory: modules/${{ matrix.module }}
+        # --frozen: respect the module's own lockfile exactly as committed.
+        # The module's path dependency on `../..` is resolved from the
+        # checked-out root, so no special setup is needed.
+        run: uv sync --frozen
+
+      - name: Run tests
+        working-directory: modules/${{ matrix.module }}
+        run: uv run pytest tests/ -q --tb=short --ignore=tests/dtu

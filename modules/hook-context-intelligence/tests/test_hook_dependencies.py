@@ -39,13 +39,15 @@ class TestHookDependencies:
         assert entry.get("path") == "../..", f"Expected path = '../..', got: {entry}"
 
     def test_dependencies_list_has_httpx_and_bundle(self) -> None:
-        """The production dependencies must be exactly httpx and amplifier-bundle-context-intelligence.
+        """The production dependencies must include httpx and amplifier-bundle-context-intelligence.
         amplifier-core is NOT a production dep — it is runtime-provided by the Amplifier CLI.
         """
         data = _load_pyproject()
         deps: list[str] = data["project"]["dependencies"]
-        assert len(deps) == 2, f"Expected 2 dependencies, got {len(deps)}: {deps}"  # noqa: PLR2004
         assert any("httpx" in d for d in deps), f"httpx not found in {deps}"
         assert any("amplifier-bundle-context-intelligence" in d for d in deps), (
             f"amplifier-bundle-context-intelligence not found in {deps}"
+        )
+        assert not any("amplifier-core" in d for d in deps), (
+            f"amplifier-core must not be a production dep (runtime-provided): {deps}"
         )

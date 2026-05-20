@@ -194,8 +194,10 @@ class LoggingHandler:
 
         # Overwrite with authoritative values from session init
         meta["parent_id"] = (
-            data.get("parent_id") or data.get("parent")
-            or self._parent_id or meta.get("parent_id", "")
+            data.get("parent_id")
+            or data.get("parent")
+            or self._parent_id
+            or meta.get("parent_id", "")
         )
         meta["started_at"] = data.get("timestamp", "") or meta.get("started_at", "")
         meta["working_dir"] = data.get("working_dir", "") or meta.get("working_dir", "")
