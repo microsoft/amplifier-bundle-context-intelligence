@@ -301,6 +301,7 @@ class TestProcessEventsMentionsResolved:
             {
                 "is_new": True,
                 "resolved_path": "/root/.amplifier/cache/amplifier-foundation-c909465861f9d6ce/context/foo.md",
+                "source_type": "bundle_context_decl",
             },
         ]
         events = [RawSignalEvent(kind="mentions_resolved", resolutions=resolutions)]
@@ -316,26 +317,43 @@ class TestProcessEventsMentionsResolved:
             {
                 "is_new": False,
                 "resolved_path": "/root/.amplifier/cache/amplifier-foundation-c909465861f9d6ce/context/foo.md",
+                "source_type": "bundle_context_decl",
             },
         ]
         events = [RawSignalEvent(kind="mentions_resolved", resolutions=resolutions)]
         result = process_events(events)
         assert result == {}
 
-    def test_mentions_resolved_skips_missing_bundle_and_no_resolved_path(self):
-        """Resolutions without a 'bundle' key AND without 'resolved_path' are skipped."""
+    def test_mentions_resolved_skips_missing_source_type_and_no_mention(self):
+        """Resolutions without 'source_type' and without extractable bundle are skipped."""
         from context_intelligence.bundle_analysis.fetchers import RawSignalEvent
         from context_intelligence.bundle_analysis.processor import process_events
 
         resolutions = [
-            {"is_new": True},  # no bundle key, no resolved_path
+            {"is_new": True},  # no source_type, no mention, no resolved_path
         ]
         events = [RawSignalEvent(kind="mentions_resolved", resolutions=resolutions)]
         result = process_events(events)
         assert result == {}
 
-    def test_mentions_resolved_attributes_via_resolved_path(self):
-        """Bundle is extracted from 'resolved_path' (the only attribution path)."""
+    def test_mentions_resolved_bundle_namespace_from_mention(self):
+        """When source_type='bundle_namespace', bundle is extracted from mention string."""
+        from context_intelligence.bundle_analysis.fetchers import RawSignalEvent
+        from context_intelligence.bundle_analysis.processor import process_events
+
+        resolutions = [
+            {
+                "is_new": True,
+                "mention": "foundation:context/foo.md",
+                "source_type": "bundle_namespace",
+            },
+        ]
+        events = [RawSignalEvent(kind="mentions_resolved", resolutions=resolutions)]
+        result = process_events(events)
+        assert result["foundation"]["context"] == 1
+
+    def test_mentions_resolved_bundle_context_decl_from_resolved_path(self):
+        """When source_type='bundle_context_decl', bundle is extracted from resolved_path."""
         from context_intelligence.bundle_analysis.fetchers import RawSignalEvent
         from context_intelligence.bundle_analysis.processor import process_events
 
@@ -349,6 +367,41 @@ class TestProcessEventsMentionsResolved:
         events = [RawSignalEvent(kind="mentions_resolved", resolutions=resolutions)]
         result = process_events(events)
         assert result["amplifier-foundation"]["context"] == 1
+
+    def test_mentions_resolved_skips_non_bundle_source_types(self):
+        """Non-bundle source types (user_shortcut, home_shortcut, etc.) yield no attribution."""
+        from context_intelligence.bundle_analysis.fetchers import RawSignalEvent
+        from context_intelligence.bundle_analysis.processor import process_events
+
+        resolutions = [
+            {
+                "is_new": True,
+                "mention": "some:mention",
+                "resolved_path": "/home/user/path",
+                "source_type": "user_shortcut",
+            },
+            {
+                "is_new": True,
+                "mention": "another:mention",
+                "resolved_path": "/home/path",
+                "source_type": "home_shortcut",
+            },
+            {
+                "is_new": True,
+                "mention": "relative:mention",
+                "resolved_path": "./relative/path",
+                "source_type": "relative_path",
+            },
+            {
+                "is_new": True,
+                "mention": "project:mention",
+                "resolved_path": "/project/path",
+                "source_type": "project_shortcut",
+            },
+        ]
+        events = [RawSignalEvent(kind="mentions_resolved", resolutions=resolutions)]
+        result = process_events(events)
+        assert result == {}
 
     def test_mentions_resolved_live_payload_format(self):
         """Full live event payload format (namespace mentions, no 'bundle' key) is handled."""
@@ -387,8 +440,9 @@ class TestProcessEventsMentionsResolved:
         ]
         events = [RawSignalEvent(kind="mentions_resolved", resolutions=resolutions)]
         result = process_events(events)
-        assert result["amplifier-foundation"]["context"] == 2  # 2 is_new=True entries
-        assert result["amplifier-bundle-recipes"]["context"] == 1
+        assert result["foundation"]["context"] == 1  # bundle_namespace from mention
+        assert result["recipes"]["context"] == 1    # bundle_namespace from mention
+        assert result["amplifier-foundation"]["context"] == 1  # bundle_context_decl from resolved_path
 
     def test_mentions_resolved_skips_empty_bundle(self):
         """Resolutions with unparseable resolved_path (empty or missing) are skipped."""
@@ -396,7 +450,7 @@ class TestProcessEventsMentionsResolved:
         from context_intelligence.bundle_analysis.processor import process_events
 
         resolutions = [
-            {"is_new": True, "resolved_path": "/tmp/no/marker/here"},
+            {"is_new": True, "resolved_path": "/tmp/no/marker/here", "source_type": "bundle_context_decl"},
         ]
         events = [RawSignalEvent(kind="mentions_resolved", resolutions=resolutions)]
         result = process_events(events)
@@ -408,7 +462,7 @@ class TestProcessEventsMentionsResolved:
         from context_intelligence.bundle_analysis.processor import process_events
 
         resolutions = [
-            {"is_new": True, "resolved_path": None},
+            {"is_new": True, "resolved_path": None, "source_type": "bundle_context_decl"},
         ]
         events = [RawSignalEvent(kind="mentions_resolved", resolutions=resolutions)]
         result = process_events(events)
@@ -423,14 +477,17 @@ class TestProcessEventsMentionsResolved:
             {
                 "is_new": True,
                 "resolved_path": "/root/.amplifier/cache/amplifier-foundation-c909465861f9d6ce/context/foo.md",
+                "source_type": "bundle_context_decl",
             },
             {
                 "is_new": True,
                 "resolved_path": "/root/.amplifier/cache/amplifier-foundation-c909465861f9d6ce/context/bar.md",
+                "source_type": "bundle_context_decl",
             },
             {
                 "is_new": False,
                 "resolved_path": "/root/.amplifier/cache/amplifier-foundation-c909465861f9d6ce/context/other.md",
+                "source_type": "bundle_context_decl",
             },  # skipped
         ]
         events = [RawSignalEvent(kind="mentions_resolved", resolutions=resolutions)]
@@ -473,6 +530,7 @@ class TestProcessEventsMixedAggregation:
                     {
                         "is_new": True,
                         "resolved_path": "/root/.amplifier/cache/foundation-a6aca0133cf890bf/context/foo.md",
+                        "source_type": "bundle_context_decl",
                     }
                 ],
             ),

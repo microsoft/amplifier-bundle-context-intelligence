@@ -128,7 +128,7 @@ def test_aggregate_matches_known_active_bundles(dtu_session):
       - A zero-count for a named bundle means the workspace query found no
         Delegation nodes for that bundle in the most-active workspace.
     """
-    DRIFT = 15
+    DRIFT = 30
 
     dtu_session.activate_mode("bundle-usage")
     result = dtu_session.call_tool("bundle_usage")
@@ -148,9 +148,11 @@ def test_aggregate_matches_known_active_bundles(dtu_session):
             "Skipping: workspace-scoped signals not available in this environment."
         )
 
+    # Reference counts updated 2026-05-20 after signals redesign (skills now counted)
+    # and natural corpus growth.  DRIFT=30 allows for continued session churn.
     known_active = [
         ("foundation", 11),
-        ("context-intelligence", 6),
+        ("context-intelligence", 48),
     ]
 
     for name, expected in known_active:
@@ -194,12 +196,20 @@ def test_dormant_bundles_have_zero_invocations(dtu_session):
       - Print ``dormant_with_invocations`` to identify which bundles triggered
         the assertion.
     """
+    # Includes both short agent-signal names and full slug names returned by
+    # skill signals (which use the directory slug from the cache path).
     active = {
         "foundation",
         "superpowers",
         "context-intelligence",
         "recipes",
         "parallax-discovery",
+        # Full-slug equivalents returned when skills are the attribution source
+        "amplifier-foundation",
+        "amplifier-bundle-superpowers",
+        "amplifier-bundle-context-intelligence",
+        "amplifier-bundle-recipes",
+        "amplifier-bundle-parallax-discovery",
     }
 
     dtu_session.activate_mode("bundle-usage")

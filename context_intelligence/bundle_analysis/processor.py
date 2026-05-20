@@ -184,11 +184,24 @@ def process_events(events: list[RawSignalEvent]) -> dict[str, Any]:
                     continue
                 if not resolution.get("is_new"):
                     continue
-                # Extract bundle from resolved_path using the cache-slug mechanism
-                # (same approach as skill_loaded).
-                resolved_path = resolution.get("resolved_path") or ""
-                bundle_name = _bundle_from_source_path(resolved_path)
-                if not isinstance(bundle_name, str) or not bundle_name:
+
+                source_type = resolution.get("source_type", "")
+
+                if source_type == "bundle_namespace":
+                    # mention = "foundation:context/bundle-awareness.md" — bundle is left of ":"
+                    mention = resolution.get("mention") or ""
+                    bundle_name = mention.split(":", 1)[0] if ":" in mention else None
+
+                elif source_type == "bundle_context_decl":
+                    # no @mention string — attribute via cache path slug
+                    resolved_path = resolution.get("resolved_path") or ""
+                    bundle_name = _bundle_from_source_path(resolved_path)
+
+                else:
+                    # user_shortcut, home_shortcut, relative_path, project_shortcut — no bundle
+                    bundle_name = None
+
+                if not bundle_name:
                     continue
                 _ensure(bundles, bundle_name)
                 bundles[bundle_name]["context"] += 1
