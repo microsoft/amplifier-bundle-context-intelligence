@@ -591,9 +591,7 @@ class TestConfigParentId:
             super().__init__(base_path, project_slug)
             self.parent_id = parent_id
 
-    async def test_uses_config_parent_id_when_event_data_lacks_it(
-        self, tmp_path: Path
-    ) -> None:
+    async def test_uses_config_parent_id_when_event_data_lacks_it(self, tmp_path: Path) -> None:
         """Resolver-spawned phase session: event data has no parent_id, hook config does.
 
         _ensure_metadata and _enrich_metadata_from_session_init must both fall back

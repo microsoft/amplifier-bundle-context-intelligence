@@ -106,9 +106,7 @@ class GraphQueryTool:
             return ToolResult(
                 success=False,
                 error={
-                    "message": (
-                        f"params must be a dict, got {type(raw_params).__name__!r}"
-                    ),
+                    "message": (f"params must be a dict, got {type(raw_params).__name__!r}"),
                     "type": "validation_error",
                 },
             )

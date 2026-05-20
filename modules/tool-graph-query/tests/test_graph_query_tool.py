@@ -371,9 +371,7 @@ class TestGraphQueryParamsForwarding:
 
         _, mock_cls = _make_mock_async_ci_client()
         with patch("amplifier_module_tool_graph_query.graph_query_tool.AsyncCIClient", mock_cls):
-            result = await tool.execute(
-                {"query": "MATCH (n) RETURN n", "params": "not-a-dict"}
-            )
+            result = await tool.execute({"query": "MATCH (n) RETURN n", "params": "not-a-dict"})
 
         assert result.success is False
         assert result.error is not None
