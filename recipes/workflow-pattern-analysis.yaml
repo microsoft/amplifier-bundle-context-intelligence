@@ -10,33 +10,62 @@ tags:
   - signals
   - analysis
 
+# =============================================================================
+# CHANGELOG
+# =============================================================================
+#
+# v1.0.0 (2026-05-20):
+#   - BUGFIX: Flattened context.defaults -> context (top-level flat dict)
+#     * ROOT CAUSE: Recipe engine expects `context:` to be a flat key/value
+#       map; the nested `defaults:` wrapper caused the engine to dereference
+#       a string as a Path ("'str' object has no attribute 'exists'").
+#     * FIX: Removed the `defaults:` indirection so every variable sits
+#       directly under `context:`.
+#   - BUGFIX: Renamed all step `name:` keys to `id:` (×10)
+#     * ROOT CAUSE: Schema requires `id:` as the step identifier; `name:`
+#       at step level was flagged UNKNOWN_STEP_KEY by validation. Stage-level
+#       `name:` is correct and was preserved.
+#   - IMPROVEMENT: Added explicit timeouts to every step (NO_TIMEOUTS ×10)
+#     * Fast probes/enumerators: 30s
+#     * Per-corpus scoring loops: 300s
+#     * File writes: 60s, render: 120s, agent steps: 300s
+#   - IMPROVEMENT: Added explicit on_error semantics to every step
+#     (NO_ERROR_HANDLING ×10)
+#     * Optional/best-effort steps -> on_error: continue
+#     * Corpus enumeration and primary outputs -> on_error: fail
+#   - IMPROVEMENT: Added `set -euo pipefail` to the two bash steps that use
+#     shell features directly (probe-graph, write-score-files); pure
+#     `python3 -c` steps left as-is since Python handles its own errors.
+
 context:
-  defaults:
-    # Scope
-    session_ids: []
-    workspace: ''
-    date_from: ''
-    date_to: ''
-    status: ''
-    session_type: ''
-    prescope: ''
-    # Detection
-    signals: []
-    behavioural_selector: ''
-    signal_set: default
-    # Execution
-    max_sessions: 500
-    etiology_mode: auto
-    # Output
-    output_path: .analysis/workflow-pattern-analysis
-    format: markdown
+  # Scope
+  session_ids: []
+  workspace: ''
+  date_from: ''
+  date_to: ''
+  status: ''
+  session_type: ''
+  prescope: ''
+  # Detection
+  signals: []
+  behavioural_selector: ''
+  signal_set: default
+  # Execution
+  max_sessions: 500
+  etiology_mode: auto
+  # Output
+  output_path: .analysis/workflow-pattern-analysis
+  format: markdown
 
 stages:
   - name: detection
     steps:
-      - name: probe-graph
+      - id: probe-graph
         type: bash
+        timeout: 30
+        on_error: continue
         command: |
+          set -euo pipefail
           if [ -z "$AMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_URL" ]; then
             echo '{"graph_available": "false", "reason": "AMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_URL not set"}'
           else
@@ -60,8 +89,10 @@ stages:
         output: graph_probe
         parse_json: true
 
-      - name: prescope-filter
+      - id: prescope-filter
         type: bash
+        timeout: 30
+        on_error: continue
         condition: "{{prescope}} != ''"
         command: |
           python3 -c "
@@ -100,8 +131,10 @@ stages:
         output: prescope_result
         parse_json: true
 
-      - name: enumerate-graph
+      - id: enumerate-graph
         type: agent
+        timeout: 300
+        on_error: fail
         agent: context-intelligence:graph-analyst
         condition: "{{graph_probe.graph_available}} == 'true'"
         prompt: |
@@ -129,8 +162,10 @@ stages:
         output: corpus_data
         parse_json: true
 
-      - name: enumerate-disk
+      - id: enumerate-disk
         type: bash
+        timeout: 30
+        on_error: fail
         condition: "{{graph_probe.graph_available}} != 'true'"
         command: |
           python3 -c "
@@ -156,8 +191,10 @@ stages:
         output: corpus_data
         parse_json: true
 
-      - name: score-lifecycle
+      - id: score-lifecycle
         type: bash
+        timeout: 300
+        on_error: continue
         command: |
           python3 -c "
           import json, subprocess, sys
@@ -181,8 +218,10 @@ stages:
         output: lifecycle_scores
         parse_json: true
 
-      - name: score-pressure
+      - id: score-pressure
         type: bash
+        timeout: 300
+        on_error: continue
         command: |
           python3 -c "
           import json, subprocess, sys
@@ -206,8 +245,10 @@ stages:
         output: pressure_scores
         parse_json: true
 
-      - name: score-iteration
+      - id: score-iteration
         type: bash
+        timeout: 300
+        on_error: continue
         command: |
           python3 -c "
           import json, subprocess, sys
@@ -248,9 +289,12 @@ stages:
 
   - name: findings
     steps:
-      - name: write-score-files
+      - id: write-score-files
         type: bash
+        timeout: 60
+        on_error: fail
         command: |
+          set -euo pipefail
           mkdir -p {{output_path}}
           python3 -c "
           import json
@@ -268,8 +312,10 @@ stages:
         output: write_result
         parse_json: false
 
-      - name: render-findings
+      - id: render-findings
         type: bash
+        timeout: 120
+        on_error: fail
         command: >-
           python3 -m context_intelligence.signals render-findings
           --lifecycle {{output_path}}/lifecycle-scores.json
@@ -279,8 +325,10 @@ stages:
         output: render_result
         parse_json: false
 
-      - name: deep-inspect
+      - id: deep-inspect
         type: agent
+        timeout: 300
+        on_error: continue
         agent: context-intelligence:graph-analyst
         condition: "{{_approval_message}} != ''"
         prompt: |
