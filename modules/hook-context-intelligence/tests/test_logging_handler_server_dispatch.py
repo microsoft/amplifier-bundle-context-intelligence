@@ -39,6 +39,7 @@ class _FakeResolver:
         dispatch_queue_capacity: int = 256,
         close_drain_timeout: float = 0.5,
         context_intelligence_api_key: str | None = None,
+        forwarding_enabled: bool = True,
     ) -> None:
         self.base_path = base_path
         self.project_slug = project_slug
@@ -49,6 +50,7 @@ class _FakeResolver:
         self.dispatch_queue_capacity = dispatch_queue_capacity
         self.close_drain_timeout = close_drain_timeout
         self.context_intelligence_api_key = context_intelligence_api_key
+        self.forwarding_enabled = forwarding_enabled
 
     def session_dir(self, session_id: str) -> Path:
         return self.base_path / self.project_slug / "sessions" / session_id / "context-intelligence"
@@ -972,3 +974,20 @@ class TestMissingApiKey:
             )
         assert handler._dispatch_enabled is False
         mock_warning.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# TestFakeResolverForwardingEnabled
+# ---------------------------------------------------------------------------
+class TestFakeResolverForwardingEnabled:
+    """_FakeResolver must expose forwarding_enabled (default True) for gate tests."""
+
+    def test_forwarding_enabled_defaults_to_true(self, tmp_path: Path) -> None:
+        """_FakeResolver.forwarding_enabled is True by default."""
+        resolver = _FakeResolver(tmp_path, "proj")
+        assert resolver.forwarding_enabled is True
+
+    def test_forwarding_enabled_can_be_set_to_false(self, tmp_path: Path) -> None:
+        """_FakeResolver.forwarding_enabled can be set to False."""
+        resolver = _FakeResolver(tmp_path, "proj", forwarding_enabled=False)
+        assert resolver.forwarding_enabled is False
