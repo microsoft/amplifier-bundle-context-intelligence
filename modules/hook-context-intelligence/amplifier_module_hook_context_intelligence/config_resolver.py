@@ -77,9 +77,12 @@ class ConfigResolver:
                                          with no matching allow has no effect —
                                          there is nothing to trim.
     - deny always beats allow when both match the same workspace
-    - forwarding_enabled: false in config (normally injected by the CLI
-      path-rule mechanism) overrides all of the above and forces a block
-      regardless of workspace patterns.
+    - forwarding_enabled: false in config → hard kill switch; bypasses all
+      workspace pattern evaluation.  Reserved for custom resolvers.  The
+      app-cli path-rule mechanism does not set this key — it contributes
+      workspace name patterns to allow_workspaces / deny_workspaces instead.
+      forwarding_enabled: true has no special effect (falls through to the
+      workspace filter as if the key were absent).
     """
 
     def __init__(self, config: dict[str, Any], coordinator: Any) -> None:

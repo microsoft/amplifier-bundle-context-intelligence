@@ -35,10 +35,26 @@ deny_workspaces : list[str], optional
     what ``allow_workspaces`` opened.  Has no effect when
     ``allow_workspaces`` is empty — there is nothing to trim.
 forwarding_enabled : bool, optional
-    Explicit host override.  When ``False``, server dispatch is suppressed
-    regardless of workspace patterns.  Normally injected by the CLI
-    path-rule mechanism (``AppSettings.get_context_intelligence_hook_overrides``)
-    rather than set by users directly.
+    Hard kill switch for server dispatch.  When ``False``, all dispatch is
+    suppressed unconditionally — workspace pattern evaluation is bypassed
+    entirely.  Setting this to ``True`` has no special effect; evaluation
+    falls through to the workspace filter (``allow_workspaces`` /
+    ``deny_workspaces``) as normal.
+
+    This is a bundle-internal override reserved for custom resolvers and
+    applications that need hard programmatic control.  The app-cli path-rule
+    mechanism (``AppSettings.get_context_intelligence_hook_overrides``) does
+    **not** inject this key; it contributes workspace name patterns to
+    ``allow_workspaces`` or ``deny_workspaces`` instead.
+
+    To globally disable dispatch without workspace logic, set this directly:
+
+    .. code-block:: yaml
+
+        overrides:
+          hook-context-intelligence:
+            config:
+              forwarding_enabled: false
 """
 
 from __future__ import annotations
