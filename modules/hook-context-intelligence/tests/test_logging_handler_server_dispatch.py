@@ -1002,9 +1002,7 @@ class TestForwardingGate:
     Local JSONL must still be written regardless.
     """
 
-    async def test_dispatch_suppressed_when_not_forwarding_enabled(
-        self, tmp_path: Path
-    ) -> None:
+    async def test_dispatch_suppressed_when_not_forwarding_enabled(self, tmp_path: Path) -> None:
         """When forwarding_enabled is False, no HTTP client is created and JSONL is written."""
         import asyncio
 
@@ -1031,15 +1029,11 @@ class TestForwardingGate:
             mock_client_cls.assert_not_called()
 
         # JSONL must still be written unconditionally
-        session_dir = (
-            tmp_path / "proj" / "sessions" / "gate-test-001" / "context-intelligence"
-        )
+        session_dir = tmp_path / "proj" / "sessions" / "gate-test-001" / "context-intelligence"
         jsonl_path = session_dir / "events.jsonl"
         assert jsonl_path.exists(), "events.jsonl must be written even when dispatch is suppressed"
 
-    async def test_dispatch_proceeds_when_forwarding_enabled(
-        self, tmp_path: Path
-    ) -> None:
+    async def test_dispatch_proceeds_when_forwarding_enabled(self, tmp_path: Path) -> None:
         """When forwarding_enabled is True, the normal dispatch path fires (regression guard)."""
         resolver = _FakeResolver(
             tmp_path,
