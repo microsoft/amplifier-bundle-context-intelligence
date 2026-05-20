@@ -25,6 +25,20 @@ additional_events : list[str], optional
     Event names to register unconditionally, regardless of capability
     discovery order.  Use to capture events from modules that mount after
     this hook (e.g. ``delegate:agent_spawned``).
+allow_workspaces : list[str], optional
+    fnmatch workspace patterns permitted to dispatch to the server.
+    When any entry is present, only matching workspaces are forwarded.
+    Default is ``[]`` — nothing dispatches (deny-all default).
+    See ``ConfigResolver`` class docstring for full semantics.
+deny_workspaces : list[str], optional
+    fnmatch workspace patterns blocked from server dispatch.  Trims from
+    what ``allow_workspaces`` opened.  Has no effect when
+    ``allow_workspaces`` is empty — there is nothing to trim.
+forwarding_enabled : bool, optional
+    Explicit host override.  When ``False``, server dispatch is suppressed
+    regardless of workspace patterns.  Normally injected by the CLI
+    path-rule mechanism (``AppSettings.get_context_intelligence_hook_overrides``)
+    rather than set by users directly.
 """
 
 from __future__ import annotations

@@ -168,3 +168,33 @@ class TestBehaviorYamlConfigShape:
         data = self._load_behavior_yaml()
         config = data["hooks"][0]["config"]
         assert "enable_graph" not in config
+
+
+class TestModuleDocstring:
+    """Verify module-level docstring documents all configuration keys."""
+
+    def _get_docstring(self) -> str:
+        import amplifier_module_hook_context_intelligence as mod
+
+        return mod.__doc__ or ""
+
+    def test_docstring_documents_allow_workspaces(self):
+        """Module docstring must document the allow_workspaces config key."""
+        doc = self._get_docstring()
+        assert "allow_workspaces" in doc, (
+            "Module docstring must document the 'allow_workspaces' configuration key"
+        )
+
+    def test_docstring_documents_deny_workspaces(self):
+        """Module docstring must document the deny_workspaces config key."""
+        doc = self._get_docstring()
+        assert "deny_workspaces" in doc, (
+            "Module docstring must document the 'deny_workspaces' configuration key"
+        )
+
+    def test_docstring_documents_forwarding_enabled(self):
+        """Module docstring must document the forwarding_enabled config key."""
+        doc = self._get_docstring()
+        assert "forwarding_enabled" in doc, (
+            "Module docstring must document the 'forwarding_enabled' configuration key"
+        )
