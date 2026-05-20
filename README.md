@@ -10,7 +10,7 @@ The bundle writes every session event to a local JSONL log and — when configur
 
 | Always active | When `context_intelligence_server_url` is set |
 |---------------|-----------------------------------------------|
-| Writes `events.jsonl` + `metadata.json` per session, both tagged with `workspace` | POSTs every event to the CI server |
+| Writes `events.jsonl` + `metadata.json` per session, both tagged with `workspace` | POSTs events to the CI server for workspaces that match the allow list — **nothing dispatches by default** |
 | | Enables graph-powered Cypher queries via `graph_query` tool |
 | | Enables `blob_read` tool for resolving `ci-blob://` URIs |
 
@@ -81,17 +81,55 @@ Every Amplifier session will now write events to local JSONL files automatically
 
 To push events to the [Context Intelligence Server](https://github.com/microsoft/amplifier-context-intelligence) for graph storage and querying, you need a running server instance and its API key. See the [server repository](https://github.com/microsoft/amplifier-context-intelligence) for setup instructions.
 
-Once the server is running, add the URL and API key to `~/.amplifier/keys.env` — the same file that holds LLM provider keys, loaded automatically by Amplifier on startup and never committed to version control:
+Once the server is running, point the hook at it with the server URL and API key:
 
-```bash
-# ~/.amplifier/keys.env
-AMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_URL=http://localhost:8000
-AMPLIFIER_CONTEXT_INTELLIGENCE_API_KEY=<your-api-key>
+Server dispatch is **off by default**. Events are only forwarded when at least one allow_workspaces pattern matches the current workspace. The deny_workspaces list trims specific workspaces from what the allow list already opened — it has no effect when allow_workspaces is empty.
+
+**Configure** via `settings.yaml`:
+
+```yaml
+# ~/.amplifier/settings.yaml  (or project .amplifier/settings.yaml)
+overrides:
+  hook-context-intelligence:
+    config:
+      context_intelligence_server_url: "http://localhost:8000"
+      context_intelligence_api_key: "<your-api-key>"
+      workspace: "my-project"    # optional — auto-resolved if omitted
+
+      # Opt-in: only these workspaces forward events to the server.
+      # Without an allow list, nothing dispatches — the server is opt-in.
+      allow_workspaces:
+        - "work-*"
+        - "personal-*"
+
+      # Optional: trim specific workspaces from the allow list.
+      deny_workspaces:
+        - "work-scratch-*"
 ```
 
-The behavior YAML already contains `${AMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_URL:}` and `${AMPLIFIER_CONTEXT_INTELLIGENCE_API_KEY:}` placeholders that resolve these automatically — no `settings.yaml` entry is required.
+#### Path-based opt-out (host-side rules)
 
-> **Never write a literal API key into `settings.yaml`.** That file is version-controllable configuration; a secret written there is one accidental commit away from exposure.
+To suppress dispatch for specific working directories — regardless of workspace patterns — configure `context_intelligence.path_rules` in `settings.yaml`. These rules are evaluated by the CLI at session start, not by the bundle.
+
+```yaml
+# ~/.amplifier/settings.yaml
+context_intelligence:
+  path_rules:
+    - path: "/tmp/**"
+      forwarding_enabled: false
+    - path: "/home/user/client-work/**"
+      forwarding_enabled: false
+```
+
+Rules are evaluated top-to-bottom; the first match wins. If a rule fires, the CLI injects `forwarding_enabled: false` into the hook config, which overrides all workspace-pattern logic. This is useful for host-specific policies such as suppressing dispatch for temporary directories or client work directories that should never reach a shared server.
+
+Or via environment variables:
+
+```bash
+export AMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_URL=http://localhost:8000
+export AMPLIFIER_CONTEXT_INTELLIGENCE_API_KEY=<your-api-key>
+export AMPLIFIER_CONTEXT_INTELLIGENCE_WORKSPACE=my-project   # optional
+```
 
 ### 3. Verify
 
@@ -112,52 +150,6 @@ If the server is configured, open `http://localhost:8000/dashboard` — your ses
 ## Exploration guide
 
 If you're wondering what's worth trying after getting set up, [`docs/context-intelligence-exploration-guide.md`](docs/context-intelligence-exploration-guide.md) is a curated list of things to explore — verifying the connection, testing session capture, querying the graph, and more. Not a formal test plan; more "here's what's interesting."
-
----
-
-## Configuring via the Amplifier app-cli
-
-When this bundle is loaded through the [Amplifier app-cli](https://github.com/microsoft/amplifier-app-cli) (`amplifier bundle add`), the app-cli provides a `settings.yaml` override mechanism for passing configuration values that differ from the bundle's defaults — for example, a different server URL or workspace name, or when your organisation names secrets differently in `keys.env`.
-
-### The override pattern
-
-`~/.amplifier/settings.yaml` is the app-cli's knob for bundle configuration. It is safe to commit to version control **as long as secrets are referenced via `${VAR_NAME}` interpolation**, never as literal values. The actual secrets stay exclusively in `~/.amplifier/keys.env`.
-
-```yaml
-# ~/.amplifier/settings.yaml
-overrides:
-  hook-context-intelligence:
-    config:
-      context_intelligence_server_url: "${AMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_URL}"
-      context_intelligence_api_key: "${AMPLIFIER_CONTEXT_INTELLIGENCE_API_KEY}"
-      workspace: "my-project"    # optional — auto-resolved if omitted
-```
-
-```bash
-# ~/.amplifier/keys.env  — secrets only, never commit this file
-AMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_URL=http://localhost:8000
-AMPLIFIER_CONTEXT_INTELLIGENCE_API_KEY=<your-api-key>
-```
-
-### Using a custom key name
-
-If your team stores the API key under a different name in `keys.env` (for example to match a secrets-rotation convention or to share a key across multiple services), map that name to the config key in the override:
-
-```bash
-# ~/.amplifier/keys.env
-CONTEXT_INTELLIGENCE_TEAM_SERVER_API_KEY=<your-api-key>
-```
-
-```yaml
-# ~/.amplifier/settings.yaml
-overrides:
-  hook-context-intelligence:
-    config:
-      context_intelligence_server_url: "${AMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_URL}"
-      context_intelligence_api_key: "${CONTEXT_INTELLIGENCE_TEAM_SERVER_API_KEY}"
-```
-
-The `${...}` placeholder is resolved by the app-cli before the value reaches the hook, so `ConfigResolver` receives the secret value through its config dict (highest resolution priority). The custom key name in `keys.env` is invisible to the bundle itself.
 
 ---
 
