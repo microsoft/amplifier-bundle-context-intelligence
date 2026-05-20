@@ -128,6 +128,15 @@ class ConfigResolver:
             return None
         return _slugify_path(str(Path(working_dir).resolve()))
 
+    def _server_config(self) -> dict:
+        """Extract the ``context_intelligence_server`` nested config dict.
+
+        Returns the dict under ``config["context_intelligence_server"]`` if it
+        exists and is a dict, otherwise returns ``{}``.
+        """
+        raw = self._config.get("context_intelligence_server")
+        return raw if isinstance(raw, dict) else {}
+
     # ------------------------------------------------------------------
     # Properties
     # ------------------------------------------------------------------
@@ -385,14 +394,16 @@ class ConfigResolver:
         """URL of the context-intelligence server, or None if not configured.
 
         Resolution order (first truthy value wins):
-        1. config['context_intelligence_server_url']  — bundle config / settings.yaml overrides
-        2. coordinator.config['context_intelligence_server_url']  — coordinator-level config
+        1. config['context_intelligence_server']['url']  — bundle config overrides
+        2. coordinator.config['context_intelligence_server']['url']  — coordinator-level config
         3. AMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_URL env var
         4. ~/.amplifier/settings.yaml  — lowest-priority fallback
         """
+        coord_server = self._coordinator_config_get("context_intelligence_server")
+        coord_url = coord_server.get("url") if isinstance(coord_server, dict) else None
         value = (
-            self._config.get("context_intelligence_server_url")
-            or self._coordinator_config_get("context_intelligence_server_url")
+            self._server_config().get("url")
+            or coord_url
             or _env("SERVER_URL")
             or _parse_settings_yaml(SETTINGS_PATH).get("server_url")
         )
@@ -403,14 +414,16 @@ class ConfigResolver:
         """API key for the context-intelligence server, or None if not configured.
 
         Resolution order (first truthy value wins):
-        1. config['context_intelligence_api_key']  — bundle config / settings.yaml overrides
-        2. coordinator.config['context_intelligence_api_key']  — coordinator-level config
+        1. config['context_intelligence_server']['api_key']  — bundle config overrides
+        2. coordinator.config['context_intelligence_server']['api_key']  — coordinator-level config
         3. AMPLIFIER_CONTEXT_INTELLIGENCE_API_KEY env var
         4. ~/.amplifier/settings.yaml  — lowest-priority fallback
         """
+        coord_server = self._coordinator_config_get("context_intelligence_server")
+        coord_key = coord_server.get("api_key") if isinstance(coord_server, dict) else None
         value = (
-            self._config.get("context_intelligence_api_key")
-            or self._coordinator_config_get("context_intelligence_api_key")
+            self._server_config().get("api_key")
+            or coord_key
             or _env("API_KEY")
             or _parse_settings_yaml(SETTINGS_PATH).get("api_key")
         )
