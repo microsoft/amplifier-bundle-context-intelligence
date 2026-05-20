@@ -696,7 +696,7 @@ class TestResolveInstanceId:
 
 
 class TestAllowWorkspaces:
-    """allow_workspaces property — reads flat list from config, no coordinator fallback."""
+    """allow_workspaces property — reads list from nested context_intelligence_server config."""
 
     def test_defaults_to_empty_list(self) -> None:
         """allow_workspaces returns [] when not set in config."""
@@ -704,9 +704,9 @@ class TestAllowWorkspaces:
         assert resolver.allow_workspaces == []
 
     def test_returns_list_from_config(self) -> None:
-        """allow_workspaces returns the configured list."""
+        """allow_workspaces returns the configured list from nested context_intelligence_server."""
         resolver = ConfigResolver(
-            config={"allow_workspaces": ["work-*", "personal-*"]},
+            config={"context_intelligence_server": {"allow_workspaces": ["work-*", "personal-*"]}},
             coordinator=_make_coordinator(),
         )
         assert resolver.allow_workspaces == ["work-*", "personal-*"]
@@ -714,7 +714,7 @@ class TestAllowWorkspaces:
     def test_returns_list_type(self) -> None:
         """allow_workspaces always returns a list instance."""
         resolver = ConfigResolver(
-            config={"allow_workspaces": ["ws1"]},
+            config={"context_intelligence_server": {"allow_workspaces": ["ws1"]}},
             coordinator=_make_coordinator(),
         )
         assert isinstance(resolver.allow_workspaces, list)
@@ -729,9 +729,9 @@ class TestDenyWorkspaces:
         assert resolver.deny_workspaces == []
 
     def test_returns_list_from_config(self) -> None:
-        """deny_workspaces returns the configured list."""
+        """deny_workspaces returns the configured list from nested context_intelligence_server."""
         resolver = ConfigResolver(
-            config={"deny_workspaces": ["scratch-*", "tmp-*"]},
+            config={"context_intelligence_server": {"deny_workspaces": ["scratch-*", "tmp-*"]}},
             coordinator=_make_coordinator(),
         )
         assert resolver.deny_workspaces == ["scratch-*", "tmp-*"]
@@ -739,7 +739,7 @@ class TestDenyWorkspaces:
     def test_returns_list_type(self) -> None:
         """deny_workspaces always returns a list instance."""
         resolver = ConfigResolver(
-            config={"deny_workspaces": ["ws1"]},
+            config={"context_intelligence_server": {"deny_workspaces": ["ws1"]}},
             coordinator=_make_coordinator(),
         )
         assert isinstance(resolver.deny_workspaces, list)
