@@ -35,10 +35,10 @@ SETTINGS_PATH = AMPLIFIER_DIR / "settings.yaml"
 
 
 def _parse_settings_yaml(path: Path) -> dict:
-    """Minimal YAML parser for settings.yaml — good enough for the flat keys
-    we need without requiring PyYAML.
+    """Minimal YAML parser for settings.yaml — reads the nested context_intelligence_server block without requiring PyYAML.
 
-    Returns a dict with CI server config keys (``server_url``, ``api_key``) if found.
+    Returns a dict with keys ``server_url`` and ``api_key`` if found under
+    ``overrides.hook-context-intelligence.config.context_intelligence_server``.
     """
     result: dict[str, str] = {}
     if not path.is_file():
@@ -55,31 +55,45 @@ def _parse_settings_yaml(path: Path) -> dict:
                 data.get("overrides", {}).get("hook-context-intelligence", {}).get("config", {})
             )
             if isinstance(ci_cfg, dict):
-                if "context_intelligence_server_url" in ci_cfg:
-                    result["server_url"] = ci_cfg["context_intelligence_server_url"]
-                if "context_intelligence_api_key" in ci_cfg:
-                    result["api_key"] = ci_cfg["context_intelligence_api_key"]
+                server_cfg = ci_cfg.get("context_intelligence_server", {})
+                if isinstance(server_cfg, dict):
+                    if server_cfg.get("url"):
+                        result["server_url"] = server_cfg["url"]
+                    if server_cfg.get("api_key"):
+                        result["api_key"] = server_cfg["api_key"]
     except ImportError:
-        # Fallback: crude line-based extraction
+        # Fallback: crude line-based extraction for environments without PyYAML.
+        # Handles the nested context_intelligence_server: block.
         try:
             text = path.read_text()
             in_ci_section = False
+            in_server_block = False
             for line in text.splitlines():
                 stripped = line.strip()
                 if "hook-context-intelligence" in stripped:
                     in_ci_section = True
+                    in_server_block = False
                     continue
                 if in_ci_section:
-                    if stripped.startswith("context_intelligence_server_url:"):
-                        val = stripped.split(":", 1)[1].strip().strip("'\"")
-                        result["server_url"] = val
-                    elif stripped.startswith("context_intelligence_api_key:"):
-                        val = stripped.split(":", 1)[1].strip().strip("'\"")
-                        result["api_key"] = val
-                    # If we hit a non-indented line, we've left the section
+                    if not in_server_block and stripped == "context_intelligence_server:":
+                        in_server_block = True
+                        continue
+                    if in_server_block:
+                        if stripped.startswith("url:"):
+                            val = stripped.split(":", 1)[1].strip().strip("'\"")
+                            if val:
+                                result["server_url"] = val
+                        elif stripped.startswith("api_key:"):
+                            val = stripped.split(":", 1)[1].strip().strip("'\"")
+                            if val:
+                                result["api_key"] = val
+                        elif stripped and not stripped.startswith("#"):
+                            if not line.startswith("        "):
+                                in_server_block = False
                     if not line.startswith(" ") and not line.startswith("\t") and stripped:
-                        if "context_intelligence" not in stripped:
+                        if "context_intelligence" not in stripped and "hook-context-intelligence" not in stripped:
                             in_ci_section = False
+                            in_server_block = False
         except OSError:
             pass
     except Exception as exc:

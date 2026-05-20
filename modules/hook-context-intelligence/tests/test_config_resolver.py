@@ -563,7 +563,8 @@ class TestSettingsYamlFallback:
             "overrides:\n"
             "  hook-context-intelligence:\n"
             "    config:\n"
-            "      context_intelligence_server_url: http://from-settings-yaml\n"
+            "      context_intelligence_server:\n"
+            "        url: http://from-settings-yaml\n"
         )
 
         monkeypatch.setattr(
@@ -584,7 +585,8 @@ class TestSettingsYamlFallback:
             "overrides:\n"
             "  hook-context-intelligence:\n"
             "    config:\n"
-            "      context_intelligence_server_url: http://from-settings-yaml\n"
+            "      context_intelligence_server:\n"
+            "        url: http://from-settings-yaml\n"
         )
 
         monkeypatch.setattr(
@@ -605,7 +607,8 @@ class TestSettingsYamlFallback:
             "overrides:\n"
             "  hook-context-intelligence:\n"
             "    config:\n"
-            "      context_intelligence_api_key: sk-from-settings-yaml\n"
+            "      context_intelligence_server:\n"
+            "        api_key: sk-from-settings-yaml\n"
         )
 
         monkeypatch.setattr(
