@@ -489,6 +489,22 @@ class TestGraphFetcher:
         assert events[0].kind == "agent_spawned"
         assert events[0].agent == "foundation:explorer"
 
+    async def test_non_list_rows_returns_empty_events_and_server_ok(self):
+        from context_intelligence.bundle_analysis.fetchers import GraphFetcher
+
+        # Simulate a contract violation where client returns None instead of list
+        client = AsyncMock()
+        client.cypher = AsyncMock(return_value=None)
+
+        fetcher = GraphFetcher()
+        events, server_ok = await fetcher.fetch(
+            client=client, workspace="ws", session_id="sess-def"
+        )
+
+        # Should handle gracefully: empty events, server_ok=True (client responded)
+        assert server_ok is True
+        assert events == []
+
 
 # ---------------------------------------------------------------------------
 # TestJSONLFetcher

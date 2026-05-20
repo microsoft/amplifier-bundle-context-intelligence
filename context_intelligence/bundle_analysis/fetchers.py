@@ -272,12 +272,13 @@ class GraphFetcher:
             return ([], False)
 
         events: list[RawSignalEvent] = []
-        for row in rows:
-            if not isinstance(row, dict):
-                continue
-            evt = RawSignalEvent.from_graph_row(row)
-            if evt is not None:
-                events.append(evt)
+        if isinstance(rows, list):
+            for row in rows:
+                if not isinstance(row, dict):
+                    continue
+                evt = RawSignalEvent.from_graph_row(row)
+                if evt is not None:
+                    events.append(evt)
 
         return (events, True)
 
