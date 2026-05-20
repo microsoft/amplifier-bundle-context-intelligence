@@ -96,7 +96,7 @@ class LoggingHandler:
             self._dispatch_enabled = False
             logger.debug(
                 "context_intelligence: server URL is configured but api_key is missing — "
-                "HTTP dispatch disabled. Set context_intelligence_api_key in your bundle config."
+                "HTTP dispatch disabled. Set context_intelligence_server.api_key in your bundle config."
             )
         self._failure_threshold: int = getattr(resolver, "dispatch_failure_threshold", 3)
         self._dispatch_queue_capacity: int = getattr(
