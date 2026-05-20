@@ -766,7 +766,7 @@ class TestForwardingEnabled:
     def test_default_deny_all_empty_lists(self) -> None:
         """Explicit empty lists still give deny-all default."""
         resolver = ConfigResolver(
-            config={"allow_workspaces": [], "deny_workspaces": []},
+            config={"context_intelligence_server": {"allow_workspaces": [], "deny_workspaces": []}},
             coordinator=_make_coordinator(),
         )
         assert resolver.forwarding_enabled is False
@@ -776,7 +776,7 @@ class TestForwardingEnabled:
     def test_workspace_not_in_allow_list(self) -> None:
         """Workspace absent from allow_workspaces is blocked."""
         resolver = ConfigResolver(
-            config={"allow_workspaces": ["work-*"], "workspace": "scratch"},
+            config={"context_intelligence_server": {"allow_workspaces": ["work-*"]}, "workspace": "scratch"},
             coordinator=_make_coordinator(),
         )
         assert resolver.forwarding_enabled is False
@@ -786,7 +786,7 @@ class TestForwardingEnabled:
     def test_workspace_matches_allow_pattern(self) -> None:
         """Workspace matching allow_workspaces dispatches when not denied."""
         resolver = ConfigResolver(
-            config={"allow_workspaces": ["work-*"], "workspace": "work-project"},
+            config={"context_intelligence_server": {"allow_workspaces": ["work-*"]}, "workspace": "work-project"},
             coordinator=_make_coordinator(),
         )
         assert resolver.forwarding_enabled is True
@@ -797,8 +797,10 @@ class TestForwardingEnabled:
         """deny_workspaces trims a workspace that matched allow_workspaces."""
         resolver = ConfigResolver(
             config={
-                "allow_workspaces": ["work-*"],
-                "deny_workspaces": ["work-secret"],
+                "context_intelligence_server": {
+                    "allow_workspaces": ["work-*"],
+                    "deny_workspaces": ["work-secret"],
+                },
                 "workspace": "work-secret",
             },
             coordinator=_make_coordinator(),
@@ -812,7 +814,7 @@ class TestForwardingEnabled:
         A deny entry with no matching allow has nothing to trim.
         """
         resolver = ConfigResolver(
-            config={"deny_workspaces": ["work-*"], "workspace": "work-project"},
+            config={"context_intelligence_server": {"deny_workspaces": ["work-*"]}, "workspace": "work-project"},
             coordinator=_make_coordinator(),
         )
         assert resolver.forwarding_enabled is False
@@ -824,7 +826,7 @@ class TestForwardingEnabled:
         resolver = ConfigResolver(
             config={
                 "forwarding_enabled": False,
-                "allow_workspaces": ["work-*"],
+                "context_intelligence_server": {"allow_workspaces": ["work-*"]},
                 "workspace": "work-project",
             },
             coordinator=_make_coordinator(),
@@ -836,7 +838,7 @@ class TestForwardingEnabled:
         resolver = ConfigResolver(
             config={
                 "forwarding_enabled": None,
-                "allow_workspaces": ["work-*"],
+                "context_intelligence_server": {"allow_workspaces": ["work-*"]},
                 "workspace": "work-project",
             },
             coordinator=_make_coordinator(),
@@ -848,7 +850,7 @@ class TestForwardingEnabled:
     def test_glob_pattern_star(self) -> None:
         """fnmatch glob * matches within workspace names."""
         resolver = ConfigResolver(
-            config={"allow_workspaces": ["work-*"], "workspace": "work-my-api"},
+            config={"context_intelligence_server": {"allow_workspaces": ["work-*"]}, "workspace": "work-my-api"},
             coordinator=_make_coordinator(),
         )
         assert resolver.forwarding_enabled is True
@@ -856,7 +858,7 @@ class TestForwardingEnabled:
     def test_exact_workspace_match(self) -> None:
         """Exact workspace name (no glob) matches correctly."""
         resolver = ConfigResolver(
-            config={"allow_workspaces": ["exact-name"], "workspace": "exact-name"},
+            config={"context_intelligence_server": {"allow_workspaces": ["exact-name"]}, "workspace": "exact-name"},
             coordinator=_make_coordinator(),
         )
         assert resolver.forwarding_enabled is True

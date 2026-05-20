@@ -230,10 +230,11 @@ class ConfigResolver:
         patterns will dispatch to the remote server.  When empty (the
         default), nothing dispatches — deny-all is the default posture.
 
-        Reads config['allow_workspaces'], defaults to [].
-        No coordinator fallback.  Not cached (cheap list copy per call).
+        Reads config['context_intelligence_server']['allow_workspaces'],
+        defaults to [].  No coordinator fallback.  Not cached (cheap list
+        copy per call).
         """
-        return list(self._config.get("allow_workspaces", []))
+        return list(self._server_config().get("allow_workspaces", []))
 
     @property
     def deny_workspaces(self) -> list[str]:
@@ -241,12 +242,13 @@ class ConfigResolver:
 
         Trims matching workspaces from what allow_workspaces already
         opened.  Has no effect when allow_workspaces is empty — there is
-        nothing to trim from.  Deny always beats allow when both match.
+        nothing to trim.  Deny always beats allow when both match.
 
-        Reads config['deny_workspaces'], defaults to [].
-        No coordinator fallback.  Not cached (cheap list copy per call).
+        Reads config['context_intelligence_server']['deny_workspaces'],
+        defaults to [].  No coordinator fallback.  Not cached (cheap list
+        copy per call).
         """
-        return list(self._config.get("deny_workspaces", []))
+        return list(self._server_config().get("deny_workspaces", []))
 
     def _evaluate_forwarding(self) -> bool:
         """Evaluate the five-step forwarding resolution chain.
