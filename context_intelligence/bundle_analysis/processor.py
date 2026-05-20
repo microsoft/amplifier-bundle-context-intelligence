@@ -184,7 +184,13 @@ def process_events(events: list[RawSignalEvent]) -> dict[str, Any]:
                     continue
                 if not resolution.get("is_new"):
                     continue
+                # Prefer the explicit "bundle" field (design-spec field); fall back to
+                # extracting from "resolved_path" (same cache-slug mechanism as
+                # skill_loaded) for implementations that omit the field.
                 bundle_name = resolution.get("bundle")
+                if not isinstance(bundle_name, str) or not bundle_name:
+                    resolved_path = resolution.get("resolved_path") or ""
+                    bundle_name = _bundle_from_source_path(resolved_path)
                 if not isinstance(bundle_name, str) or not bundle_name:
                     continue
                 _ensure(bundles, bundle_name)

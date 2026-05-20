@@ -316,17 +316,91 @@ class TestProcessEventsMentionsResolved:
         result = process_events(events)
         assert result == {}
 
-    def test_mentions_resolved_skips_missing_bundle(self):
-        """Resolutions without a 'bundle' key are skipped."""
+    def test_mentions_resolved_skips_missing_bundle_and_no_resolved_path(self):
+        """Resolutions without a 'bundle' key AND without 'resolved_path' are skipped."""
         from context_intelligence.bundle_analysis.fetchers import RawSignalEvent
         from context_intelligence.bundle_analysis.processor import process_events
 
         resolutions = [
-            {"is_new": True},  # no bundle key
+            {"is_new": True},  # no bundle key, no resolved_path
         ]
         events = [RawSignalEvent(kind="mentions_resolved", resolutions=resolutions)]
         result = process_events(events)
         assert result == {}
+
+    def test_mentions_resolved_falls_back_to_resolved_path_when_no_bundle_key(self):
+        """When 'bundle' key is absent, bundle is extracted from 'resolved_path' (live event format)."""
+        from context_intelligence.bundle_analysis.fetchers import RawSignalEvent
+        from context_intelligence.bundle_analysis.processor import process_events
+
+        resolutions = [
+            {
+                "is_new": True,
+                "resolved_path": "/root/.amplifier/cache/amplifier-foundation-c909465861f9d6ce/context/foo.md",
+                "source_type": "bundle_context_decl",
+            },
+        ]
+        events = [RawSignalEvent(kind="mentions_resolved", resolutions=resolutions)]
+        result = process_events(events)
+        assert result["amplifier-foundation"]["context"] == 1
+
+    def test_mentions_resolved_prefers_explicit_bundle_over_resolved_path(self):
+        """Explicit 'bundle' field takes precedence over resolved_path extraction."""
+        from context_intelligence.bundle_analysis.fetchers import RawSignalEvent
+        from context_intelligence.bundle_analysis.processor import process_events
+
+        resolutions = [
+            {
+                "bundle": "foundation",
+                "is_new": True,
+                "resolved_path": "/root/.amplifier/cache/amplifier-foundation-c909465861f9d6ce/context/foo.md",
+            },
+        ]
+        events = [RawSignalEvent(kind="mentions_resolved", resolutions=resolutions)]
+        result = process_events(events)
+        # "foundation" (explicit) wins over "amplifier-foundation" (path-derived)
+        assert "foundation" in result
+        assert result["foundation"]["context"] == 1
+
+    def test_mentions_resolved_live_payload_format(self):
+        """Full live event payload format (namespace mentions, no 'bundle' key) is handled."""
+        from context_intelligence.bundle_analysis.fetchers import RawSignalEvent
+        from context_intelligence.bundle_analysis.processor import process_events
+
+        resolutions = [
+            {
+                "content_hash": "a059611a",
+                "is_new": True,
+                "mention": "foundation:context/bundle-awareness.md",
+                "resolved_path": "/root/.amplifier/cache/amplifier-foundation-c909465861f9d6ce/context/bundle-awareness.md",
+                "source_type": "bundle_namespace",
+            },
+            {
+                "content_hash": "b1234567",
+                "is_new": True,
+                "mention": "recipes:context/recipe-awareness.md",
+                "resolved_path": "/root/.amplifier/cache/amplifier-bundle-recipes-2b1e350432fea9ba/context/recipe-awareness.md",
+                "source_type": "bundle_namespace",
+            },
+            {
+                "content_hash": "c9999999",
+                "is_new": False,  # skipped
+                "mention": "foundation:context/other.md",
+                "resolved_path": "/root/.amplifier/cache/amplifier-foundation-c909465861f9d6ce/context/other.md",
+                "source_type": "bundle_namespace",
+            },
+            {
+                "content_hash": "d0000000",
+                "is_new": True,
+                "mention": None,  # bundle_context_decl — no mention string
+                "resolved_path": "/root/.amplifier/cache/amplifier-foundation-c909465861f9d6ce/context/shared/common-agent-base.md",
+                "source_type": "bundle_context_decl",
+            },
+        ]
+        events = [RawSignalEvent(kind="mentions_resolved", resolutions=resolutions)]
+        result = process_events(events)
+        assert result["amplifier-foundation"]["context"] == 2  # 2 is_new=True entries
+        assert result["amplifier-bundle-recipes"]["context"] == 1
 
     def test_mentions_resolved_skips_empty_bundle(self):
         """Resolutions with empty string bundle are skipped."""
