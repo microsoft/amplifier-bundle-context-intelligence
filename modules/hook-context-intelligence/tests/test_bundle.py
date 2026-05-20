@@ -92,7 +92,8 @@ class TestBehaviorYaml:
         assert "config" in hook_spec, "Hook spec must have a config field"
         config = hook_spec["config"]
         # Thin forwarder config keys
-        assert "context_intelligence_server_url" in config
+        assert "context_intelligence_server" in config
+        assert isinstance(config["context_intelligence_server"], dict)
         assert "log_level" in config
 
     def test_behavior_hook_is_in_hooks_section_not_tools(self):
