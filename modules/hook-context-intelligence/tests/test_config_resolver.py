@@ -201,11 +201,15 @@ class TestContextIntelligenceServerUrl:
 
         assert resolver.context_intelligence_server_url is None
 
-    def test_returns_string_when_set(self) -> None:
+    def test_returns_string_when_set(self, monkeypatch, tmp_path) -> None:
         """Returns the URL string when configured."""
+        monkeypatch.setattr(
+            "amplifier_module_hook_context_intelligence.config_resolver.SETTINGS_PATH",
+            tmp_path / "nonexistent.yaml",
+        )
         coordinator = _make_coordinator(config={})
         resolver = ConfigResolver(
-            config={"context_intelligence_server_url": "http://localhost:8000"},
+            config={"context_intelligence_server": {"url": "http://localhost:8000"}},
             coordinator=coordinator,
         )
 
@@ -219,7 +223,7 @@ class TestContextIntelligenceServerUrl:
         )
         coordinator = _make_coordinator(config={})
         resolver = ConfigResolver(
-            config={"context_intelligence_server_url": ""},
+            config={"context_intelligence_server": {"url": ""}},
             coordinator=coordinator,
         )
 
@@ -373,7 +377,7 @@ class TestContextIntelligenceApiKey:
     def test_returns_string_when_configured(self) -> None:
         """Returns the API key string when configured."""
         resolver = ConfigResolver(
-            config={"context_intelligence_api_key": "my-secret-key"},
+            config={"context_intelligence_server": {"api_key": "my-secret-key"}},
             coordinator=_make_coordinator(config={}),
         )
 
@@ -386,7 +390,7 @@ class TestContextIntelligenceApiKey:
             tmp_path / "nonexistent.yaml",
         )
         resolver = ConfigResolver(
-            config={"context_intelligence_api_key": ""},
+            config={"context_intelligence_server": {"api_key": ""}},
             coordinator=_make_coordinator(config={}),
         )
 
@@ -395,12 +399,40 @@ class TestContextIntelligenceApiKey:
     def test_coerces_non_string_to_string(self) -> None:
         """Coerces non-string values to str."""
         resolver = ConfigResolver(
-            config={"context_intelligence_api_key": 12345},
+            config={"context_intelligence_server": {"api_key": 12345}},
             coordinator=_make_coordinator(config={}),
         )
 
         assert resolver.context_intelligence_api_key == "12345"
         assert isinstance(resolver.context_intelligence_api_key, str)
+
+
+class TestServerConfig:
+    """_server_config() helper method."""
+
+    def test_returns_empty_dict_when_absent(self) -> None:
+        """Returns empty dict when context_intelligence_server not in config."""
+        resolver = ConfigResolver(config={}, coordinator=None)
+
+        assert resolver._server_config() == {}
+
+    def test_returns_nested_dict_when_present(self) -> None:
+        """Returns the nested dict when context_intelligence_server is configured."""
+        resolver = ConfigResolver(
+            config={"context_intelligence_server": {"url": "http://localhost:8000"}},
+            coordinator=None,
+        )
+
+        assert resolver._server_config() == {"url": "http://localhost:8000"}
+
+    def test_returns_empty_dict_when_value_is_not_a_dict(self) -> None:
+        """Returns empty dict when context_intelligence_server is not a dict."""
+        resolver = ConfigResolver(
+            config={"context_intelligence_server": "not-a-dict"},
+            coordinator=None,
+        )
+
+        assert resolver._server_config() == {}
 
 
 class TestDispatchTimeout:
