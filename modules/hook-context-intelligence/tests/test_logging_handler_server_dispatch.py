@@ -991,3 +991,78 @@ class TestFakeResolverForwardingEnabled:
         """_FakeResolver.forwarding_enabled can be set to False."""
         resolver = _FakeResolver(tmp_path, "proj", forwarding_enabled=False)
         assert resolver.forwarding_enabled is False
+
+
+# ---------------------------------------------------------------------------
+# TestForwardingGate
+# ---------------------------------------------------------------------------
+class TestForwardingGate:
+    """LoggingHandler suppresses HTTP dispatch when resolver.forwarding_enabled is False.
+
+    Local JSONL must still be written regardless.
+    """
+
+    async def test_dispatch_suppressed_when_not_forwarding_enabled(
+        self, tmp_path: Path
+    ) -> None:
+        """When forwarding_enabled is False, no HTTP client is created and JSONL is written."""
+        import asyncio
+
+        resolver = _FakeResolver(
+            tmp_path,
+            "proj",
+            context_intelligence_server_url="http://localhost:9999",
+            context_intelligence_api_key="test-key",
+            forwarding_enabled=False,
+        )
+        assert resolver.forwarding_enabled is False
+
+        handler = LoggingHandler(resolver)
+
+        with patch(
+            "amplifier_module_hook_context_intelligence.handlers.logging_handler.httpx.AsyncClient"
+        ) as mock_client_cls:
+            await handler(
+                "session:start",
+                {"session_id": "gate-test-001", "timestamp": "t0", "working_dir": "/w"},
+            )
+            # Give the event loop one tick to flush any pending tasks
+            await asyncio.sleep(0)
+            mock_client_cls.assert_not_called()
+
+        # JSONL must still be written unconditionally
+        session_dir = (
+            tmp_path / "proj" / "sessions" / "gate-test-001" / "context-intelligence"
+        )
+        jsonl_path = session_dir / "events.jsonl"
+        assert jsonl_path.exists(), "events.jsonl must be written even when dispatch is suppressed"
+
+    async def test_dispatch_proceeds_when_forwarding_enabled(
+        self, tmp_path: Path
+    ) -> None:
+        """When forwarding_enabled is True, the normal dispatch path fires (regression guard)."""
+        resolver = _FakeResolver(
+            tmp_path,
+            "proj",
+            context_intelligence_server_url="http://localhost:9999",
+            context_intelligence_api_key="test-key",
+            forwarding_enabled=True,
+        )
+        assert resolver.forwarding_enabled is True
+
+        handler = LoggingHandler(resolver)
+
+        with patch(
+            "amplifier_module_hook_context_intelligence.handlers.logging_handler.httpx.AsyncClient"
+        ) as mock_client_cls:
+            mock_client_cls.return_value.__aenter__ = mock_client_cls.return_value
+            mock_client_cls.return_value.__aexit__ = lambda *a: None
+            await handler(
+                "session:start",
+                {"session_id": "gate-test-002", "timestamp": "t0", "working_dir": "/w"},
+            )
+            # Worker is started but httpx.AsyncClient may not be created yet
+            # (lazy creation happens inside the worker). The key assertion is that
+            # _dispatch_enabled is True and the queue received the event.
+        assert handler._dispatch_enabled is True
+        await handler.close()

@@ -140,7 +140,13 @@ class LoggingHandler:
             logger.warning("LoggingHandler disk write error processing %s", event, exc_info=True)
 
         if self._server_url and self._dispatch_enabled:
-            self._enqueue_dispatch(event, sanitized_data)
+            if not self._resolver.forwarding_enabled:
+                logger.debug(
+                    "forwarding_disabled: skipping server dispatch for workspace=%s",
+                    self._workspace,
+                )
+            else:
+                self._enqueue_dispatch(event, sanitized_data)
 
         return HookResult(action="continue")
 
