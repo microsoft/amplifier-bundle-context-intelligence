@@ -14,13 +14,11 @@
 # Usage:
 #   amplifier-digital-twin launch ci-dispatch-filtering-validation \
 #     --var BUNDLE_GIT_URL=http://gitea-host/user/amplifier-bundle-context-intelligence.git \
-#     --var APP_CLI_GIT_URL=http://gitea-host/user/amplifier-app-cli.git \
 #     --var CONTEXT_INTELLIGENCE_WORKSPACE=ci-test \
 #     [--var CONTEXT_INTELLIGENCE_SERVER_URL=http://10.0.0.1:8000]
 #
 # Variables:
 #   BUNDLE_GIT_URL                       -- (required) Gitea URL for bundle repo
-#   APP_CLI_GIT_URL                      -- (required) Gitea URL for app-cli repo
 #   CONTEXT_INTELLIGENCE_SERVER_URL      -- (optional) CI server URL; auto-detected if omitted
 #   CONTEXT_INTELLIGENCE_SERVER_PORT     -- (optional) CI server port; defaults to 8000
 #
@@ -69,11 +67,6 @@ provision:
       uv pip install -e .
       uv pip install httpx pyyaml
 
-    # Install Amplifier CLI from local Gitea mirror
-    - |
-      export PATH="/root/.local/bin:$PATH"
-      uv tool install "${APP_CLI_GIT_URL}"
-
     # Resolve CI server URL (auto-detect host gateway if not provided)
     - |
       CI_URL="${CONTEXT_INTELLIGENCE_SERVER_URL:-}"
@@ -88,9 +81,6 @@ provision:
       echo "PATH=/opt/venv/bin:/root/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" >> /etc/environment
       echo "CI_SERVER_URL=${CI_URL}" >> /etc/environment
       echo "CI_API_KEY=${CI_KEY}" >> /etc/environment
-
-    # Verify CLI installed
-    - /root/.local/bin/amplifier --version
 
     # Verify hook module importable
     - /opt/venv/bin/python3 -c "from amplifier_module_hook_context_intelligence.config_resolver import ConfigResolver; print('bundle importable')"
@@ -130,8 +120,10 @@ validation_cmds:
 
       # No allow_workspaces — deny-all default must fire
       config = {
-          'context_intelligence_server_url': CI_URL,
-          'context_intelligence_api_key': CI_KEY,
+          'context_intelligence_server': {
+              'url': CI_URL,
+              'api_key': CI_KEY,
+          },
           'workspace': WORKSPACE,
           'base_path': BASE_PATH,
       }
@@ -225,11 +217,13 @@ validation_cmds:
           def get_capability(self, name): return None
 
       config = {
-          'context_intelligence_server_url': CI_URL,
-          'context_intelligence_api_key': CI_KEY,
+          'context_intelligence_server': {
+              'url': CI_URL,
+              'api_key': CI_KEY,
+              'allow_workspaces': ['ci-allowed-*'],
+          },
           'workspace': WORKSPACE,
           'base_path': BASE_PATH,
-          'allow_workspaces': ['ci-allowed-*'],  # workspace matches this pattern
       }
       resolver = ConfigResolver(config=config, coordinator=FakeCoord())
 
@@ -323,12 +317,14 @@ validation_cmds:
           def get_capability(self, name): return None
 
       config = {
-          'context_intelligence_server_url': CI_URL,
-          'context_intelligence_api_key': CI_KEY,
+          'context_intelligence_server': {
+              'url': CI_URL,
+              'api_key': CI_KEY,
+              'allow_workspaces': ['ci-*'],
+              'deny_workspaces': ['ci-denied-*'],
+          },
           'workspace': WORKSPACE,
           'base_path': BASE_PATH,
-          'allow_workspaces': ['ci-*'],           # workspace matches: ci-denied-test
-          'deny_workspaces': ['ci-denied-*'],      # deny trims it back
       }
       resolver = ConfigResolver(config=config, coordinator=FakeCoord())
 
