@@ -39,7 +39,7 @@ provision:
         git config --global credential.helper 'store'
       fi
 
-    # Clone the bundle (HEAD of main, commit 84c7d53)
+    # Clone the bundle (HEAD of main)
     - |
       export PATH="/root/.local/bin:$PATH"
       git clone --depth 1 https://github.com/microsoft/amplifier-bundle-context-intelligence.git /opt/ci-bundle

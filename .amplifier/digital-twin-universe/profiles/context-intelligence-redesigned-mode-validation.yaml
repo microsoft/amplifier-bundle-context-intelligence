@@ -4,7 +4,6 @@
 #   Validates 5-phase redesign end-to-end.
 #   Layer 1 — Structural assertions (7 test points).
 #   Layer 2 — Behavioural scenarios (A: concept elicitation, B: signal gap loop).
-#   Run via amplifier-tester:setup-digital-twin with local submodule on current branch.
 
 profile:
   name: context-intelligence-redesigned-mode-validation
@@ -14,17 +13,10 @@ profile:
     Asserts 7 structural test points and runs 2 behavioural scenarios inside
     a DTU built from the local bundle branch.
 
-# MANDATORY: Gitea url_rewrites are non-optional for this profile.
+# Gitea url_rewrites enable local development testing.
 #
-# The install command fetches the bundle from GitHub by default. Without these
-# rewrites, Amplifier would install the published main-branch version rather
-# than the developer's local working-tree snapshot, which defeats the entire
-# purpose of this validation profile.
-#
-# amplifier-tester:setup-digital-twin mirrors the local submodule to a Gitea
-# instance and substitutes {gitea_host} at launch time. Every git+ install URL
-# that references amplifier-bundle-context-intelligence MUST be redirected here
-# so the DTU picks up uncommitted/unreleased local changes.
+# To test local changes: point {gitea_host} at a Gitea instance with your
+# branch mirrored, then pass --var gitea_host=http://your-gitea:3000
 #
 # Both entries are required:
 #   1. The bare @main URL (used by `amplifier bundle add` for the bundle root)

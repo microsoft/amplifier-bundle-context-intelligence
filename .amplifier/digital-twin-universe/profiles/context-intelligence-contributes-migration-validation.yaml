@@ -16,15 +16,11 @@ profile:
   name: context-intelligence-contributes-migration-validation
   version: 2.1.0
   description: >
-    Validates the Modes v1 contributes: migration for the context-intelligence mode.
-    Framework fixes for #233 are on GitHub main (app-cli#178, bundle-skills#15,
-    foundation#203) — only amplifier-bundle-context-intelligence is Gitea-redirected.
+    Validates the context-intelligence contributes.agents specialist-behind-gate pattern.
     Proves specialists ARE gated behind the mode and that sub-session delegation +
     skill search work correctly through the contributes.agents path.
 
-# Only redirect amplifier-bundle-context-intelligence — the framework fixes for
-# issue #233 (app-cli#178, bundle-skills#15, foundation#203) are merged to their
-# respective GitHub main branches and install from real GitHub.
+# Only redirect amplifier-bundle-context-intelligence for development testing.
 url_rewrites:
   - from: "git+https://github.com/microsoft/amplifier-bundle-context-intelligence@main"
     to:   "git+http://{gitea_host}/microsoft/amplifier-bundle-context-intelligence@main"

@@ -12,8 +12,6 @@
 #     .amplifier/digital-twin-universe/profiles/ci-signals-validation.yaml \
 #     --name ci-signals-validation
 #
-# TODO: update --branch to main after feat/improve-geenrated-tools is merged.
-
 name: ci-signals-validation
 description: >
   Integration test for context_intelligence.signals library and
@@ -46,13 +44,11 @@ provision:
         git config --global credential.helper 'store'
       fi
 
-    # Clone the bundle from the working branch
-    # TODO: update --branch to main after feat/improve-geenrated-tools is merged
+    # Clone the bundle from the default (main) branch
     - |
       export PATH="/root/.local/bin:$PATH"
       git clone \
         --depth 1 \
-        --branch feat/improve-geenrated-tools \
         https://github.com/microsoft/amplifier-bundle-context-intelligence.git \
         /opt/ci-bundle
 

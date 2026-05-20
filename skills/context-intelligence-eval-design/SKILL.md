@@ -72,13 +72,13 @@ The explanatory comment is included inline so readers cannot remove the block wi
 # MANDATORY: Gitea URL rewrite for local branch skill resolution.
 # The bundle ships skills with a git+https://github.com/microsoft/amplifier-bundle-context-intelligence@main#subdirectory=skills source in behaviors/context-intelligence.yaml.
 # When running in DTU, local working branch is source of truth — NOT GitHub @main. Without rewrite, skill registration inside DTU fetches from GitHub @main and silently runs stale code, producing test results that do not reflect local changes.
-# The amplifier-tester:setup-digital-twin agent mirrors the local amplifier-bundle-context-intelligence submodule to Gitea on current branch. These rewrites point every reference at that mirror.
+# The digital-twin-universe:dtu-profile-builder agent mirrors the local amplifier-bundle-context-intelligence submodule to Gitea on current branch. These rewrites point every reference at that mirror.
 url_rewrites:
   - from: "git+https://github.com/microsoft/amplifier-bundle-context-intelligence@main"
     to:   "git+http://{gitea_host}/microsoft/amplifier-bundle-context-intelligence@main"
 ```
 
-This block must appear in EVERY profile this skill produces. `{gitea_host}` is resolved by `amplifier-tester:setup-digital-twin` from the running Gitea instance.
+This block must appear in EVERY profile this skill produces. `{gitea_host}` is resolved by `digital-twin-universe:dtu-profile-builder` from the running Gitea instance.
 
 ---
 

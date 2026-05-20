@@ -98,7 +98,7 @@ Or more specifically:
 **Bonus — try this one:**
 > *"Which of my recent sessions spawned the deepest delegation tree?"*
 
-I found this one interesting because it surfaces sessions with complex agent orchestration that you might not have realized were that deep. Brian — this is super relevant for understanding how recipes actually fan out.
+This query surfaces sessions with complex agent orchestration that you might not have realized were that deep. It's particularly relevant for understanding how recipes actually fan out.
 
 ---
 
@@ -232,7 +232,7 @@ Pick any session where you wrote or heavily edited files. Ask:
 - It identifies runs with a high input:output ratio (e.g., 20:1 or higher)
 - It reports the session ID, the `OrchestratorRun.prompt` (what was asked), and the ratio
 
-**Why this one's super interesting:** A high input:output ratio is a cost-efficiency signal. You're paying for a large context window but the model is producing a short response — which might mean the session was near-complete and just needed a small finishing step, or the model got stuck in a loop making small tool calls against heavy context, or the task ended in a cancellation after expensive iterations. These are qualitatively different failure modes. Brian — this one directly surfaces the "are we burning tokens efficiently?" question. This query exercises `Iteration.usage.*` properties and cross-session aggregation — two Data Layer 2 capabilities that have no straightforward Data Layer 1 (raw events) equivalent.
+**Why this one's super interesting:** A high input:output ratio is a cost-efficiency signal. You're paying for a large context window but the model is producing a short response — which might mean the session was near-complete and just needed a small finishing step, or the model got stuck in a loop making small tool calls against heavy context, or the task ended in a cancellation after expensive iterations. These are qualitatively different failure modes. This query directly surfaces the "are we burning tokens efficiently?" question. It exercises `Iteration.usage.*` properties and cross-session aggregation — two Data Layer 2 capabilities that have no straightforward Data Layer 1 (raw events) equivalent.
 
 ---
 
