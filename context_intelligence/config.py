@@ -91,7 +91,10 @@ def _parse_settings_yaml(path: Path) -> dict:
                             if not line.startswith("        "):
                                 in_server_block = False
                     if not line.startswith(" ") and not line.startswith("\t") and stripped:
-                        if "context_intelligence" not in stripped and "hook-context-intelligence" not in stripped:
+                        if (
+                            "context_intelligence" not in stripped
+                            and "hook-context-intelligence" not in stripped
+                        ):
                             in_ci_section = False
                             in_server_block = False
         except OSError:

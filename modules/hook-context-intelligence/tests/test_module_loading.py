@@ -149,10 +149,16 @@ class TestBehaviorYamlConfigShape:
         assert data["hooks"][0]["module"] == "hook-context-intelligence"
 
     def test_config_has_thin_forwarder_keys(self):
-        """Config must have: context_intelligence_server_url, workspace, log_level."""
+        """Config must have: context_intelligence_server (nested dict), workspace, log_level."""
         data = self._load_behavior_yaml()
         config = data["hooks"][0]["config"]
-        assert "context_intelligence_server_url" in config
+        assert "context_intelligence_server" in config, (
+            "Expected nested 'context_intelligence_server' key in config; "
+            f"got keys: {list(config.keys())}"
+        )
+        assert isinstance(config["context_intelligence_server"], dict), (
+            "context_intelligence_server must be a dict"
+        )
         assert "workspace" in config
         assert "log_level" in config
 
