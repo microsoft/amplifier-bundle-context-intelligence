@@ -663,6 +663,56 @@ class TestResolveInstanceId:
         assert isinstance(cr.resolve_instance_id, str)
 
 
+class TestAllowWorkspaces:
+    """allow_workspaces property — reads flat list from config, no coordinator fallback."""
+
+    def test_defaults_to_empty_list(self) -> None:
+        """allow_workspaces returns [] when not set in config."""
+        resolver = ConfigResolver(config={}, coordinator=_make_coordinator())
+        assert resolver.allow_workspaces == []
+
+    def test_returns_list_from_config(self) -> None:
+        """allow_workspaces returns the configured list."""
+        resolver = ConfigResolver(
+            config={"allow_workspaces": ["work-*", "personal-*"]},
+            coordinator=_make_coordinator(),
+        )
+        assert resolver.allow_workspaces == ["work-*", "personal-*"]
+
+    def test_returns_list_type(self) -> None:
+        """allow_workspaces always returns a list instance."""
+        resolver = ConfigResolver(
+            config={"allow_workspaces": ["ws1"]},
+            coordinator=_make_coordinator(),
+        )
+        assert isinstance(resolver.allow_workspaces, list)
+
+
+class TestDenyWorkspaces:
+    """deny_workspaces property — reads flat list from config, no coordinator fallback."""
+
+    def test_defaults_to_empty_list(self) -> None:
+        """deny_workspaces returns [] when not set in config."""
+        resolver = ConfigResolver(config={}, coordinator=_make_coordinator())
+        assert resolver.deny_workspaces == []
+
+    def test_returns_list_from_config(self) -> None:
+        """deny_workspaces returns the configured list."""
+        resolver = ConfigResolver(
+            config={"deny_workspaces": ["scratch-*", "tmp-*"]},
+            coordinator=_make_coordinator(),
+        )
+        assert resolver.deny_workspaces == ["scratch-*", "tmp-*"]
+
+    def test_returns_list_type(self) -> None:
+        """deny_workspaces always returns a list instance."""
+        resolver = ConfigResolver(
+            config={"deny_workspaces": ["ws1"]},
+            coordinator=_make_coordinator(),
+        )
+        assert isinstance(resolver.deny_workspaces, list)
+
+
 class TestSlugifyPath:
     """_slugify_path function — module-level helper for workspace slug derivation."""
 

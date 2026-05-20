@@ -192,6 +192,32 @@ class ConfigResolver:
         return self._additional_events
 
     @property
+    def allow_workspaces(self) -> list[str]:
+        """Workspace patterns permitted to dispatch to the server.
+
+        When any entry is present, only workspaces matching one of these
+        patterns will dispatch to the remote server.  When empty (the
+        default), nothing dispatches — deny-all is the default posture.
+
+        Reads config['allow_workspaces'], defaults to [].
+        No coordinator fallback.  Not cached (cheap list copy per call).
+        """
+        return list(self._config.get("allow_workspaces", []))
+
+    @property
+    def deny_workspaces(self) -> list[str]:
+        """Workspace patterns blocked from server dispatch.
+
+        Trims matching workspaces from what allow_workspaces already
+        opened.  Has no effect when allow_workspaces is empty — there is
+        nothing to trim from.  Deny always beats allow when both match.
+
+        Reads config['deny_workspaces'], defaults to [].
+        No coordinator fallback.  Not cached (cheap list copy per call).
+        """
+        return list(self._config.get("deny_workspaces", []))
+
+    @property
     def log_level(self) -> str:
         """Log level string for this module.
 
