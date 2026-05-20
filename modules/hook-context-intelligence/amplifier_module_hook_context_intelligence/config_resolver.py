@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import fnmatch
 import os
 from pathlib import Path
 from typing import Any
@@ -216,6 +217,59 @@ class ConfigResolver:
         No coordinator fallback.  Not cached (cheap list copy per call).
         """
         return list(self._config.get("deny_workspaces", []))
+
+    def _evaluate_forwarding(self) -> bool:
+        """Evaluate the five-step forwarding resolution chain.
+
+        Resolution order (first match wins):
+
+        1. config['forwarding_enabled'] is False
+           → False  (host path-rule hard override; short-circuits pattern eval)
+        2. allow_workspaces is empty
+           → False  (deny-all default: nothing dispatches without explicit opt-in)
+        3. workspace matches none of allow_workspaces
+           → False  (workspace not opted in)
+        4. workspace matches any deny_workspaces pattern
+           → False  (trimmed from what allow opened; deny beats allow)
+        5. default
+           → True   (opted in and not trimmed)
+        """
+        # Step 1: host hard override (only False short-circuits; None/True are ignored)
+        explicit = self._config.get("forwarding_enabled")
+        if explicit is False:
+            return False
+
+        allow = self.allow_workspaces
+        deny = self.deny_workspaces
+        workspace = self.workspace
+
+        # Step 2: deny-all default — nothing dispatches without an explicit allow entry
+        if not allow:
+            return False
+
+        # Step 3: workspace not opted in
+        if not any(fnmatch.fnmatch(workspace, p) for p in allow):
+            return False
+
+        # Step 4: workspace trimmed by deny list
+        if any(fnmatch.fnmatch(workspace, p) for p in deny):
+            return False
+
+        # Step 5: permitted
+        return True
+
+    @property
+    def forwarding_enabled(self) -> bool:
+        """Whether this session should dispatch events to the remote server.
+
+        Recomputed on every access (no caching) so dynamic config updates
+        are immediately reflected without remounting.
+
+        See _evaluate_forwarding() for the full resolution chain.
+        See ConfigResolver class docstring 'Workspace forwarding semantics'
+        for the user-facing explanation.
+        """
+        return self._evaluate_forwarding()
 
     @property
     def log_level(self) -> str:

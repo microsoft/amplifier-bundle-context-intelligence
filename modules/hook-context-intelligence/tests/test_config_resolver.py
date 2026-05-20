@@ -713,6 +713,123 @@ class TestDenyWorkspaces:
         assert isinstance(resolver.deny_workspaces, list)
 
 
+class TestForwardingEnabled:
+    """forwarding_enabled property — five-step resolution chain.
+
+    Resolution order (first match wins):
+    1. config['forwarding_enabled'] is False  → False (host hard override)
+    2. allow_workspaces is empty              → False (deny-all default)
+    3. workspace not in allow_workspaces      → False (not opted in)
+    4. workspace in deny_workspaces           → False (trimmed from allow)
+    5. default                                → True
+    """
+
+    # ---- Step 2: deny-all default ----------------------------------------
+
+    def test_default_deny_all_no_rules(self) -> None:
+        """With no rules configured, nothing dispatches — deny-all default."""
+        resolver = ConfigResolver(config={}, coordinator=_make_coordinator())
+        assert resolver.forwarding_enabled is False
+
+    def test_default_deny_all_empty_lists(self) -> None:
+        """Explicit empty lists still give deny-all default."""
+        resolver = ConfigResolver(
+            config={"allow_workspaces": [], "deny_workspaces": []},
+            coordinator=_make_coordinator(),
+        )
+        assert resolver.forwarding_enabled is False
+
+    # ---- Step 3: not opted in --------------------------------------------
+
+    def test_workspace_not_in_allow_list(self) -> None:
+        """Workspace absent from allow_workspaces is blocked."""
+        resolver = ConfigResolver(
+            config={"allow_workspaces": ["work-*"], "workspace": "scratch"},
+            coordinator=_make_coordinator(),
+        )
+        assert resolver.forwarding_enabled is False
+
+    # ---- Step 3: opted in ------------------------------------------------
+
+    def test_workspace_matches_allow_pattern(self) -> None:
+        """Workspace matching allow_workspaces dispatches when not denied."""
+        resolver = ConfigResolver(
+            config={"allow_workspaces": ["work-*"], "workspace": "work-project"},
+            coordinator=_make_coordinator(),
+        )
+        assert resolver.forwarding_enabled is True
+
+    # ---- Step 4: deny trims allow ----------------------------------------
+
+    def test_deny_trims_allowed_workspace(self) -> None:
+        """deny_workspaces trims a workspace that matched allow_workspaces."""
+        resolver = ConfigResolver(
+            config={
+                "allow_workspaces": ["work-*"],
+                "deny_workspaces": ["work-secret"],
+                "workspace": "work-secret",
+            },
+            coordinator=_make_coordinator(),
+        )
+        assert resolver.forwarding_enabled is False
+
+    def test_deny_without_allow_has_no_effect(self) -> None:
+        """deny_workspaces has no effect when allow_workspaces is empty.
+
+        The deny-all default fires at step 2 before deny is evaluated.
+        A deny entry with no matching allow has nothing to trim.
+        """
+        resolver = ConfigResolver(
+            config={"deny_workspaces": ["work-*"], "workspace": "work-project"},
+            coordinator=_make_coordinator(),
+        )
+        assert resolver.forwarding_enabled is False
+
+    # ---- Step 1: host hard override --------------------------------------
+
+    def test_host_override_false_short_circuits(self) -> None:
+        """forwarding_enabled: False in config overrides allow list match."""
+        resolver = ConfigResolver(
+            config={
+                "forwarding_enabled": False,
+                "allow_workspaces": ["work-*"],
+                "workspace": "work-project",
+            },
+            coordinator=_make_coordinator(),
+        )
+        assert resolver.forwarding_enabled is False
+
+    def test_host_override_none_does_not_short_circuit(self) -> None:
+        """forwarding_enabled: None in config is ignored — only False short-circuits."""
+        resolver = ConfigResolver(
+            config={
+                "forwarding_enabled": None,
+                "allow_workspaces": ["work-*"],
+                "workspace": "work-project",
+            },
+            coordinator=_make_coordinator(),
+        )
+        assert resolver.forwarding_enabled is True
+
+    # ---- Glob pattern matching -------------------------------------------
+
+    def test_glob_pattern_star(self) -> None:
+        """fnmatch glob * matches within workspace names."""
+        resolver = ConfigResolver(
+            config={"allow_workspaces": ["work-*"], "workspace": "work-my-api"},
+            coordinator=_make_coordinator(),
+        )
+        assert resolver.forwarding_enabled is True
+
+    def test_exact_workspace_match(self) -> None:
+        """Exact workspace name (no glob) matches correctly."""
+        resolver = ConfigResolver(
+            config={"allow_workspaces": ["exact-name"], "workspace": "exact-name"},
+            coordinator=_make_coordinator(),
+        )
+        assert resolver.forwarding_enabled is True
+
+
 class TestSlugifyPath:
     """_slugify_path function — module-level helper for workspace slug derivation."""
 
