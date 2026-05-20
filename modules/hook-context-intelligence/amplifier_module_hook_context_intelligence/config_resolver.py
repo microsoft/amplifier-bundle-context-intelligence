@@ -62,6 +62,24 @@ class ConfigResolver:
 
     Note: Empty strings in config are treated as absent and fall through to the
     next source in the chain (standard ``or``-chain falsy semantics).
+
+    Workspace forwarding semantics
+    ------------------------------
+    Default: nothing dispatches to the remote server.  Even with a server URL
+    configured, events are only forwarded when workspace opt-in rules explicitly
+    permit it.
+
+    - No allow_workspaces configured  → nothing dispatches (deny-all default;
+                                        the server is opt-in)
+    - allow_workspaces entries present → only matching workspaces dispatch
+    - deny_workspaces entries present  → trim matching workspaces from what
+                                         allow_workspaces opened.  A deny entry
+                                         with no matching allow has no effect —
+                                         there is nothing to trim.
+    - deny always beats allow when both match the same workspace
+    - forwarding_enabled: false in config (normally injected by the CLI
+      path-rule mechanism) overrides all of the above and forces a block
+      regardless of workspace patterns.
     """
 
     def __init__(self, config: dict[str, Any], coordinator: Any) -> None:
