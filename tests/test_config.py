@@ -69,8 +69,9 @@ class TestParseSettingsYaml:
             "overrides:\n"
             "  hook-context-intelligence:\n"
             "    config:\n"
-            "      context_intelligence_server_url: http://localhost:8100\n"
-            "      context_intelligence_api_key: secret-key\n"
+            "      context_intelligence_server:\n"
+            "        url: http://localhost:8100\n"
+            "        api_key: secret-key\n"
         )
 
         from context_intelligence.config import _parse_settings_yaml
@@ -91,8 +92,9 @@ class TestParseSettingsYaml:
             "overrides:\n"
             "  hook-context-intelligence:\n"
             "    config:\n"
-            "      context_intelligence_server_url: http://localhost:8100\n"
-            "      context_intelligence_api_key: secret-key\n"
+            "      context_intelligence_server:\n"
+            "        url: http://localhost:8100\n"
+            "        api_key: secret-key\n"
         )
 
         from context_intelligence.config import _parse_settings_yaml

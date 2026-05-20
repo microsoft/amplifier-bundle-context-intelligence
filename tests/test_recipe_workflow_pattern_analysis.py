@@ -185,9 +185,11 @@ class TestYamlMetadata:
         data = self._load()
         assert "context" in data, "YAML must have 'context' block"
         ctx = data["context"]
+        # context is a flat key/value map (defaults wrapper removed in v1.0.0)
         assert isinstance(ctx, dict), "context must be a flat dict (not nested under 'defaults')"
         assert "output_path" in ctx, "context must declare 'output_path' variable"
         assert "max_sessions" in ctx, "context must declare 'max_sessions' variable"
+        assert "date_from" in ctx, "context must have 'date_from' variable"
 
 
 # ---------------------------------------------------------------------------
