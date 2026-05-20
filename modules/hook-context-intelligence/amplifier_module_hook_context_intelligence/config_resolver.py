@@ -77,12 +77,8 @@ class ConfigResolver:
                                          with no matching allow has no effect —
                                          there is nothing to trim.
     - deny always beats allow when both match the same workspace
-    - forwarding_enabled: false in config → hard kill switch; bypasses all
-      workspace pattern evaluation.  Reserved for custom resolvers.  The
-      app-cli path-rule mechanism does not set this key — it contributes
-      workspace name patterns to allow_workspaces / deny_workspaces instead.
-      forwarding_enabled: true has no special effect (falls through to the
-      workspace filter as if the key were absent).
+    - allow_workspaces and deny_workspaces are configured under the
+      context_intelligence_server key alongside url and api_key.
     """
 
     def __init__(self, config: dict[str, Any], coordinator: Any) -> None:
@@ -251,43 +247,36 @@ class ConfigResolver:
         return list(self._server_config().get("deny_workspaces", []))
 
     def _evaluate_forwarding(self) -> bool:
-        """Evaluate the five-step forwarding resolution chain.
+        """Evaluate the four-step forwarding resolution chain.
 
         Resolution order (first match wins):
 
-        1. config['forwarding_enabled'] is False
-           → False  (host path-rule hard override; short-circuits pattern eval)
-        2. allow_workspaces is empty
+        1. allow_workspaces is empty
            → False  (deny-all default: nothing dispatches without explicit opt-in)
-        3. workspace matches none of allow_workspaces
+        2. workspace matches none of allow_workspaces
            → False  (workspace not opted in)
-        4. workspace matches any deny_workspaces pattern
+        3. workspace matches any deny_workspaces pattern
            → False  (trimmed from what allow opened; deny beats allow)
-        5. default
+        4. default
            → True   (opted in and not trimmed)
         """
-        # Step 1: host hard override (only False short-circuits; None/True are ignored)
-        explicit = self._config.get("forwarding_enabled")
-        if explicit is False:
-            return False
-
         allow = self.allow_workspaces
         deny = self.deny_workspaces
         workspace = self.workspace
 
-        # Step 2: deny-all default — nothing dispatches without an explicit allow entry
+        # Step 1: deny-all default — nothing dispatches without an explicit allow entry
         if not allow:
             return False
 
-        # Step 3: workspace not opted in
+        # Step 2: workspace not opted in
         if not any(fnmatch.fnmatch(workspace, p) for p in allow):
             return False
 
-        # Step 4: workspace trimmed by deny list
+        # Step 3: workspace trimmed by deny list
         if any(fnmatch.fnmatch(workspace, p) for p in deny):
             return False
 
-        # Step 5: permitted
+        # Step 4: permitted
         return True
 
     @property

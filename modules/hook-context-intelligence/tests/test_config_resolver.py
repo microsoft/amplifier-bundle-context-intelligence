@@ -746,14 +746,13 @@ class TestDenyWorkspaces:
 
 
 class TestForwardingEnabled:
-    """forwarding_enabled property — five-step resolution chain.
+    """forwarding_enabled property — four-step resolution chain.
 
     Resolution order (first match wins):
-    1. config['forwarding_enabled'] is False  → False (host hard override)
-    2. allow_workspaces is empty              → False (deny-all default)
-    3. workspace not in allow_workspaces      → False (not opted in)
-    4. workspace in deny_workspaces           → False (trimmed from allow)
-    5. default                                → True
+    1. allow_workspaces is empty              → False (deny-all default)
+    2. workspace not in allow_workspaces      → False (not opted in)
+    3. workspace in deny_workspaces           → False (trimmed from allow)
+    4. default                                → True
     """
 
     # ---- Step 2: deny-all default ----------------------------------------
@@ -818,32 +817,6 @@ class TestForwardingEnabled:
             coordinator=_make_coordinator(),
         )
         assert resolver.forwarding_enabled is False
-
-    # ---- Step 1: host hard override --------------------------------------
-
-    def test_host_override_false_short_circuits(self) -> None:
-        """forwarding_enabled: False in config overrides allow list match."""
-        resolver = ConfigResolver(
-            config={
-                "forwarding_enabled": False,
-                "context_intelligence_server": {"allow_workspaces": ["work-*"]},
-                "workspace": "work-project",
-            },
-            coordinator=_make_coordinator(),
-        )
-        assert resolver.forwarding_enabled is False
-
-    def test_host_override_none_does_not_short_circuit(self) -> None:
-        """forwarding_enabled: None in config is ignored — only False short-circuits."""
-        resolver = ConfigResolver(
-            config={
-                "forwarding_enabled": None,
-                "context_intelligence_server": {"allow_workspaces": ["work-*"]},
-                "workspace": "work-project",
-            },
-            coordinator=_make_coordinator(),
-        )
-        assert resolver.forwarding_enabled is True
 
     # ---- Glob pattern matching -------------------------------------------
 
