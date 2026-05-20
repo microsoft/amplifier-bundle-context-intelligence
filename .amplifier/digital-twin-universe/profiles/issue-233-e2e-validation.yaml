@@ -9,7 +9,7 @@
 # Launch:
 #   amplifier-digital-twin launch \
 #     .amplifier/digital-twin-universe/profiles/issue-233-e2e-validation.yaml \
-#     --var GITEA_URL=http://10.160.61.25:3000 \
+#     --var GITEA_URL=http://<your-gitea-host>:3000 \
 #     --var GITEA_TOKEN=<token> \
 #     --name ci-issue-233-e2e
 

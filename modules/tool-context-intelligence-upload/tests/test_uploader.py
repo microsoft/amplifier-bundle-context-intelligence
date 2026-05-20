@@ -493,7 +493,7 @@ class TestWorkspaceFromPath:
     def test_workspace_fallback_used_when_record_missing_workspace(self, tmp_path: Path) -> None:
         """When events.jsonl record has no 'workspace' key, project slug is used."""
         # Build path structure that embeds project slug
-        project_slug = "-home-dicolomb-my-project"
+        project_slug = "-home-user-my-project"
         session_dir = (
             tmp_path / "projects" / project_slug / "sessions" / "s1" / "context-intelligence"
         )
