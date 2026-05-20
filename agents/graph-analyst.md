@@ -265,8 +265,8 @@ context-intelligence-upload \
   --api-key "${AMPLIFIER_CONTEXT_INTELLIGENCE_API_KEY}"
 ```
 
-If environment variables are not set, find `context_intelligence_server_url` and
-`context_intelligence_api_key` in the Amplifier bundle config YAML under
+If environment variables are not set, find `context_intelligence_server.url` and
+`context_intelligence_server.api_key` in the Amplifier bundle config YAML under
 `hook-context-intelligence.config` and pass them explicitly.
 
 Run `context-intelligence-upload --help` for full options.
@@ -291,7 +291,7 @@ reconstructs session summaries that can then be uploaded to the graph server for
 ## Section 4: Context File References
 
 @context-intelligence:context/config-resolution.dot
-<!-- ConfigResolver fallback chain: how context_intelligence_server_url, workspace, and log_level are resolved from env vars and settings -->
+<!-- ConfigResolver fallback chain: how context_intelligence_server.url, workspace, and log_level are resolved from env vars and settings -->
 
 @context-intelligence:context/delegation-strategy.dot
 <!-- delegation chain diagram: graph-analyst → session-navigator → foundation:session-analyst -->
