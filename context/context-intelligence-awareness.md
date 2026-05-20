@@ -42,17 +42,16 @@ The graph-analyst checks server availability automatically and falls back to
 | `AMPLIFIER_CONTEXT_INTELLIGENCE_DISPATCH_FAILURE_THRESHOLD` | Circuit breaker trips after N failures | `3` |
 | `allow_workspaces` (config key, not env var) | fnmatch workspace patterns permitted to dispatch to the server. When any entry is present, only matching workspaces forward events. When empty — the default — **nothing dispatches** (deny-all posture). Set under `overrides.hook-context-intelligence.config` in `settings.yaml`. | `[]` — deny-all |
 | `deny_workspaces` (config key, not env var) | fnmatch workspace patterns blocked from dispatch. Trims from what `allow_workspaces` opened. No effect when allow list is empty. Set under `overrides.hook-context-intelligence.config`. | `[]` |
-| `forwarding_enabled` (config key, not env var) | Explicit boolean override. `false` suppresses dispatch regardless of workspace patterns. Normally injected by the CLI's `context_intelligence.path_rules` mechanism rather than set directly. | (absent — deferred to workspace pattern logic) |
-| `context_intelligence.path_rules` (top-level settings key) | Host-side path rules evaluated by the CLI at session start. First matching rule wins. When `forwarding_enabled: false` fires, the CLI injects an override that blocks dispatch for that working directory regardless of workspace patterns. Configured at the **top level** of `settings.yaml` (not under `config:`). | `[]` |
+| `context_intelligence.path_rules` (top-level settings key) | Host-side path rules evaluated by the CLI at session start. Tilde (`~`) is expanded; **all** matching rules contribute. Each matching rule's path pattern is transformed into a workspace name pattern (e.g. `~/work/**` → `-home-<user>-work-*`) and appended to `allow_workspaces` (when `forwarding_enabled: true`) or `deny_workspaces` (when `forwarding_enabled: false`). Injected patterns are additive with any patterns already set under `overrides.hook-context-intelligence.config`. Configured at the **top level** of `settings.yaml` (not under `config:`). | `[]` |
 
 ## Forwarding semantics (dispatch opt-in model)
 
-Server dispatch is **off by default**. The resolution order is:
+Server dispatch is **off by default**. The bundle's `ConfigResolver` resolves `forwarding_enabled` via the following chain (first match wins):
 
-1. `forwarding_enabled: false` in config (injected by CLI path rules) → blocked, no further evaluation
+1. `config["forwarding_enabled"]` is explicitly `False` → blocked (bundle-internal hard override; reserved for custom resolvers — the app-cli path-rule mechanism does not use this and instead contributes workspace patterns)
 2. `allow_workspaces` is empty → blocked (deny-all default; must opt in explicitly)
 3. Workspace matches none of `allow_workspaces` → blocked (not opted in)
-4. Workspace matches any `deny_workspaces` pattern → blocked (trimmed from allow)
+4. Workspace matches any `deny_workspaces` pattern → blocked (`deny_workspaces` trims from what `allow_workspaces` opened; no effect when allow list is empty)
 5. Otherwise → **dispatches to server**
 
 Local `events.jsonl` is **always written** regardless of dispatch status.

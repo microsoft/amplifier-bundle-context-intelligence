@@ -10,7 +10,7 @@ The bundle writes every session event to a local JSONL log and — when configur
 
 | Always active | When `context_intelligence_server_url` is set |
 |---------------|-----------------------------------------------|
-| Writes `events.jsonl` + `metadata.json` per session, both tagged with `workspace` | POSTs events to the CI server for workspaces that match the allow list — **nothing dispatches by default** |
+| Writes `events.jsonl` + `metadata.json` per session, both tagged with `workspace` | POSTs events to the CI server for opted-in workspaces (default: nothing dispatches until workspace allow-rules are configured) |
 | | Enables graph-powered Cypher queries via `graph_query` tool |
 | | Enables `blob_read` tool for resolving `ci-blob://` URIs |
 
@@ -107,21 +107,55 @@ overrides:
         - "work-scratch-*"
 ```
 
-#### Path-based opt-out (host-side rules)
+#### Path rules (host-side, additive to workspace patterns)
 
-To suppress dispatch for specific working directories — regardless of workspace patterns — configure `context_intelligence.path_rules` in `settings.yaml`. These rules are evaluated by the CLI at session start, not by the bundle.
+To opt working directories in or out of dispatch based on disk path — independently of the workspace-pattern config above — configure `context_intelligence.path_rules` in `settings.yaml`. These rules are evaluated by the CLI at session start, not by the bundle.
+
+Path patterns support `~` (tilde expansion) and `**` glob segments. The CLI evaluates **all** matching rules (not first-match-wins), transforms each matching path pattern into a workspace name pattern, and appends it to the bundle's `allow_workspaces` or `deny_workspaces` list:
+
+- `forwarding_enabled: true` → the transformed pattern is appended to `allow_workspaces`
+- `forwarding_enabled: false` → the transformed pattern is appended to `deny_workspaces`
+
+The transformation replaces `/` and `\` with `-`, replaces `**` with `*`, and ensures a leading `-`. For example, on a host where `$HOME=/home/alice`:
+
+| Path pattern | Transformed workspace pattern |
+|--------------|-------------------------------|
+| `~/work/**` | `-home-alice-work-*` |
+| `/tmp/**` | `-tmp-*` |
+| `~/client/**` | `-home-alice-client-*` |
+
+The injected workspace patterns are **additive** with any patterns already in `overrides.hook-context-intelligence.config.allow_workspaces` / `deny_workspaces`. The bundle never sees disk paths — only the unioned workspace-pattern lists.
 
 ```yaml
 # ~/.amplifier/settings.yaml
+
+# Bundle-level workspace filter (evaluated inside the hook)
+overrides:
+  hook-context-intelligence:
+    config:
+      allow_workspaces:
+        - "work-*"
+        - "personal-*"
+      deny_workspaces:
+        - "work-scratch-*"
+
+# CLI-level path rules (transformed and unioned into the lists above)
 context_intelligence:
   path_rules:
+    - path: "~/work/**"
+      forwarding_enabled: true    # → appends -home-alice-work-* to allow_workspaces
     - path: "/tmp/**"
-      forwarding_enabled: false
-    - path: "/home/user/client-work/**"
-      forwarding_enabled: false
+      forwarding_enabled: false   # → appends -tmp-* to deny_workspaces
+    - path: "~/client/**"
+      forwarding_enabled: false   # → appends -home-alice-client-* to deny_workspaces
 ```
 
-Rules are evaluated top-to-bottom; the first match wins. If a rule fires, the CLI injects `forwarding_enabled: false` into the hook config, which overrides all workspace-pattern logic. This is useful for host-specific policies such as suppressing dispatch for temporary directories or client work directories that should never reach a shared server.
+With the configuration above, a session in `/home/alice/work/my-api` produces effective workspace `-home-alice-work-my-api`. The bundle sees:
+
+- `allow_workspaces`: `["work-*", "personal-*", "-home-alice-work-*"]`
+- `deny_workspaces`: `["work-scratch-*", "-tmp-*", "-home-alice-client-*"]`
+
+The workspace matches `-home-alice-work-*` and no deny pattern, so dispatch is allowed.
 
 Or via environment variables:
 
