@@ -1,15 +1,28 @@
 """Context Intelligence hook — thin event forwarder.
 
 Writes session events to local JSONL and dispatches them to the
-Context Intelligence server when ``context_intelligence_server_url``
+Context Intelligence server when ``context_intelligence_server.url``
 is configured.
 
 Configuration keys
 ------------------
-context_intelligence_server_url : str, optional
-    Base URL of the Context Intelligence server, e.g.
-    ``http://localhost:8000``.  When set, every event is POSTed
-    to ``{url}/events``.
+context_intelligence_server : dict, optional
+    Server connection and workspace filter configuration.  All sub-keys are
+    optional and independent.
+
+    url : str
+        Base URL of the Context Intelligence server, e.g.
+        ``http://localhost:8000``.  When set, the hook attempts to POST
+        events that pass the workspace filter.
+    api_key : str
+        Bearer token for server API authentication.
+    allow_workspaces : list[str]
+        fnmatch patterns for workspaces permitted to dispatch.  When any
+        entry is present, only matching workspaces dispatch.  When absent
+        or empty, nothing dispatches (deny-all default).
+    deny_workspaces : list[str]
+        fnmatch patterns that trim from what ``allow_workspaces`` opened.
+        Has no effect when ``allow_workspaces`` is empty.
 workspace : str, optional
     Workspace identifier used to scope graph data on the server.
     Resolved automatically from the coordinator when not set
@@ -25,36 +38,6 @@ additional_events : list[str], optional
     Event names to register unconditionally, regardless of capability
     discovery order.  Use to capture events from modules that mount after
     this hook (e.g. ``delegate:agent_spawned``).
-allow_workspaces : list[str], optional
-    fnmatch workspace patterns permitted to dispatch to the server.
-    When any entry is present, only matching workspaces are forwarded.
-    Default is ``[]`` — nothing dispatches (deny-all default).
-    See ``ConfigResolver`` class docstring for full semantics.
-deny_workspaces : list[str], optional
-    fnmatch workspace patterns blocked from server dispatch.  Trims from
-    what ``allow_workspaces`` opened.  Has no effect when
-    ``allow_workspaces`` is empty — there is nothing to trim.
-forwarding_enabled : bool, optional
-    Hard kill switch for server dispatch.  When ``False``, all dispatch is
-    suppressed unconditionally — workspace pattern evaluation is bypassed
-    entirely.  Setting this to ``True`` has no special effect; evaluation
-    falls through to the workspace filter (``allow_workspaces`` /
-    ``deny_workspaces``) as normal.
-
-    This is a bundle-internal override reserved for custom resolvers and
-    applications that need hard programmatic control.  The app-cli path-rule
-    mechanism (``AppSettings.get_context_intelligence_hook_overrides``) does
-    **not** inject this key; it contributes workspace name patterns to
-    ``allow_workspaces`` or ``deny_workspaces`` instead.
-
-    To globally disable dispatch without workspace logic, set this directly:
-
-    .. code-block:: yaml
-
-        overrides:
-          hook-context-intelligence:
-            config:
-              forwarding_enabled: false
 """
 
 from __future__ import annotations

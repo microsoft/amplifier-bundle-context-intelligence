@@ -192,9 +192,24 @@ class TestModuleDocstring:
             "Module docstring must document the 'deny_workspaces' configuration key"
         )
 
-    def test_docstring_documents_forwarding_enabled(self):
-        """Module docstring must document the forwarding_enabled config key."""
+    def test_docstring_documents_nested_server_config(self):
+        """Module docstring must document context_intelligence_server as a nested dict.
+
+        The top-level key is context_intelligence_server (not flat
+        context_intelligence_server_url / context_intelligence_api_key).
+        Sub-keys url, api_key, allow_workspaces, deny_workspaces must be present.
+        """
         doc = self._get_docstring()
-        assert "forwarding_enabled" in doc, (
-            "Module docstring must document the 'forwarding_enabled' configuration key"
+        assert "context_intelligence_server" in doc, (
+            "Module docstring must document 'context_intelligence_server' as the top-level config key"
+        )
+        for sub_key in ("url", "api_key"):
+            assert sub_key in doc, (
+                f"Module docstring must document '{sub_key}' as a sub-key of context_intelligence_server"
+            )
+        assert "context_intelligence_server_url" not in doc, (
+            "Module docstring must NOT document 'context_intelligence_server_url' as a flat key"
+        )
+        assert "context_intelligence_api_key" not in doc, (
+            "Module docstring must NOT document 'context_intelligence_api_key' as a flat key"
         )
