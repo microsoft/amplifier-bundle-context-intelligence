@@ -26,7 +26,8 @@ from .uploader import run_upload
 _COMPACT_HELP = """\
 usage: context-intelligence-upload --path PATH --server-url URL --api-key KEY
 	                                    [--job-id ID] [--progress FILE]
-	                                    [--event-delay-ms MS] [--no-replay]
+	                                    [--event-delay-ms MS]
+	                                    [--no-replay]
 
 Replay context-intelligence session data to a server.
 
@@ -342,7 +343,7 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         default=False,
         dest="no_replay",
-        help="Disable the default replay=True query parameter on POST /events; "
+        help="Disable the default replay=true query parameter on POST /events; "
         "re-enables the server's 7-day idempotency cache",
     )
 

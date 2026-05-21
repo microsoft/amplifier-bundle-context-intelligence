@@ -137,7 +137,7 @@ def run_upload(
     endpoint = f"{server_url}/events"
     timeout = httpx.Timeout(connect=5.0, read=30.0, write=30.0, pool=5.0)
     headers = {"Authorization": f"Bearer {api_key}"}
-    query_params: dict[str, Any] | None = {"replay": True} if replay else None
+    query_params: dict[str, str] | None = {"replay": "true"} if replay else None
 
     total_events_uploaded = 0
     total_sessions_uploaded = 0

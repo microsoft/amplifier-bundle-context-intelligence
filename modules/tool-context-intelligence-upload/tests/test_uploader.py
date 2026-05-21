@@ -337,7 +337,7 @@ class TestUploadUrlAndAuth:
         assert headers.get("Authorization") == "Bearer sk-my-key"
 
     def test_default_sends_replay_true_query_param(self, tmp_path: Path) -> None:
-        """By default, run_upload posts with params={'replay': True} on every call."""
+        """By default, run_upload posts with params={'replay': 'true'} on every call."""
         events = _make_events(1)
         session_dir, metadata = _write_session(tmp_path, "abc", events)
         sessions = [(session_dir, metadata)]
@@ -354,8 +354,10 @@ class TestUploadUrlAndAuth:
         url_called = mock_client.post.call_args[0][0]
         assert url_called.endswith("/events")
         # The replay query parameter is forwarded as the httpx `params` kwarg
+        # Use a string value ("true") not a Python bool (True) — httpx serialises
+        # bool True as "True" (capital T), which the server would not recognise.
         call_kwargs = mock_client.post.call_args[1]
-        assert call_kwargs.get("params") == {"replay": True}
+        assert call_kwargs.get("params") == {"replay": "true"}
 
 
 # ---------------------------------------------------------------------------
