@@ -26,7 +26,7 @@ from .uploader import run_upload
 _COMPACT_HELP = """\
 usage: context-intelligence-upload --path PATH --server-url URL --api-key KEY
 	                                    [--job-id ID] [--progress FILE]
-	                                    [--event-delay-ms MS]
+	                                    [--event-delay-ms MS] [--no-replay]
 
 Replay context-intelligence session data to a server.
 
@@ -41,6 +41,8 @@ flags:
                        default: /tmp/context-intelligence-upload-{job_id}.json
   --event-delay-ms   Milliseconds to sleep between events (default: 0)
                        Use 50-200 to reduce Neo4j write pressure on the server
+  --no-replay        Disable replay=true; re-enable server 7-day idempotency cache
+                       default: off (every event is replayed unconditionally)
 """
 
 # ---------------------------------------------------------------------------
@@ -117,13 +119,19 @@ before their children:
      alphabetically before enqueuing them.
   5. Emit sessions in BFS order.
 
-IDEMPOTENCY GUARANTEE
----------------------
-The tool has NO built-in deduplication -- re-running will re-upload all sessions.
-Idempotency is provided by the server using the ``idempotency_key`` field in every
-POST payload.  This key is a SHA-256 hash of the canonical event JSON, so the server
-can safely skip already-ingested events by treating ``idempotency_key`` as a natural
-key.  This means it is safe to re-upload the same PATH multiple times.
+IDEMPOTENCY
+-----------
+The upload CLI bypasses the server-side event deduplication cache by default.
+Every event in every session is forwarded to the server unconditionally, and the
+server processes it on every run.  Neo4j idempotency is guaranteed by
+``MERGE + SET n += row.props`` semantics: re-uploading the same session data
+produces the same graph state.
+
+Use ``--no-replay`` to re-enable the server's 7-day in-memory deduplication
+cache.  With ``--no-replay``, events whose ``idempotency_key`` was seen within
+the last 7 days are silently skipped.  Only use this flag when running the
+upload tool against a live session in progress where duplicate suppression is
+intentional.
 
 WORKSPACE BEHAVIOUR
 -------------------
@@ -329,6 +337,14 @@ def _build_parser() -> argparse.ArgumentParser:
         dest="event_delay_ms",
         help="Milliseconds to sleep between events (default: 0; use 50-200 to reduce Neo4j pressure)",
     )
+    parser.add_argument(
+        "--no-replay",
+        action="store_true",
+        default=False,
+        dest="no_replay",
+        help="Disable the default replay=True query parameter on POST /events; "
+        "re-enables the server's 7-day idempotency cache",
+    )
 
     return parser
 
@@ -399,6 +415,7 @@ def main() -> None:
         api_key=api_key,
         tracker=tracker,
         event_delay_s=args.event_delay_ms / 1000.0,
+        replay=not args.no_replay,
     )
 
     # 7. Write result JSON to stdout

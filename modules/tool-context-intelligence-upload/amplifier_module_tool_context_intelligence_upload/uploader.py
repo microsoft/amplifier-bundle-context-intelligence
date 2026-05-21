@@ -102,6 +102,7 @@ def run_upload(
     api_key: str,
     tracker: ProgressTracker,
     event_delay_s: float = 0.0,
+    replay: bool = True,
 ) -> UploadResult:
     """Replay all events from *sessions* to the server.
 
@@ -119,6 +120,13 @@ def run_upload(
         Seconds to sleep between each successful event POST.  Defaults to
         ``0.0`` (no delay).  Set to a positive value (e.g. ``0.05``) to
         throttle the upload rate and reduce Neo4j write pressure on the server.
+    replay:
+        When ``True`` (the default), every POST is sent with ``?replay=true`` so
+        the server bypasses its in-memory idempotency cache.  This is the safe
+        default for re-uploading historical session data.  Set to ``False`` to
+        re-enable the server's 7-day deduplication cache (the old behaviour);
+        only do this for live, in-progress sessions where duplicate suppression
+        is intentional.
 
     Returns
     -------
@@ -129,6 +137,7 @@ def run_upload(
     endpoint = f"{server_url}/events"
     timeout = httpx.Timeout(connect=5.0, read=30.0, write=30.0, pool=5.0)
     headers = {"Authorization": f"Bearer {api_key}"}
+    query_params: dict[str, Any] | None = {"replay": True} if replay else None
 
     total_events_uploaded = 0
     total_sessions_uploaded = 0
@@ -181,7 +190,7 @@ def run_upload(
                     payload = build_payload(event, workspace, data)
 
                     try:
-                        response = client.post(endpoint, json=payload)
+                        response = client.post(endpoint, json=payload, params=query_params)
                     except httpx.HTTPError as exc:
                         tracker.mark_failed(
                             session_id=session_id,
