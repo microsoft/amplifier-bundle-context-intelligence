@@ -15,6 +15,7 @@ package = true
 
 [tool.uv.sources]
 amplifier-core = { git = "https://github.com/microsoft/amplifier-core", rev = "main" }
+amplifier-module-tool-bundle-usage = { path = "modules/tool-bundle-usage", editable = true }
 
 [tool.hatch.build.targets.wheel]
 packages = [
@@ -37,6 +38,7 @@ dev = [
     "idna>=3.15",
     "PyYAML>=6.0",
     "amplifier-core",
+    "amplifier-module-tool-bundle-usage",
 ]
 
 [tool.pytest.ini_options]
