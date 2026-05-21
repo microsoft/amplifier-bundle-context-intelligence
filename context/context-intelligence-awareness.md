@@ -87,11 +87,11 @@ Two opt-in modes extend the always-active capabilities:
 | Mode | Activation | Purpose |
 |------|-----------|---------|
 | `context-intelligence` | `/context-intelligence` | Design workspace for building new CI-aware Amplifier components |
-| `bundle-usage` | `/bundle-usage` | Analyse what bundles and their components a session or workspace actually used versus what was declared; surfaces tree-shake, mode-refactor, and config-gap opportunities. Signals: CI graph (full) with JSONL fallback (agents + skills) when server unavailable. |
+| `bundle-usage` | `/bundle-usage` | Analyse what bundles and their components a session or workspace actually used versus what was declared; surfaces tree-shake, mode-refactor, config-gap, and mode-never-activated opportunities. Signals: local JSONL only — all six signal types (agents, skills, modes, recipes, tools, context) fully attributed from `events.jsonl`. |
 
 **`/bundle-usage` — delegation:**
 
-When the `bundle-usage` mode is active, delegate to `context-intelligence:bundle-usage-analyst` for all usage and gap analysis requests. The analyst calls the `bundle_usage` tool (three-layer: CI graph signals → local cache inventory → set-arithmetic gap) and writes a structured report.
+When the `bundle-usage` mode is active, delegate to `context-intelligence:bundle-usage-analyst` for all usage and gap analysis requests. The analyst calls the `bundle_usage` tool (three-layer: JSONL signals → local cache inventory → set-arithmetic gap) and writes a structured report.
 
 ```
 # Example
@@ -99,4 +99,4 @@ delegate(agent="context-intelligence:bundle-usage-analyst",
          instruction="Analyse session <id> and produce a usage report.")
 ```
 
-Requires a configured CI server for the signals layer (see Configuration above). The inventory and gap layers run without a server.
+No CI server is required. The signals layer reads local `events.jsonl` files directly. The inventory and gap layers scan the local bundle cache at `~/.amplifier/cache/`.

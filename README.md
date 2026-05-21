@@ -313,7 +313,7 @@ See [`context/graph-model-reference.md`](context/graph-model-reference.md) for t
 
 The `context-intelligence-design-facilitator` is a conversational design guide available only when the `/context-intelligence` mode is active. It asks questions to understand the user's domain, maps that domain to context intelligence data layers, and helps design the right Amplifier component shape (skill, agent, recipe, CLI, etc.) for the investigation findings. It delegates investigation to `graph-analyst` and component authoring mechanics to ecosystem experts (`foundation:foundation-expert`, `recipes:recipe-author`).
 
-The `bundle-usage-analyst` is available only when the `/bundle-usage` mode is active. It calls the `bundle_usage` tool to run a three-layer analysis (CI graph signals, local cache inventory, set-arithmetic gap), then writes a structured markdown report. If the CI graph server is unreachable, the signals layer returns empty but the inventory and gap layers still run against the local bundle cache.
+The `bundle-usage-analyst` is available only when the `/bundle-usage` mode is active. It calls the `bundle_usage` tool to run a three-layer analysis (JSONL signals, local cache inventory, set-arithmetic gap), then writes a structured markdown report.
 
 See [`context/safe-extraction-patterns.md`](context/safe-extraction-patterns.md) for JSONL navigation patterns.
 
@@ -377,7 +377,7 @@ The analysis runs three deterministic layers, in order:
 
 | Layer | What it does | Data source |
 |-------|-------------|-------------|
-| **Signals** | Counts actual invocations per bundle by component type (agents, skills, modes, recipes, tools) | CI graph — Cypher queries S-01..S-18 |
+| **Signals** | Counts actual invocations per bundle by component type (agents, skills, modes, recipes, tools) | Local JSONL event files (`events.jsonl`) |
 | **Inventory** | Enumerates what each installed bundle *declares* (agents, modes, skills, recipes) | Local bundle cache at `~/.amplifier/cache/` |
 | **Gap** | Computes set differences; classifies improvement opportunities | Set arithmetic — no LLM |
 
@@ -388,19 +388,22 @@ The analysis runs three deterministic layers, in order:
 | `tree-shake` 🌳 | Bundle is declared but never invoked | 0 invocations across all component types |
 | `mode-refactor` ⚙️ | Bundle is under-utilised | Used < 20 % of declared components |
 | `config-gap` 🚩 | Bundle was invoked but is absent from local cache | Present in signals, missing from inventory |
+| `mode-never-activated` 🔒 | A contributed mode was never activated | Mode name absent from `mode:activated` / `mode:changed` events |
 
 ### Requirements
 
-The **Signals** layer uses a **dual-path fallback**:
+The **Signals** layer reads **local JSONL event files only** — no CI graph server required.
 
-| Path | When used | Coverage |
-|------|----------|---------|
-| CI graph server (Cypher queries) | Server URL configured and reachable | Full — agents, skills, modes, recipes, tools |
-| Local JSONL files (`events.jsonl`) | Server unreachable or not configured | Partial — agents (full) and skills (best-effort); modes, recipes, tools not attributable |
+| Signal type | Event kind | Coverage |
+|-------------|-----------|---------|
+| Agents | `delegate:agent_spawned` | Full — bundle prefix from event or inventory reverse-lookup |
+| Skills | `skill:loaded` | Full — bundle extracted from cache path or inventory reverse-lookup |
+| Recipes | `tool:pre` (recipes, execute) | Full — bundle extracted from `@bundle:path` prefix |
+| Tools | `tool:pre` (all other tools) | Full — attributed via inventory `agent_level` tool declarations |
+| Modes | `mode:activated`, `mode:changed` | Full — attributed via inventory `modes` reverse-lookup |
+| Context | `mentions:resolved` | Full — attributed via bundle key (new format) or cache path (legacy) |
 
-**Without a server** the analysis still produces useful output: the Inventory and Gap layers always run against the local bundle cache, and JSONL extraction covers agent delegation signals. The gap analysis will flag tree-shake candidates and config-gap entries regardless.
-
-To enable full signals coverage, configure the CI server (see [Configuration reference](#configuration-reference)).
+Events are read from `~/.amplifier/projects/{workspace}/sessions/*/context-intelligence/events.jsonl`.
 
 ### Usage
 
@@ -476,7 +479,7 @@ amplifier-bundle-context-intelligence/
 │   ├── tool-blob-read/                 ← blob_read tool module
 │   └── tool-bundle-usage/         ← bundle_usage tool module
 ├── context_intelligence/
-│   └── bundle_analysis/           ← signals / inventory / gap library + Cypher queries
+│   └── bundle_analysis/           ← signals / inventory / gap library (JSONL-only)
 ├── docs/
 │   ├── context-intelligence-exploration-guide.md   ← what to explore and how to test
 │   ├── dispatch-circuit-breaker.dot    ← dispatch flow and circuit breaker state machine

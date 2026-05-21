@@ -214,8 +214,9 @@ def process_events(events: list[RawSignalEvent], inventory: dict[str, Any]) -> d
         Mapping from bundle name to a usage dict with six named-set keys:
         ``agents``, ``skills``, ``recipes``, ``context``, ``modes``, ``tools``
         (all ``set[str]``).
-        ``modes`` and ``tools`` are always empty sets — these event kinds carry
-        no reliable bundle attribution yet.
+        ``modes`` is populated via ``mode:activated`` / ``mode:changed`` events
+        using an inventory reverse-lookup; ``tools`` is populated via
+        ``tool:pre`` events using an inventory reverse-lookup.
         Returns ``{}`` when *events* is empty or no event yields attribution.
     """
     bundles: dict[str, Any] = {}
@@ -334,11 +335,4 @@ def process_events(events: list[RawSignalEvent], inventory: dict[str, Any]) -> d
     return bundles
 
 
-__all__ = [
-    "_SIGNAL_KEYS",
-    "_build_reverse_lookups",
-    "_bundle_from_recipe_path",
-    "_bundle_from_source_path",
-    "_ensure",
-    "process_events",
-]
+__all__ = ["process_events"]
