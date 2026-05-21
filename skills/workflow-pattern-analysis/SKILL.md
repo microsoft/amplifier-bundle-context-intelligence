@@ -25,6 +25,23 @@ license: MIT
 
 # Workflow Pattern Analysis
 
+## Phase Gate (mandatory before any analysis)
+
+**Your first tool call must be:**
+```
+read_file(".context-intelligence-investigation/domain-concepts.md")
+```
+
+| Result | Action |
+|---|---|
+| File **found** | Domain concepts are established. Proceed with the analysis below. |
+| File **not found** | Phase 0 is incomplete. Delegate to `context-intelligence:context-intelligence-design-facilitator` with `context_depth="none"` to run Phase 0 first. Do NOT proceed with any analysis until the facilitator has written `domain-concepts.md`. |
+
+This skill is designed to run AFTER Phase 0 (concept elicitation). Running it before Phase 0
+produces poorly scoped signals and forces the user to steer corrective turns.
+
+---
+
 Systematic investigation of failure and success patterns across many runs of a specific
 workflow using context-intelligence session data.
 
