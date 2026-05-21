@@ -317,6 +317,15 @@ class AsyncCIClient:
         self._api_key: str = api_key
 
     # ------------------------------------------------------------------
+    # Properties
+    # ------------------------------------------------------------------
+
+    @property
+    def server_url(self) -> str:
+        """Base URL of the context-intelligence server (read-only)."""
+        return self._server_url
+
+    # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
 

@@ -79,3 +79,24 @@ cat /tmp/context-intelligence-upload-my-recovery-job.json
 
 Run `context-intelligence-upload --help` for full documentation including progress file schema,
 ordering behaviour, and idempotency guarantee.
+
+## Modes
+
+Two opt-in modes extend the always-active capabilities:
+
+| Mode | Activation | Purpose |
+|------|-----------|---------|
+| `context-intelligence` | `/context-intelligence` | Design workspace for building new CI-aware Amplifier components |
+| `bundle-usage` | `/bundle-usage` | Analyse what bundles and their components a session or workspace actually used versus what was declared; surfaces tree-shake, mode-refactor, and config-gap opportunities. Signals: CI graph (full) with JSONL fallback (agents + skills) when server unavailable. |
+
+**`/bundle-usage` — delegation:**
+
+When the `bundle-usage` mode is active, delegate to `context-intelligence:bundle-usage-analyst` for all usage and gap analysis requests. The analyst calls the `bundle_usage` tool (three-layer: CI graph signals → local cache inventory → set-arithmetic gap) and writes a structured report.
+
+```
+# Example
+delegate(agent="context-intelligence:bundle-usage-analyst",
+         instruction="Analyse session <id> and produce a usage report.")
+```
+
+Requires a configured CI server for the signals layer (see Configuration above). The inventory and gap layers run without a server.

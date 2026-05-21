@@ -50,6 +50,7 @@ def check(label, condition, detail=""):
 cache = Path("/root/.amplifier/cache/amplifier-bundle-context-intelligence-ecd41f3e6fa67bd2")
 
 
+
 def load_frontmatter(rel_path):
     text = (cache / rel_path).read_text()
     parts = text.split("---", 2)

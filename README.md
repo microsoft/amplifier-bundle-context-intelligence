@@ -21,6 +21,8 @@ Two agents are included for querying session data:
 
 A **`/context-intelligence` mode** is also included for building new context intelligence-aware tooling. Activate it to enter a design workspace where you can investigate session data, explore the graph model, and produce reusable Amplifier components (skills, agents, context files, recipes, CLIs) for your project.
 
+A **`/bundle-usage` mode** is also included for analysing what a session or workspace actually used versus what its installed bundles declared. It surfaces tree-shake opportunities, under-utilised bundles, and configuration gaps — useful for auditing bundle payloads and guiding optimisation.
+
 ---
 
 ## Understanding workspace
@@ -305,10 +307,13 @@ See [`context/graph-model-reference.md`](context/graph-model-reference.md) for t
 | `graph-analyst` | Always | `graph_query`, `blob_read`, `tool-filesystem`, `tool-bash`, `tool-skills` | Primary entry point — graph-powered analysis via Cypher across all three data layers, blob resolution, automatic fallback |
 | `session-navigator` | Always (via delegation) | `tool-filesystem`, `tool-search`, `tool-bash`, `tool-skills` | Local fallback — safe JSONL navigation via bash/jq/grep; invoked by graph-analyst when the server is unreachable |
 | `context-intelligence-design-facilitator` | `/context-intelligence` mode only | `tool-skills` | Design guide — domain elicitation and component design facilitation for building new context intelligence-aware tooling |
+| `bundle-usage-analyst` | `/bundle-usage` mode only | `bundle_usage`, `tool-filesystem`, `tool-bash` | Bundle usage specialist — calls `bundle_usage`, inspects gap output, optionally reads bundle content for engagement-gap reasoning, writes a `.bundle-usage-report-<timestamp>.md` |
 
 **Delegation chain:** External callers always invoke `graph-analyst`. If the server is unreachable or the workspace contains 0 sessions, it delegates to `session-navigator`, which navigates local JSONL files using safe extraction patterns. `session-navigator` is never invoked directly.
 
 The `context-intelligence-design-facilitator` is a conversational design guide available only when the `/context-intelligence` mode is active. It asks questions to understand the user's domain, maps that domain to context intelligence data layers, and helps design the right Amplifier component shape (skill, agent, recipe, CLI, etc.) for the investigation findings. It delegates investigation to `graph-analyst` and component authoring mechanics to ecosystem experts (`foundation:foundation-expert`, `recipes:recipe-author`).
+
+The `bundle-usage-analyst` is available only when the `/bundle-usage` mode is active. It calls the `bundle_usage` tool to run a three-layer analysis (CI graph signals, local cache inventory, set-arithmetic gap), then writes a structured markdown report. If the CI graph server is unreachable, the signals layer returns empty but the inventory and gap layers still run against the local bundle cache.
 
 See [`context/safe-extraction-patterns.md`](context/safe-extraction-patterns.md) for JSONL navigation patterns.
 
@@ -358,17 +363,102 @@ See [`context/dual-path-library-template.md`](context/dual-path-library-template
 
 ---
 
+## Bundle Usage Analysis Mode
+
+Activate with `/bundle-usage` (or `/mode bundle-usage`).
+
+The bundle usage mode analyses what a session or workspace actually used versus what each installed bundle declared. It reports gaps and generates actionable improvement suggestions for bundle optimisation.
+
+**Zero footprint when inactive** — the mode is registered with `advertised: false`, so neither the `bundle_usage` tool nor the `bundle-usage-analyst` agent appear in default sessions. They are only mounted when the mode is explicitly activated.
+
+### What it analyses
+
+The analysis runs three deterministic layers, in order:
+
+| Layer | What it does | Data source |
+|-------|-------------|-------------|
+| **Signals** | Counts actual invocations per bundle by component type (agents, skills, modes, recipes, tools) | CI graph — Cypher queries S-01..S-18 |
+| **Inventory** | Enumerates what each installed bundle *declares* (agents, modes, skills, recipes) | Local bundle cache at `~/.amplifier/cache/` |
+| **Gap** | Computes set differences; classifies improvement opportunities | Set arithmetic — no LLM |
+
+### Improvement classifications
+
+| Type | Meaning | Trigger |
+|------|---------|---------|
+| `tree-shake` 🌳 | Bundle is declared but never invoked | 0 invocations across all component types |
+| `mode-refactor` ⚙️ | Bundle is under-utilised | Used < 20 % of declared components |
+| `config-gap` 🚩 | Bundle was invoked but is absent from local cache | Present in signals, missing from inventory |
+
+### Requirements
+
+The **Signals** layer uses a **dual-path fallback**:
+
+| Path | When used | Coverage |
+|------|----------|---------|
+| CI graph server (Cypher queries) | Server URL configured and reachable | Full — agents, skills, modes, recipes, tools |
+| Local JSONL files (`events.jsonl`) | Server unreachable or not configured | Partial — agents (full) and skills (best-effort); modes, recipes, tools not attributable |
+
+**Without a server** the analysis still produces useful output: the Inventory and Gap layers always run against the local bundle cache, and JSONL extraction covers agent delegation signals. The gap analysis will flag tree-shake candidates and config-gap entries regardless.
+
+To enable full signals coverage, configure the CI server (see [Configuration reference](#configuration-reference)).
+
+### Usage
+
+```
+# Session scope — analyse one session
+/bundle-usage
+> Analyse session <session-id>
+
+# Workspace scope — aggregate across all sessions in the workspace
+/bundle-usage
+> Analyse the whole workspace
+```
+
+The `bundle-usage-analyst` handles both scopes. It delegates to `bundle_usage(session_id=...)` for session scope and `bundle_usage(workspace=...)` for workspace scope, then writes a structured report.
+
+### Tool policies in the mode
+
+| Tool | Policy |
+|------|--------|
+| `bundle_usage`, `read_file`, `glob`, `grep`, `bash`, `delegate`, `todo` | Safe — always allowed |
+| `write_file` | Safe — analyst writes the report file |
+| `edit_file` | Warn — first call blocked with a reminder; retry proceeds |
+
+### Report format
+
+The analyst writes `.bundle-usage-report-<timestamp>.md` with:
+
+```
+# Bundle Usage Report
+Scope: session=<id>  OR  workspace=<name>
+
+## Summary Table
+| Bundle | Declared | Used | Util % | Improvement |
+
+## Improvement Actions
+🌳 TREE-SHAKE     — declared but zero invocations
+⚙️ MODE-REFACTOR  — used < 20 % of declared components
+🚩 CONFIG-GAP     — invoked but absent from cache
+
+## Engagement Gap (if requested)
+## Raw Output (JSON)
+```
+
+---
+
 ## Repository structure
 
 ```
 amplifier-bundle-context-intelligence/
 ├── bundle.md                           ← root bundle definition
 ├── modes/
-│   └── context-intelligence.md  ← design-time mode
+│   ├── context-intelligence.md  ← design-time mode
+│   └── bundle-usage.md           ← bundle usage analysis mode
 ├── agents/
 │   ├── graph-analyst.md  ← primary entry point agent
 │   ├── session-navigator.md      ← local fallback agent
-│   └── context-intelligence-design-facilitator.md  ← design guide agent (mode only)
+│   ├── context-intelligence-design-facilitator.md  ← design guide agent (mode only)
+│   └── bundle-usage-analyst.md   ← bundle usage specialist (mode only)
 ├── context/
 │   ├── event-schema.md                 ← all 51+ Amplifier events
 │   ├── graph-model-reference.md        ← Neo4j graph model for Cypher queries
@@ -383,7 +473,10 @@ amplifier-bundle-context-intelligence/
 ├── modules/
 │   ├── hook-context-intelligence/      ← the Python hook module
 │   ├── tool-graph-query/               ← graph_query tool module
-│   └── tool-blob-read/                 ← blob_read tool module
+│   ├── tool-blob-read/                 ← blob_read tool module
+│   └── tool-bundle-usage/         ← bundle_usage tool module
+├── context_intelligence/
+│   └── bundle_analysis/           ← signals / inventory / gap library + Cypher queries
 ├── docs/
 │   ├── context-intelligence-exploration-guide.md   ← what to explore and how to test
 │   ├── dispatch-circuit-breaker.dot    ← dispatch flow and circuit breaker state machine
