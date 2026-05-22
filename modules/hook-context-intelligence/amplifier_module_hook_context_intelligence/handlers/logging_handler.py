@@ -98,6 +98,7 @@ class LoggingHandler:
                 "context_intelligence: server URL is configured but api_key is missing — "
                 "HTTP dispatch disabled. Set context_intelligence_server.api_key in your bundle config."
             )
+        self._warned_no_dispatch: bool = False
         self._failure_threshold: int = getattr(resolver, "dispatch_failure_threshold", 3)
         self._dispatch_queue_capacity: int = getattr(
             resolver, "dispatch_queue_capacity", _DEFAULT_DISPATCH_QUEUE_CAPACITY
@@ -141,10 +142,15 @@ class LoggingHandler:
 
         if self._server_url and self._dispatch_enabled:
             if not self._resolver.forwarding_enabled:
-                logger.debug(
-                    "forwarding_disabled: skipping server dispatch for workspace=%s",
-                    self._workspace,
-                )
+                if not self._warned_no_dispatch:
+                    logger.warning(
+                        "context_intelligence: server is configured but dispatch is disabled for "
+                        "workspace=%s — allow_workspaces is empty or workspace is not in the allow "
+                        "list. If migrating from an older config, update your settings to use "
+                        "context_intelligence_server: {url: ..., api_key: ..., allow_workspaces: [...]}",
+                        self._resolver.workspace,
+                    )
+                    self._warned_no_dispatch = True
             else:
                 self._enqueue_dispatch(event, sanitized_data)
 

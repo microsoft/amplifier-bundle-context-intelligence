@@ -1060,3 +1060,119 @@ class TestForwardingGate:
             # _dispatch_enabled is True and the queue received the event.
         assert handler._dispatch_enabled is True
         await handler.close()
+
+
+# ---------------------------------------------------------------------------
+# TestSilentDispatchWarning
+# ---------------------------------------------------------------------------
+class TestSilentDispatchWarning:
+    """When server_url is set but forwarding_enabled is False, a WARNING is emitted once."""
+
+    async def test_warning_emitted_on_first_blocked_dispatch(self, tmp_path: Path) -> None:
+        """A WARNING is logged exactly once on the first dispatch when forwarding is disabled."""
+        resolver = _FakeResolver(
+            tmp_path,
+            "proj",
+            context_intelligence_server_url="http://localhost:9999",
+            context_intelligence_api_key="key",
+            forwarding_enabled=False,
+        )
+        handler = LoggingHandler(resolver)
+
+        with patch.object(logging.getLogger(_LOGGER_NAME), "warning") as mock_warning:
+            await handler(
+                "session:start",
+                {"session_id": "warn-test-001", "timestamp": "t0", "working_dir": "/w"},
+            )
+
+        mock_warning.assert_called_once()
+        call_args_str = str(mock_warning.call_args)
+        assert "dispatch is disabled" in call_args_str or "allow_workspaces" in call_args_str
+
+    async def test_warning_emitted_only_once_across_multiple_dispatches(
+        self, tmp_path: Path
+    ) -> None:
+        """WARNING is NOT emitted a second time — one-time only per session."""
+        resolver = _FakeResolver(
+            tmp_path,
+            "proj",
+            context_intelligence_server_url="http://localhost:9999",
+            context_intelligence_api_key="key",
+            forwarding_enabled=False,
+        )
+        handler = LoggingHandler(resolver)
+
+        with patch.object(logging.getLogger(_LOGGER_NAME), "warning") as mock_warning:
+            for i in range(3):
+                await handler(
+                    "tool:call",
+                    {"session_id": f"warn-test-{i:03d}", "timestamp": "t0"},
+                )
+
+        # Only one warning regardless of how many dispatches were blocked
+        dispatch_disabled_warnings = [
+            c
+            for c in mock_warning.call_args_list
+            if "dispatch is disabled" in str(c) or "allow_workspaces" in str(c)
+        ]
+        assert len(dispatch_disabled_warnings) == 1
+
+
+# ---------------------------------------------------------------------------
+# TestParentIdForwardingCombined
+# ---------------------------------------------------------------------------
+class TestParentIdForwardingCombined:
+    """CR-1: parent_id flows to server dispatch when workspace is opted in."""
+
+    async def test_parent_id_in_payload_when_workspace_allowed(self, tmp_path: Path) -> None:
+        """parent_id from config reaches server dispatch payload when forwarding is enabled."""
+        from unittest.mock import AsyncMock, MagicMock
+
+        from amplifier_module_hook_context_intelligence.config_resolver import ConfigResolver
+
+        coordinator = MagicMock()
+        coordinator.config = {}
+        resolver = ConfigResolver(
+            config={
+                "context_intelligence_server": {
+                    "url": "http://localhost:9999",
+                    "api_key": "test-key",
+                    "allow_workspaces": ["work-*"],
+                },
+                "parent_id": "test-parent-abc-123",
+                "workspace": "work-myapi",
+                "base_path": str(tmp_path),
+                "project_slug": "test-proj",
+            },
+            coordinator=coordinator,
+        )
+
+        assert resolver.forwarding_enabled is True, "workspace should be opted in"
+        assert resolver.parent_id == "test-parent-abc-123"
+
+        handler = LoggingHandler(resolver)
+
+        assert handler._parent_id == "test-parent-abc-123"
+
+        # Inject a mock client to capture the dispatched payload
+        mock_response = MagicMock()
+        mock_response.raise_for_status.return_value = None
+        mock_client = AsyncMock()
+        mock_client.is_closed = False
+        mock_client.post.return_value = mock_response
+        handler._client = mock_client
+
+        event_data = {
+            "session_id": "sess-combined-1",
+            "timestamp": "2026-01-01T00:00:00Z",
+            "parent_id": "test-parent-abc-123",
+        }
+        await handler._dispatch_to_server("session:start", event_data)
+
+        payload = mock_client.post.await_args.kwargs["json"]
+        assert payload["data"]["parent_id"] == "test-parent-abc-123", (
+            "parent_id must be present in the server dispatch payload data"
+        )
+        assert payload["workspace"] == "work-myapi", (
+            "workspace must be the opted-in workspace from config"
+        )
