@@ -177,8 +177,11 @@ hook-context-intelligence module config section:
   hooks:
     - module: hook-context-intelligence
       config:
-        context_intelligence_server_url: "https://your-server.example.com"
-        context_intelligence_api_key:    "your-api-key"
+        context_intelligence_server:
+          url: "https://your-server.example.com"
+          api_key: "your-api-key"
+          allow_workspaces:
+            - "my-workspace-*"
 
 When invoking from an Amplifier session via the bash tool, use shell
 variable substitution to pass the values directly:
