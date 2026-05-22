@@ -34,7 +34,7 @@ dev = [
 ]
 
 [tool.uv.sources]
-amplifier-bundle-context-intelligence = { path = "../..", editable = true }
+amplifier-bundle-context-intelligence = { path = "../.." }
 amplifier-core = { git = "https://github.com/microsoft/amplifier-core", branch = "main" }
 
 [tool.pytest.ini_options]
