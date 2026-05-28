@@ -1,4 +1,5 @@
 """Test that context-intelligence.yaml uses the new key names."""
+
 import yaml
 import pathlib
 
@@ -21,22 +22,21 @@ def test_hook_config_uses_server_key():
     data = load_yaml()
     hook_config = data["hooks"][0]["config"]
     assert "server" in hook_config, "Expected 'server' key in hook config"
-    assert "context_intelligence_server" not in hook_config, \
+    assert "context_intelligence_server" not in hook_config, (
         "'context_intelligence_server' key must be removed"
+    )
 
 
 def test_no_allow_workspaces_key():
     """The file must not contain 'allow_workspaces' (renamed to 'include')."""
     content = BEHAVIOR_FILE.read_text()
-    assert "allow_workspaces" not in content, \
-        "'allow_workspaces' must be replaced with 'include'"
+    assert "allow_workspaces" not in content, "'allow_workspaces' must be replaced with 'include'"
 
 
 def test_no_deny_workspaces_key():
     """The file must not contain 'deny_workspaces' (renamed to 'exclude')."""
     content = BEHAVIOR_FILE.read_text()
-    assert "deny_workspaces" not in content, \
-        "'deny_workspaces' must be replaced with 'exclude'"
+    assert "deny_workspaces" not in content, "'deny_workspaces' must be replaced with 'exclude'"
 
 
 def test_include_comment_present():

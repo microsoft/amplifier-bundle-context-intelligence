@@ -156,9 +156,7 @@ class TestBehaviorYamlConfigShape:
             "Expected nested 'server' key in config (renamed from context_intelligence_server); "
             f"got keys: {list(config.keys())}"
         )
-        assert isinstance(config["server"], dict), (
-            "server must be a dict"
-        )
+        assert isinstance(config["server"], dict), "server must be a dict"
         assert "workspace" in config
         assert "log_level" in config
 
@@ -187,16 +185,12 @@ class TestModuleDocstring:
     def test_docstring_documents_include(self):
         """Module docstring must document the include config key (renamed from allow_workspaces)."""
         doc = self._get_docstring()
-        assert "include" in doc, (
-            "Module docstring must document the 'include' configuration key"
-        )
+        assert "include" in doc, "Module docstring must document the 'include' configuration key"
 
     def test_docstring_documents_exclude(self):
         """Module docstring must document the exclude config key (renamed from deny_workspaces)."""
         doc = self._get_docstring()
-        assert "exclude" in doc, (
-            "Module docstring must document the 'exclude' configuration key"
-        )
+        assert "exclude" in doc, "Module docstring must document the 'exclude' configuration key"
 
     def test_docstring_documents_nested_server_config(self):
         """Module docstring must document server as a nested dict.
