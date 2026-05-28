@@ -933,3 +933,155 @@ class TestInclude:
             coordinator=_make_coordinator(),
         )
         assert isinstance(resolver.include, list)
+
+
+class TestExclude:
+    """exclude property — reads list from nested ``server`` config block."""
+
+    def test_defaults_to_empty_list(self) -> None:
+        """exclude returns [] when not set in config."""
+        resolver = ConfigResolver(config={}, coordinator=_make_coordinator())
+        assert resolver.exclude == []
+
+    def test_returns_list_from_config(self) -> None:
+        """exclude returns the configured list from the nested ``server`` block."""
+        resolver = ConfigResolver(
+            config={
+                "server": {
+                    "exclude": ["*-secrets", "-home-dicolomb-workspaces-team-pulse-*"],
+                },
+            },
+            coordinator=_make_coordinator(),
+        )
+        assert resolver.exclude == [
+            "*-secrets",
+            "-home-dicolomb-workspaces-team-pulse-*",
+        ]
+
+    def test_returns_list_type(self) -> None:
+        """exclude always returns a list instance."""
+        resolver = ConfigResolver(
+            config={"server": {"exclude": ["*-secrets"]}},
+            coordinator=_make_coordinator(),
+        )
+        assert isinstance(resolver.exclude, list)
+
+
+class TestIncludeUnionSemantics:
+    """include unions config, coordinator config, and env var (deduped, order-preserved)."""
+
+    ENV = "AMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_INCLUDE"
+
+    def test_include_from_config_only(self, monkeypatch) -> None:
+        monkeypatch.delenv(self.ENV, raising=False)
+        resolver = ConfigResolver(
+            config={"server": {"include": ["-home-dicolomb-amplifier-*"]}},
+            coordinator=_make_coordinator(),
+        )
+        assert resolver.include == ["-home-dicolomb-amplifier-*"]
+
+    def test_include_from_coordinator_only(self, monkeypatch) -> None:
+        monkeypatch.delenv(self.ENV, raising=False)
+        coordinator = _make_coordinator(
+            config={"server": {"include": ["-home-dicolomb-workspaces-*"]}},
+        )
+        resolver = ConfigResolver(config={}, coordinator=coordinator)
+        assert resolver.include == ["-home-dicolomb-workspaces-*"]
+
+    def test_include_from_env_var_only(self, monkeypatch) -> None:
+        monkeypatch.setenv(self.ENV, "-home-dicolomb-amplifier-*,-home-dicolomb-workspaces-*")
+        resolver = ConfigResolver(config={}, coordinator=_make_coordinator())
+        assert resolver.include == ["-home-dicolomb-amplifier-*", "-home-dicolomb-workspaces-*"]
+
+    def test_include_union_all_three_layers(self, monkeypatch) -> None:
+        monkeypatch.setenv(self.ENV, "-home-dicolomb-personal-projects-*")
+        coordinator = _make_coordinator(
+            config={"server": {"include": ["-home-dicolomb-workspaces-*"]}}
+        )
+        resolver = ConfigResolver(
+            config={"server": {"include": ["-home-dicolomb-amplifier-*"]}},
+            coordinator=coordinator,
+        )
+        assert resolver.include == [
+            "-home-dicolomb-amplifier-*",
+            "-home-dicolomb-workspaces-*",
+            "-home-dicolomb-personal-projects-*",
+        ]
+
+    def test_include_deduplication(self, monkeypatch) -> None:
+        monkeypatch.setenv(self.ENV, "-home-dicolomb-amplifier-*")
+        resolver = ConfigResolver(
+            config={"server": {"include": ["-home-dicolomb-amplifier-*"]}},
+            coordinator=_make_coordinator(),
+        )
+        assert resolver.include == ["-home-dicolomb-amplifier-*"]
+
+    def test_empty_env_var_contributes_nothing(self, monkeypatch) -> None:
+        monkeypatch.setenv(self.ENV, "")
+        resolver = ConfigResolver(
+            config={"server": {"include": ["-home-dicolomb-amplifier-*"]}},
+            coordinator=_make_coordinator(),
+        )
+        assert resolver.include == ["-home-dicolomb-amplifier-*"]
+
+    def test_whitespace_only_env_var_ignored(self, monkeypatch) -> None:
+        monkeypatch.setenv(self.ENV, "  ,  ")
+        resolver = ConfigResolver(config={}, coordinator=_make_coordinator())
+        assert resolver.include == []
+
+
+class TestExcludeUnionSemantics:
+    """exclude unions config, coordinator config, and env var (deduped, order-preserved)."""
+
+    ENV = "AMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_EXCLUDE"
+
+    def test_exclude_from_config_only(self, monkeypatch) -> None:
+        monkeypatch.delenv(self.ENV, raising=False)
+        resolver = ConfigResolver(
+            config={"server": {"exclude": ["*-secrets"]}},
+            coordinator=_make_coordinator(),
+        )
+        assert resolver.exclude == ["*-secrets"]
+
+    def test_exclude_from_coordinator_only(self, monkeypatch) -> None:
+        monkeypatch.delenv(self.ENV, raising=False)
+        coordinator = _make_coordinator(
+            config={"server": {"exclude": ["*-scratch"]}},
+        )
+        resolver = ConfigResolver(config={}, coordinator=coordinator)
+        assert resolver.exclude == ["*-scratch"]
+
+    def test_exclude_from_env_var_only(self, monkeypatch) -> None:
+        monkeypatch.setenv(self.ENV, "*-secrets,*-scratch")
+        resolver = ConfigResolver(config={}, coordinator=_make_coordinator())
+        assert resolver.exclude == ["*-secrets", "*-scratch"]
+
+    def test_exclude_union_all_three_layers(self, monkeypatch) -> None:
+        monkeypatch.setenv(self.ENV, "*-personal")
+        coordinator = _make_coordinator(config={"server": {"exclude": ["*-scratch"]}})
+        resolver = ConfigResolver(
+            config={"server": {"exclude": ["*-secrets"]}},
+            coordinator=coordinator,
+        )
+        assert resolver.exclude == ["*-secrets", "*-scratch", "*-personal"]
+
+    def test_exclude_deduplication(self, monkeypatch) -> None:
+        monkeypatch.setenv(self.ENV, "*-secrets")
+        resolver = ConfigResolver(
+            config={"server": {"exclude": ["*-secrets"]}},
+            coordinator=_make_coordinator(),
+        )
+        assert resolver.exclude == ["*-secrets"]
+
+    def test_empty_env_var_contributes_nothing(self, monkeypatch) -> None:
+        monkeypatch.setenv(self.ENV, "")
+        resolver = ConfigResolver(
+            config={"server": {"exclude": ["*-secrets"]}},
+            coordinator=_make_coordinator(),
+        )
+        assert resolver.exclude == ["*-secrets"]
+
+    def test_whitespace_only_env_var_ignored(self, monkeypatch) -> None:
+        monkeypatch.setenv(self.ENV, "  ,  ")
+        resolver = ConfigResolver(config={}, coordinator=_make_coordinator())
+        assert resolver.exclude == []
