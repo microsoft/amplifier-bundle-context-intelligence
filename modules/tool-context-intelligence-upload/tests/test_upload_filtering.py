@@ -4,6 +4,28 @@ from __future__ import annotations
 
 from amplifier_module_tool_context_intelligence_upload.cli import _session_passes_filter
 
+import logging
+import sys
+from dataclasses import dataclass
+from pathlib import Path
+
+import pytest
+
+
+@dataclass
+class _FakeSession:
+    session_id: str
+    workspace: str
+    path: Path
+
+
+@dataclass
+class _FakeUploadResult:
+    success: bool
+
+    def to_dict(self) -> dict:
+        return {"status": "completed", "success": self.success}
+
 
 class TestSessionPassesFilter:
     """Unit tests for the per-session fnmatch filter predicate.
@@ -197,3 +219,146 @@ class TestEffectivePatterns:
         assert _effective_patterns(
             ["-home-dicolomb-amplifier-*", "-home-dicolomb-workspaces-*"], self.ENV
         ) == ["-home-dicolomb-amplifier-*", "-home-dicolomb-workspaces-*"]
+
+
+class TestUploadFilterIntegration:
+    """Integration tests that drive filtering in main().
+
+    These tests FAIL until Task 8 wires the include/exclude filter into
+    main() — that is the intentional RED state.
+    """
+
+    def test_deny_all_warning_when_no_include(self, monkeypatch, capsys, tmp_path) -> None:
+        """When no --include patterns are configured, main() warns to stderr and exits 0.
+
+        Verifies that:
+        - stderr contains 'no --include configured'
+        - run_upload is never invoked
+        - exit code is 0
+        """
+        import amplifier_module_tool_context_intelligence_upload.cli as cli
+        import context_intelligence.config as ci_config
+
+        # Remove env vars that could add include/exclude patterns
+        monkeypatch.delenv("AMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_INCLUDE", raising=False)
+        monkeypatch.delenv("AMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_EXCLUDE", raising=False)
+
+        # Stub resolve_config to avoid real server/key lookup
+        monkeypatch.setattr(ci_config, "resolve_config", lambda **kwargs: ("http://x", "k"))
+
+        # Set sys.argv — no --include flag provided
+        monkeypatch.setattr(sys, "argv", ["context-intelligence-upload", "--path", str(tmp_path)])
+
+        # Stub discover_and_sort to count calls and return empty list
+        called: dict[str, int] = {"discover": 0, "upload": 0}
+
+        def fake_discover(path: Path) -> list:
+            called["discover"] += 1
+            return []
+
+        monkeypatch.setattr(cli, "discover_and_sort", fake_discover)
+
+        # Stub run_upload to raise AssertionError if invoked (should not be called)
+        def fake_run_upload(**kwargs: object) -> object:
+            called["upload"] += 1
+            raise AssertionError(
+                "run_upload should not be called when no --include patterns are configured"
+            )
+
+        monkeypatch.setattr(cli, "run_upload", fake_run_upload)
+
+        # Call main() — expect clean exit 0
+        with pytest.raises(SystemExit) as exc_info:
+            cli.main()
+
+        assert exc_info.value.code == 0
+
+        captured = capsys.readouterr()
+        assert "no --include configured" in captured.err.lower()
+        assert called["upload"] == 0
+
+    def test_per_session_skip_logged_at_info(self, monkeypatch, caplog, tmp_path) -> None:
+        """Sessions not matching include patterns are skipped; skip is logged at INFO.
+
+        Verifies that:
+        - Only the session whose workspace matches --include is uploaded
+        - The skipped session generates an INFO log containing session_id and workspace
+        """
+        import amplifier_module_tool_context_intelligence_upload.cli as cli
+        import context_intelligence.config as ci_config
+
+        # Remove env vars
+        monkeypatch.delenv("AMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_INCLUDE", raising=False)
+        monkeypatch.delenv("AMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_EXCLUDE", raising=False)
+
+        # Stub resolve_config
+        monkeypatch.setattr(ci_config, "resolve_config", lambda **kwargs: ("http://x", "k"))
+
+        # Create two fake sessions: one that matches, one that doesn't
+        s_pass = _FakeSession(
+            session_id="s-pass",
+            workspace="-home-dicolomb-amplifier-bundle-context-intelligence-design-mode",
+            path=tmp_path / "s-pass",
+        )
+        s_skip = _FakeSession(
+            session_id="s-skip",
+            workspace="-home-dicolomb-personal-projects-ecoflow-library",
+            path=tmp_path / "s-skip",
+        )
+
+        # Stub discover_and_sort to return both sessions
+        monkeypatch.setattr(cli, "discover_and_sort", lambda path: [s_pass, s_skip])
+
+        # Fake run_upload that records which sessions were uploaded
+        uploaded: list[_FakeSession] = []
+
+        def fake_run_upload(
+            sessions: list,
+            server_url: str,
+            api_key: str,
+            tracker: object,
+            event_delay_s: float,
+        ) -> _FakeUploadResult:
+            uploaded.extend(sessions)
+            return _FakeUploadResult(success=True)
+
+        monkeypatch.setattr(cli, "run_upload", fake_run_upload)
+
+        # Set sys.argv with --include pattern that matches s_pass but not s_skip
+        monkeypatch.setattr(
+            sys,
+            "argv",
+            [
+                "context-intelligence-upload",
+                "--path",
+                str(tmp_path),
+                "--include",
+                "-home-dicolomb-amplifier-*",
+            ],
+        )
+
+        # Capture INFO logs from the CLI module
+        caplog.set_level(
+            logging.INFO,
+            logger="amplifier_module_tool_context_intelligence_upload.cli",
+        )
+
+        # Call main() — expect clean exit 0
+        with pytest.raises(SystemExit) as exc_info:
+            cli.main()
+
+        assert exc_info.value.code == 0
+
+        # Only the matching session should have been uploaded
+        assert [s.session_id for s in uploaded] == ["s-pass"]
+
+        # The skipped session should generate at least one INFO log with both
+        # the session_id and workspace slug visible
+        skip_logs = [
+            r
+            for r in caplog.records
+            if r.levelno == logging.INFO
+            and "s-skip" in r.message
+            and "-home-dicolomb-personal-projects-ecoflow-library" in r.message
+        ]
+        assert len(skip_logs) >= 1
