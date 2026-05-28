@@ -8,7 +8,7 @@ The bundle writes every session event to a local JSONL log and — when configur
 
 ## What it does
 
-| Always active | When `context_intelligence_server.url` is set |
+| Always active | When `server.url` is set |
 |---------------|-----------------------------------------------|
 | Writes `events.jsonl` + `metadata.json` per session, both tagged with `workspace` | POSTs events to the CI server for opted-in workspaces (default: nothing dispatches until workspace allow-rules are configured) |
 | | Enables graph-powered Cypher queries via `graph_query` tool |
@@ -83,7 +83,7 @@ To push events to the [Context Intelligence Server](https://github.com/microsoft
 
 Once the server is running, point the hook at it with the server URL and API key:
 
-Server dispatch is **off by default**. Events are only forwarded when at least one allow_workspaces pattern matches the current workspace. The deny_workspaces list trims specific workspaces from what the allow list already opened — it has no effect when allow_workspaces is empty.
+Server dispatch is **off by default**. Events are only forwarded when at least one `include` pattern matches the current workspace. The exclude list trims specific workspaces from what the allow list already opened — it has no effect when `include` is empty.
 
 **Configure** via `settings.yaml`:
 
@@ -92,13 +92,13 @@ Server dispatch is **off by default**. Events are only forwarded when at least o
 overrides:
   hook-context-intelligence:
     config:
-      context_intelligence_server:
+      server:
         url: "http://localhost:8000"
         api_key: "<your-api-key>"
-        allow_workspaces:
+        include:
           - "work-*"
           - "personal-*"
-        deny_workspaces:
+        exclude:
           - "work-scratch-*"
       workspace: "my-project"    # optional — auto-resolved if omitted
 ```
@@ -119,19 +119,19 @@ When `workspace` is not explicitly configured, it is auto-resolved from the work
 | `/tmp/scratch` | `-tmp-scratch` |
 | `C:\Users\alice\work` | `-C--Users-alice-work` |
 
-Use `allow_workspaces` and `deny_workspaces` inside the `context_intelligence_server` block to control which workspaces forward events:
+Use `include` and `exclude` inside the `server` block to control which workspaces forward events:
 
 ```yaml
 overrides:
   hook-context-intelligence:
     config:
-      context_intelligence_server:
+      server:
         url: "http://localhost:8000"
         api_key: "<your-api-key>"
-        allow_workspaces:
+        include:
           - "work-*"
           - "personal-*"
-        deny_workspaces:
+        exclude:
           - "work-scratch-*"
 ```
 
@@ -197,11 +197,11 @@ All keys are optional. Omitted keys fall through to `coordinator.config` then to
 
 ```python
 config = {
-    "context_intelligence_server": {
+    "server": {
         "url": "http://localhost:8000",
         "api_key": "your-api-key",
-        "allow_workspaces": ["work-*", "personal-*"],
-        "deny_workspaces": ["work-scratch-*"],
+        "include": ["work-*", "personal-*"],
+        "exclude": ["work-scratch-*"],
     },
     "workspace": "my-project",
     "base_path": "/var/data/amplifier/projects",
@@ -223,7 +223,7 @@ When workspace varies at runtime (e.g., multi-tenant apps), omit `workspace` fro
 coordinator.config["workspace"] = tenant_id   # priority 2 — used when config["workspace"] is absent
 
 cleanup = await mount(coordinator, config={
-    "context_intelligence_server": {
+    "server": {
         "url": "http://localhost:8000",
         "api_key": "your-api-key",
     },
@@ -249,11 +249,11 @@ The `config` dict passed to `mount()` uses the same keys as the `overrides.hook-
 
 | Key | Env var | Default | Description |
 |-----|---------|---------|-------------|
-| `context_intelligence_server` | — | *(empty)* | Nested config block for server connection and workspace filter. Omit the entire key to disable server forwarding. |
-| `context_intelligence_server.url` | `AMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_URL` | *(empty)* | Base URL of the CI server. Events are forwarded to opted-in workspaces when set. |
-| `context_intelligence_server.api_key` | `AMPLIFIER_CONTEXT_INTELLIGENCE_API_KEY` | *(empty)* | Bearer token added as `Authorization: Bearer <value>` on every HTTP dispatch. |
-| `context_intelligence_server.allow_workspaces` | — | `[]` | fnmatch workspace patterns permitted to dispatch. When absent or empty, nothing dispatches (deny-all default). |
-| `context_intelligence_server.deny_workspaces` | — | `[]` | fnmatch patterns that trim from what allow_workspaces opened. No effect when allow_workspaces is empty. |
+| `server` | — | *(empty)* | Nested config block for server connection and workspace filter. Omit the entire key to disable server forwarding. |
+| `server.url` | `AMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_URL` | *(empty)* | Base URL of the CI server. Events are forwarded to opted-in workspaces when set. |
+| `server.api_key` | `AMPLIFIER_CONTEXT_INTELLIGENCE_API_KEY` | *(empty)* | Bearer token added as `Authorization: Bearer <value>` on every HTTP dispatch. |
+| `server.include` | `AMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_INCLUDE` | `[]` | fnmatch workspace patterns permitted to dispatch. Union semantics: env var patterns are merged with config file patterns. When absent or empty, nothing dispatches (deny-all default). |
+| `server.exclude` | `AMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_EXCLUDE` | `[]` | fnmatch patterns that trim from what include opened. No effect when include is empty. |
 | `workspace` | `AMPLIFIER_CONTEXT_INTELLIGENCE_WORKSPACE` | *(auto)* | Written into every `events.jsonl` record and `metadata.json`. Resolution: `config["workspace"]` → `coordinator.config["workspace"]` → `project_slug`. |
 | `log_level` | `AMPLIFIER_CONTEXT_INTELLIGENCE_LOG_LEVEL` | `INFO` | Hook logging level. |
 | `base_path` | — | `~/.amplifier/projects` | Root directory for local JSONL output. |
