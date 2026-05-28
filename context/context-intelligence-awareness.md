@@ -49,14 +49,14 @@ replaying interrupted sessions, or targeting a different server.
 
 **Finding connection parameters:**
 
-Check environment variables first:
+Check the environment variables:
+
 ```bash
 echo $AMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_URL
 echo $AMPLIFIER_CONTEXT_INTELLIGENCE_API_KEY
 ```
-If not set, read from your Amplifier bundle config YAML under `hook-context-intelligence.config`:
-- `context_intelligence_server_url`
-- `context_intelligence_api_key`
+
+`AMPLIFIER_CONTEXT_INTELLIGENCE_API_KEY` is a secret — it must not appear as plain text in any configuration file. Provide it through whatever secret injection mechanism the deployment uses (environment variables set by the runtime, a secrets manager, or equivalent).
 
 **Invoke via bash tool:**
 ```bash
