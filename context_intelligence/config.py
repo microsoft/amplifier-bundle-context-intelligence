@@ -35,10 +35,10 @@ SETTINGS_PATH = AMPLIFIER_DIR / "settings.yaml"
 
 
 def _parse_settings_yaml(path: Path) -> dict:
-    """Minimal YAML parser for settings.yaml — reads the nested context_intelligence_server block without requiring PyYAML.
+    """Minimal YAML parser for settings.yaml — reads the nested ``server`` block without requiring PyYAML.
 
     Returns a dict with keys ``server_url`` and ``api_key`` if found under
-    ``overrides.hook-context-intelligence.config.context_intelligence_server``.
+    ``overrides.hook-context-intelligence.config.server``.
     """
     result: dict[str, str] = {}
     if not path.is_file():
@@ -55,7 +55,7 @@ def _parse_settings_yaml(path: Path) -> dict:
                 data.get("overrides", {}).get("hook-context-intelligence", {}).get("config", {})
             )
             if isinstance(ci_cfg, dict):
-                server_cfg = ci_cfg.get("context_intelligence_server", {})
+                server_cfg = ci_cfg.get("server", {})
                 if isinstance(server_cfg, dict):
                     if server_cfg.get("url"):
                         result["server_url"] = server_cfg["url"]
@@ -63,7 +63,7 @@ def _parse_settings_yaml(path: Path) -> dict:
                         result["api_key"] = server_cfg["api_key"]
     except ImportError:
         # Fallback: crude line-based extraction for environments without PyYAML.
-        # Handles the nested context_intelligence_server: block.
+        # Handles the nested server: block.
         try:
             text = path.read_text()
             in_ci_section = False
@@ -75,7 +75,7 @@ def _parse_settings_yaml(path: Path) -> dict:
                     in_server_block = False
                     continue
                 if in_ci_section:
-                    if not in_server_block and stripped == "context_intelligence_server:":
+                    if not in_server_block and stripped == "server:":
                         in_server_block = True
                         continue
                     if in_server_block:

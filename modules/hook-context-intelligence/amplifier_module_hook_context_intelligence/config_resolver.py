@@ -408,12 +408,12 @@ class ConfigResolver:
         """URL of the context-intelligence server, or None if not configured.
 
         Resolution order (first truthy value wins):
-        1. config['context_intelligence_server']['url']  — bundle config overrides
-        2. coordinator.config['context_intelligence_server']['url']  — coordinator-level config
+        1. config['server']['url']  — bundle config overrides
+        2. coordinator.config['server']['url']  — coordinator-level config
         3. AMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_URL env var
         4. ~/.amplifier/settings.yaml  — lowest-priority fallback
         """
-        coord_server = self._coordinator_config_get("context_intelligence_server")
+        coord_server = self._coordinator_config_get("server")
         coord_url = coord_server.get("url") if isinstance(coord_server, dict) else None
         value = (
             self._server_config().get("url")
@@ -428,12 +428,12 @@ class ConfigResolver:
         """API key for the context-intelligence server, or None if not configured.
 
         Resolution order (first truthy value wins):
-        1. config['context_intelligence_server']['api_key']  — bundle config overrides
-        2. coordinator.config['context_intelligence_server']['api_key']  — coordinator-level config
+        1. config['server']['api_key']  — bundle config overrides
+        2. coordinator.config['server']['api_key']  — coordinator-level config
         3. AMPLIFIER_CONTEXT_INTELLIGENCE_API_KEY env var
         4. ~/.amplifier/settings.yaml  — lowest-priority fallback
         """
-        coord_server = self._coordinator_config_get("context_intelligence_server")
+        coord_server = self._coordinator_config_get("server")
         coord_key = coord_server.get("api_key") if isinstance(coord_server, dict) else None
         value = (
             self._server_config().get("api_key")

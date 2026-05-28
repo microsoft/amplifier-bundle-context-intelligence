@@ -229,6 +229,19 @@ class TestContextIntelligenceServerUrl:
 
         assert resolver.context_intelligence_server_url is None
 
+    def test_coordinator_config_url_used_when_hook_config_absent(
+        self, monkeypatch, tmp_path
+    ) -> None:
+        """URL from coordinator.config['server']['url'] is used when hook config has no server."""
+        monkeypatch.setattr(
+            "amplifier_module_hook_context_intelligence.config_resolver.SETTINGS_PATH",
+            tmp_path / "nonexistent.yaml",
+        )
+        coordinator = _make_coordinator(config={"server": {"url": "http://coordinator-url:8000"}})
+        resolver = ConfigResolver(config={}, coordinator=coordinator)
+
+        assert resolver.context_intelligence_server_url == "http://coordinator-url:8000"
+
 
 class TestExcludeEvents:
     def test_defaults_to_empty_set(self) -> None:
@@ -405,6 +418,13 @@ class TestContextIntelligenceApiKey:
 
         assert resolver.context_intelligence_api_key == "12345"
         assert isinstance(resolver.context_intelligence_api_key, str)
+
+    def test_coordinator_config_api_key_used_when_hook_config_absent(self) -> None:
+        """API key from coordinator.config['server']['api_key'] used when hook config has no server."""
+        coordinator = _make_coordinator(config={"server": {"api_key": "coord-secret-key"}})
+        resolver = ConfigResolver(config={}, coordinator=coordinator)
+
+        assert resolver.context_intelligence_api_key == "coord-secret-key"
 
 
 class TestServerConfig:
