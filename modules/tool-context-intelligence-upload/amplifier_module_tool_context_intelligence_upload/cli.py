@@ -294,9 +294,35 @@ def _session_passes_filter(workspace: str, include: list[str], exclude: list[str
 # ---------------------------------------------------------------------------
 
 
+class _ArgumentParser(argparse.ArgumentParser):
+    """ArgumentParser subclass that treats single-dash non-option strings as values.
+
+    Workspace slugs derived from filesystem paths start with a single dash
+    (e.g. ``-home-dicolomb-amplifier-*``).  Python's argparse POSIX
+    short-option concatenation heuristic would normally classify such a string
+    as an abbreviation of the registered ``-h`` option, which prevents using
+    them as values for ``--include`` / ``--exclude``.
+
+    Overriding ``_parse_optional`` to return ``None`` for any single-dash
+    string that is not an exact match for a registered option instructs
+    argparse to treat the string as a positional value rather than an option.
+    Registered options like ``-h`` are unaffected because they ARE in
+    ``_option_string_actions`` and the guard returns early via ``super()``.
+    """
+
+    def _parse_optional(self, arg_string: str):  # type: ignore[override]
+        if (
+            arg_string.startswith("-")
+            and not arg_string.startswith("--")
+            and arg_string not in self._option_string_actions
+        ):
+            return None
+        return super()._parse_optional(arg_string)
+
+
 def _build_parser() -> argparse.ArgumentParser:
     """Return the argument parser.  Built with ``add_help=False``."""
-    parser = argparse.ArgumentParser(
+    parser = _ArgumentParser(
         prog="context-intelligence-upload",
         add_help=False,
     )
@@ -355,6 +381,20 @@ def _build_parser() -> argparse.ArgumentParser:
         metavar="MS",
         dest="event_delay_ms",
         help="Milliseconds to sleep between events (default: 0; use 50-200 to reduce Neo4j pressure)",
+    )
+    parser.add_argument(
+        "--include",
+        action="append",
+        default=[],
+        metavar="PATTERN",
+        help='Workspace patterns to include (fnmatch). Repeatable: --include "work-*" --include "personal-*". If no --include is configured (and AMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_INCLUDE is unset), no sessions will be uploaded. Use --include "*" to upload all sessions.',
+    )
+    parser.add_argument(
+        "--exclude",
+        action="append",
+        default=[],
+        metavar="PATTERN",
+        help="Workspace patterns to exclude (fnmatch). Repeatable. Applied after --include. May also be supplied via AMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_EXCLUDE (comma-separated).",
     )
 
     return parser
