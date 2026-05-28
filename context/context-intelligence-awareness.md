@@ -49,12 +49,14 @@ replaying interrupted sessions, or targeting a different server.
 
 **Finding connection parameters:**
 
-Check the environment variables — these are set from `~/.amplifier/keys.env` on startup:
+Check the environment variables:
 
 ```bash
 echo $AMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_URL
 echo $AMPLIFIER_CONTEXT_INTELLIGENCE_API_KEY
 ```
+
+`AMPLIFIER_CONTEXT_INTELLIGENCE_API_KEY` is a secret — it must not appear as plain text in any configuration file. Provide it through whatever secret injection mechanism the deployment uses (environment variables set by the runtime, a secrets manager, or equivalent).
 
 **Invoke via bash tool:**
 ```bash
