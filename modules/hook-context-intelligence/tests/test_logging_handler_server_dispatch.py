@@ -40,6 +40,7 @@ class _FakeResolver:
         close_drain_timeout: float = 0.5,
         context_intelligence_api_key: str | None = None,
         forwarding_enabled: bool = True,
+        forwarding_blocked_reason: str | None = None,
     ) -> None:
         self.base_path = base_path
         self.project_slug = project_slug
@@ -51,6 +52,15 @@ class _FakeResolver:
         self.close_drain_timeout = close_drain_timeout
         self.context_intelligence_api_key = context_intelligence_api_key
         self.forwarding_enabled = forwarding_enabled
+        # When blocked and no reason given, default to the deny-all message
+        if forwarding_blocked_reason is not None:
+            self.forwarding_blocked_reason = forwarding_blocked_reason
+        elif not forwarding_enabled:
+            self.forwarding_blocked_reason: str | None = (
+                "no include patterns configured (deny-all default)"
+            )
+        else:
+            self.forwarding_blocked_reason = None
 
     def session_dir(self, session_id: str) -> Path:
         return self.base_path / self.project_slug / "sessions" / session_id / "context-intelligence"
@@ -1087,7 +1097,57 @@ class TestSilentDispatchWarning:
 
         mock_warning.assert_called_once()
         call_args_str = str(mock_warning.call_args)
-        assert "dispatch is disabled" in call_args_str or "include" in call_args_str
+        assert "workspace not forwarded to server" in call_args_str
+
+    async def test_warning_contains_deny_all_reason_when_no_include(self, tmp_path: Path) -> None:
+        """WARNING message names 'no include patterns configured' when include is empty."""
+        resolver = _FakeResolver(
+            tmp_path,
+            "proj",
+            context_intelligence_server_url="http://localhost:9999",
+            context_intelligence_api_key="key",
+            forwarding_enabled=False,
+            forwarding_blocked_reason="no include patterns configured (deny-all default)",
+        )
+        handler = LoggingHandler(resolver)
+
+        with patch.object(logging.getLogger(_LOGGER_NAME), "warning") as mock_warning:
+            await handler(
+                "session:start",
+                {"session_id": "warn-test-002", "timestamp": "t0", "working_dir": "/w"},
+            )
+
+        mock_warning.assert_called_once()
+        call_args_str = str(mock_warning.call_args)
+        assert "no include patterns configured" in call_args_str
+
+    async def test_warning_contains_exclude_pattern_when_workspace_excluded(
+        self, tmp_path: Path
+    ) -> None:
+        """WARNING message names the matching exclude pattern — the previously-misleading case."""
+        resolver = _FakeResolver(
+            tmp_path,
+            "proj",
+            context_intelligence_server_url="http://localhost:9999",
+            context_intelligence_api_key="key",
+            forwarding_enabled=False,
+            forwarding_blocked_reason=(
+                "workspace '-home-user-amplifier-test' is excluded by"
+                " server.exclude pattern '*-test*'"
+            ),
+        )
+        handler = LoggingHandler(resolver)
+
+        with patch.object(logging.getLogger(_LOGGER_NAME), "warning") as mock_warning:
+            await handler(
+                "session:start",
+                {"session_id": "warn-test-003", "timestamp": "t0", "working_dir": "/w"},
+            )
+
+        mock_warning.assert_called_once()
+        call_args_str = str(mock_warning.call_args)
+        assert "is excluded by server.exclude pattern" in call_args_str
+        assert "*-test*" in call_args_str
 
     async def test_warning_emitted_only_once_across_multiple_dispatches(
         self, tmp_path: Path
@@ -1110,12 +1170,10 @@ class TestSilentDispatchWarning:
                 )
 
         # Only one warning regardless of how many dispatches were blocked
-        dispatch_disabled_warnings = [
-            c
-            for c in mock_warning.call_args_list
-            if "dispatch is disabled" in str(c) or "include" in str(c)
+        forwarding_warnings = [
+            c for c in mock_warning.call_args_list if "workspace not forwarded to server" in str(c)
         ]
-        assert len(dispatch_disabled_warnings) == 1
+        assert len(forwarding_warnings) == 1
 
 
 # ---------------------------------------------------------------------------

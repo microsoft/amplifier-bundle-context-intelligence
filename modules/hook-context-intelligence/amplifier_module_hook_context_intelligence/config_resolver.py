@@ -298,6 +298,31 @@ class ConfigResolver:
         return True
 
     @property
+    def forwarding_blocked_reason(self) -> str | None:
+        """Human-readable reason why forwarding is blocked, or None if forwarding is enabled.
+
+        Returns None when forwarding_enabled is True.
+        Returns a descriptive string explaining the deny reason when False:
+          - "no include patterns configured (deny-all default)"
+          - "workspace '{ws}' does not match any server.include pattern"
+          - "workspace '{ws}' is excluded by server.exclude pattern '{pattern}'"
+        """
+        include = self.include
+        exclude = self.exclude
+        workspace = self.workspace
+
+        if not include:
+            return "no include patterns configured (deny-all default)"
+        if not any(fnmatch.fnmatch(workspace, p) for p in include):
+            return f"workspace {workspace!r} does not match any server.include pattern"
+        matched_exclude = next((p for p in exclude if fnmatch.fnmatch(workspace, p)), None)
+        if matched_exclude:
+            return (
+                f"workspace {workspace!r} is excluded by server.exclude pattern {matched_exclude!r}"
+            )
+        return None
+
+    @property
     def forwarding_enabled(self) -> bool:
         """Whether this session should dispatch events to the remote server.
 

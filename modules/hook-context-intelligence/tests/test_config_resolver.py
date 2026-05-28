@@ -12,10 +12,17 @@ from amplifier_module_hook_context_intelligence.config_resolver import _slugify_
 # ---------------------------------------------------------------------------
 
 
-def _make_coordinator(config: dict | None = None) -> MagicMock:
-    """Build a MagicMock coordinator with a .config dict attribute."""
+def _make_coordinator(config: dict | None = None, workspace: str | None = None) -> MagicMock:
+    """Build a MagicMock coordinator with a .config dict attribute.
+
+    If ``workspace`` is given it is merged into ``coordinator.config`` so that
+    ConfigResolver picks it up via the coordinator fallback chain.
+    """
     coordinator = MagicMock()
-    coordinator.config = config if config is not None else {}
+    base = config if config is not None else {}
+    if workspace is not None:
+        base = {**base, "workspace": workspace}
+    coordinator.config = base
     return coordinator
 
 
@@ -858,6 +865,66 @@ class TestForwardingEnabled:
             coordinator=_make_coordinator(),
         )
         assert resolver.forwarding_enabled is True
+
+
+class TestForwardingBlockedReason:
+    """forwarding_blocked_reason property — human-readable deny reason or None."""
+
+    def test_returns_none_when_forwarding_enabled(self):
+        # include matches, exclude doesn't match → None
+        resolver = ConfigResolver(
+            config={"server": {"include": ["-home-dicolomb-workspaces-*"]}},
+            coordinator=_make_coordinator(workspace="-home-dicolomb-workspaces-team-pulse-bundle"),
+        )
+        assert resolver.forwarding_blocked_reason is None
+
+    def test_deny_all_no_include(self):
+        resolver = ConfigResolver(config={}, coordinator=_make_coordinator())
+        assert (
+            resolver.forwarding_blocked_reason
+            == "no include patterns configured (deny-all default)"
+        )
+
+    def test_workspace_not_in_include(self):
+        resolver = ConfigResolver(
+            config={"server": {"include": ["-home-dicolomb-amplifier-*"]}},
+            coordinator=_make_coordinator(
+                workspace="-home-dicolomb-personal-projects-ecoflow-library"
+            ),
+        )
+        reason = resolver.forwarding_blocked_reason
+        assert reason is not None
+        assert "-home-dicolomb-personal-projects-ecoflow-library" in reason
+        assert "does not match any server.include pattern" in reason
+
+    def test_workspace_excluded(self):
+        # This is the misleading case: workspace IS in include but excluded
+        resolver = ConfigResolver(
+            config={
+                "server": {
+                    "include": ["-home-dicolomb-workspaces-*"],
+                    "exclude": ["*-secrets"],
+                }
+            },
+            coordinator=_make_coordinator(
+                workspace="-home-dicolomb-workspaces-cotnext-intelligence-configuration-secrets"
+            ),
+        )
+        reason = resolver.forwarding_blocked_reason
+        assert reason is not None
+        assert "is excluded by server.exclude pattern" in reason
+        assert "*-secrets" in reason  # the matching exclude pattern is named
+
+    def test_returns_str_type_when_blocked(self):
+        resolver = ConfigResolver(config={}, coordinator=_make_coordinator())
+        assert isinstance(resolver.forwarding_blocked_reason, str)
+
+    def test_returns_none_type_when_forwarding_enabled(self):
+        resolver = ConfigResolver(
+            config={"server": {"include": ["*"]}},
+            coordinator=_make_coordinator(workspace="default"),
+        )
+        assert resolver.forwarding_blocked_reason is None
 
 
 class TestSlugifyPath:

@@ -143,13 +143,11 @@ class LoggingHandler:
         if self._server_url and self._dispatch_enabled:
             if not self._resolver.forwarding_enabled:
                 if not self._warned_no_dispatch:
-                    logger.warning(
-                        "context_intelligence: server is configured but dispatch is disabled for "
-                        "workspace=%s — server.include is empty or workspace is not in the include "
-                        "list. Configure your settings with "
-                        "server: {url: ..., api_key: ..., include: [...]}",
-                        self._resolver.workspace,
+                    reason = (
+                        getattr(self._resolver, "forwarding_blocked_reason", None)
+                        or "unknown reason"
                     )
+                    logger.warning("workspace not forwarded to server: %s", reason)
                     self._warned_no_dispatch = True
             else:
                 self._enqueue_dispatch(event, sanitized_data)
