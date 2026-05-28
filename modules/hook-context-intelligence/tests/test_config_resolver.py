@@ -718,157 +718,142 @@ class TestResolveInstanceId:
         assert isinstance(cr.resolve_instance_id, str)
 
 
-class TestAllowWorkspaces:
-    """allow_workspaces property — reads list from nested context_intelligence_server config."""
-
-    def test_defaults_to_empty_list(self) -> None:
-        """allow_workspaces returns [] when not set in config."""
-        resolver = ConfigResolver(config={}, coordinator=_make_coordinator())
-        assert resolver.allow_workspaces == []
-
-    def test_returns_list_from_config(self) -> None:
-        """allow_workspaces returns the configured list from nested context_intelligence_server."""
-        resolver = ConfigResolver(
-            config={"context_intelligence_server": {"allow_workspaces": ["work-*", "personal-*"]}},
-            coordinator=_make_coordinator(),
-        )
-        assert resolver.allow_workspaces == ["work-*", "personal-*"]
-
-    def test_returns_list_type(self) -> None:
-        """allow_workspaces always returns a list instance."""
-        resolver = ConfigResolver(
-            config={"context_intelligence_server": {"allow_workspaces": ["ws1"]}},
-            coordinator=_make_coordinator(),
-        )
-        assert isinstance(resolver.allow_workspaces, list)
-
-
-class TestDenyWorkspaces:
-    """deny_workspaces property — reads list from nested context_intelligence_server config."""
-
-    def test_defaults_to_empty_list(self) -> None:
-        """deny_workspaces returns [] when not set in config."""
-        resolver = ConfigResolver(config={}, coordinator=_make_coordinator())
-        assert resolver.deny_workspaces == []
-
-    def test_returns_list_from_config(self) -> None:
-        """deny_workspaces returns the configured list from nested context_intelligence_server."""
-        resolver = ConfigResolver(
-            config={"context_intelligence_server": {"deny_workspaces": ["scratch-*", "tmp-*"]}},
-            coordinator=_make_coordinator(),
-        )
-        assert resolver.deny_workspaces == ["scratch-*", "tmp-*"]
-
-    def test_returns_list_type(self) -> None:
-        """deny_workspaces always returns a list instance."""
-        resolver = ConfigResolver(
-            config={"context_intelligence_server": {"deny_workspaces": ["ws1"]}},
-            coordinator=_make_coordinator(),
-        )
-        assert isinstance(resolver.deny_workspaces, list)
-
-
 class TestForwardingEnabled:
-    """forwarding_enabled property — four-step resolution chain.
+    """forwarding_enabled property — four-step resolution chain using new include/exclude config.
 
     Resolution order (first match wins):
-    1. allow_workspaces is empty              → False (deny-all default)
-    2. workspace not in allow_workspaces      → False (not opted in)
-    3. workspace in deny_workspaces           → False (trimmed from allow)
-    4. default                                → True
+    1. include is empty                     → False (deny-all default)
+    2. workspace not in include patterns    → False (not opted in)
+    3. workspace matches exclude pattern    → False (trimmed from include)
+    4. default                              → True
     """
 
-    # ---- Step 2: deny-all default ----------------------------------------
-
-    def test_default_deny_all_no_rules(self) -> None:
-        """With no rules configured, nothing dispatches — deny-all default."""
-        resolver = ConfigResolver(config={}, coordinator=_make_coordinator())
-        assert resolver.forwarding_enabled is False
-
-    def test_default_deny_all_empty_lists(self) -> None:
-        """Explicit empty lists still give deny-all default."""
-        resolver = ConfigResolver(
-            config={"context_intelligence_server": {"allow_workspaces": [], "deny_workspaces": []}},
-            coordinator=_make_coordinator(),
-        )
-        assert resolver.forwarding_enabled is False
-
-    # ---- Step 3: not opted in --------------------------------------------
-
-    def test_workspace_not_in_allow_list(self) -> None:
-        """Workspace absent from allow_workspaces is blocked."""
+    def test_deny_all_no_include(self) -> None:
+        """Empty include+exclude → False (deny-all at step 1)."""
         resolver = ConfigResolver(
             config={
-                "context_intelligence_server": {"allow_workspaces": ["work-*"]},
-                "workspace": "scratch",
+                "server": {"include": [], "exclude": []},
+                "workspace": "-home-dicolomb-amplifier-context-intelligence-graph-query",
             },
             coordinator=_make_coordinator(),
         )
         assert resolver.forwarding_enabled is False
 
-    # ---- Step 3: opted in ------------------------------------------------
-
-    def test_workspace_matches_allow_pattern(self) -> None:
-        """Workspace matching allow_workspaces dispatches when not denied."""
+    def test_exact_match(self) -> None:
+        """Exact slug -home-dicolomb-amplifier-context-intelligence-graph-query in include → True."""
         resolver = ConfigResolver(
             config={
-                "context_intelligence_server": {"allow_workspaces": ["work-*"]},
-                "workspace": "work-project",
-            },
-            coordinator=_make_coordinator(),
-        )
-        assert resolver.forwarding_enabled is True
-
-    # ---- Step 4: deny trims allow ----------------------------------------
-
-    def test_deny_trims_allowed_workspace(self) -> None:
-        """deny_workspaces trims a workspace that matched allow_workspaces."""
-        resolver = ConfigResolver(
-            config={
-                "context_intelligence_server": {
-                    "allow_workspaces": ["work-*"],
-                    "deny_workspaces": ["work-secret"],
+                "server": {
+                    "include": ["-home-dicolomb-amplifier-context-intelligence-graph-query"],
+                    "exclude": [],
                 },
-                "workspace": "work-secret",
-            },
-            coordinator=_make_coordinator(),
-        )
-        assert resolver.forwarding_enabled is False
-
-    def test_deny_without_allow_has_no_effect(self) -> None:
-        """deny_workspaces has no effect when allow_workspaces is empty.
-
-        The deny-all default fires at step 2 before deny is evaluated.
-        A deny entry with no matching allow has nothing to trim.
-        """
-        resolver = ConfigResolver(
-            config={
-                "context_intelligence_server": {"deny_workspaces": ["work-*"]},
-                "workspace": "work-project",
-            },
-            coordinator=_make_coordinator(),
-        )
-        assert resolver.forwarding_enabled is False
-
-    # ---- Glob pattern matching -------------------------------------------
-
-    def test_glob_pattern_star(self) -> None:
-        """fnmatch glob * matches within workspace names."""
-        resolver = ConfigResolver(
-            config={
-                "context_intelligence_server": {"allow_workspaces": ["work-*"]},
-                "workspace": "work-my-api",
+                "workspace": "-home-dicolomb-amplifier-context-intelligence-graph-query",
             },
             coordinator=_make_coordinator(),
         )
         assert resolver.forwarding_enabled is True
 
-    def test_exact_workspace_match(self) -> None:
-        """Exact workspace name (no glob) matches correctly."""
+    def test_suffix_wildcard(self) -> None:
+        """-home-dicolomb-amplifier-bundle-* matches -home-dicolomb-amplifier-bundle-context-intelligence-design-mode → True."""
         resolver = ConfigResolver(
             config={
-                "context_intelligence_server": {"allow_workspaces": ["exact-name"]},
-                "workspace": "exact-name",
+                "server": {
+                    "include": ["-home-dicolomb-amplifier-bundle-*"],
+                    "exclude": [],
+                },
+                "workspace": "-home-dicolomb-amplifier-bundle-context-intelligence-design-mode",
+            },
+            coordinator=_make_coordinator(),
+        )
+        assert resolver.forwarding_enabled is True
+
+    def test_prefix_wildcard(self) -> None:
+        """*-secrets matches -home-dicolomb-workspaces-cotnext-intelligence-configuration-secrets → True."""
+        resolver = ConfigResolver(
+            config={
+                "server": {
+                    "include": ["*-secrets"],
+                    "exclude": [],
+                },
+                "workspace": "-home-dicolomb-workspaces-cotnext-intelligence-configuration-secrets",
+            },
+            coordinator=_make_coordinator(),
+        )
+        assert resolver.forwarding_enabled is True
+
+    def test_multi_segment_wildcard(self) -> None:
+        """-home-dicolomb-amplifier-*-context-intelligence* matches -home-dicolomb-amplifier-bundle-context-intelligence-design-mode → True (fnmatch * spans -)."""
+        resolver = ConfigResolver(
+            config={
+                "server": {
+                    "include": ["-home-dicolomb-amplifier-*-context-intelligence*"],
+                    "exclude": [],
+                },
+                "workspace": "-home-dicolomb-amplifier-bundle-context-intelligence-design-mode",
+            },
+            coordinator=_make_coordinator(),
+        )
+        assert resolver.forwarding_enabled is True
+
+    def test_wildcard_all(self) -> None:
+        """* matches default → True (documented escape hatch)."""
+        resolver = ConfigResolver(
+            config={
+                "server": {"include": ["*"], "exclude": []},
+                "workspace": "default",
+            },
+            coordinator=_make_coordinator(),
+        )
+        assert resolver.forwarding_enabled is True
+
+    def test_no_pattern_match(self) -> None:
+        """-home-dicolomb-amplifier-* vs -home-dicolomb-personal-projects-ecoflow-library → False."""
+        resolver = ConfigResolver(
+            config={
+                "server": {
+                    "include": ["-home-dicolomb-amplifier-*"],
+                    "exclude": [],
+                },
+                "workspace": "-home-dicolomb-personal-projects-ecoflow-library",
+            },
+            coordinator=_make_coordinator(),
+        )
+        assert resolver.forwarding_enabled is False
+
+    def test_exclude_trims_include(self) -> None:
+        """include -home-dicolomb-workspaces-* + exclude *-secrets, workspace -home-dicolomb-workspaces-cotnext-intelligence-configuration-secrets → False."""
+        resolver = ConfigResolver(
+            config={
+                "server": {
+                    "include": ["-home-dicolomb-workspaces-*"],
+                    "exclude": ["*-secrets"],
+                },
+                "workspace": "-home-dicolomb-workspaces-cotnext-intelligence-configuration-secrets",
+            },
+            coordinator=_make_coordinator(),
+        )
+        assert resolver.forwarding_enabled is False
+
+    def test_exclude_without_include_deny_all(self) -> None:
+        """Empty include + exclude *-secrets → False (deny-all fires at step 1)."""
+        resolver = ConfigResolver(
+            config={
+                "server": {"include": [], "exclude": ["*-secrets"]},
+                "workspace": "-home-dicolomb-workspaces-cotnext-intelligence-configuration-secrets",
+            },
+            coordinator=_make_coordinator(),
+        )
+        assert resolver.forwarding_enabled is False
+
+    def test_include_with_non_matching_exclude(self) -> None:
+        """include -home-dicolomb-workspaces-* + exclude *-secrets, workspace -home-dicolomb-workspaces-team-pulse-bundle → True."""
+        resolver = ConfigResolver(
+            config={
+                "server": {
+                    "include": ["-home-dicolomb-workspaces-*"],
+                    "exclude": ["*-secrets"],
+                },
+                "workspace": "-home-dicolomb-workspaces-team-pulse-bundle",
             },
             coordinator=_make_coordinator(),
         )
