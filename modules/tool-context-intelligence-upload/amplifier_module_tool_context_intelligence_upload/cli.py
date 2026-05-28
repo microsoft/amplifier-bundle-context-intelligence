@@ -20,6 +20,9 @@ from pathlib import Path
 from .progress import ProgressTracker, progress_file_path
 from .session_graph import discover_and_sort
 from .uploader import run_upload
+import logging
+
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Compact help text
@@ -431,6 +434,23 @@ def main() -> None:
         api_key=args.api_key,
     )
 
+    # 0a. Resolve effective include/exclude (CLI flags unioned with env vars)
+    effective_include = _effective_patterns(
+        args.include or [], "AMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_INCLUDE"
+    )
+    effective_exclude = _effective_patterns(
+        args.exclude or [], "AMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_EXCLUDE"
+    )
+
+    # 0b. Deny-all default: no --include configured anywhere = upload nothing.
+    if not effective_include:
+        print(
+            "warning: no --include configured and AMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_INCLUDE is unset."
+            ' No sessions will be uploaded. Use --include "*" to upload all sessions.',
+            file=sys.stderr,
+        )
+        sys.exit(0)
+
     # 1. Auto-generate job_id if not provided
     job_id: str = args.job_id
     if job_id is None:
@@ -449,6 +469,20 @@ def main() -> None:
 
     # 3. Discover and sort sessions
     sessions = discover_and_sort(target_path)
+
+    # 3a. Apply workspace filter — drop sessions whose workspace fails the predicate.
+    filtered_sessions = []
+    for session in sessions:
+        workspace = getattr(session, "workspace", None) or ""
+        if _session_passes_filter(workspace, effective_include, effective_exclude):
+            filtered_sessions.append(session)
+        else:
+            logger.info(
+                "skipping session %s (workspace %r not in include filter)",
+                getattr(session, "session_id", "<unknown>"),
+                workspace,
+            )
+    sessions = filtered_sessions
 
     # 4. Handle no sessions found
     if not sessions:
