@@ -69,16 +69,18 @@ class ConfigResolver:
     configured, events are only forwarded when workspace opt-in rules explicitly
     permit it.
 
-    - No allow_workspaces configured  → nothing dispatches (deny-all default;
-                                        the server is opt-in)
-    - allow_workspaces entries present → only matching workspaces dispatch
-    - deny_workspaces entries present  → trim matching workspaces from what
-                                         allow_workspaces opened.  A deny entry
-                                         with no matching allow has no effect —
-                                         there is nothing to trim.
-    - deny always beats allow when both match the same workspace
-    - allow_workspaces and deny_workspaces are configured under the
-      context_intelligence_server key alongside url and api_key.
+    - No include configured        → nothing dispatches (deny-all default;
+                                     the server is opt-in)
+    - include entries present      → only matching workspaces dispatch
+    - exclude entries present      → trim matching workspaces from what
+                                     include opened.  An exclude entry with
+                                     no matching include has no effect —
+                                     there is nothing to trim.
+    - exclude always beats include when both match the same workspace
+    - include and exclude are configured under the ``server`` key alongside
+      url and api_key.  Each is unioned across hook config, coordinator
+      config, and the AMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_INCLUDE /
+      AMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_EXCLUDE env vars.
     """
 
     def __init__(self, config: dict[str, Any], coordinator: Any) -> None:
@@ -262,62 +264,34 @@ class ConfigResolver:
         env_list = [p.strip() for p in env_str.split(",") if p.strip()]
         return list(dict.fromkeys(config_list + coord_list + env_list))
 
-    @property
-    def allow_workspaces(self) -> list[str]:
-        """Workspace patterns permitted to dispatch to the server.
-
-        When any entry is present, only workspaces matching one of these
-        patterns will dispatch to the remote server.  When empty (the
-        default), nothing dispatches — deny-all is the default posture.
-
-        Reads config['context_intelligence_server']['allow_workspaces'],
-        defaults to [].  No coordinator fallback.  Not cached (cheap list
-        copy per call).
-        """
-        return list(self._server_config().get("allow_workspaces", []))
-
-    @property
-    def deny_workspaces(self) -> list[str]:
-        """Workspace patterns blocked from server dispatch.
-
-        Trims matching workspaces from what allow_workspaces already
-        opened.  Has no effect when allow_workspaces is empty — there is
-        nothing to trim.  Deny always beats allow when both match.
-
-        Reads config['context_intelligence_server']['deny_workspaces'],
-        defaults to [].  No coordinator fallback.  Not cached (cheap list
-        copy per call).
-        """
-        return list(self._server_config().get("deny_workspaces", []))
-
     def _evaluate_forwarding(self) -> bool:
         """Evaluate the four-step forwarding resolution chain.
 
         Resolution order (first match wins):
 
-        1. allow_workspaces is empty
+        1. include is empty
            → False  (deny-all default: nothing dispatches without explicit opt-in)
-        2. workspace matches none of allow_workspaces
+        2. workspace matches none of include
            → False  (workspace not opted in)
-        3. workspace matches any deny_workspaces pattern
-           → False  (trimmed from what allow opened; deny beats allow)
+        3. workspace matches any exclude pattern
+           → False  (trimmed from what include opened; exclude beats include)
         4. default
            → True   (opted in and not trimmed)
         """
-        allow = self.allow_workspaces
-        deny = self.deny_workspaces
+        include = self.include
+        exclude = self.exclude
         workspace = self.workspace
 
-        # Step 1: deny-all default — nothing dispatches without an explicit allow entry
-        if not allow:
+        # Step 1: deny-all default — nothing dispatches without an explicit include entry
+        if not include:
             return False
 
         # Step 2: workspace not opted in
-        if not any(fnmatch.fnmatch(workspace, p) for p in allow):
+        if not any(fnmatch.fnmatch(workspace, p) for p in include):
             return False
 
-        # Step 3: workspace trimmed by deny list
-        if any(fnmatch.fnmatch(workspace, p) for p in deny):
+        # Step 3: workspace trimmed by exclude list
+        if any(fnmatch.fnmatch(workspace, p) for p in exclude):
             return False
 
         # Step 4: permitted
