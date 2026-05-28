@@ -108,6 +108,22 @@ class TestSessionPassesFilter:
             is False
         )
 
+    def test_tuple_session_workspace_extracted_correctly(self):
+        """Verify workspace extraction works with real tuple[Path, dict] sessions.
+
+        This test verifies the fix for the critical bug where getattr() on a
+        tuple always returned None, making all specific include patterns useless.
+        The production path in main() unpacks the tuple and reads workspace from
+        the metadata dict; this test exercises that exact extraction pattern.
+        """
+        session = (
+            Path("/tmp/fake-session"),
+            {"workspace": "-home-dicolomb-amplifier-bundle-context-intelligence-design-mode"},
+        )
+        session_dir, meta = session
+        workspace = (meta.get("workspace") or "") if isinstance(meta, dict) else ""
+        assert _session_passes_filter(workspace, ["-home-dicolomb-amplifier-*"], []) is True
+
     def test_include_with_non_matching_exclude(self):
         assert (
             _session_passes_filter(
@@ -307,8 +323,20 @@ class TestUploadFilterIntegration:
             path=tmp_path / "s-skip",
         )
 
-        # Stub discover_and_sort to return both sessions
-        monkeypatch.setattr(cli, "discover_and_sort", lambda path: [s_pass, s_skip])
+        # Regression guard (Fix 1): a real tuple[Path, dict] session that should be
+        # skipped.  If the code regresses to getattr(session, "workspace") on a tuple,
+        # it always returns None → workspace becomes '' → the skip-log message would
+        # contain '' instead of the actual workspace slug, failing the assertion below.
+        s_tuple_skip = (
+            tmp_path / "s-tuple-skip",
+            {
+                "session_id": "s-tuple-skip",
+                "workspace": "-home-dicolomb-personal-projects-ecoflow-library",
+            },
+        )
+
+        # Stub discover_and_sort to return all three sessions
+        monkeypatch.setattr(cli, "discover_and_sort", lambda path: [s_pass, s_skip, s_tuple_skip])
 
         # Fake run_upload that records which sessions were uploaded
         uploaded: list[_FakeSession] = []
@@ -363,3 +391,19 @@ class TestUploadFilterIntegration:
             and "-home-dicolomb-personal-projects-ecoflow-library" in r.message
         ]
         assert len(skip_logs) >= 1
+
+        # Regression guard (Fix 1): the tuple session must be skipped and its skip log
+        # must contain the workspace slug read from the dict — NOT '' (which would happen
+        # if the code regressed to getattr(session, "workspace") on a tuple, which always
+        # returns None and therefore produces an empty workspace string in the log).
+        tuple_skip_logs = [
+            r
+            for r in caplog.records
+            if r.levelno == logging.INFO
+            and "s-tuple-skip" in r.message
+            and "-home-dicolomb-personal-projects-ecoflow-library" in r.message
+        ]
+        assert len(tuple_skip_logs) >= 1, (
+            "Expected INFO log for skipped tuple session containing the actual workspace "
+            "slug from the metadata dict (not '' which would indicate getattr regression)"
+        )

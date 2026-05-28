@@ -132,24 +132,21 @@ key.  This means it is safe to re-upload the same PATH multiple times.
 
 WORKSPACE BEHAVIOUR
 -------------------
-Each session has an associated workspace (derived from the ``workspace`` field
-in its metadata, or inferred from the directory path as a fallback).  The
-upload tool filters sessions by workspace before uploading:
+Events are only uploaded for workspaces that match the --include filter.
 
-  --include PATTERN   Upload only sessions whose workspace matches PATTERN
-                      (shell glob, e.g. ``-home-alice-my-project-*``).
-                      May be given multiple times; also reads
-                      CI_UPLOAD_INCLUDE_WORKSPACES (colon-separated).
-                      If no include patterns are provided (neither flag nor
-                      env var), the tool exits with a deny-all warning and
-                      uploads nothing.
+  --include PATTERN     Workspace patterns to upload (fnmatch, repeatable).
+                        If no --include is configured, no sessions are uploaded.
+  --exclude PATTERN     Workspace patterns to exclude (fnmatch, repeatable).
+                        Applied after --include; exclude beats include.
 
-  --exclude PATTERN   Skip sessions whose workspace matches PATTERN even if
-                      it also matched an include pattern.  May be given
-                      multiple times; also reads CI_UPLOAD_EXCLUDE_WORKSPACES
-                      (colon-separated).
+Both flags accept multiple values:
+  --include "-home-user-amplifier-*" --include "-home-user-workspaces-*"
 
-Use ``--include "*"`` to upload all sessions regardless of workspace.
+Environment variables (comma-separated) are unioned with flag values:
+  AMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_INCLUDE=-home-user-amplifier-*,-home-user-workspaces-*
+  AMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_EXCLUDE=*-secrets
+
+Use --include "*" to upload all workspaces.
 
 PROGRESS FILE
 -------------
