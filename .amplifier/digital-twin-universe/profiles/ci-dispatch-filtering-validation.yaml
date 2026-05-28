@@ -3,9 +3,9 @@
 # End-to-end integration test for context-intelligence server dispatch filtering.
 #
 # Validates the three-scenario dispatch model:
-#   1. Deny-all default: server configured but no allow_workspaces → zero server events
-#   2. Allow list opt-in: workspace matches allow pattern → events appear on server
-#   3. Deny trims allow: workspace matches both allow and deny → zero server events
+#   1. Deny-all default: server configured but no include → zero server events
+#   2. Include list opt-in: workspace matches include pattern → events appear on server
+#   3. Exclude trims include: workspace matches both include and exclude → zero server events
 #
 # Local events.jsonl is verified as written in ALL three scenarios.
 #
@@ -27,7 +27,7 @@
 name: ci-dispatch-filtering-validation
 description: >
   End-to-end validation of context-intelligence dispatch filtering.
-  Tests deny-all default, allow list opt-in, and deny-trims-allow scenarios
+  Tests deny-all default, include list opt-in, and exclude-trims-include scenarios
   using local Gitea mirrors of both repos. No LLM required.
 
 base:
@@ -93,7 +93,7 @@ readiness:
 
 validation_cmds:
   # ── Scenario 1: Deny-all default ────────────────────────────────────────────
-  # Server URL + API key configured but NO allow_workspaces.
+  # Server URL + API key configured but NO include.
   # Expected: forwarding_enabled=False, zero events reach server, JSONL written.
 
   - name: scenario-1-deny-all-default
@@ -118,9 +118,9 @@ validation_cmds:
           config = {}
           def get_capability(self, name): return None
 
-      # No allow_workspaces — deny-all default must fire
+      # No include — deny-all default must fire
       config = {
-          'context_intelligence_server': {
+          'server': {
               'url': CI_URL,
               'api_key': CI_KEY,
           },
@@ -130,7 +130,7 @@ validation_cmds:
       resolver = ConfigResolver(config=config, coordinator=FakeCoord())
 
       assert resolver.forwarding_enabled is False, (
-          f"FAIL scenario 1: forwarding_enabled must be False when allow_workspaces is empty, "
+          f"FAIL scenario 1: forwarding_enabled must be False when include is empty, "
           f"got {resolver.forwarding_enabled}"
       )
       print(f"  forwarding_enabled=False confirmed (deny-all default)")
@@ -190,11 +190,11 @@ validation_cmds:
       print('PASS: Scenario 1 — deny-all default')
       PYEOF
 
-  # ── Scenario 2: Allow list opt-in ───────────────────────────────────────────
-  # workspace matches allow_workspaces pattern → events dispatch to server.
+  # ── Scenario 2: Include list opt-in ───────────────────────────────────────────
+  # workspace matches include pattern → events dispatch to server.
   # Expected: forwarding_enabled=True, events appear on server, JSONL written.
 
-  - name: scenario-2-allow-list-opt-in
+  - name: scenario-2-include-list-opt-in
     command: |
       set -e
       . /etc/environment
@@ -206,8 +206,8 @@ validation_cmds:
       CI_URL = os.environ['CI_SERVER_URL']
       CI_KEY = os.environ.get('CI_API_KEY', '')
       BASE_PATH = '/tmp/dtu-s2'
-      SESSION_ID = 'dtu-allow-001'
-      WORKSPACE = 'ci-allowed-test'
+      SESSION_ID = 'dtu-include-001'
+      WORKSPACE = '-home-dicolomb-amplifier-bundle-context-intelligence-dtu-test'
 
       from amplifier_module_hook_context_intelligence.config_resolver import ConfigResolver
       from amplifier_module_hook_context_intelligence.handlers.logging_handler import LoggingHandler
@@ -217,10 +217,10 @@ validation_cmds:
           def get_capability(self, name): return None
 
       config = {
-          'context_intelligence_server': {
+          'server': {
               'url': CI_URL,
               'api_key': CI_KEY,
-              'allow_workspaces': ['ci-allowed-*'],
+              'include': ['-home-dicolomb-amplifier-bundle-*'],
           },
           'workspace': WORKSPACE,
           'base_path': BASE_PATH,
@@ -229,9 +229,9 @@ validation_cmds:
 
       assert resolver.forwarding_enabled is True, (
           f"FAIL scenario 2: forwarding_enabled must be True for workspace '{WORKSPACE}' "
-          f"matching allow pattern 'ci-allowed-*', got {resolver.forwarding_enabled}"
+          f"matching include pattern '-home-dicolomb-amplifier-bundle-*', got {resolver.forwarding_enabled}"
       )
-      print(f"  forwarding_enabled=True confirmed (workspace matches allow pattern)")
+      print(f"  forwarding_enabled=True confirmed (workspace matches include pattern)")
 
       handler = LoggingHandler(resolver)
 
@@ -287,14 +287,14 @@ validation_cmds:
           print(f"  server check skipped (connection error: {e})")
           print(f"  WARN: could not verify server state — JSONL was written correctly")
 
-      print('PASS: Scenario 2 — allow list opt-in')
+      print('PASS: Scenario 2 — include list opt-in')
       PYEOF
 
-  # ── Scenario 3: Deny trims allow ────────────────────────────────────────────
-  # Workspace matches BOTH allow_workspaces and deny_workspaces.
-  # Expected: forwarding_enabled=False (deny wins), zero events on server, JSONL written.
+  # ── Scenario 3: Exclude trims include ────────────────────────────────────────────
+  # Workspace matches BOTH include and exclude.
+  # Expected: forwarding_enabled=False (exclude wins), zero events on server, JSONL written.
 
-  - name: scenario-3-deny-trims-allow
+  - name: scenario-3-exclude-trims-include
     command: |
       set -e
       . /etc/environment
@@ -306,8 +306,8 @@ validation_cmds:
       CI_URL = os.environ['CI_SERVER_URL']
       CI_KEY = os.environ.get('CI_API_KEY', '')
       BASE_PATH = '/tmp/dtu-s3'
-      SESSION_ID = 'dtu-deny-trim-001'
-      WORKSPACE = 'ci-denied-test'
+      SESSION_ID = 'dtu-exclude-trim-001'
+      WORKSPACE = '-home-dicolomb-workspaces-cotnext-intelligence-configuration-secrets'
 
       from amplifier_module_hook_context_intelligence.config_resolver import ConfigResolver
       from amplifier_module_hook_context_intelligence.handlers.logging_handler import LoggingHandler
@@ -317,11 +317,11 @@ validation_cmds:
           def get_capability(self, name): return None
 
       config = {
-          'context_intelligence_server': {
+          'server': {
               'url': CI_URL,
               'api_key': CI_KEY,
-              'allow_workspaces': ['ci-*'],
-              'deny_workspaces': ['ci-denied-*'],
+              'include': ['-home-dicolomb-workspaces-*'],
+              'exclude': ['*-secrets'],
           },
           'workspace': WORKSPACE,
           'base_path': BASE_PATH,
@@ -329,10 +329,10 @@ validation_cmds:
       resolver = ConfigResolver(config=config, coordinator=FakeCoord())
 
       assert resolver.forwarding_enabled is False, (
-          f"FAIL scenario 3: forwarding_enabled must be False — deny_workspaces must trim "
-          f"workspace '{WORKSPACE}' that matched allow, got {resolver.forwarding_enabled}"
+          f"FAIL scenario 3: forwarding_enabled must be False — exclude must trim "
+          f"workspace '{WORKSPACE}' that matched include, got {resolver.forwarding_enabled}"
       )
-      print(f"  forwarding_enabled=False confirmed (deny trims allow)")
+      print(f"  forwarding_enabled=False confirmed (exclude trims include)")
 
       handler = LoggingHandler(resolver)
 
@@ -385,5 +385,5 @@ validation_cmds:
           print(f"  server check skipped (connection error: {e})")
           print(f"  WARN: could not verify server state — check manually")
 
-      print('PASS: Scenario 3 — deny trims allow')
+      print('PASS: Scenario 3 — exclude trims include')
       PYEOF
