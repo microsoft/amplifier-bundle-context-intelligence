@@ -496,7 +496,9 @@ def main() -> None:
         if isinstance(session, tuple):
             session_dir, meta = session
             workspace = (meta.get("workspace") or "") if isinstance(meta, dict) else ""
-            session_id = meta.get("session_id", "<unknown>") if isinstance(meta, dict) else "<unknown>"
+            session_id = (
+                meta.get("session_id", "<unknown>") if isinstance(meta, dict) else "<unknown>"
+            )
         else:
             # Fallback for test doubles that use dataclass/object shapes.
             workspace = getattr(session, "workspace", None) or ""
