@@ -125,12 +125,12 @@ class ConfigResolver:
         return _slugify_path(str(Path(working_dir).resolve()))
 
     def _server_config(self) -> dict:
-        """Extract the ``context_intelligence_server`` nested config dict.
+        """Extract the ``server`` nested config dict.
 
-        Returns the dict under ``config["context_intelligence_server"]`` if it
-        exists and is a dict, otherwise returns ``{}``.
+        Returns the dict under ``config["server"]`` if it exists and is a
+        dict, otherwise returns ``{}``.
         """
-        raw = self._config.get("context_intelligence_server")
+        raw = self._config.get("server")
         return raw if isinstance(raw, dict) else {}
 
     # ------------------------------------------------------------------
@@ -217,6 +217,29 @@ class ConfigResolver:
         if self._additional_events is None:
             self._additional_events = frozenset(self._config.get("additional_events", []))
         return self._additional_events
+
+    @property
+    def include(self) -> list[str]:
+        """Workspace patterns permitted to dispatch to the server.
+
+        Reads from three layers and returns their **union**, deduplicated
+        with insertion order preserved:
+
+        1. ``config["server"]["include"]``           (hook config)
+        2. ``coordinator.config["server"]["include"]`` (coordinator config)
+        3. ``AMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_INCLUDE`` env var
+           (comma-separated string; whitespace and empty segments stripped)
+
+        Deduplication uses ``dict.fromkeys`` so order is stable across
+        Python runs (unlike ``set``). Not cached — cheap recomputation per
+        call keeps env-var changes immediately visible.
+        """
+        config_list = list(self._server_config().get("include", []))
+        coord_server = self._coordinator_config_get("server")
+        coord_list = list(coord_server.get("include", [])) if isinstance(coord_server, dict) else []
+        env_str = os.environ.get("AMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_INCLUDE", "")
+        env_list = [p.strip() for p in env_str.split(",") if p.strip()]
+        return list(dict.fromkeys(config_list + coord_list + env_list))
 
     @property
     def allow_workspaces(self) -> list[str]:
