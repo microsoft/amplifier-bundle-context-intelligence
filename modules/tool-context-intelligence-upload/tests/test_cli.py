@@ -194,6 +194,8 @@ class TestJobIdAutoGeneration:
                     "key",
                     "--job-id",
                     "my-custom-job",
+                    "--include",
+                    "*",
                 ],
             ),
             patch(

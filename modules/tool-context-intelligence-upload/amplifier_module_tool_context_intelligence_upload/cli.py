@@ -12,6 +12,7 @@ from __future__ import annotations
 import argparse
 import fnmatch
 import json
+import logging
 import os
 import sys
 import uuid
@@ -20,7 +21,6 @@ from pathlib import Path
 from .progress import ProgressTracker, progress_file_path
 from .session_graph import discover_and_sort
 from .uploader import run_upload
-import logging
 
 logger = logging.getLogger(__name__)
 
@@ -132,9 +132,24 @@ key.  This means it is safe to re-upload the same PATH multiple times.
 
 WORKSPACE BEHAVIOUR
 -------------------
-Each event line in events.jsonl carries an optional "workspace" field.  The
-tool passes this value to build_payload() unchanged.  No workspace filtering
-or transformation is applied by the upload tool itself.
+Each session has an associated workspace (derived from the ``workspace`` field
+in its metadata, or inferred from the directory path as a fallback).  The
+upload tool filters sessions by workspace before uploading:
+
+  --include PATTERN   Upload only sessions whose workspace matches PATTERN
+                      (shell glob, e.g. ``-home-alice-my-project-*``).
+                      May be given multiple times; also reads
+                      CI_UPLOAD_INCLUDE_WORKSPACES (colon-separated).
+                      If no include patterns are provided (neither flag nor
+                      env var), the tool exits with a deny-all warning and
+                      uploads nothing.
+
+  --exclude PATTERN   Skip sessions whose workspace matches PATTERN even if
+                      it also matched an include pattern.  May be given
+                      multiple times; also reads CI_UPLOAD_EXCLUDE_WORKSPACES
+                      (colon-separated).
+
+Use ``--include "*"`` to upload all sessions regardless of workspace.
 
 PROGRESS FILE
 -------------
@@ -471,15 +486,27 @@ def main() -> None:
     sessions = discover_and_sort(target_path)
 
     # 3a. Apply workspace filter — drop sessions whose workspace fails the predicate.
+    #
+    # discover_and_sort() returns list[tuple[Path, dict[str, Any]]].  Workspace
+    # must be extracted from the metadata dict (index 1), not via getattr on a
+    # tuple (which always returns None and causes every specific --include pattern
+    # to silently filter out all real sessions).
     filtered_sessions = []
     for session in sessions:
-        workspace = getattr(session, "workspace", None) or ""
+        if isinstance(session, tuple):
+            session_dir, meta = session
+            workspace = (meta.get("workspace") or "") if isinstance(meta, dict) else ""
+            session_id = meta.get("session_id", "<unknown>") if isinstance(meta, dict) else "<unknown>"
+        else:
+            # Fallback for test doubles that use dataclass/object shapes.
+            workspace = getattr(session, "workspace", None) or ""
+            session_id = getattr(session, "session_id", "<unknown>")
         if _session_passes_filter(workspace, effective_include, effective_exclude):
             filtered_sessions.append(session)
         else:
             logger.info(
                 "skipping session %s (workspace %r not in include filter)",
-                getattr(session, "session_id", "<unknown>"),
+                session_id,
                 workspace,
             )
     sessions = filtered_sessions
