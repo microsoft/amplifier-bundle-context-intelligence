@@ -10,6 +10,7 @@ help actions:
 from __future__ import annotations
 
 import argparse
+import fnmatch
 import json
 import sys
 import uuid
@@ -263,6 +264,29 @@ def _make_help_action(text: str) -> type[argparse.Action]:
 
 _CompactHelpAction = _make_help_action(_COMPACT_HELP)
 _DetailedHelpAction = _make_help_action(_DETAILED_HELP)
+
+
+# ---------------------------------------------------------------------------
+# Workspace filter
+# ---------------------------------------------------------------------------
+
+
+def _session_passes_filter(workspace: str, include: list[str], exclude: list[str]) -> bool:
+    """Return True when *workspace* should be uploaded given include/exclude patterns.
+
+    Semantics mirror the hook's _evaluate_forwarding:
+      1. include is empty  → False (deny-all default)
+      2. workspace matches no include pattern  → False
+      3. workspace matches any exclude pattern → False
+      4. default → True
+    """
+    if not include:
+        return False
+    if not any(fnmatch.fnmatch(workspace, p) for p in include):
+        return False
+    if any(fnmatch.fnmatch(workspace, p) for p in exclude):
+        return False
+    return True
 
 
 # ---------------------------------------------------------------------------
