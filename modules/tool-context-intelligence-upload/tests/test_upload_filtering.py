@@ -94,3 +94,36 @@ class TestSessionPassesFilter:
             )
             is True
         )
+
+
+class TestUploadFilterArgs:
+    """Tests for --include and --exclude argparse flags on the upload CLI."""
+
+    @staticmethod
+    def _parse(extra_args: list[str]) -> object:
+        from amplifier_module_tool_context_intelligence_upload.cli import _build_parser
+
+        parser = _build_parser()
+        return parser.parse_args(["--path", "/tmp"] + extra_args)
+
+    def test_include_defaults_to_empty(self):
+        args = self._parse([])
+        assert args.include == []
+
+    def test_include_flag_single(self):
+        args = self._parse(["--include", "-home-dicolomb-amplifier-*"])
+        assert args.include == ["-home-dicolomb-amplifier-*"]
+
+    def test_include_flag_multiple(self):
+        args = self._parse(
+            ["--include", "-home-dicolomb-amplifier-*", "--include", "-home-dicolomb-workspaces-*"]
+        )
+        assert args.include == ["-home-dicolomb-amplifier-*", "-home-dicolomb-workspaces-*"]
+
+    def test_exclude_defaults_to_empty(self):
+        args = self._parse([])
+        assert args.exclude == []
+
+    def test_exclude_flag_single(self):
+        args = self._parse(["--exclude", "*-secrets"])
+        assert args.exclude == ["*-secrets"]
