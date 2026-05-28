@@ -12,6 +12,7 @@ from __future__ import annotations
 import argparse
 import fnmatch
 import json
+import os
 import sys
 import uuid
 from pathlib import Path
@@ -287,6 +288,18 @@ def _session_passes_filter(workspace: str, include: list[str], exclude: list[str
     if any(fnmatch.fnmatch(workspace, p) for p in exclude):
         return False
     return True
+
+
+def _effective_patterns(flag_values: list[str], env_var_name: str) -> list[str]:
+    """Union flag_values with comma-separated patterns from env_var_name.
+
+    Order: flag values first, then env-var values.
+    Deduplicated with dict.fromkeys (preserves first-seen position).
+    Whitespace-only and empty segments in the env var are ignored.
+    """
+    env_str = os.environ.get(env_var_name, "")
+    env_list = [p.strip() for p in env_str.split(",") if p.strip()]
+    return list(dict.fromkeys(list(flag_values) + env_list))
 
 
 # ---------------------------------------------------------------------------
