@@ -49,7 +49,7 @@ Three methods — use whichever fits your environment:
 |--------|-----|
 | Environment variable | `export AMPLIFIER_CONTEXT_INTELLIGENCE_API_KEY=<key>` |
 | CLI flag | Pass `--api-key <key>` to any subcommand |
-| Settings file | Add `api_key: <key>` nested under `context_intelligence_server:` in `~/.amplifier/settings.yaml` |
+| Settings file | Add `api_key: <key>` nested under `server:` in `~/.amplifier/settings.yaml` |
 
 The CLI resolves in this order: flag → env var → `~/.amplifier/settings.yaml`.
 

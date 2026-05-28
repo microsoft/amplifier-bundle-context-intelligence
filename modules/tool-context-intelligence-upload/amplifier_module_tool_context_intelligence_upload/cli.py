@@ -194,10 +194,10 @@ hook-context-intelligence module config section:
   hooks:
     - module: hook-context-intelligence
       config:
-        context_intelligence_server:
+        server:
           url: "https://your-server.example.com"
           api_key: "your-api-key"
-          allow_workspaces:
+          include:
             - "my-workspace-*"
 
 When invoking from an Amplifier session via the bash tool, use shell

@@ -112,10 +112,10 @@ class TestDetailedHelp:
         """$AMPLIFIER_CONTEXT_INTELLIGENCE_API_KEY must appear in detailed help."""
         assert "$AMPLIFIER_CONTEXT_INTELLIGENCE_API_KEY" in detailed_help_output
 
-    def test_nested_context_intelligence_server_config_shown(self, detailed_help_output):
-        """Help text must show the nested context_intelligence_server config format, not flat keys."""
-        assert "context_intelligence_server:" in detailed_help_output
-        assert "allow_workspaces:" in detailed_help_output
+    def test_server_config_shown_in_help(self, detailed_help_output):
+        """Help text must show the nested server config format with new key names."""
+        assert "server:" in detailed_help_output
+        assert "include:" in detailed_help_output
         # Flat keys are deprecated — the new nested format must replace them
         assert "context_intelligence_server_url:" not in detailed_help_output
         assert "context_intelligence_api_key:" not in detailed_help_output

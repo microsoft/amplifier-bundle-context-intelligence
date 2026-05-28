@@ -215,7 +215,7 @@ Since session-navigator is active when no server is configured, you must locate
 `server_url` and `api_key` explicitly before invoking:
 
 1. Check environment variables: `$AMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_URL` and `$AMPLIFIER_CONTEXT_INTELLIGENCE_API_KEY`
-2. Or read from bundle config YAML under `hook-context-intelligence.config.context_intelligence_server`: `url` and `api_key`
+2. Or read from bundle config YAML under `hook-context-intelligence.config.server`: `url` and `api_key`
 
 ```bash
 context-intelligence-upload \
