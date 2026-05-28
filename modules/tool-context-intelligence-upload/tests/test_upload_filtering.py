@@ -2,14 +2,15 @@
 
 from __future__ import annotations
 
-from amplifier_module_tool_context_intelligence_upload.cli import _session_passes_filter
-
+import argparse
 import logging
 import sys
 from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
+
+from amplifier_module_tool_context_intelligence_upload.cli import _session_passes_filter
 
 
 @dataclass
@@ -122,7 +123,7 @@ class TestUploadFilterArgs:
     """Tests for --include and --exclude argparse flags on the upload CLI."""
 
     @staticmethod
-    def _parse(extra_args: list[str]) -> object:
+    def _parse(extra_args: list[str]) -> argparse.Namespace:
         from amplifier_module_tool_context_intelligence_upload.cli import _build_parser
 
         parser = _build_parser()

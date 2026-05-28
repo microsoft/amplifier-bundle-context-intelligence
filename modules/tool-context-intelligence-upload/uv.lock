@@ -27,14 +27,12 @@ source = { editable = "../hook-context-intelligence" }
 dependencies = [
     { name = "amplifier-bundle-context-intelligence" },
     { name = "httpx" },
-    { name = "idna" },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "amplifier-bundle-context-intelligence", directory = "../../" },
     { name = "httpx", specifier = ">=0.28.1" },
-    { name = "idna", specifier = ">=3.15" },
 ]
 
 [package.metadata.requires-dev]
