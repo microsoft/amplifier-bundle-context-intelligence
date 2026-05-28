@@ -49,21 +49,12 @@ replaying interrupted sessions, or targeting a different server.
 
 **Finding connection parameters:**
 
-Secrets belong in `~/.amplifier/keys.env` — never as literal values in `settings.yaml`:
+Check the environment variables — these are set from `~/.amplifier/keys.env` on startup:
 
-```bash
-# ~/.amplifier/keys.env
-AMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_URL=http://localhost:8000
-AMPLIFIER_CONTEXT_INTELLIGENCE_API_KEY=<your-api-key>
-```
-
-Verify they are loaded:
 ```bash
 echo $AMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_URL
 echo $AMPLIFIER_CONTEXT_INTELLIGENCE_API_KEY
 ```
-
-For how to pass these through `settings.yaml` overrides when configuring the bundle via the Amplifier app-cli (including using a custom key name for the secret), see the [README](https://github.com/microsoft/amplifier-bundle-context-intelligence#configuring-via-the-amplifier-app-cli).
 
 **Invoke via bash tool:**
 ```bash
