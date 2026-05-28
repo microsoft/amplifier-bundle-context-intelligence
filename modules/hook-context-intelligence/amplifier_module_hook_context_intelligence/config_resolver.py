@@ -242,6 +242,27 @@ class ConfigResolver:
         return list(dict.fromkeys(config_list + coord_list + env_list))
 
     @property
+    def exclude(self) -> list[str]:
+        """Workspace patterns blocked from dispatch.
+
+        Same three-layer **union** semantics as ``include``, reading from:
+
+        1. ``config["server"]["exclude"]``
+        2. ``coordinator.config["server"]["exclude"]``
+        3. ``AMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_EXCLUDE`` env var
+           (comma-separated, whitespace stripped)
+
+        Trims matches from what ``include`` opened. Has no effect when
+        ``include`` is empty — there is nothing to trim. Not cached.
+        """
+        config_list = list(self._server_config().get("exclude", []))
+        coord_server = self._coordinator_config_get("server")
+        coord_list = list(coord_server.get("exclude", [])) if isinstance(coord_server, dict) else []
+        env_str = os.environ.get("AMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_EXCLUDE", "")
+        env_list = [p.strip() for p in env_str.split(",") if p.strip()]
+        return list(dict.fromkeys(config_list + coord_list + env_list))
+
+    @property
     def allow_workspaces(self) -> list[str]:
         """Workspace patterns permitted to dispatch to the server.
 
