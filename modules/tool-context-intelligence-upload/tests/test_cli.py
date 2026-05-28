@@ -159,6 +159,8 @@ class TestJobIdAutoGeneration:
                     "http://localhost",
                     "--api-key",
                     "key",
+                    "--include",
+                    "*",
                 ],
             ),
             patch(
@@ -229,6 +231,8 @@ class TestCliEndToEnd:
                     "http://localhost",
                     "--api-key",
                     "key",
+                    "--include",
+                    "*",
                 ],
             ),
             pytest.raises(SystemExit) as exc_info,
@@ -252,6 +256,8 @@ class TestCliEndToEnd:
                     "http://localhost",
                     "--api-key",
                     "key",
+                    "--include",
+                    "*",
                 ],
             ),
             patch(
@@ -291,6 +297,8 @@ class TestCliEndToEnd:
                     "http://localhost",
                     "--api-key",
                     "key",
+                    "--include",
+                    "*",
                 ],
             ),
             patch(
@@ -348,6 +356,8 @@ class TestEnvVarConfigResolution:
                     "--path",
                     str(tmp_path),
                     # NOTE: no --server-url, no --api-key
+                    "--include",
+                    "*",
                 ],
             ),
             patch(
@@ -398,6 +408,8 @@ class TestEnvVarConfigResolution:
                     "http://flag-server:9999",
                     "--api-key",
                     "flag-key",
+                    "--include",
+                    "*",
                 ],
             ),
             patch(
