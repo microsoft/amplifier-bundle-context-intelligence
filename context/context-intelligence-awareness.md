@@ -49,14 +49,33 @@ replaying interrupted sessions, or targeting a different server.
 
 **Finding connection parameters:**
 
-Check environment variables first:
+Secrets live in `~/.amplifier/keys.env`, never as literal values in `settings.yaml`. Two patterns are supported:
+
+*Default env var names (no `settings.yaml` override needed):*
+```bash
+# ~/.amplifier/keys.env
+AMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_URL=http://localhost:8000
+AMPLIFIER_CONTEXT_INTELLIGENCE_API_KEY=<your-api-key>
+```
+
+*Custom key name with `settings.yaml` override (using `${...}` interpolation — safe to commit):*
+```bash
+# ~/.amplifier/keys.env
+CONTEXT_INTELLIGENCE_TEAM_SERVER_API_KEY=<your-api-key>
+```
+```yaml
+# ~/.amplifier/settings.yaml
+overrides:
+  hook-context-intelligence:
+    config:
+      context_intelligence_api_key: "${CONTEXT_INTELLIGENCE_TEAM_SERVER_API_KEY}"
+```
+
+Verify the env vars are exported:
 ```bash
 echo $AMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_URL
 echo $AMPLIFIER_CONTEXT_INTELLIGENCE_API_KEY
 ```
-If not set, read from your Amplifier bundle config YAML under `hook-context-intelligence.config`:
-- `context_intelligence_server_url`
-- `context_intelligence_api_key`
 
 **Invoke via bash tool:**
 ```bash

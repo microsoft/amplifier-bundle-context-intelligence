@@ -81,27 +81,42 @@ Every Amplifier session will now write events to local JSONL files automatically
 
 To push events to the [Context Intelligence Server](https://github.com/microsoft/amplifier-context-intelligence) for graph storage and querying, you need a running server instance and its API key. See the [server repository](https://github.com/microsoft/amplifier-context-intelligence) for setup instructions.
 
-Once the server is running, point the hook at it with the server URL and API key:
+Once the server is running, point the hook at it with the server URL and API key.
 
-**Configure** via `settings.yaml`:
+**Secrets belong in `~/.amplifier/keys.env`** — loaded automatically by Amplifier on startup, never committed to version control. This follows the same pattern as LLM provider keys (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, etc.). Never write a literal secret value into `settings.yaml`; use `${VAR_NAME}` interpolation to reference a `keys.env` entry instead.
+
+#### Option A — use the default env var names (no `settings.yaml` override needed)
+
+The behavior YAML already contains `${AMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_URL:}` and `${AMPLIFIER_CONTEXT_INTELLIGENCE_API_KEY:}` placeholders, so storing the values under those exact names in `keys.env` is all that is required:
+
+```bash
+# ~/.amplifier/keys.env
+AMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_URL=http://localhost:8000
+AMPLIFIER_CONTEXT_INTELLIGENCE_API_KEY=<your-api-key>
+```
+
+No `settings.yaml` entry is needed — Amplifier resolves the placeholders automatically.
+
+#### Option B — use a custom key name with a `settings.yaml` override
+
+If your organisation stores the secret under a different name in `keys.env` (for example a shared team key or a name that matches your secrets-rotation convention), add a `settings.yaml` override that maps that name to the config key via `${...}` interpolation:
+
+```bash
+# ~/.amplifier/keys.env  — custom key name; can be anything your team chooses
+CONTEXT_INTELLIGENCE_TEAM_SERVER_API_KEY=<your-api-key>
+```
 
 ```yaml
 # ~/.amplifier/settings.yaml  (or project .amplifier/settings.yaml)
 overrides:
   hook-context-intelligence:
     config:
-      context_intelligence_server_url: "http://localhost:8000"
-      context_intelligence_api_key: "<your-api-key>"
+      context_intelligence_server_url: "${AMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_URL}"
+      context_intelligence_api_key: "${CONTEXT_INTELLIGENCE_TEAM_SERVER_API_KEY}"
       workspace: "my-project"    # optional — auto-resolved if omitted
 ```
 
-Or via environment variables:
-
-```bash
-export AMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_URL=http://localhost:8000
-export AMPLIFIER_CONTEXT_INTELLIGENCE_API_KEY=<your-api-key>
-export AMPLIFIER_CONTEXT_INTELLIGENCE_WORKSPACE=my-project   # optional
-```
+`settings.yaml` is safe to commit to version control in this form: it contains only `${...}` references, never literal secret values. The actual secrets live exclusively in `keys.env`.
 
 ### 3. Verify
 
