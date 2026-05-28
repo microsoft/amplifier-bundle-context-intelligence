@@ -49,33 +49,21 @@ replaying interrupted sessions, or targeting a different server.
 
 **Finding connection parameters:**
 
-Secrets live in `~/.amplifier/keys.env`, never as literal values in `settings.yaml`. Two patterns are supported:
+Secrets belong in `~/.amplifier/keys.env` — never as literal values in `settings.yaml`:
 
-*Default env var names (no `settings.yaml` override needed):*
 ```bash
 # ~/.amplifier/keys.env
 AMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_URL=http://localhost:8000
 AMPLIFIER_CONTEXT_INTELLIGENCE_API_KEY=<your-api-key>
 ```
 
-*Custom key name with `settings.yaml` override (using `${...}` interpolation — safe to commit):*
-```bash
-# ~/.amplifier/keys.env
-CONTEXT_INTELLIGENCE_TEAM_SERVER_API_KEY=<your-api-key>
-```
-```yaml
-# ~/.amplifier/settings.yaml
-overrides:
-  hook-context-intelligence:
-    config:
-      context_intelligence_api_key: "${CONTEXT_INTELLIGENCE_TEAM_SERVER_API_KEY}"
-```
-
-Verify the env vars are exported:
+Verify they are loaded:
 ```bash
 echo $AMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_URL
 echo $AMPLIFIER_CONTEXT_INTELLIGENCE_API_KEY
 ```
+
+For how to pass these through `settings.yaml` overrides when configuring the bundle via the Amplifier app-cli (including using a custom key name for the secret), see the [README](https://github.com/microsoft/amplifier-bundle-context-intelligence#configuring-via-the-amplifier-app-cli).
 
 **Invoke via bash tool:**
 ```bash
