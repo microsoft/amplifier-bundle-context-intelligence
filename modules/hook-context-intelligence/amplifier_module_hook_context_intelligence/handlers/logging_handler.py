@@ -96,7 +96,7 @@ class LoggingHandler:
             self._dispatch_enabled = False
             logger.debug(
                 "context_intelligence: server URL is configured but api_key is missing — "
-                "HTTP dispatch disabled. Set context_intelligence_server.api_key in your bundle config."
+                "HTTP dispatch disabled. Set server.api_key in your bundle config."
             )
         self._warned_no_dispatch: bool = False
         self._failure_threshold: int = getattr(resolver, "dispatch_failure_threshold", 3)
@@ -145,9 +145,9 @@ class LoggingHandler:
                 if not self._warned_no_dispatch:
                     logger.warning(
                         "context_intelligence: server is configured but dispatch is disabled for "
-                        "workspace=%s — allow_workspaces is empty or workspace is not in the allow "
-                        "list. If migrating from an older config, update your settings to use "
-                        "context_intelligence_server: {url: ..., api_key: ..., allow_workspaces: [...]}",
+                        "workspace=%s — server.include is empty or workspace is not in the include "
+                        "list. Configure your settings with "
+                        "server: {url: ..., api_key: ..., include: [...]}",
                         self._resolver.workspace,
                     )
                     self._warned_no_dispatch = True

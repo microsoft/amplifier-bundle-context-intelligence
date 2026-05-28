@@ -1087,7 +1087,7 @@ class TestSilentDispatchWarning:
 
         mock_warning.assert_called_once()
         call_args_str = str(mock_warning.call_args)
-        assert "dispatch is disabled" in call_args_str or "allow_workspaces" in call_args_str
+        assert "dispatch is disabled" in call_args_str or "include" in call_args_str
 
     async def test_warning_emitted_only_once_across_multiple_dispatches(
         self, tmp_path: Path
@@ -1113,7 +1113,7 @@ class TestSilentDispatchWarning:
         dispatch_disabled_warnings = [
             c
             for c in mock_warning.call_args_list
-            if "dispatch is disabled" in str(c) or "allow_workspaces" in str(c)
+            if "dispatch is disabled" in str(c) or "include" in str(c)
         ]
         assert len(dispatch_disabled_warnings) == 1
 
@@ -1134,10 +1134,10 @@ class TestParentIdForwardingCombined:
         coordinator.config = {}
         resolver = ConfigResolver(
             config={
-                "context_intelligence_server": {
+                "server": {
                     "url": "http://localhost:9999",
                     "api_key": "test-key",
-                    "allow_workspaces": ["work-*"],
+                    "include": ["work-*"],
                 },
                 "parent_id": "test-parent-abc-123",
                 "workspace": "work-myapi",

@@ -149,15 +149,15 @@ class TestBehaviorYamlConfigShape:
         assert data["hooks"][0]["module"] == "hook-context-intelligence"
 
     def test_config_has_thin_forwarder_keys(self):
-        """Config must have: context_intelligence_server (nested dict), workspace, log_level."""
+        """Config must have: server (nested dict), workspace, log_level."""
         data = self._load_behavior_yaml()
         config = data["hooks"][0]["config"]
-        assert "context_intelligence_server" in config, (
-            "Expected nested 'context_intelligence_server' key in config; "
+        assert "server" in config, (
+            "Expected nested 'server' key in config (renamed from context_intelligence_server); "
             f"got keys: {list(config.keys())}"
         )
-        assert isinstance(config["context_intelligence_server"], dict), (
-            "context_intelligence_server must be a dict"
+        assert isinstance(config["server"], dict), (
+            "server must be a dict"
         )
         assert "workspace" in config
         assert "log_level" in config
@@ -184,34 +184,33 @@ class TestModuleDocstring:
 
         return mod.__doc__ or ""
 
-    def test_docstring_documents_allow_workspaces(self):
-        """Module docstring must document the allow_workspaces config key."""
+    def test_docstring_documents_include(self):
+        """Module docstring must document the include config key (renamed from allow_workspaces)."""
         doc = self._get_docstring()
-        assert "allow_workspaces" in doc, (
-            "Module docstring must document the 'allow_workspaces' configuration key"
+        assert "include" in doc, (
+            "Module docstring must document the 'include' configuration key"
         )
 
-    def test_docstring_documents_deny_workspaces(self):
-        """Module docstring must document the deny_workspaces config key."""
+    def test_docstring_documents_exclude(self):
+        """Module docstring must document the exclude config key (renamed from deny_workspaces)."""
         doc = self._get_docstring()
-        assert "deny_workspaces" in doc, (
-            "Module docstring must document the 'deny_workspaces' configuration key"
+        assert "exclude" in doc, (
+            "Module docstring must document the 'exclude' configuration key"
         )
 
     def test_docstring_documents_nested_server_config(self):
-        """Module docstring must document context_intelligence_server as a nested dict.
+        """Module docstring must document server as a nested dict.
 
-        The top-level key is context_intelligence_server (not flat
-        context_intelligence_server_url / context_intelligence_api_key).
-        Sub-keys url, api_key, allow_workspaces, deny_workspaces must be present.
+        The top-level key is server (renamed from context_intelligence_server).
+        Sub-keys url, api_key, include, exclude must be present.
         """
         doc = self._get_docstring()
-        assert "context_intelligence_server" in doc, (
-            "Module docstring must document 'context_intelligence_server' as the top-level config key"
+        assert "server" in doc, (
+            "Module docstring must document 'server' as the top-level config key"
         )
         for sub_key in ("url", "api_key"):
             assert sub_key in doc, (
-                f"Module docstring must document '{sub_key}' as a sub-key of context_intelligence_server"
+                f"Module docstring must document '{sub_key}' as a sub-key of server"
             )
         assert "context_intelligence_server_url" not in doc, (
             "Module docstring must NOT document 'context_intelligence_server_url' as a flat key"

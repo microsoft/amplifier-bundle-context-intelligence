@@ -1,12 +1,11 @@
 """Context Intelligence hook — thin event forwarder.
 
 Writes session events to local JSONL and dispatches them to the
-Context Intelligence server when ``context_intelligence_server.url``
-is configured.
+Context Intelligence server when ``server.url`` is configured.
 
 Configuration keys
 ------------------
-context_intelligence_server : dict, optional
+server : dict, optional
     Server connection and workspace filter configuration.  All sub-keys are
     optional and independent.
 
@@ -16,13 +15,17 @@ context_intelligence_server : dict, optional
         events that pass the workspace filter.
     api_key : str
         Bearer token for server API authentication.
-    allow_workspaces : list[str]
+    include : list[str]
         fnmatch patterns for workspaces permitted to dispatch.  When any
         entry is present, only matching workspaces dispatch.  When absent
         or empty, nothing dispatches (deny-all default).
-    deny_workspaces : list[str]
-        fnmatch patterns that trim from what ``allow_workspaces`` opened.
-        Has no effect when ``allow_workspaces`` is empty.
+        Union of config, coordinator config, and env var
+        ``AMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_INCLUDE``.
+    exclude : list[str]
+        fnmatch patterns that trim from what ``include`` opened.
+        Has no effect when ``include`` is empty.
+        Union of config, coordinator config, and env var
+        ``AMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_EXCLUDE``.
 workspace : str, optional
     Workspace identifier used to scope graph data on the server.
     Resolved automatically from the coordinator when not set
