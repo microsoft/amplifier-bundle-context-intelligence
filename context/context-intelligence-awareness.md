@@ -40,17 +40,17 @@ The graph-analyst checks server availability automatically and falls back to
 | `AMPLIFIER_CONTEXT_INTELLIGENCE_LOG_LEVEL` | Hook logging verbosity | `INFO` |
 | `AMPLIFIER_CONTEXT_INTELLIGENCE_DISPATCH_TIMEOUT` | Server dispatch timeout (seconds) | `30` |
 | `AMPLIFIER_CONTEXT_INTELLIGENCE_DISPATCH_FAILURE_THRESHOLD` | Circuit breaker trips after N failures | `3` |
-| `context_intelligence_server.allow_workspaces` (nested config key) | fnmatch workspace patterns permitted to dispatch to the server. When any entry is present, only matching workspaces forward events. When empty — the default — **nothing dispatches** (deny-all posture). Nested under `overrides.hook-context-intelligence.config.context_intelligence_server` in `settings.yaml`. | `[]` — deny-all |
-| `context_intelligence_server.deny_workspaces` (nested config key) | fnmatch workspace patterns blocked from dispatch. Trims from what `allow_workspaces` opened. No effect when allow list is empty. Nested under `overrides.hook-context-intelligence.config.context_intelligence_server`. | `[]` |
-| `context_intelligence.path_rules` (top-level settings key) | Host-side path rules evaluated by the CLI at session start. Tilde (`~`) is expanded; **all** matching rules contribute. Each matching rule's path pattern is transformed into a workspace name pattern (e.g. `~/work/**` → `-home-<user>-work-*`) and appended to `allow_workspaces`. Injected patterns are additive with any patterns already set under `overrides.hook-context-intelligence.config`. Configured at the **top level** of `settings.yaml` (not under `config:`). | `[]` |
+| `server.include` (nested config key) | fnmatch workspace patterns permitted to dispatch to the server. When any entry is present, only matching workspaces forward events. When empty — the default — **nothing dispatches** (deny-all posture). Nested under `overrides.hook-context-intelligence.config.server` in `settings.yaml`. Union semantics: `AMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_INCLUDE` env var values are merged with config values. | `[]` — deny-all |
+| `server.exclude` (nested config key) | fnmatch workspace patterns blocked from dispatch. Trims from what `include` opened. No effect when include list is empty. Nested under `overrides.hook-context-intelligence.config.server`. Union semantics: `AMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_EXCLUDE` env var values are merged with config values. | `[]` |
+| `context_intelligence.path_rules` (top-level settings key) | Host-side path rules evaluated by the CLI at session start. Tilde (`~`) is expanded; **all** matching rules contribute. Each matching rule's path pattern is transformed into a workspace name pattern (e.g. `~/work/**` → `-home-<user>-work-*`) and appended to `server.include`. Injected patterns are additive with any patterns already set under `overrides.hook-context-intelligence.config`. Configured at the **top level** of `settings.yaml` (not under `config:`). | `[]` |
 
 ## Forwarding semantics (dispatch opt-in model)
 
 Server dispatch is **off by default**. The bundle's `ConfigResolver` evaluates dispatch via the following chain (first match wins):
 
-1. `allow_workspaces` is empty → blocked (deny-all default; must opt in explicitly)
-2. Workspace matches none of `allow_workspaces` → blocked (not opted in)
-3. Workspace matches any `deny_workspaces` pattern → blocked (`deny_workspaces` trims from what `allow_workspaces` opened; no effect when allow list is empty)
+1. `include` is empty → blocked (deny-all default; must opt in explicitly)
+2. Workspace matches none of `include` → blocked (not opted in)
+3. Workspace matches any `exclude` pattern → blocked (`exclude` trims from what `include` opened; no effect when include list is empty)
 4. Otherwise → **dispatches to server**
 
 Local `events.jsonl` is **always written** regardless of dispatch status.
@@ -69,8 +69,8 @@ echo $AMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_URL
 echo $AMPLIFIER_CONTEXT_INTELLIGENCE_API_KEY
 ```
 If not set, read from your Amplifier bundle config YAML under `hook-context-intelligence.config`:
-- `context_intelligence_server.url` (nested under `context_intelligence_server:`)
-- `context_intelligence_server.api_key` (nested under `context_intelligence_server:`)
+- `server.url` (nested under `server:`)
+- `server.api_key` (nested under `server:`)
 
 **Invoke via bash tool:**
 ```bash
