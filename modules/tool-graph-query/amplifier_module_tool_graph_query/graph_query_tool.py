@@ -80,7 +80,7 @@ class GraphQueryTool:
     async def execute(self, input: dict[str, Any]) -> ToolResult:  # noqa: A002
         if self._resolver is None:
             self._resolver = self._coordinator.get_capability(
-                "context_intelligence.config_resolver"
+                "context_intelligence.hook_config_resolver"
             )
 
         # Resolve server_url, api_key, workspace — from hook capability when

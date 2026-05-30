@@ -233,7 +233,7 @@ cleanup = await mount(coordinator, config={
 `mount()` registers a `HookConfigResolver` as the `context_intelligence.config_resolver` capability:
 
 ```python
-resolver = coordinator.get_capability("context_intelligence.config_resolver")
+resolver = coordinator.get_capability("context_intelligence.hook_config_resolver")
 resolver.workspace                  # resolved workspace string
 resolver.base_path                  # resolved Path object
 resolver.session_dir("abc-123")     # Path to a session's CI directory

@@ -163,7 +163,7 @@ async def mount(
 
     resolver = HookConfigResolver(config, coordinator)
     log.setLevel(resolver.log_level)
-    coordinator.register_capability("context_intelligence.config_resolver", resolver)
+    coordinator.register_capability("context_intelligence.hook_config_resolver", resolver)
 
     unregister_fns: list[Callable[[], None]] = []
 
@@ -248,7 +248,7 @@ async def mount(
             except Exception:
                 pass
         try:
-            coordinator.register_capability("context_intelligence.config_resolver", None)
+            coordinator.register_capability("context_intelligence.hook_config_resolver", None)
         except Exception:
             pass
         try:

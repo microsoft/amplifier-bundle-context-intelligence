@@ -64,7 +64,7 @@ class BlobReadTool:
         # (1) Lazy capability resolution
         if self._resolver is None:
             self._resolver = self._coordinator.get_capability(
-                "context_intelligence.config_resolver"
+                "context_intelligence.hook_config_resolver"
             )
 
         # (2) Resolve server_url and api_key — from hook capability when
