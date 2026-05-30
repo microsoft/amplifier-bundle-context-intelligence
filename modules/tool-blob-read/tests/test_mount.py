@@ -71,3 +71,16 @@ class TestMountBehavior:
         assert isinstance(result, dict)
         assert "tool" in result
         assert "status" in result
+
+    async def test_config_dict_passed_to_tool_constructor(self) -> None:
+        """Config dict is forwarded to the tool so it can resolve server_url without the hook."""
+        from amplifier_module_tool_blob_read import mount
+
+        coordinator = MagicMock()
+        coordinator.mount = AsyncMock()
+        await mount(
+            coordinator,
+            config={"context_intelligence_server_url": "http://test"},
+        )
+        tool = coordinator.mount.call_args.args[1]
+        assert tool._config["context_intelligence_server_url"] == "http://test"

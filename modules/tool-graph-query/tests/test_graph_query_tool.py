@@ -376,3 +376,76 @@ class TestGraphQueryParamsForwarding:
         assert result.success is False
         assert result.error is not None
         assert result.error["type"] == "validation_error"
+
+
+# ---------------------------------------------------------------------------
+# TestAnalyticsOnlyMode
+# ---------------------------------------------------------------------------
+
+
+class TestAnalyticsOnlyMode:
+    """Analytics-only mode: config dict is used when the hook capability is absent."""
+
+    async def test_analytics_only_success(self) -> None:
+        """Tool succeeds using config values when no hook capability is registered."""
+        from amplifier_module_tool_graph_query.graph_query_tool import GraphQueryTool
+
+        coordinator = _make_coordinator(resolver=None)
+        config = {
+            "context_intelligence_server_url": "http://ci:4200",
+            "context_intelligence_api_key": "key123",
+            "workspace": "my-ws",
+        }
+        tool = GraphQueryTool(coordinator=coordinator, config=config)
+
+        mock_instance, mock_cls = _make_mock_async_ci_client()
+        with patch("amplifier_module_tool_graph_query.graph_query_tool.AsyncCIClient", mock_cls):
+            result = await tool.execute({"query": "MATCH (n) RETURN n"})
+
+        assert result.success is True
+        mock_cls.assert_called_once()
+        call_kwargs = mock_cls.call_args.kwargs
+        assert call_kwargs.get("server_url") == "http://ci:4200"
+        assert call_kwargs.get("api_key") == "key123"
+        # workspace must be forwarded as the 2nd positional arg to cypher()
+        cypher_args = mock_instance.cypher.call_args
+        all_args = list(cypher_args.args) + list(cypher_args.kwargs.values())
+        assert "my-ws" in all_args
+
+    async def test_analytics_only_workspace_defaults_to_default(self) -> None:
+        """When config has no 'workspace' key the cypher call receives 'default'."""
+        from amplifier_module_tool_graph_query.graph_query_tool import GraphQueryTool
+
+        coordinator = _make_coordinator(resolver=None)
+        config = {
+            "context_intelligence_server_url": "http://ci:4200",
+            "context_intelligence_api_key": "key123",
+            # no "workspace" key
+        }
+        tool = GraphQueryTool(coordinator=coordinator, config=config)
+
+        mock_instance, mock_cls = _make_mock_async_ci_client()
+        with patch("amplifier_module_tool_graph_query.graph_query_tool.AsyncCIClient", mock_cls):
+            await tool.execute({"query": "MATCH (n) RETURN n"})
+
+        cypher_args = mock_instance.cypher.call_args
+        # workspace is the 2nd positional arg: cypher(query, workspace, params=...)
+        assert cypher_args.args[1] == "default"
+
+    async def test_analytics_only_no_server_url_returns_error(self) -> None:
+        """Missing server URL in config returns a configuration_error — not 'hook not configured'."""
+        from amplifier_module_tool_graph_query.graph_query_tool import GraphQueryTool
+
+        coordinator = _make_coordinator(resolver=None)
+        config = {
+            "context_intelligence_api_key": "key123",
+            # no "context_intelligence_server_url"
+        }
+        tool = GraphQueryTool(coordinator=coordinator, config=config)
+
+        result = await tool.execute({"query": "MATCH (n) RETURN n"})
+
+        assert result.success is False
+        assert result.error is not None
+        assert result.error["type"] == "configuration_error"
+        assert "server URL not configured" in result.error["message"]

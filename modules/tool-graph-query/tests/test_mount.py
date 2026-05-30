@@ -71,3 +71,17 @@ class TestMountBehavior:
         assert isinstance(result, dict)
         assert result["tool"] == "graph_query"
         assert result["status"] == "mounted"
+
+    async def test_config_dict_passed_to_tool_constructor(self) -> None:
+        """Config dict is forwarded to the tool so it can resolve server_url and workspace."""
+        from amplifier_module_tool_graph_query import mount
+
+        coordinator = MagicMock()
+        coordinator.mount = AsyncMock()
+        await mount(
+            coordinator,
+            config={"context_intelligence_server_url": "http://test", "workspace": "ws1"},
+        )
+        tool = coordinator.mount.call_args.args[1]
+        assert tool._config["context_intelligence_server_url"] == "http://test"
+        assert tool._config["workspace"] == "ws1"

@@ -405,3 +405,47 @@ class TestAuthHeader:
             await tool.execute({"uri": "ci-blob://my-session/my-key"})
 
         mock_cls.assert_called_once_with(server_url="http://localhost:8080", api_key="")
+
+
+# ---------------------------------------------------------------------------
+# (8) Analytics-only mode
+# ---------------------------------------------------------------------------
+
+
+class TestAnalyticsOnlyMode:
+    """Analytics-only mode: config dict is used when the hook capability is absent."""
+
+    async def test_analytics_only_success(self) -> None:
+        """Tool succeeds using config values when no hook capability is registered."""
+        from amplifier_module_tool_blob_read.blob_read_tool import BlobReadTool
+
+        coordinator = _make_coordinator(None)
+        config = {
+            "context_intelligence_server_url": "http://ci:4200",
+            "context_intelligence_api_key": "key123",
+        }
+        tool = BlobReadTool(coordinator, config=config)
+
+        with _patch_async_client(fetch_blob_return={"data": "test"}) as (mock_cls, _):
+            result = await tool.execute({"uri": "ci-blob://session-123/some-key"})
+
+        assert result.success is True
+        mock_cls.assert_called_once_with(server_url="http://ci:4200", api_key="key123")
+
+    async def test_analytics_only_no_server_url_returns_error(self) -> None:
+        """Missing server URL in config returns a configuration_error — not 'hook not configured'."""
+        from amplifier_module_tool_blob_read.blob_read_tool import BlobReadTool
+
+        coordinator = _make_coordinator(None)
+        config = {
+            "context_intelligence_api_key": "key123",
+            # no "context_intelligence_server_url"
+        }
+        tool = BlobReadTool(coordinator, config=config)
+
+        result = await tool.execute({"uri": "ci-blob://session-123/some-key"})
+
+        assert result.success is False
+        assert result.error is not None
+        assert result.error["type"] == "configuration_error"
+        assert "server URL not configured" in result.error["message"]

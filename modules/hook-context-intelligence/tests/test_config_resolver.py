@@ -82,6 +82,33 @@ class TestBasePathResolution:
 
         assert isinstance(resolver.base_path, Path)
 
+    def test_env_var_used_when_config_and_coordinator_absent(self, monkeypatch) -> None:
+        """AMPLIFIER_CONTEXT_INTELLIGENCE_BASE_PATH env var is used when config and coordinator both lack base_path."""
+        monkeypatch.setenv("AMPLIFIER_CONTEXT_INTELLIGENCE_BASE_PATH", "/from/env")
+        resolver = ConfigResolver(config={}, coordinator=_make_coordinator(config={}))
+
+        assert resolver.base_path == Path("/from/env")
+
+    def test_env_var_does_not_override_config_dict(self, monkeypatch) -> None:
+        """Config dict base_path wins over AMPLIFIER_CONTEXT_INTELLIGENCE_BASE_PATH env var."""
+        monkeypatch.setenv("AMPLIFIER_CONTEXT_INTELLIGENCE_BASE_PATH", "/from/env")
+        resolver = ConfigResolver(
+            config={"base_path": "/from/config"},
+            coordinator=_make_coordinator(config={}),
+        )
+
+        assert resolver.base_path == Path("/from/config")
+
+    def test_env_var_does_not_override_coordinator_config(self, monkeypatch) -> None:
+        """Coordinator config base_path wins over AMPLIFIER_CONTEXT_INTELLIGENCE_BASE_PATH env var."""
+        monkeypatch.setenv("AMPLIFIER_CONTEXT_INTELLIGENCE_BASE_PATH", "/from/env")
+        resolver = ConfigResolver(
+            config={},
+            coordinator=_make_coordinator(config={"base_path": "/from/coordinator"}),
+        )
+
+        assert resolver.base_path == Path("/from/coordinator")
+
 
 class TestProjectSlugResolution:
     def test_config_value_wins(self) -> None:
