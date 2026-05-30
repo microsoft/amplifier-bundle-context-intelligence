@@ -146,7 +146,9 @@ class TestLazyCapabilityResolution:
             await tool.execute({"query": "MATCH (n) RETURN n LIMIT 2"})
 
         # get_capability should only be called once (on first execute)
-        coordinator.get_capability.assert_called_once_with("context_intelligence.hook_config_resolver")
+        coordinator.get_capability.assert_called_once_with(
+            "context_intelligence.hook_config_resolver"
+        )
 
     async def test_configured_resolver_succeeds(self) -> None:
         from amplifier_module_tool_graph_query.graph_query_tool import GraphQueryTool

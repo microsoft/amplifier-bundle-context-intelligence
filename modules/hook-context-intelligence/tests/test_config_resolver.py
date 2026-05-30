@@ -35,7 +35,9 @@ class TestBasePathResolution:
     def test_config_value_wins(self) -> None:
         """Explicit hook config base_path wins over coordinator config."""
         coordinator = _make_coordinator(config={"base_path": "/coordinator/path"})
-        resolver = HookConfigResolver(config={"base_path": "/explicit/path"}, coordinator=coordinator)
+        resolver = HookConfigResolver(
+            config={"base_path": "/explicit/path"}, coordinator=coordinator
+        )
 
         assert resolver.base_path == Path("/explicit/path")
 
@@ -56,7 +58,9 @@ class TestBasePathResolution:
     def test_tilde_expanded(self) -> None:
         """Tilde in base_path is expanded (no '~' in string result)."""
         coordinator = _make_coordinator(config={})
-        resolver = HookConfigResolver(config={"base_path": "~/custom/path"}, coordinator=coordinator)
+        resolver = HookConfigResolver(
+            config={"base_path": "~/custom/path"}, coordinator=coordinator
+        )
 
         assert "~" not in str(resolver.base_path)
 
@@ -116,7 +120,9 @@ class TestProjectSlugResolution:
     def test_config_value_wins(self) -> None:
         """Explicit hook config project_slug wins over coordinator config."""
         coordinator = _make_coordinator(config={"project_slug": "from-coordinator"})
-        resolver = HookConfigResolver(config={"project_slug": "from-config"}, coordinator=coordinator)
+        resolver = HookConfigResolver(
+            config={"project_slug": "from-config"}, coordinator=coordinator
+        )
 
         assert resolver.project_slug == "from-config"
 
@@ -154,7 +160,9 @@ class TestProjectSlugResolution:
     def test_returns_str_type(self) -> None:
         """project_slug always returns a str instance."""
         coordinator = _make_coordinator(config={})
-        resolver = HookConfigResolver(config={"project_slug": "my-project"}, coordinator=coordinator)
+        resolver = HookConfigResolver(
+            config={"project_slug": "my-project"}, coordinator=coordinator
+        )
 
         assert isinstance(resolver.project_slug, str)
 
@@ -471,7 +479,9 @@ class TestDispatchFailureThreshold:
     def test_reads_from_config(self) -> None:
         """dispatch_failure_threshold returns the configured value as an int."""
         coordinator = _make_coordinator(config={})
-        resolver = HookConfigResolver(config={"dispatch_failure_threshold": 5}, coordinator=coordinator)
+        resolver = HookConfigResolver(
+            config={"dispatch_failure_threshold": 5}, coordinator=coordinator
+        )
 
         assert resolver.dispatch_failure_threshold == 5
 
@@ -497,7 +507,9 @@ class TestDispatchQueueCapacity:
     def test_reads_from_config(self) -> None:
         """dispatch_queue_capacity returns the configured value as an int."""
         coordinator = _make_coordinator(config={})
-        resolver = HookConfigResolver(config={"dispatch_queue_capacity": 64}, coordinator=coordinator)
+        resolver = HookConfigResolver(
+            config={"dispatch_queue_capacity": 64}, coordinator=coordinator
+        )
 
         assert resolver.dispatch_queue_capacity == 64
 
@@ -513,7 +525,9 @@ class TestCloseDrainTimeout:
     def test_reads_from_config(self) -> None:
         """close_drain_timeout returns the configured value as a float."""
         coordinator = _make_coordinator(config={})
-        resolver = HookConfigResolver(config={"close_drain_timeout": "1.25"}, coordinator=coordinator)
+        resolver = HookConfigResolver(
+            config={"close_drain_timeout": "1.25"}, coordinator=coordinator
+        )
 
         assert resolver.close_drain_timeout == 1.25
 

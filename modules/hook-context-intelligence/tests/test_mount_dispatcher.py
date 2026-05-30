@@ -337,7 +337,9 @@ class TestCapabilityRegistration:
         await mount(coordinator, config={})
 
         reg_calls = coordinator.register_capability.call_args_list
-        cap_calls = [c for c in reg_calls if c.args[0] == "context_intelligence.hook_config_resolver"]
+        cap_calls = [
+            c for c in reg_calls if c.args[0] == "context_intelligence.hook_config_resolver"
+        ]
         assert len(cap_calls) == 1, (
             "register_capability should be called once with 'context_intelligence.config_resolver'"
         )
