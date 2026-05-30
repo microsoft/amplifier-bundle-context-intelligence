@@ -2,31 +2,13 @@ bundle:
   name: context-intelligence-behavior
   version: 0.1.0
   description: >
-    Context intelligence capability: graph-powered session analysis
-    and event-driven telemetry capture for Amplifier sessions.
+    Full context intelligence: graph-powered session analysis, navigation agents,
+    skills, design mode, AND event-capture hook for session telemetry.
+    Composes context-intelligence-nav and adds the hook-context-intelligence module.
+    Use this when you want both read/query capabilities AND session instrumentation.
 
-agents:
-  include:
-    - context-intelligence:graph-analyst
-    - context-intelligence:session-navigator
-
-modes:
-  include:
-    - context-intelligence:modes/context-intelligence.md
-
-tools:
-  - module: tool-delegate
-    source: git+https://github.com/microsoft/amplifier-foundation@main#subdirectory=modules/tool-delegate
-  - module: tool-skills
-    source: git+https://github.com/microsoft/amplifier-bundle-skills@main#subdirectory=modules/tool-skills
-    config:
-      skills:
-        # General context-intelligence skills only — design-phase skills gated behind the context-intelligence mode
-        - "git+https://github.com/microsoft/amplifier-bundle-context-intelligence@main#subdirectory=skills/blob-reading"
-        - "git+https://github.com/microsoft/amplifier-bundle-context-intelligence@main#subdirectory=skills/context-intelligence-graph-query"
-        - "git+https://github.com/microsoft/amplifier-bundle-context-intelligence@main#subdirectory=skills/context-intelligence-session-navigation"
-        - "git+https://github.com/microsoft/amplifier-bundle-context-intelligence@main#subdirectory=skills/context-intelligence-session-reconstruction"
-        - "git+https://github.com/microsoft/amplifier-bundle-context-intelligence@main#subdirectory=skills/workflow-pattern-analysis"
+includes:
+  - bundle: context-intelligence:behaviors/context-intelligence-nav
 
 hooks:
   - module: hook-context-intelligence
@@ -48,7 +30,3 @@ hooks:
       # base_path: ~/.amplifier/projects  (auto-resolved; uncomment to override)
       # project_slug: (auto-resolved from working directory; uncomment to override)
       # exclude_events: []  (optional fnmatch patterns; uncomment and list events to suppress)
-
-context:
-  include:
-    - context-intelligence:context/context-intelligence-awareness.md
