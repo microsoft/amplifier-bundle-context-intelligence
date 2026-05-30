@@ -27,6 +27,8 @@ hooks:
         - delegate:agent_completed
         - delegate:agent_cancelled
         - delegate:error
-      # base_path: ~/.amplifier/projects  (auto-resolved; uncomment to override)
+      # Base path where session files are written. Defaults to ~/.amplifier/projects.
+      # Override via env var or set explicitly here.
+      base_path: "${AMPLIFIER_CONTEXT_INTELLIGENCE_BASE_PATH:}"
       # project_slug: (auto-resolved from working directory; uncomment to override)
       # exclude_events: []  (optional fnmatch patterns; uncomment and list events to suppress)

@@ -40,8 +40,18 @@ tools:
     source: git+https://github.com/microsoft/amplifier-foundation@main#subdirectory=modules/tool-delegate
   - module: tool-graph-query
     source: git+https://github.com/microsoft/amplifier-bundle-context-intelligence@main#subdirectory=modules/tool-graph-query
+    config:
+      # Used as fallback when hook-context-intelligence is not mounted (analytics-only mode).
+      # When the hook is present its config_resolver capability takes priority over these values.
+      context_intelligence_server_url: "${AMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_URL:}"
+      context_intelligence_api_key: "${AMPLIFIER_CONTEXT_INTELLIGENCE_API_KEY:}"
+      workspace: "${AMPLIFIER_CONTEXT_INTELLIGENCE_WORKSPACE:}"
   - module: tool-blob-read
     source: git+https://github.com/microsoft/amplifier-bundle-context-intelligence@main#subdirectory=modules/tool-blob-read
+    config:
+      # Same fallback semantics as tool-graph-query above.
+      context_intelligence_server_url: "${AMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_URL:}"
+      context_intelligence_api_key: "${AMPLIFIER_CONTEXT_INTELLIGENCE_API_KEY:}"
   - module: tool-filesystem
     source: git+https://github.com/microsoft/amplifier-module-tool-filesystem@main
     config:

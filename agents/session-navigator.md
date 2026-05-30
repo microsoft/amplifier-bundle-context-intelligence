@@ -110,11 +110,11 @@ You are `session-navigator` — the local JSONL fallback navigation agent for th
 
 **No server tools:** You do NOT have `graph_query` or `blob_read` tools. You operate entirely on local filesystem files using bash/jq/grep safe extraction patterns. Never attempt to use server tools — they are not available in your tool set.
 
-**Storage path convention:** All session data lives at:
+**Storage path convention:** All session data lives under `$BASE_PATH` (resolve it first — see top of document):
 
 ```
-~/.amplifier/projects/{project-slug}/sessions/{session_id}/context-intelligence/events.jsonl
-~/.amplifier/projects/{project-slug}/sessions/{session_id}/context-intelligence/metadata.json
+$BASE_PATH/{project-slug}/sessions/{session_id}/context-intelligence/events.jsonl
+$BASE_PATH/{project-slug}/sessions/{session_id}/context-intelligence/metadata.json
 ```
 
 Every `events.jsonl` line and every `metadata.json` file contains a `workspace` field. The graph-analyst will pass the active workspace when it delegates to you. **Always scope your search to that workspace.**
@@ -126,7 +126,7 @@ When a workspace is provided by the caller, apply it immediately before any othe
 **Step 1 — Try directory-first lookup** (fast, covers the common case where workspace equals the project slug):
 
 ```bash
-ls ~/.amplifier/projects/{WORKSPACE}/sessions/ 2>/dev/null
+ls "$BASE_PATH/{WORKSPACE}/sessions/" 2>/dev/null
 ```
 
 If this directory exists and contains sessions, work within it exclusively.
@@ -134,7 +134,7 @@ If this directory exists and contains sessions, work within it exclusively.
 **Step 2 — If that directory is empty or missing**, the workspace was set explicitly and differs from the project slug. Scan across all project directories and filter by the `workspace` field in `metadata.json`:
 
 ```bash
-for f in ~/.amplifier/projects/*/sessions/*/context-intelligence/metadata.json; do
+for f in "$BASE_PATH"/*/sessions/*/context-intelligence/metadata.json; do
   jq -r 'select(.workspace == "{WORKSPACE}") | input_filename' "$f" 2>/dev/null
 done
 ```
@@ -151,25 +151,25 @@ Find sessions by ID, project slug, date, or agent name, always scoped to the pro
 
 ```bash
 # List sessions in a workspace (directory-first path)
-for f in ~/.amplifier/projects/my-project/sessions/*/context-intelligence/metadata.json; do
+for f in "$BASE_PATH/my-project/sessions"/*/context-intelligence/metadata.json; do
   jq -r '[.session_id, .workspace, .status, .started_at, .agent_name // "(root)"] | join("\t")' "$f" 2>/dev/null
 done | sort -t$'\t' -k4
 
 # List sessions scoped by workspace field (cross-project scan)
-for f in ~/.amplifier/projects/*/sessions/*/context-intelligence/metadata.json; do
+for f in "$BASE_PATH"/*/sessions/*/context-intelligence/metadata.json; do
   jq -r 'select(.workspace == "my-project") | [.session_id, .status, .started_at, .agent_name // "(root)"] | join("\t")' "$f" 2>/dev/null
 done | sort -t$'\t' -k3
 
 # Find a session by partial ID (within a workspace)
-find ~/.amplifier/projects/my-project/sessions -maxdepth 1 -name "*PARTIAL_ID*" -type d
+find "$BASE_PATH/my-project/sessions" -maxdepth 1 -name "*PARTIAL_ID*" -type d
 
 # Find sessions by agent name within a workspace
-for f in ~/.amplifier/projects/my-project/sessions/*/context-intelligence/metadata.json; do
+for f in "$BASE_PATH/my-project/sessions"/*/context-intelligence/metadata.json; do
   jq -r 'select(.agent_name == "TARGET_AGENT") | .session_id' "$f" 2>/dev/null
 done
 
 # Confirm the workspace of a specific session
-jq -r '.workspace' ~/.amplifier/projects/my-project/sessions/SESSION_ID/context-intelligence/metadata.json
+jq -r '.workspace' "$BASE_PATH/my-project/sessions/SESSION_ID/context-intelligence/metadata.json"
 ```
 
 ### Event Search
@@ -207,7 +207,7 @@ jq -r '{parent_id, workspace, status}' metadata.json
 
 # Find child sessions within a workspace
 PARENT_ID="YOUR_SESSION_ID_HERE"
-for f in ~/.amplifier/projects/my-project/sessions/*/context-intelligence/metadata.json; do
+for f in "$BASE_PATH/my-project/sessions"/*/context-intelligence/metadata.json; do
   jq -r "select(.parent_id == \"$PARENT_ID\") | [.session_id, .agent_name // \"(root)\", .status, .workspace] | join(\"\t\")" "$f" 2>/dev/null
 done
 
@@ -233,7 +233,7 @@ Since session-navigator is active when no server is configured, you must locate
 
 ```bash
 context-intelligence-upload \
-  --path ~/.amplifier/projects/my-project \
+  --path "$BASE_PATH/my-project" \
   --server-url "https://your-server.example.com" \
   --api-key "your-api-key"
 ```

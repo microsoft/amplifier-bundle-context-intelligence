@@ -20,10 +20,19 @@ def _sanitize_path_component(s: str) -> str:
 
 
 class BlobReadTool:
-    """Tool that fetches a ci-blob:// URI from the server and writes it to disk."""
+    """Tool that fetches a ci-blob:// URI from the server and writes it to disk.
 
-    def __init__(self, coordinator: Any) -> None:
+    Configuration priority at execute() time:
+
+    1. ``context_intelligence.config_resolver`` coordinator capability
+       (registered by hook-context-intelligence when the full behavior is used).
+    2. ``config`` dict passed to mount() — used when the analytics-only behavior
+       is composed without the hook.
+    """
+
+    def __init__(self, coordinator: Any, config: dict[str, Any] | None = None) -> None:
         self._coordinator = coordinator
+        self._config: dict[str, Any] = config or {}
         self._resolver: Any = None
 
     @property
@@ -56,17 +65,16 @@ class BlobReadTool:
             self._resolver = self._coordinator.get_capability(
                 "context_intelligence.config_resolver"
             )
-        if self._resolver is None:
-            # Analytics-only mode: hook-context-intelligence is not mounted.
-            # Fall back to StandaloneConfigResolver which reads from env vars
-            # and ~/.amplifier/settings.yaml — the same sources ConfigResolver
-            # uses, but without needing the hook's coordinator capability.
-            from context_intelligence.standalone_resolver import StandaloneConfigResolver
 
-            self._resolver = StandaloneConfigResolver()
+        # (2) Resolve server_url and api_key — from hook capability when
+        # available, otherwise directly from the tool's mount() config dict.
+        if self._resolver is not None:
+            server_url: str | None = self._resolver.context_intelligence_server_url
+            api_key: str | None = self._resolver.context_intelligence_api_key
+        else:
+            server_url = self._config.get("context_intelligence_server_url") or None
+            api_key = self._config.get("context_intelligence_api_key") or None
 
-        # (2) Get server_url from resolver
-        server_url: str | None = self._resolver.context_intelligence_server_url
         if not server_url:
             return ToolResult(
                 success=False,
@@ -105,7 +113,6 @@ class BlobReadTool:
         safe_key = _sanitize_path_component(key)
 
         # (5) Construct AsyncCIClient
-        api_key: str | None = self._resolver.context_intelligence_api_key
         async_client = AsyncCIClient(server_url=server_url, api_key=api_key or "")
 
         # (6) Fetch blob using original unsanitized values for the server request

@@ -12,15 +12,16 @@ from typing import Any
 __amplifier_module_type__ = "tool"
 
 
-async def mount(coordinator: Any, config: dict[str, Any]) -> dict[str, Any]:  # noqa: ARG001
+async def mount(coordinator: Any, config: dict[str, Any]) -> dict[str, Any]:
     """Mount the graph_query tool.
 
-    Captures a coordinator reference for lazy capability resolution.
-    The tool reads the config resolver at execute() time, not mount() time,
-    because hooks mount after tools.
+    Passes ``config`` into GraphQueryTool so it can resolve server_url,
+    api_key and workspace directly when hook-context-intelligence is not
+    mounted (analytics-only mode).  When the hook IS mounted its
+    ``context_intelligence.config_resolver`` capability takes priority.
     """
     from .graph_query_tool import GraphQueryTool
 
-    tool = GraphQueryTool(coordinator=coordinator)
+    tool = GraphQueryTool(coordinator=coordinator, config=config)
     await coordinator.mount("tools", tool, name=tool.name)
     return {"tool": tool.name, "status": "mounted"}

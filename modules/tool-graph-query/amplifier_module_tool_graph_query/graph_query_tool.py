@@ -1,8 +1,10 @@
 """GraphQueryTool — agent-facing tool for executing Cypher queries.
 
-Implements the Amplifier Tool protocol.  Resolves configuration lazily
-via the ``context_intelligence.config_resolver`` coordinator capability
-registered by the hook-context-intelligence module.
+Implements the Amplifier Tool protocol.  Configuration is resolved lazily at
+execute() time, preferring the ``context_intelligence.config_resolver``
+coordinator capability registered by hook-context-intelligence.  When the hook
+is not mounted (analytics-only mode) the tool falls back to the ``config`` dict
+passed via mount() — the standard Amplifier tool configuration mechanism.
 """
 
 from __future__ import annotations
@@ -18,12 +20,17 @@ class GraphQueryTool:
     """Execute Cypher queries against the context-intelligence server.
 
     Implements the Amplifier Tool protocol (name, description, input_schema,
-    execute).  Configuration is resolved lazily at execute() time via the
-    coordinator's ``context_intelligence.config_resolver`` capability.
+    execute).  Configuration priority at execute() time:
+
+    1. ``context_intelligence.config_resolver`` coordinator capability
+       (registered by hook-context-intelligence when the full behavior is used).
+    2. ``config`` dict passed to mount() — used when the analytics-only behavior
+       is composed without the hook.
     """
 
-    def __init__(self, coordinator: Any) -> None:
+    def __init__(self, coordinator: Any, config: dict[str, Any] | None = None) -> None:
         self._coordinator = coordinator
+        self._config: dict[str, Any] = config or {}
         self._resolver: Any | None = None
 
     @property
@@ -75,16 +82,17 @@ class GraphQueryTool:
                 "context_intelligence.config_resolver"
             )
 
-        if self._resolver is None:
-            # Analytics-only mode: hook-context-intelligence is not mounted.
-            # Fall back to StandaloneConfigResolver which reads from env vars
-            # and ~/.amplifier/settings.yaml — the same sources ConfigResolver
-            # uses, but without needing the hook's coordinator capability.
-            from context_intelligence.standalone_resolver import StandaloneConfigResolver
+        # Resolve server_url, api_key, workspace — from hook capability when
+        # available, otherwise directly from the tool's mount() config dict.
+        if self._resolver is not None:
+            server_url = self._resolver.context_intelligence_server_url
+            api_key = self._resolver.context_intelligence_api_key
+            workspace = self._resolver.workspace
+        else:
+            server_url = self._config.get("context_intelligence_server_url") or None
+            api_key = self._config.get("context_intelligence_api_key") or None
+            workspace = self._config.get("workspace") or "default"
 
-            self._resolver = StandaloneConfigResolver()
-
-        server_url = self._resolver.context_intelligence_server_url
         if not server_url:
             return ToolResult(
                 success=False,
@@ -94,7 +102,6 @@ class GraphQueryTool:
                 },
             )
 
-        workspace = self._resolver.workspace
         query: str = input["query"]
         ws_override = input.get("workspace")
         effective_workspace = ws_override if ws_override is not None else workspace
@@ -113,7 +120,6 @@ class GraphQueryTool:
         else:
             params = raw_params
 
-        api_key = self._resolver.context_intelligence_api_key
         async_client = AsyncCIClient(server_url=server_url, api_key=api_key or "")
         result = await async_client.cypher(query, effective_workspace, params=params)
         return ToolResult(success=True, output=result)

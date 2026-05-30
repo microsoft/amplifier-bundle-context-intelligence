@@ -12,9 +12,16 @@ from typing import Any
 __amplifier_module_type__ = "tool"
 
 
-async def mount(coordinator: Any, config: Any) -> dict[str, Any]:  # noqa: ARG001
+async def mount(coordinator: Any, config: dict[str, Any]) -> dict[str, Any]:
+    """Mount the blob_read tool.
+
+    Passes ``config`` into BlobReadTool so it can resolve server_url and
+    api_key directly when hook-context-intelligence is not mounted
+    (analytics-only mode).  When the hook IS mounted its
+    ``context_intelligence.config_resolver`` capability takes priority.
+    """
     from amplifier_module_tool_blob_read.blob_read_tool import BlobReadTool
 
-    tool = BlobReadTool(coordinator)
+    tool = BlobReadTool(coordinator=coordinator, config=config)
     await coordinator.mount("tools", tool, name=tool.name)
     return {"tool": tool.name, "status": "mounted"}
