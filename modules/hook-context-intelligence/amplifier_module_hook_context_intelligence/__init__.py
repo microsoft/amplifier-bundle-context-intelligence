@@ -13,7 +13,7 @@ context_intelligence_server_url : str, optional
 workspace : str, optional
     Workspace identifier used to scope graph data on the server.
     Resolved automatically from the coordinator when not set
-    (see ConfigResolver.workspace).
+    (see HookConfigResolver.workspace).
 log_level : str, optional
     Logging level.  Default ``"WARNING"``.
 base_path : str, optional
@@ -149,10 +149,10 @@ async def mount(
     """Mount the context-intelligence hook.
 
     Always:
-    - Registers ConfigResolver as ``context_intelligence.config_resolver`` capability
+    - Registers HookConfigResolver as ``context_intelligence.config_resolver`` capability
     - LoggingHandler  — writes events.jsonl + dispatches to CI server
     """
-    from .config_resolver import ConfigResolver
+    from .config_resolver import HookConfigResolver
     from .handlers.logging_handler import LoggingHandler
     from .skill_fetcher import (
         TOOL_SKILLS_DISCOVERY_CAPABILITY,
@@ -161,7 +161,7 @@ async def mount(
         _is_skills_capable,
     )
 
-    resolver = ConfigResolver(config, coordinator)
+    resolver = HookConfigResolver(config, coordinator)
     log.setLevel(resolver.log_level)
     coordinator.register_capability("context_intelligence.config_resolver", resolver)
 

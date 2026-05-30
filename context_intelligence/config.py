@@ -88,6 +88,26 @@ def _parse_settings_yaml(path: Path) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Shared env-var helpers (used by HookConfigResolver and ToolConfigResolver)
+# ---------------------------------------------------------------------------
+
+#: Environment variable prefix shared by all CI configuration.
+#: ``AMPLIFIER_CONTEXT_INTELLIGENCE_WORKSPACE``  → workspace
+#: ``AMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_URL`` → context_intelligence_server_url
+#: etc.
+_ENV_PREFIX = "AMPLIFIER_CONTEXT_INTELLIGENCE_"
+
+
+def _env(suffix: str) -> str | None:
+    """Read ``AMPLIFIER_CONTEXT_INTELLIGENCE_<SUFFIX>`` from the environment.
+
+    Returns the value as a string if set and non-empty, otherwise ``None``.
+    """
+    value = os.environ.get(_ENV_PREFIX + suffix)
+    return value if value else None
+
+
+# ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
 

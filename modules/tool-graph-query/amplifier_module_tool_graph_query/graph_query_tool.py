@@ -32,6 +32,7 @@ class GraphQueryTool:
         self._coordinator = coordinator
         self._config: dict[str, Any] = config or {}
         self._resolver: Any | None = None
+        self._tool_resolver: Any | None = None
 
     @property
     def name(self) -> str:
@@ -89,9 +90,15 @@ class GraphQueryTool:
             api_key = self._resolver.context_intelligence_api_key
             workspace = self._resolver.workspace
         else:
-            server_url = self._config.get("context_intelligence_server_url") or None
-            api_key = self._config.get("context_intelligence_api_key") or None
-            workspace = self._config.get("workspace") or "default"
+            # Analytics-only mode: hook not mounted. Create ToolConfigResolver lazily —
+            # only when needed, only once per tool instance.
+            if self._tool_resolver is None:
+                from context_intelligence.tool_resolver import ToolConfigResolver
+
+                self._tool_resolver = ToolConfigResolver(self._config, self._coordinator)
+            server_url = self._tool_resolver.context_intelligence_server_url
+            api_key = self._tool_resolver.context_intelligence_api_key
+            workspace = self._tool_resolver.workspace
 
         if not server_url:
             return ToolResult(

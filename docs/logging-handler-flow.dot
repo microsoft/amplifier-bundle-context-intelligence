@@ -41,7 +41,7 @@ digraph LoggingHandlerFlow {
         ];
 
         mount_resolver [
-            label="ConfigResolver(config, coordinator)\n───────────────────\nLazy fallback chains for:\nproject_slug, base_path,\nworkspace, server_url, log_level",
+            label="HookConfigResolver(config, coordinator)\n───────────────────\nLazy fallback chains for:\nproject_slug, base_path,\nworkspace, server_url, log_level",
             fillcolor="#E8F5E9",
             color="#2E7D32"
         ];

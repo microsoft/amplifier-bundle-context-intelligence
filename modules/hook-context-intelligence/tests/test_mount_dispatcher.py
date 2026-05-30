@@ -326,12 +326,12 @@ class TestModuleContract:
 # TestCapabilityRegistration
 # ---------------------------------------------------------------------------
 class TestCapabilityRegistration:
-    """Hook registers ConfigResolver as a coordinator capability."""
+    """Hook registers HookConfigResolver as a coordinator capability."""
 
     async def test_config_resolver_capability_registered_on_mount(self) -> None:
-        """mount() registers the config_resolver capability with a ConfigResolver instance."""
+        """mount() registers the config_resolver capability with a HookConfigResolver instance."""
         from amplifier_module_hook_context_intelligence import mount
-        from amplifier_module_hook_context_intelligence.config_resolver import ConfigResolver
+        from amplifier_module_hook_context_intelligence.config_resolver import HookConfigResolver
 
         coordinator = _make_coordinator()
         await mount(coordinator, config={})
@@ -341,7 +341,7 @@ class TestCapabilityRegistration:
         assert len(cap_calls) == 1, (
             "register_capability should be called once with 'context_intelligence.config_resolver'"
         )
-        assert isinstance(cap_calls[0].args[1], ConfigResolver)
+        assert isinstance(cap_calls[0].args[1], HookConfigResolver)
 
     async def test_hook_state_capability_registered_on_mount(self) -> None:
         """mount() registers the _hook_state capability as a dict with required keys."""

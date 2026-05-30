@@ -1,31 +1,15 @@
-"""ConfigResolver — lazy fallback chain for hook configuration values."""
+"""HookConfigResolver — lazy fallback chain for hook configuration values."""
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 from typing import Any
 
-from context_intelligence.config import SETTINGS_PATH, _parse_settings_yaml
+from context_intelligence.config import SETTINGS_PATH, _env, _parse_settings_yaml  # type: ignore[attr-defined]
 from context_intelligence.reconstruct.discover import workspace_slug
 
 _DEFAULT_BASE_PATH = "~/.amplifier/projects"
 _DEFAULT_PROJECT_SLUG = "default"
-
-# Environment variable prefix for all hook configuration.
-# AMPLIFIER_CONTEXT_INTELLIGENCE_WORKSPACE  → workspace
-# AMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_URL → context_intelligence_server_url
-# etc.
-_ENV_PREFIX = "AMPLIFIER_CONTEXT_INTELLIGENCE_"
-
-
-def _env(suffix: str) -> str | None:
-    """Read ``AMPLIFIER_CONTEXT_INTELLIGENCE_<SUFFIX>`` from the environment.
-
-    Returns the value as a string if set and non-empty, otherwise ``None``.
-    """
-    value = os.environ.get(_ENV_PREFIX + suffix)
-    return value if value else None
 
 
 def _slugify_path(path_str: str) -> str:
@@ -48,13 +32,13 @@ def _slugify_path(path_str: str) -> str:
     return slug or _DEFAULT_PROJECT_SLUG
 
 
-class ConfigResolver:
-    """Resolve configuration values with lazy fallback chains.
+class HookConfigResolver:
+    """Resolve configuration values with lazy fallback chains for the CI hook.
 
     Resolution order per property:
 
     - project_slug: config → coordinator.config → session.working_dir capability → 'default'
-    - base_path:    config → coordinator.config → default
+    - base_path:    config → coordinator.config → AMPLIFIER_CONTEXT_INTELLIGENCE_BASE_PATH env var → default
     - workspace:    config['workspace'] → coordinator.config['workspace'] → project_slug
 
     Resolved values are cached after first access.

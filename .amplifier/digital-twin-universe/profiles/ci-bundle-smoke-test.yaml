@@ -1,6 +1,6 @@
 # Smoke-test profile for amplifier-bundle-context-intelligence
 #
-# Tests: library imports, CLI tools, hook ConfigResolver, and Amplifier
+# Tests: library imports, CLI tools, hook HookConfigResolver, and Amplifier
 # bundle loading.  Does NOT require an external CI server.
 #
 # Usage:

@@ -164,7 +164,7 @@ def _via_jsonl(*args: Any, session_dir: Path) -> list[dict]:
 # Wrapper examples (each is a thin shell over get_X):
 #
 # Agent tool (in-session):
-#   register a tool whose handler reads ConfigResolver for server_url and
+#   register a tool whose handler reads HookConfigResolver for server_url and
 #   session_dir, then calls get_X(..., mode="auto", ...).
 #
 # CLI (out-of-session):

@@ -301,7 +301,7 @@ reconstructs session summaries that can then be uploaded to the graph server for
 ## Section 4: Context File References
 
 @context-intelligence:context/config-resolution.dot
-<!-- ConfigResolver fallback chain: how context_intelligence_server_url, workspace, and log_level are resolved from env vars and settings -->
+<!-- HookConfigResolver fallback chain: how context_intelligence_server_url, workspace, and log_level are resolved from env vars and settings -->
 
 @context-intelligence:context/delegation-strategy.dot
 <!-- delegation chain diagram: graph-analyst → session-navigator → foundation:session-analyst -->

@@ -38,7 +38,7 @@ def _make_coordinator(server_url: str | None, skill_path: Path | None) -> MagicM
         return None
 
     coordinator.get_capability = MagicMock(side_effect=_get_capability)
-    # Put server_url in coordinator.config so ConfigResolver can find it
+    # Put server_url in coordinator.config so HookConfigResolver can find it
     coordinator.config = {"context_intelligence_server_url": server_url} if server_url else {}
 
     return coordinator

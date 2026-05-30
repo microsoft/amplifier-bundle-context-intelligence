@@ -71,7 +71,7 @@ def _workspace_from_path(session_dir: Path) -> str:
     Used as a fallback when an ``events.jsonl`` record does not carry a
     ``workspace`` field.  Sessions captured before workspace was added to the
     on-disk format lack the field entirely; the project slug is the value
-    ``ConfigResolver`` would have resolved at live-capture time.
+    ``HookConfigResolver`` would have resolved at live-capture time.
 
     Path structure:
         .../.amplifier/projects/{project_slug}/sessions/{id}/context-intelligence/

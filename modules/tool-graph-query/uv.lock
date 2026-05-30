@@ -5,7 +5,7 @@ requires-python = ">=3.11"
 [[package]]
 name = "amplifier-bundle-context-intelligence"
 version = "0.1.1"
-source = { editable = "../../" }
+source = { directory = "../../" }
 
 [package.metadata]
 
@@ -53,7 +53,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "amplifier-bundle-context-intelligence", editable = "../../" },
+    { name = "amplifier-bundle-context-intelligence", directory = "../../" },
     { name = "httpx", specifier = ">=0.28.1" },
     { name = "idna", specifier = ">=3.15" },
 ]

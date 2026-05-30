@@ -1,4 +1,4 @@
-// ConfigResolver — lazy fallback chain for hook configuration values.
+// HookConfigResolver — lazy fallback chain for hook configuration values.
 //
 // Each property is resolved on first access and cached.
 // Empty strings in config are treated as absent and fall through
@@ -6,14 +6,14 @@
 //
 // Render: dot -Tsvg config-resolution.dot -o config-resolution.svg
 
-digraph ConfigResolver {
+digraph HookConfigResolver {
     rankdir=TB;
     fontname="Helvetica";
     node [fontname="Helvetica", shape=box, style="rounded,filled", fillcolor="#f0f0f0"];
     edge [fontname="Helvetica", fontsize=10];
 
     // --- Central node ---
-    resolver [label="ConfigResolver", shape=component, fillcolor="#d4e6f1", style="filled"];
+    resolver [label="HookConfigResolver", shape=component, fillcolor="#d4e6f1", style="filled"];
 
     // --- Input sources ---
     subgraph cluster_inputs {

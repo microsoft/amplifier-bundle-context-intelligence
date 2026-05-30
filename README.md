@@ -157,7 +157,7 @@ overrides:
       context_intelligence_api_key: "${CONTEXT_INTELLIGENCE_TEAM_SERVER_API_KEY}"
 ```
 
-The `${...}` placeholder is resolved by the app-cli before the value reaches the hook, so `ConfigResolver` receives the secret value through its config dict (highest resolution priority). The custom key name in `keys.env` is invisible to the bundle itself.
+The `${...}` placeholder is resolved by the app-cli before the value reaches the hook, so `HookConfigResolver` receives the secret value through its config dict (highest resolution priority). The custom key name in `keys.env` is invisible to the bundle itself.
 
 ---
 
@@ -230,7 +230,7 @@ cleanup = await mount(coordinator, config={
 
 ### Accessing resolved values
 
-`mount()` registers a `ConfigResolver` as the `context_intelligence.config_resolver` capability:
+`mount()` registers a `HookConfigResolver` as the `context_intelligence.config_resolver` capability:
 
 ```python
 resolver = coordinator.get_capability("context_intelligence.config_resolver")
@@ -409,7 +409,7 @@ amplifier-bundle-context-intelligence/
 │   ├── event-schema.md                 ← all 51+ Amplifier events
 │   ├── graph-model-reference.md        ← Neo4j graph model for Cypher queries
 │   ├── safe-extraction-patterns.md     ← JSONL navigation patterns
-│   ├── config-resolution.dot           ← ConfigResolver fallback chain diagram
+│   ├── config-resolution.dot           ← HookConfigResolver fallback chain diagram
 │   ├── session-disk-layout.dot         ← on-disk session directory structure
 │   ├── delegation-strategy.dot         ← graph-analyst → session-navigator delegation logic
 │   ├── agents/
