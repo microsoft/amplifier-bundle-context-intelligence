@@ -76,13 +76,13 @@ class GraphQueryTool:
             )
 
         if self._resolver is None:
-            return ToolResult(
-                success=False,
-                error={
-                    "message": "context-intelligence hook not configured",
-                    "type": "configuration_error",
-                },
-            )
+            # Analytics-only mode: hook-context-intelligence is not mounted.
+            # Fall back to StandaloneConfigResolver which reads from env vars
+            # and ~/.amplifier/settings.yaml — the same sources ConfigResolver
+            # uses, but without needing the hook's coordinator capability.
+            from context_intelligence.standalone_resolver import StandaloneConfigResolver
+
+            self._resolver = StandaloneConfigResolver()
 
         server_url = self._resolver.context_intelligence_server_url
         if not server_url:

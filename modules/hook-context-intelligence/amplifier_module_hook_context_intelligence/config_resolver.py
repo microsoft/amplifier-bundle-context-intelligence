@@ -135,13 +135,17 @@ class ConfigResolver:
     def base_path(self) -> Path:
         """Resolved base path for project storage.
 
-        Chain: config['base_path'] → coordinator.config['base_path'] → default.
+        Chain: config['base_path']
+               → coordinator.config['base_path']
+               → AMPLIFIER_CONTEXT_INTELLIGENCE_BASE_PATH env var
+               → default (~/.amplifier/projects).
         Tilde is expanded.  Result is cached after first access.
         """
         if self._base_path is None:
             raw = (
                 self._config.get("base_path")
                 or self._coordinator_config_get("base_path")
+                or _env("BASE_PATH")
                 or _DEFAULT_BASE_PATH
             )
             self._base_path = Path(raw).expanduser()

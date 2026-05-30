@@ -8,7 +8,7 @@ bundle:
     Use this when you want both read/query capabilities AND session instrumentation.
 
 includes:
-  - bundle: context-intelligence:behaviors/context-intelligence-nav
+  - bundle: context-intelligence:behaviors/context-intelligence-analytics
 
 hooks:
   - module: hook-context-intelligence

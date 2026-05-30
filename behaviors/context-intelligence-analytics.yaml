@@ -1,5 +1,5 @@
 bundle:
-  name: context-intelligence-nav-behavior
+  name: context-intelligence-analytics-behavior
   version: 0.1.0
   description: >
     Context intelligence: navigation, exploration, and tool-design capabilities.
