@@ -3,7 +3,24 @@
 You have access to the **context-intelligence** bundle for analyzing Amplifier sessions
 through an event-driven property graph.
 
-## Two Composition Modes
+## Three Composition Modes
+
+Pick the smallest behavior that covers your need. The hook (producer) and the
+analysis agents/tools (consumer) are independently composable.
+
+**Logging-only** (`context-intelligence-logging` behavior):
+- The `hook-context-intelligence` module **only** — no agents, tools, skills, or design mode.
+- Use for pure session instrumentation/telemetry: capture all events as structured
+  JSONL (and optionally dispatch them to the graph server) without adding any
+  read/query surface to the session.
+- This is the **producer** side only. It does NOT include `graph_query`, `blob_read`,
+  or the navigation agents — you cannot read events back with this behavior alone.
+- Events are stored at:
+  ```
+  <BASE_PATH>/{slug}/sessions/{id}/context-intelligence/events.jsonl
+  <BASE_PATH>/{slug}/sessions/{id}/context-intelligence/metadata.json
+  ```
+  where `BASE_PATH` defaults to `~/.amplifier/projects`.
 
 **Analytics-only** (`context-intelligence-analytics` behavior):
 - Agents, tools, skills, and design mode — **no event capture hook**.
@@ -13,14 +30,9 @@ through an event-driven property graph.
   (env var or `~/.amplifier/settings.yaml`) — no hook required.
 
 **Full** (`context-intelligence` behavior):
-- Everything above **plus** the `hook-context-intelligence` module.
-- Hook captures all session events as structured JSONL and forwards them to the graph server.
-- Events are stored at:
-  ```
-  <BASE_PATH>/{slug}/sessions/{id}/context-intelligence/events.jsonl
-  <BASE_PATH>/{slug}/sessions/{id}/context-intelligence/metadata.json
-  ```
-  where `BASE_PATH` defaults to `~/.amplifier/projects`.
+- Composes **both** the analytics and logging behaviors — read/query capabilities
+  AND the `hook-context-intelligence` event-capture module in one drop-in.
+- Equivalent to composing `context-intelligence-analytics` + `context-intelligence-logging`.
 
 ## Capabilities
 

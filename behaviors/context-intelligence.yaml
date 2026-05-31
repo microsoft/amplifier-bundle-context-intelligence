@@ -3,32 +3,13 @@ bundle:
   version: 0.1.0
   description: >
     Full context intelligence: graph-powered session analysis, navigation agents,
-    skills, design mode, AND event-capture hook for session telemetry.
-    Composes context-intelligence-nav and adds the hook-context-intelligence module.
-    Use this when you want both read/query capabilities AND session instrumentation.
+    skills, design mode, AND the event-capture hook for session telemetry.
+    Composes the analytics behavior (read/query/design) and the logging behavior
+    (event-capture hook) into a single drop-in. Use this when you want both
+    read/query capabilities AND session instrumentation. For finer-grained control,
+    compose context-intelligence-analytics (read only) or
+    context-intelligence-logging (hook only) directly.
 
 includes:
   - bundle: context-intelligence:behaviors/context-intelligence-analytics
-
-hooks:
-  - module: hook-context-intelligence
-    source: git+https://github.com/microsoft/amplifier-bundle-context-intelligence@main#subdirectory=modules/hook-context-intelligence
-    config:
-      context_intelligence_server_url: "${AMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_URL:}"
-      context_intelligence_api_key: "${AMPLIFIER_CONTEXT_INTELLIGENCE_API_KEY:}"
-      # workspace: auto-resolved from coordinator project_slug → config → env var fallback
-      workspace: "${AMPLIFIER_CONTEXT_INTELLIGENCE_WORKSPACE:}"
-      log_level: "${AMPLIFIER_CONTEXT_INTELLIGENCE_LOG_LEVEL:INFO}"
-      dispatch_timeout: "${AMPLIFIER_CONTEXT_INTELLIGENCE_DISPATCH_TIMEOUT:30}"
-      dispatch_failure_threshold: "${AMPLIFIER_CONTEXT_INTELLIGENCE_DISPATCH_FAILURE_THRESHOLD:3}"
-      additional_events:
-        - delegate:agent_spawned
-        - delegate:agent_resumed
-        - delegate:agent_completed
-        - delegate:agent_cancelled
-        - delegate:error
-      # Base path where session files are written. Defaults to ~/.amplifier/projects.
-      # Override via env var or set explicitly here.
-      base_path: "${AMPLIFIER_CONTEXT_INTELLIGENCE_BASE_PATH:}"
-      # project_slug: (auto-resolved from working directory; uncomment to override)
-      # exclude_events: []  (optional fnmatch patterns; uncomment and list events to suppress)
+  - bundle: context-intelligence:behaviors/context-intelligence-logging
