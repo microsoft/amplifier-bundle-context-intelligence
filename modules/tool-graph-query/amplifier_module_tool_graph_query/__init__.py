@@ -1,7 +1,7 @@
 """Graph query tool module — Cypher queries against the context-intelligence server.
 
 Implements the Amplifier Tool protocol.  Configuration is resolved lazily
-via the ``context_intelligence.config_resolver`` coordinator capability
+via the ``context_intelligence.hook_config_resolver`` coordinator capability
 registered by the hook-context-intelligence module.
 """
 
@@ -18,7 +18,7 @@ async def mount(coordinator: Any, config: dict[str, Any]) -> dict[str, Any]:
     Passes ``config`` into GraphQueryTool so it can resolve server_url,
     api_key and workspace directly when hook-context-intelligence is not
     mounted (analytics-only mode).  When the hook IS mounted its
-    ``context_intelligence.config_resolver`` capability takes priority.
+    ``context_intelligence.hook_config_resolver`` capability takes priority.
     """
     from .graph_query_tool import GraphQueryTool
 

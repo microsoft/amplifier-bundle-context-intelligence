@@ -24,7 +24,7 @@ class BlobReadTool:
 
     Configuration priority at execute() time:
 
-    1. ``context_intelligence.config_resolver`` coordinator capability
+    1. ``context_intelligence.hook_config_resolver`` coordinator capability
        (registered by hook-context-intelligence when the full behavior is used).
     2. ``config`` dict passed to mount() — used when the analytics-only behavior
        is composed without the hook.
@@ -33,7 +33,7 @@ class BlobReadTool:
     def __init__(self, coordinator: Any, config: dict[str, Any] | None = None) -> None:
         self._coordinator = coordinator
         self._config: dict[str, Any] = config or {}
-        self._resolver: Any = None
+        self._resolver: Any | None = None
         self._tool_resolver: Any | None = None
 
     @property

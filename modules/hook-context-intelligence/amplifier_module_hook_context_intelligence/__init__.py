@@ -153,7 +153,7 @@ async def mount(
     """Mount the context-intelligence hook.
 
     Always:
-    - Registers HookConfigResolver as ``context_intelligence.config_resolver`` capability
+    - Registers HookConfigResolver as ``context_intelligence.hook_config_resolver`` capability
     - LoggingHandler  — writes events.jsonl + dispatches to CI server
     """
     from .config_resolver import HookConfigResolver

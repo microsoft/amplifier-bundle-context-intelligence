@@ -1,7 +1,7 @@
 """GraphQueryTool — agent-facing tool for executing Cypher queries.
 
 Implements the Amplifier Tool protocol.  Configuration is resolved lazily at
-execute() time, preferring the ``context_intelligence.config_resolver``
+execute() time, preferring the ``context_intelligence.hook_config_resolver``
 coordinator capability registered by hook-context-intelligence.  When the hook
 is not mounted (analytics-only mode) the tool falls back to the ``config`` dict
 passed via mount() — the standard Amplifier tool configuration mechanism.
@@ -22,7 +22,7 @@ class GraphQueryTool:
     Implements the Amplifier Tool protocol (name, description, input_schema,
     execute).  Configuration priority at execute() time:
 
-    1. ``context_intelligence.config_resolver`` coordinator capability
+    1. ``context_intelligence.hook_config_resolver`` coordinator capability
        (registered by hook-context-intelligence when the full behavior is used).
     2. ``config`` dict passed to mount() — used when the analytics-only behavior
        is composed without the hook.
