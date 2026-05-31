@@ -451,3 +451,71 @@ class TestAnalyticsOnlyMode:
         assert result.error is not None
         assert result.error["type"] == "configuration_error"
         assert "server URL not configured" in result.error["message"]
+
+
+# ---------------------------------------------------------------------------
+# TestLateMountUpgrade
+# ---------------------------------------------------------------------------
+
+
+class TestLateMountUpgrade:
+    """Late-mount upgrade path: hook resolver supersedes ToolConfigResolver after mount.
+
+    The lazy re-check design: while ``_resolver`` is ``None``,
+    ``get_capability`` is called on every ``execute()``.  A coordinator that
+    mounts the hook between two calls therefore causes the tool to switch from
+    the ToolConfigResolver fallback to the hook resolver — changing
+    ``server_url`` — on the very next call.
+    """
+
+    async def test_late_mount_switches_from_tool_resolver_to_hook_resolver(
+        self,
+    ) -> None:
+        """First execute() uses ToolConfigResolver (hook absent); second uses hook resolver.
+
+        Asserts that ``AsyncCIClient`` is constructed with the tool-config
+        ``server_url`` on call 1 and the hook ``server_url`` on call 2.
+        """
+        from amplifier_module_tool_graph_query.graph_query_tool import GraphQueryTool
+
+        hook_resolver = _make_resolver(
+            server_url="http://hook-server:9000",
+            workspace="hook-workspace",
+            api_key="hook-key",
+        )
+        # First get_capability call returns None (hook not yet mounted).
+        # Second get_capability call returns hook_resolver (hook mounted between calls).
+        coordinator = MagicMock()
+        coordinator.get_capability = MagicMock(side_effect=[None, hook_resolver])
+        coordinator.config = {}
+
+        config = {
+            "context_intelligence_server_url": "http://tool-config-server:8000",
+            "context_intelligence_api_key": "tool-key",
+            "workspace": "tool-workspace",
+        }
+        tool = GraphQueryTool(coordinator=coordinator, config=config)
+
+        mock_instance, mock_cls = _make_mock_async_ci_client()
+        with patch("amplifier_module_tool_graph_query.graph_query_tool.AsyncCIClient", mock_cls):
+            result1 = await tool.execute({"query": "MATCH (n) RETURN n LIMIT 1"})
+            result2 = await tool.execute({"query": "MATCH (n) RETURN n LIMIT 2"})
+
+        # Both calls must succeed
+        assert result1.success is True
+        assert result2.success is True
+
+        # AsyncCIClient must have been constructed once per execute() call
+        assert mock_cls.call_count == 2
+
+        first_url = mock_cls.call_args_list[0].kwargs.get("server_url")
+        second_url = mock_cls.call_args_list[1].kwargs.get("server_url")
+
+        # Call 1: hook absent → ToolConfigResolver drives server_url from config dict
+        assert first_url == "http://tool-config-server:8000", (
+            f"Expected tool-config URL on first call, got {first_url!r}"
+        )
+        # Call 2: hook now present → hook resolver drives server_url
+        assert second_url == "http://hook-server:9000", (
+            f"Expected hook URL on second call, got {second_url!r}"
+        )

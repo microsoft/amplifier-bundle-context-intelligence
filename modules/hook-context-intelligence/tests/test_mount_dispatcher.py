@@ -341,7 +341,7 @@ class TestCapabilityRegistration:
             c for c in reg_calls if c.args[0] == "context_intelligence.hook_config_resolver"
         ]
         assert len(cap_calls) == 1, (
-            "register_capability should be called once with 'context_intelligence.config_resolver'"
+            "register_capability should be called once with 'context_intelligence.hook_config_resolver'"
         )
         assert isinstance(cap_calls[0].args[1], HookConfigResolver)
 

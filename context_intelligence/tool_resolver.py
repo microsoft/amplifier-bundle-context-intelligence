@@ -2,7 +2,7 @@
 
 Used by tool-graph-query and tool-blob-read when the hook-context-intelligence
 module is NOT mounted.  Created lazily at execute() time on the first call where
-``context_intelligence.config_resolver`` coordinator capability is absent.
+``context_intelligence.hook_config_resolver`` coordinator capability is absent.
 
 Resolution priority for every property (mirrors HookConfigResolver for the
 shared keys):
@@ -33,7 +33,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from context_intelligence.config import SETTINGS_PATH, _env, _parse_settings_yaml
+from context_intelligence.config import SETTINGS_PATH, _env, _parse_settings_yaml  # type: ignore[attr-defined]
 
 _DEFAULT_WORKSPACE = "default"
 

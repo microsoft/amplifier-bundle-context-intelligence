@@ -230,7 +230,7 @@ cleanup = await mount(coordinator, config={
 
 ### Accessing resolved values
 
-`mount()` registers a `HookConfigResolver` as the `context_intelligence.config_resolver` capability:
+`mount()` registers a `HookConfigResolver` as the `context_intelligence.hook_config_resolver` capability:
 
 ```python
 resolver = coordinator.get_capability("context_intelligence.hook_config_resolver")
