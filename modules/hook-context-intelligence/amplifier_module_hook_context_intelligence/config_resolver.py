@@ -18,22 +18,21 @@ _DEFAULT_PROJECT_SLUG = "default"
 # etc.
 _ENV_PREFIX = "AMPLIFIER_CONTEXT_INTELLIGENCE_"
 
-# Default event-name patterns excluded from local JSONL logging and graph dispatch.
+# Default event-name patterns (fnmatch) excluded from local JSONL logging and graph dispatch.
 #
-# This default intentionally MATCHES amplifier-module-hooks-logging's _DEFAULT_EXCLUDE_EVENTS
-# so both hooks behave identically out of the box — users who run both hooks see the same
-# event set in their local events.jsonl AND in the graph server by default.
+# The pattern ``llm:stream_*delta`` expresses the transient-streaming-delta *category*: it
+# matches every per-token delta event (currently ``llm:stream_block_delta``) while sparing
+# the structural streaming events (block_start, block_end, stream_aborted).  The glob comes
+# directly from the "Event dispositions" convention in the provider streaming contract
+# (provider-streaming-contract.md) and is intentionally IDENTICAL to the default used by
+# amplifier-module-hooks-logging — aligned by that convention, NOT by shared code.
 #
-# Alignment is by VALUE (identical list), not by shared code or import.  The two hooks are
-# deliberately decoupled; they must NOT share a module, constant, or import.  If you need to
-# change this default, mirror the change in amplifier-module-hooks-logging independently.
+# The two hooks are deliberately decoupled; they must NOT share a module, constant, or import.
+# Keep them in sync via the contract, never by extracting a shared module.  If you change
+# this default, mirror the change in amplifier-module-hooks-logging independently.
 #
-# llm:stream_block_delta fires once per token-ish fragment (hundreds-to-thousands per turn)
-# and floods both the audit log and the graph.  The surrounding block_start / block_end /
-# stream_aborted events are sufficient for most purposes.  The common streaming contract
-# (provider-streaming-contract.md) defines the full four-event envelope; only the per-token
-# delta is suppressed here.  Set exclude_events: [] in config to opt back in.
-_DEFAULT_EXCLUDE_EVENTS: list[str] = ["llm:stream_block_delta"]
+# Set exclude_events: [] in config to opt back in to all events including the deltas.
+_DEFAULT_EXCLUDE_EVENTS: list[str] = ["llm:stream_*delta"]
 
 
 def _env(suffix: str) -> str | None:
@@ -189,9 +188,9 @@ class ConfigResolver:
     def exclude_events(self) -> frozenset[str]:
         """Frozen set of event-name patterns (fnmatch) to suppress from logging and dispatch.
 
-        Defaults to ``_DEFAULT_EXCLUDE_EVENTS`` (["llm:stream_block_delta"]) — keeping the
-        high-frequency per-token streaming delta out of both the local events.jsonl and the
-        graph-server dispatch by default.
+        Defaults to ``_DEFAULT_EXCLUDE_EVENTS`` (["llm:stream_*delta"]) — matching the
+        transient per-token streaming delta category (fnmatch) while sparing the structural
+        streaming events (block_start, block_end, stream_aborted).
 
         Set ``exclude_events: []`` in config to disable the filter and log/dispatch every event.
         No coordinator fallback.  Result is cached after first access.

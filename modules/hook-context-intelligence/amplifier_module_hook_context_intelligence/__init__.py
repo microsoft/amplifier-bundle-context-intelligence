@@ -19,10 +19,11 @@ log_level : str, optional
 base_path : str, optional
     Root directory for JSONL output.  Defaults to the coordinator
     working directory.
-exclude_events : list[str], default ["llm:stream_block_delta"]
+exclude_events : list[str], default ["llm:stream_*delta"]
     Event name patterns (fnmatch) to suppress from both local JSONL logging and
-    graph-server dispatch.  Defaults to ``["llm:stream_block_delta"]``, keeping
-    the high-frequency per-token streaming delta out of both sinks.
+    graph-server dispatch.  Defaults to ``["llm:stream_*delta"]``, matching the
+    transient per-token streaming delta category while sparing the structural
+    streaming events (block_start, block_end, stream_aborted).
     Set ``exclude_events: []`` to disable the filter and log/dispatch every event.
 additional_events : list[str], optional
     Event names to register unconditionally, regardless of capability
