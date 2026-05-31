@@ -64,9 +64,10 @@ class SkillFetcher:
     drifted (git, manual edit, etc.) and an unconditional GET is performed.
     """
 
-    def __init__(self, server_url: str, timeout: float = 3.0) -> None:
+    def __init__(self, server_url: str, timeout: float = 3.0, api_key: str | None = None) -> None:
         self._server_url = server_url.rstrip("/")
         self._timeout = timeout
+        self._api_key = api_key
 
     async def check_server_version(self) -> VersionCheckResult:
         """Check the server version via GET /version. Never raises."""
@@ -107,6 +108,8 @@ class SkillFetcher:
         content_hash_path = skill_path.parent / _CONTENT_HASH_FILENAME
 
         headers: dict[str, str] = {}
+        if self._api_key:
+            headers["Authorization"] = f"Bearer {self._api_key}"
         if etag_path.exists():
             stored_etag = etag_path.read_text().strip()
             if stored_etag:

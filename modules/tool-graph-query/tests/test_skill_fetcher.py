@@ -186,9 +186,7 @@ class TestSkillFetcherETagSidecar:
 
         skill_path = tmp_path / "SKILL.md"
         skill_path.write_text("# Existing skill content")
-        (tmp_path / ".content_hash").write_text(
-            hashlib.sha256(skill_path.read_bytes()).hexdigest()
-        )
+        (tmp_path / ".content_hash").write_text(hashlib.sha256(skill_path.read_bytes()).hexdigest())
         (tmp_path / ".etag").write_text("stored-etag-value")
         fetcher = SkillFetcher("http://localhost:8000")
         mock_cls = _make_http_mock(304, "", "")
@@ -297,3 +295,43 @@ class TestCheckServerVersion:
         with patch("httpx.AsyncClient", _make_version_http_mock(200, {"version": "2.0.0"})):
             result = await fetcher.check_server_version()
         assert result == VersionCheckResult(reachable=True, version="2.0.0")
+
+
+class TestSkillFetcherAuth:
+    async def test_bearer_header_present_when_api_key_set(self, tmp_path: Path) -> None:
+        from amplifier_module_tool_graph_query.skill_fetcher import SkillFetcher
+
+        skill_path = tmp_path / "SKILL.md"
+        fetcher = SkillFetcher("http://localhost:8000", api_key="secret-token")
+        mock_cls = _make_http_mock(200, "skill content", "")
+        with patch("httpx.AsyncClient", mock_cls):
+            await fetcher.fetch("my-skill", skill_path)
+        sent_headers = mock_cls.return_value.get.call_args.kwargs.get("headers", {})
+        assert sent_headers.get("Authorization") == "Bearer secret-token"
+
+    async def test_no_auth_header_when_api_key_absent(self, tmp_path: Path) -> None:
+        from amplifier_module_tool_graph_query.skill_fetcher import SkillFetcher
+
+        skill_path = tmp_path / "SKILL.md"
+        fetcher = SkillFetcher("http://localhost:8000")
+        mock_cls = _make_http_mock(200, "skill content", "")
+        with patch("httpx.AsyncClient", mock_cls):
+            await fetcher.fetch("my-skill", skill_path)
+        sent_headers = mock_cls.return_value.get.call_args.kwargs.get("headers", {})
+        assert "Authorization" not in sent_headers
+
+    async def test_auth_and_if_none_match_coexist(self, tmp_path: Path) -> None:
+        from amplifier_module_tool_graph_query.skill_fetcher import SkillFetcher
+
+        skill_path = tmp_path / "SKILL.md"
+        content = b"# Existing skill content"
+        skill_path.write_bytes(content)
+        (tmp_path / ".content_hash").write_text(hashlib.sha256(content).hexdigest())
+        (tmp_path / ".etag").write_text("stored-etag-value")
+        fetcher = SkillFetcher("http://localhost:8000", api_key="secret-token")
+        mock_cls = _make_http_mock(304, "", "")
+        with patch("httpx.AsyncClient", mock_cls):
+            await fetcher.fetch("my-skill", skill_path)
+        sent_headers = mock_cls.return_value.get.call_args.kwargs.get("headers", {})
+        assert sent_headers.get("Authorization") == "Bearer secret-token"
+        assert sent_headers.get("If-None-Match") == "stored-etag-value"
