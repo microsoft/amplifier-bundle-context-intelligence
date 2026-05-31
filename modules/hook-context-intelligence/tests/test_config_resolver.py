@@ -3,6 +3,8 @@
 from pathlib import Path
 from unittest.mock import MagicMock
 
+import fnmatch
+
 from amplifier_module_hook_context_intelligence.config_resolver import ConfigResolver
 from amplifier_module_hook_context_intelligence.config_resolver import _slugify_path
 
@@ -227,12 +229,90 @@ class TestContextIntelligenceServerUrl:
 
 
 class TestExcludeEvents:
-    def test_defaults_to_empty_set(self) -> None:
-        """exclude_events returns an empty set when not set in config."""
+    def test_defaults_to_stream_delta_glob(self) -> None:
+        """exclude_events defaults to the llm:stream_*delta convention glob when not set.
+
+        The pattern expresses the transient-streaming-delta category (fnmatch), not one
+        hardcoded event name.  It is intentionally IDENTICAL to amplifier-module-hooks-logging's
+        _DEFAULT_EXCLUDE_EVENTS, aligned by the provider streaming contract convention, NOT
+        by shared code or import — the two hooks must remain decoupled.
+        """
         coordinator = _make_coordinator(config={})
         resolver = ConfigResolver(config={}, coordinator=coordinator)
 
-        assert resolver.exclude_events == set()
+        assert resolver.exclude_events == {"llm:stream_*delta"}
+
+    def test_explicit_empty_list_disables_filter(self) -> None:
+        """exclude_events: [] (explicit empty) disables the filter entirely.
+
+        An explicit empty list opts back in to full logging/dispatch.
+        The distinction between "unset" (default applies) and "set to []" (no filter)
+        is intentional: unset uses the default; [] means the operator wants everything.
+        """
+        coordinator = _make_coordinator(config={})
+        resolver = ConfigResolver(
+            config={"exclude_events": []},
+            coordinator=coordinator,
+        )
+
+        assert resolver.exclude_events == frozenset()
+
+    def test_stream_block_delta_excluded_by_default(self) -> None:
+        """llm:stream_block_delta is matched by the default glob — treated as excluded."""
+        coordinator = _make_coordinator(config={})
+        resolver = ConfigResolver(config={}, coordinator=coordinator)
+
+        assert any(fnmatch.fnmatch("llm:stream_block_delta", p) for p in resolver.exclude_events)
+
+    def test_stream_block_start_not_excluded_by_default(self) -> None:
+        """llm:stream_block_start is NOT matched by the default glob — structural event spared."""
+        coordinator = _make_coordinator(config={})
+        resolver = ConfigResolver(config={}, coordinator=coordinator)
+
+        assert not any(
+            fnmatch.fnmatch("llm:stream_block_start", p) for p in resolver.exclude_events
+        )
+
+    def test_stream_block_end_not_excluded_by_default(self) -> None:
+        """llm:stream_block_end is NOT matched by the default glob — structural event spared."""
+        coordinator = _make_coordinator(config={})
+        resolver = ConfigResolver(config={}, coordinator=coordinator)
+
+        assert not any(fnmatch.fnmatch("llm:stream_block_end", p) for p in resolver.exclude_events)
+
+    def test_stream_aborted_not_excluded_by_default(self) -> None:
+        """llm:stream_aborted is NOT matched by the default glob — structural event spared."""
+        coordinator = _make_coordinator(config={})
+        resolver = ConfigResolver(config={}, coordinator=coordinator)
+
+        assert not any(fnmatch.fnmatch("llm:stream_aborted", p) for p in resolver.exclude_events)
+
+    def test_ordinary_event_not_excluded_by_default(self) -> None:
+        """Ordinary events like llm:response are NOT matched by the default glob."""
+        coordinator = _make_coordinator(config={})
+        resolver = ConfigResolver(config={}, coordinator=coordinator)
+
+        assert not any(fnmatch.fnmatch("llm:response", p) for p in resolver.exclude_events)
+
+    def test_glob_spares_structural_streaming_events(self) -> None:
+        """The llm:stream_*delta glob explicitly spares the structural streaming events.
+
+        llm:stream_block_delta  -> matched  (suppressed by default)
+        llm:stream_block_start  -> no match (passes through)
+        llm:stream_block_end    -> no match (passes through)
+        llm:stream_aborted      -> no match (passes through)
+        """
+        coordinator = _make_coordinator(config={})
+        resolver = ConfigResolver(config={}, coordinator=coordinator)
+        patterns = resolver.exclude_events
+
+        def is_excluded(event: str) -> bool:
+            return any(fnmatch.fnmatch(event, p) for p in patterns)
+
+        assert is_excluded("llm:stream_block_delta"), "delta must be suppressed"
+        assert not is_excluded("llm:stream_block_start"), "block_start must pass through"
+        assert not is_excluded("llm:stream_block_end"), "block_end must pass through"
+        assert not is_excluded("llm:stream_aborted"), "stream_aborted must pass through"
 
     def test_returns_set_from_list(self) -> None:
         """exclude_events converts a list from config to a set."""
