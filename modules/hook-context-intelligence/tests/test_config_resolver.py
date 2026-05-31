@@ -269,7 +269,9 @@ class TestExcludeEvents:
         coordinator = _make_coordinator(config={})
         resolver = ConfigResolver(config={}, coordinator=coordinator)
 
-        assert not any(fnmatch.fnmatch("llm:stream_block_start", p) for p in resolver.exclude_events)
+        assert not any(
+            fnmatch.fnmatch("llm:stream_block_start", p) for p in resolver.exclude_events
+        )
 
     def test_stream_block_end_not_excluded_by_default(self) -> None:
         """llm:stream_block_end is NOT matched by the default glob — structural event spared."""
@@ -311,7 +313,6 @@ class TestExcludeEvents:
         assert not is_excluded("llm:stream_block_start"), "block_start must pass through"
         assert not is_excluded("llm:stream_block_end"), "block_end must pass through"
         assert not is_excluded("llm:stream_aborted"), "stream_aborted must pass through"
-
 
     def test_returns_set_from_list(self) -> None:
         """exclude_events converts a list from config to a set."""

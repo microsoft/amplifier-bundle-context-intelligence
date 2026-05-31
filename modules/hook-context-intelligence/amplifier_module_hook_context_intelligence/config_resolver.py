@@ -196,7 +196,9 @@ class ConfigResolver:
         No coordinator fallback.  Result is cached after first access.
         """
         if self._exclude_events is None:
-            self._exclude_events = frozenset(self._config.get("exclude_events", _DEFAULT_EXCLUDE_EVENTS))
+            self._exclude_events = frozenset(
+                self._config.get("exclude_events", _DEFAULT_EXCLUDE_EVENTS)
+            )
         return self._exclude_events
 
     @property
