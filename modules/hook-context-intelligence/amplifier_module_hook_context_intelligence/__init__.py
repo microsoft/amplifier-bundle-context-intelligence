@@ -19,8 +19,11 @@ log_level : str, optional
 base_path : str, optional
     Root directory for JSONL output.  Defaults to the coordinator
     working directory.
-exclude_events : list[str], optional
-    Event name patterns (fnmatch) to suppress from logging and dispatch.
+exclude_events : list[str], default ["llm:stream_block_delta"]
+    Event name patterns (fnmatch) to suppress from both local JSONL logging and
+    graph-server dispatch.  Defaults to ``["llm:stream_block_delta"]``, keeping
+    the high-frequency per-token streaming delta out of both sinks.
+    Set ``exclude_events: []`` to disable the filter and log/dispatch every event.
 additional_events : list[str], optional
     Event names to register unconditionally, regardless of capability
     discovery order.  Use to capture events from modules that mount after

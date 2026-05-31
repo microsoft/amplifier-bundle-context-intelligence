@@ -227,12 +227,67 @@ class TestContextIntelligenceServerUrl:
 
 
 class TestExcludeEvents:
-    def test_defaults_to_empty_set(self) -> None:
-        """exclude_events returns an empty set when not set in config."""
+    def test_defaults_to_block_delta(self) -> None:
+        """exclude_events defaults to {"llm:stream_block_delta"} when not set in config.
+
+        This intentionally matches amplifier-module-hooks-logging's _DEFAULT_EXCLUDE_EVENTS
+        so both hooks behave identically out of the box.  The two hooks are aligned by
+        value, NOT by shared code or import — they must remain decoupled.
+        """
         coordinator = _make_coordinator(config={})
         resolver = ConfigResolver(config={}, coordinator=coordinator)
 
-        assert resolver.exclude_events == set()
+        assert resolver.exclude_events == {"llm:stream_block_delta"}
+
+    def test_explicit_empty_list_disables_filter(self) -> None:
+        """exclude_events: [] (explicit empty) disables the filter entirely.
+
+        An explicit empty list opts back in to full logging/dispatch.
+        The distinction between "unset" (default applies) and "set to []" (no filter)
+        is intentional: unset uses the default; [] means the operator wants everything.
+        """
+        coordinator = _make_coordinator(config={})
+        resolver = ConfigResolver(
+            config={"exclude_events": []},
+            coordinator=coordinator,
+        )
+
+        assert resolver.exclude_events == frozenset()
+
+    def test_stream_block_delta_excluded_by_default(self) -> None:
+        """llm:stream_block_delta is in the default exclusion set."""
+        coordinator = _make_coordinator(config={})
+        resolver = ConfigResolver(config={}, coordinator=coordinator)
+
+        assert "llm:stream_block_delta" in resolver.exclude_events
+
+    def test_stream_block_start_not_excluded_by_default(self) -> None:
+        """llm:stream_block_start is NOT excluded by default — only the per-token delta is."""
+        coordinator = _make_coordinator(config={})
+        resolver = ConfigResolver(config={}, coordinator=coordinator)
+
+        assert "llm:stream_block_start" not in resolver.exclude_events
+
+    def test_stream_block_end_not_excluded_by_default(self) -> None:
+        """llm:stream_block_end is NOT excluded by default."""
+        coordinator = _make_coordinator(config={})
+        resolver = ConfigResolver(config={}, coordinator=coordinator)
+
+        assert "llm:stream_block_end" not in resolver.exclude_events
+
+    def test_stream_aborted_not_excluded_by_default(self) -> None:
+        """llm:stream_aborted is NOT excluded by default."""
+        coordinator = _make_coordinator(config={})
+        resolver = ConfigResolver(config={}, coordinator=coordinator)
+
+        assert "llm:stream_aborted" not in resolver.exclude_events
+
+    def test_ordinary_event_not_excluded_by_default(self) -> None:
+        """Ordinary events like llm:response are NOT excluded by default."""
+        coordinator = _make_coordinator(config={})
+        resolver = ConfigResolver(config={}, coordinator=coordinator)
+
+        assert "llm:response" not in resolver.exclude_events
 
     def test_returns_set_from_list(self) -> None:
         """exclude_events converts a list from config to a set."""

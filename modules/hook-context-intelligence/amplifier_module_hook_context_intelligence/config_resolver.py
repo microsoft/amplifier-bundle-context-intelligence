@@ -18,6 +18,23 @@ _DEFAULT_PROJECT_SLUG = "default"
 # etc.
 _ENV_PREFIX = "AMPLIFIER_CONTEXT_INTELLIGENCE_"
 
+# Default event-name patterns excluded from local JSONL logging and graph dispatch.
+#
+# This default intentionally MATCHES amplifier-module-hooks-logging's _DEFAULT_EXCLUDE_EVENTS
+# so both hooks behave identically out of the box — users who run both hooks see the same
+# event set in their local events.jsonl AND in the graph server by default.
+#
+# Alignment is by VALUE (identical list), not by shared code or import.  The two hooks are
+# deliberately decoupled; they must NOT share a module, constant, or import.  If you need to
+# change this default, mirror the change in amplifier-module-hooks-logging independently.
+#
+# llm:stream_block_delta fires once per token-ish fragment (hundreds-to-thousands per turn)
+# and floods both the audit log and the graph.  The surrounding block_start / block_end /
+# stream_aborted events are sufficient for most purposes.  The common streaming contract
+# (provider-streaming-contract.md) defines the full four-event envelope; only the per-token
+# delta is suppressed here.  Set exclude_events: [] in config to opt back in.
+_DEFAULT_EXCLUDE_EVENTS: list[str] = ["llm:stream_block_delta"]
+
 
 def _env(suffix: str) -> str | None:
     """Read ``AMPLIFIER_CONTEXT_INTELLIGENCE_<SUFFIX>`` from the environment.
@@ -170,13 +187,17 @@ class ConfigResolver:
 
     @property
     def exclude_events(self) -> frozenset[str]:
-        """Frozen set of event names to exclude from processing.
+        """Frozen set of event-name patterns (fnmatch) to suppress from logging and dispatch.
 
-        Reads directly from config['exclude_events'], defaults to empty frozenset.
+        Defaults to ``_DEFAULT_EXCLUDE_EVENTS`` (["llm:stream_block_delta"]) — keeping the
+        high-frequency per-token streaming delta out of both the local events.jsonl and the
+        graph-server dispatch by default.
+
+        Set ``exclude_events: []`` in config to disable the filter and log/dispatch every event.
         No coordinator fallback.  Result is cached after first access.
         """
         if self._exclude_events is None:
-            self._exclude_events = frozenset(self._config.get("exclude_events", []))
+            self._exclude_events = frozenset(self._config.get("exclude_events", _DEFAULT_EXCLUDE_EVENTS))
         return self._exclude_events
 
     @property
