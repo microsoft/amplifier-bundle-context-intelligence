@@ -34,7 +34,6 @@ class BlobReadTool:
         self._coordinator = coordinator
         self._config: dict[str, Any] = config or {}
         self._hook_resolver: Any | None = None
-        self._tool_resolver: Any | None = None
 
     @property
     def name(self) -> str:
@@ -73,14 +72,10 @@ class BlobReadTool:
             server_url: str | None = self._hook_resolver.context_intelligence_server_url
             api_key: str | None = self._hook_resolver.context_intelligence_api_key
         else:
-            # Analytics-only mode: hook not mounted. Create ToolConfigResolver lazily —
-            # only when needed, only once per tool instance.
-            if self._tool_resolver is None:
-                from context_intelligence.tool_resolver import ToolConfigResolver
-
-                self._tool_resolver = ToolConfigResolver(self._config, self._coordinator)
-            server_url = self._tool_resolver.context_intelligence_server_url
-            api_key = self._tool_resolver.context_intelligence_api_key
+            # Analytics-only mode: hook not mounted. Read directly from the config
+            # dict passed to mount() — no env-var fallback in this path.
+            server_url = self._config.get("context_intelligence_server_url")
+            api_key = self._config.get("context_intelligence_api_key")
 
         if not server_url:
             return ToolResult(
