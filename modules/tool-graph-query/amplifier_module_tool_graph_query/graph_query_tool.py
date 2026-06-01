@@ -12,6 +12,7 @@ from __future__ import annotations
 from typing import Any
 
 from context_intelligence.client import AsyncCIClient
+from context_intelligence.tool_resolver import ToolConfigResolver
 
 from amplifier_core.models import ToolResult
 
@@ -32,6 +33,7 @@ class GraphQueryTool:
         self._coordinator = coordinator
         self._config: dict[str, Any] = config or {}
         self._hook_resolver: Any | None = None
+        self._tool_resolver = ToolConfigResolver(self._config, coordinator)
 
     @property
     def name(self) -> str:
@@ -77,18 +79,19 @@ class GraphQueryTool:
         }
 
     def _resolve_server_config(self, coordinator: Any) -> tuple[str | None, str | None, str]:
-        """Return (server_url, api_key, workspace) from hook resolver or config dict.
+        """Return (server_url, api_key, workspace) from hook resolver or ToolConfigResolver.
 
         While ``_hook_resolver`` is ``None``, calls ``get_capability`` on every
         invocation so that a hook mounted after tool construction is picked up on
         the very next ``execute()`` call (late-mount upgrade path).  Once set,
         ``_hook_resolver`` is cached and ``get_capability`` is no longer called.
 
-        In analytics-only mode (no hook), values are read directly from the
-        ``config`` dict.  No env-var or settings-file fallback is applied here:
-        if ``context_intelligence_server_url`` is absent from the config dict,
-        ``server_url`` is ``None`` and ``execute()`` will return a
-        ``configuration_error`` before reaching the query path.
+        In analytics-only mode (no hook), ``_tool_resolver`` (a
+        ``ToolConfigResolver``) is used.  It applies the full four-level
+        priority chain: config dict → coordinator.config →
+        AMPLIFIER_CONTEXT_INTELLIGENCE_* env vars → ~/.amplifier/settings.yaml.
+        If no source provides a server URL, ``server_url`` is ``None`` and
+        ``execute()`` will return a ``configuration_error``.
         """
         if self._hook_resolver is None:
             self._hook_resolver = coordinator.get_capability(
@@ -100,10 +103,12 @@ class GraphQueryTool:
                 self._hook_resolver.context_intelligence_api_key,
                 self._hook_resolver.workspace,
             )
+        # Analytics-only mode: delegate to ToolConfigResolver for full
+        # env-var / settings.yaml fallback chain.
         return (
-            self._config.get("context_intelligence_server_url"),
-            self._config.get("context_intelligence_api_key"),
-            self._config.get("workspace") or "default",
+            self._tool_resolver.context_intelligence_server_url,
+            self._tool_resolver.context_intelligence_api_key,
+            self._tool_resolver.workspace,
         )
 
     async def execute(self, input: dict[str, Any]) -> ToolResult:  # noqa: A002

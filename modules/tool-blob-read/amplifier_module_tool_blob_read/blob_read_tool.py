@@ -9,6 +9,7 @@ from typing import Any
 
 from amplifier_core import ToolResult
 from context_intelligence.client import AsyncCIClient
+from context_intelligence.tool_resolver import ToolConfigResolver
 
 _URI_SCHEME = "ci-blob://"
 _BLOB_DIR = Path("/tmp/ci-blobs")
@@ -34,6 +35,7 @@ class BlobReadTool:
         self._coordinator = coordinator
         self._config: dict[str, Any] = config or {}
         self._hook_resolver: Any | None = None
+        self._tool_resolver = ToolConfigResolver(self._config, coordinator)
 
     @property
     def name(self) -> str:
@@ -67,15 +69,19 @@ class BlobReadTool:
             )
 
         # (2) Resolve server_url and api_key — from hook capability when
-        # available, otherwise directly from the tool's mount() config dict.
+        # available, otherwise from ToolConfigResolver (full env/settings
+        # fallback chain).
         if self._hook_resolver is not None:
             server_url: str | None = self._hook_resolver.context_intelligence_server_url
             api_key: str | None = self._hook_resolver.context_intelligence_api_key
         else:
-            # Analytics-only mode: hook not mounted. Read directly from the config
-            # dict passed to mount() — no env-var fallback in this path.
-            server_url = self._config.get("context_intelligence_server_url")
-            api_key = self._config.get("context_intelligence_api_key")
+            # Analytics-only mode: hook not mounted.  Delegate to
+            # ToolConfigResolver which applies the full four-level priority
+            # chain: config dict → coordinator.config →
+            # AMPLIFIER_CONTEXT_INTELLIGENCE_* env vars →
+            # ~/.amplifier/settings.yaml.
+            server_url = self._tool_resolver.context_intelligence_server_url
+            api_key = self._tool_resolver.context_intelligence_api_key
 
         if not server_url:
             return ToolResult(

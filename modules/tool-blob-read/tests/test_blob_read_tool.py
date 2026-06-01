@@ -136,11 +136,20 @@ class TestBlobReadToolProtocol:
 class TestLazyCapabilityResolution:
     """execute() must resolve the config capability lazily and cache it."""
 
-    async def test_capability_not_found_returns_configuration_error(self) -> None:
+    async def test_capability_not_found_returns_configuration_error(self, monkeypatch) -> None:
         from amplifier_module_tool_blob_read.blob_read_tool import BlobReadTool
 
+        # Isolate from live AMPLIFIER_CONTEXT_INTELLIGENCE_* env vars so that
+        # ToolConfigResolver cannot find a server URL anywhere and the guard
+        # in execute() returns configuration_error.
+        monkeypatch.delenv("AMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_URL", raising=False)
+        monkeypatch.delenv("AMPLIFIER_CONTEXT_INTELLIGENCE_API_KEY", raising=False)
+        monkeypatch.delenv("AMPLIFIER_CONTEXT_INTELLIGENCE_WORKSPACE", raising=False)
+
+        coordinator = _make_coordinator(None)
+        coordinator.config = {}
         # get_capability returns None → capability not registered
-        tool = BlobReadTool(_make_coordinator(None))
+        tool = BlobReadTool(coordinator)
         result = await tool.execute({"uri": "ci-blob://session/key"})
 
         assert result.success is False
@@ -432,11 +441,18 @@ class TestAnalyticsOnlyMode:
         assert result.success is True
         mock_cls.assert_called_once_with(server_url="http://ci:4200", api_key="key123")
 
-    async def test_analytics_only_no_server_url_returns_error(self) -> None:
+    async def test_analytics_only_no_server_url_returns_error(self, monkeypatch) -> None:
         """Missing server URL in config returns a configuration_error — not 'hook not configured'."""
         from amplifier_module_tool_blob_read.blob_read_tool import BlobReadTool
 
+        # Isolate from live AMPLIFIER_CONTEXT_INTELLIGENCE_* env vars so
+        # ToolConfigResolver has nowhere to find a server URL.
+        monkeypatch.delenv("AMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_URL", raising=False)
+        monkeypatch.delenv("AMPLIFIER_CONTEXT_INTELLIGENCE_API_KEY", raising=False)
+        monkeypatch.delenv("AMPLIFIER_CONTEXT_INTELLIGENCE_WORKSPACE", raising=False)
+
         coordinator = _make_coordinator(None)
+        coordinator.config = {}
         config = {
             "context_intelligence_api_key": "key123",
             # no "context_intelligence_server_url"
@@ -449,6 +465,35 @@ class TestAnalyticsOnlyMode:
         assert result.error is not None
         assert result.error["type"] == "configuration_error"
         assert "server URL not configured" in result.error["message"]
+
+    async def test_analytics_only_env_var_fallback_resolves_server_url(self, monkeypatch) -> None:
+        """ToolConfigResolver env-var fallback must be used when config has no server_url.
+
+        Regression: commits 584efb9/be6451e removed ToolConfigResolver, dropping the
+        AMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_URL env-var fallback path in analytics-only
+        mode.  This test ensures the fallback is restored.
+        """
+        from amplifier_module_tool_blob_read.blob_read_tool import BlobReadTool
+
+        # Stamp a specific URL into the env var (overrides whatever live value exists)
+        monkeypatch.setenv("AMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_URL", "http://env-server:8000")
+
+        coordinator = _make_coordinator(None)
+        coordinator.config = {}  # prevent coordinator.config from providing a URL
+        config = {
+            "context_intelligence_api_key": "key123",
+            # deliberately NO "context_intelligence_server_url" in config
+        }
+        tool = BlobReadTool(coordinator, config=config)
+
+        with _patch_async_client(fetch_blob_return={"data": "test"}) as (mock_cls, _):
+            result = await tool.execute({"uri": "ci-blob://session-123/some-key"})
+
+        # ToolConfigResolver must have resolved the URL from the env var
+        assert result.success is True, f"Expected success=True (env-var fallback), got: {result}"
+        mock_cls.assert_called_once()
+        call_kwargs = mock_cls.call_args.kwargs
+        assert call_kwargs.get("server_url") == "http://env-server:8000"
 
 
 # ---------------------------------------------------------------------------

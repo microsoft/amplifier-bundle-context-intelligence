@@ -110,10 +110,18 @@ class TestGraphQueryToolProtocol:
 class TestLazyCapabilityResolution:
     """Lazy resolver lookup and caching behaviour."""
 
-    async def test_capability_not_found_returns_configuration_error(self) -> None:
+    async def test_capability_not_found_returns_configuration_error(self, monkeypatch) -> None:
         from amplifier_module_tool_graph_query.graph_query_tool import GraphQueryTool
 
+        # Isolate from live AMPLIFIER_CONTEXT_INTELLIGENCE_* env vars so that
+        # ToolConfigResolver cannot find a server URL anywhere and the guard
+        # in execute() returns configuration_error.
+        monkeypatch.delenv("AMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_URL", raising=False)
+        monkeypatch.delenv("AMPLIFIER_CONTEXT_INTELLIGENCE_API_KEY", raising=False)
+        monkeypatch.delenv("AMPLIFIER_CONTEXT_INTELLIGENCE_WORKSPACE", raising=False)
+
         coordinator = _make_coordinator(resolver=None)
+        coordinator.config = {}
         tool = GraphQueryTool(coordinator=coordinator)
         result = await tool.execute({"query": "MATCH (n) RETURN n"})
 
@@ -434,11 +442,18 @@ class TestAnalyticsOnlyMode:
         # workspace is the 2nd positional arg: cypher(query, workspace, params=...)
         assert cypher_args.args[1] == "default"
 
-    async def test_analytics_only_no_server_url_returns_error(self) -> None:
+    async def test_analytics_only_no_server_url_returns_error(self, monkeypatch) -> None:
         """Missing server URL in config returns a configuration_error — not 'hook not configured'."""
         from amplifier_module_tool_graph_query.graph_query_tool import GraphQueryTool
 
+        # Isolate from live AMPLIFIER_CONTEXT_INTELLIGENCE_* env vars so
+        # ToolConfigResolver has nowhere to find a server URL.
+        monkeypatch.delenv("AMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_URL", raising=False)
+        monkeypatch.delenv("AMPLIFIER_CONTEXT_INTELLIGENCE_API_KEY", raising=False)
+        monkeypatch.delenv("AMPLIFIER_CONTEXT_INTELLIGENCE_WORKSPACE", raising=False)
+
         coordinator = _make_coordinator(resolver=None)
+        coordinator.config = {}
         config = {
             "context_intelligence_api_key": "key123",
             # no "context_intelligence_server_url"
@@ -451,6 +466,35 @@ class TestAnalyticsOnlyMode:
         assert result.error is not None
         assert result.error["type"] == "configuration_error"
         assert "server URL not configured" in result.error["message"]
+
+    async def test_analytics_only_env_var_fallback_resolves_server_url(self, monkeypatch) -> None:
+        """ToolConfigResolver env-var fallback must be used when config has no server_url.
+
+        Regression: commits 584efb9/be6451e removed ToolConfigResolver, dropping the
+        AMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_URL env-var fallback path in analytics-only
+        mode.  This test ensures the fallback is restored.
+        """
+        from amplifier_module_tool_graph_query.graph_query_tool import GraphQueryTool
+
+        # Stamp a specific URL into the env var (overrides whatever live value exists)
+        monkeypatch.setenv("AMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_URL", "http://env-server:8000")
+
+        coordinator = _make_coordinator(resolver=None)
+        coordinator.config = {}  # prevent coordinator.config from providing a URL
+        config = {
+            "context_intelligence_api_key": "key123",
+            # deliberately NO "context_intelligence_server_url" in config
+        }
+        tool = GraphQueryTool(coordinator=coordinator, config=config)
+
+        mock_instance, mock_cls = _make_mock_async_ci_client()
+        with patch("amplifier_module_tool_graph_query.graph_query_tool.AsyncCIClient", mock_cls):
+            result = await tool.execute({"query": "MATCH (n) RETURN n"})
+
+        # ToolConfigResolver must have resolved the URL from the env var
+        assert result.success is True, f"Expected success=True (env-var fallback), got: {result}"
+        call_kwargs = mock_cls.call_args.kwargs
+        assert call_kwargs.get("server_url") == "http://env-server:8000"
 
 
 # ---------------------------------------------------------------------------
