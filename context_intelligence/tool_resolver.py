@@ -33,9 +33,24 @@ from __future__ import annotations
 
 from typing import Any
 
-from context_intelligence.config import SETTINGS_PATH, _env, _parse_settings_yaml  # type: ignore[attr-defined]
+from context_intelligence.config import (  # type: ignore[attr-defined]
+    SETTINGS_PATH,
+    _env,
+    _expand_env_placeholders,
+    _parse_settings_yaml,
+)
 
 _DEFAULT_WORKSPACE = "default"
+
+
+def _expand(value: Any) -> Any:
+    """Expand shell-style ``${VAR}`` placeholders in *value* if it is a string.
+
+    Returns the expanded string, or *value* unchanged when it is not a string.
+    An unexpanded placeholder like ``${VAR:}`` with *VAR* unset expands to ``""``
+    (falsy), letting the caller's ``or``-chain continue to the next source.
+    """
+    return _expand_env_placeholders(value) if isinstance(value, str) else value
 
 
 class ToolConfigResolver:
@@ -80,10 +95,14 @@ class ToolConfigResolver:
         2. coordinator.config['context_intelligence_server_url']
         3. AMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_URL env var
         4. ~/.amplifier/settings.yaml
+
+        Shell-style placeholders (``${VAR:}``) in steps 1–2 are expanded
+        against the environment before the truthiness check so that an
+        unexpanded placeholder does not short-circuit the chain.
         """
         value = (
-            self._config.get("context_intelligence_server_url")
-            or self._coordinator_config_get("context_intelligence_server_url")
+            _expand(self._config.get("context_intelligence_server_url"))
+            or _expand(self._coordinator_config_get("context_intelligence_server_url"))
             or _env("SERVER_URL")
             or _parse_settings_yaml(SETTINGS_PATH).get("server_url")
         )
@@ -98,10 +117,14 @@ class ToolConfigResolver:
         2. coordinator.config['context_intelligence_api_key']
         3. AMPLIFIER_CONTEXT_INTELLIGENCE_API_KEY env var
         4. ~/.amplifier/settings.yaml
+
+        Shell-style placeholders (``${VAR:}``) in steps 1–2 are expanded
+        against the environment before the truthiness check so that an
+        unexpanded placeholder does not short-circuit the chain.
         """
         value = (
-            self._config.get("context_intelligence_api_key")
-            or self._coordinator_config_get("context_intelligence_api_key")
+            _expand(self._config.get("context_intelligence_api_key"))
+            or _expand(self._coordinator_config_get("context_intelligence_api_key"))
             or _env("API_KEY")
             or _parse_settings_yaml(SETTINGS_PATH).get("api_key")
         )
@@ -122,12 +145,15 @@ class ToolConfigResolver:
         an active capture session.  In analytics-only mode set the env var or
         pass workspace explicitly via the tool's config.
 
+        Shell-style placeholders (``${VAR:}``) in steps 1–2 are expanded
+        against the environment before the truthiness check.
+
         Cached after first access.
         """
         if self._workspace is None:
             self._workspace = str(
-                self._config.get("workspace")
-                or self._coordinator_config_get("workspace")
+                _expand(self._config.get("workspace"))
+                or _expand(self._coordinator_config_get("workspace"))
                 or _env("WORKSPACE")
                 or _DEFAULT_WORKSPACE
             )

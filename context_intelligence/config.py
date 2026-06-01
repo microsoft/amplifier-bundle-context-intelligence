@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 from pathlib import Path
 
 log = logging.getLogger("context_intelligence.config")
@@ -105,6 +106,34 @@ def _env(suffix: str) -> str | None:
     """
     value = os.environ.get(_ENV_PREFIX + suffix)
     return value if value else None
+
+
+# ---------------------------------------------------------------------------
+# Shell-style placeholder expander (used by ToolConfigResolver)
+# ---------------------------------------------------------------------------
+
+_PLACEHOLDER_RE = re.compile(r"\$\{([^}:]+)(?::([^}]*))?\}")
+
+
+def _expand_env_placeholders(value: str) -> str:
+    """Expand shell-style ``${VAR}``, ``${VAR:}``, ``${VAR:default}`` placeholders.
+
+    - ``${VAR}`` — replaced with ``os.environ[VAR]`` if set, else ``""``.
+    - ``${VAR:}`` — same as ``${VAR}`` (empty default when var is unset).
+    - ``${VAR:default}`` — replaced with ``os.environ[VAR]`` if set, else ``"default"``.
+    - Non-placeholder strings pass through unchanged.
+
+    Note: ``os.path.expandvars`` does **not** support the ``${VAR:default}``
+    colon syntax used by the agent behavior YAML files shipped with this bundle,
+    hence this small regex-based helper.
+    """
+
+    def _replace(m: re.Match) -> str:  # type: ignore[type-arg]
+        var_name = m.group(1)
+        default = m.group(2) if m.group(2) is not None else ""
+        return os.environ.get(var_name, default)
+
+    return _PLACEHOLDER_RE.sub(_replace, value)
 
 
 # ---------------------------------------------------------------------------

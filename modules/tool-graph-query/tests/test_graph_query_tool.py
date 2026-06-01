@@ -625,3 +625,117 @@ class TestResolveServerConfigHelper:
         tool._resolve_server_config(coordinator)
 
         assert tool._hook_resolver is hook
+
+
+# ---------------------------------------------------------------------------
+# TestExpandEnvPlaceholders — unit tests for the helper (Case 4)
+# ---------------------------------------------------------------------------
+
+
+class TestExpandEnvPlaceholders:
+    """Unit tests for _expand_env_placeholders in context_intelligence.config."""
+
+    def test_var_syntax_env_set(self, monkeypatch) -> None:
+        """${VAR} with env set → env var value."""
+        from context_intelligence.config import _expand_env_placeholders
+
+        monkeypatch.setenv("_CI_TEST_PLACEHOLDER_VAR", "hello")
+        assert _expand_env_placeholders("${_CI_TEST_PLACEHOLDER_VAR}") == "hello"
+
+    def test_var_syntax_env_unset(self, monkeypatch) -> None:
+        """${VAR} with env unset → empty string."""
+        from context_intelligence.config import _expand_env_placeholders
+
+        monkeypatch.delenv("_CI_TEST_PLACEHOLDER_VAR", raising=False)
+        assert _expand_env_placeholders("${_CI_TEST_PLACEHOLDER_VAR}") == ""
+
+    def test_var_colon_empty_default_env_set(self, monkeypatch) -> None:
+        """${VAR:} with env set → env var value."""
+        from context_intelligence.config import _expand_env_placeholders
+
+        monkeypatch.setenv("_CI_TEST_PLACEHOLDER_VAR", "world")
+        assert _expand_env_placeholders("${_CI_TEST_PLACEHOLDER_VAR:}") == "world"
+
+    def test_var_colon_empty_default_env_unset(self, monkeypatch) -> None:
+        """${VAR:} with env unset → empty string."""
+        from context_intelligence.config import _expand_env_placeholders
+
+        monkeypatch.delenv("_CI_TEST_PLACEHOLDER_VAR", raising=False)
+        assert _expand_env_placeholders("${_CI_TEST_PLACEHOLDER_VAR:}") == ""
+
+    def test_var_with_default_env_unset(self, monkeypatch) -> None:
+        """${VAR:default} with env unset → 'default'."""
+        from context_intelligence.config import _expand_env_placeholders
+
+        monkeypatch.delenv("_CI_TEST_PLACEHOLDER_VAR", raising=False)
+        assert _expand_env_placeholders("${_CI_TEST_PLACEHOLDER_VAR:my_default}") == "my_default"
+
+    def test_plain_string_passes_through_unchanged(self) -> None:
+        """A non-placeholder string passes through unchanged."""
+        from context_intelligence.config import _expand_env_placeholders
+
+        assert _expand_env_placeholders("http://plain:8000") == "http://plain:8000"
+
+
+# ---------------------------------------------------------------------------
+# TestToolConfigResolverPlaceholderExpansion — Cases 1-3
+# ---------------------------------------------------------------------------
+
+
+class TestToolConfigResolverPlaceholderExpansion:
+    """ToolConfigResolver must expand ${VAR} placeholders from the config dict.
+
+    In analytics-only mode, agent behaviors ship config values like:
+        context_intelligence_server_url: "${AMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_URL:}"
+    These arrive as literal strings in the mount() config dict.  Without
+    expansion they are truthy and short-circuit the env-var fallback chain.
+    """
+
+    def test_server_url_placeholder_with_env_set(self, monkeypatch) -> None:
+        """Case 1: placeholder config + env set → real URL is returned."""
+        from context_intelligence.tool_resolver import ToolConfigResolver
+
+        monkeypatch.setenv("AMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_URL", "http://real:8000")
+        # Isolate the settings.yaml fallback so only env var or placeholder matters.
+        import context_intelligence.tool_resolver as _tr
+
+        monkeypatch.setattr(_tr, "_parse_settings_yaml", lambda _: {})
+
+        config = {
+            "context_intelligence_server_url": "${AMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_URL:}"
+        }
+        resolver = ToolConfigResolver(config=config, coordinator=MagicMock())
+
+        assert resolver.context_intelligence_server_url == "http://real:8000"
+
+    def test_server_url_placeholder_with_env_unset_returns_none(self, monkeypatch) -> None:
+        """Case 2: placeholder config + env unset → None (falls through entire chain)."""
+        from context_intelligence.tool_resolver import ToolConfigResolver
+
+        monkeypatch.delenv("AMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_URL", raising=False)
+        import context_intelligence.tool_resolver as _tr
+
+        monkeypatch.setattr(_tr, "_parse_settings_yaml", lambda _: {})
+
+        config = {
+            "context_intelligence_server_url": "${AMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_URL:}"
+        }
+        coordinator = MagicMock()
+        coordinator.config = {}  # ensure _coordinator_config_get returns None
+        resolver = ToolConfigResolver(config=config, coordinator=coordinator)
+
+        assert resolver.context_intelligence_server_url is None
+
+    def test_api_key_placeholder_with_env_set(self, monkeypatch) -> None:
+        """Case 3: api_key placeholder config + env set → 'secret' is returned."""
+        from context_intelligence.tool_resolver import ToolConfigResolver
+
+        monkeypatch.setenv("AMPLIFIER_CONTEXT_INTELLIGENCE_API_KEY", "secret")
+        import context_intelligence.tool_resolver as _tr
+
+        monkeypatch.setattr(_tr, "_parse_settings_yaml", lambda _: {})
+
+        config = {"context_intelligence_api_key": "${AMPLIFIER_CONTEXT_INTELLIGENCE_API_KEY:}"}
+        resolver = ToolConfigResolver(config=config, coordinator=MagicMock())
+
+        assert resolver.context_intelligence_api_key == "secret"
