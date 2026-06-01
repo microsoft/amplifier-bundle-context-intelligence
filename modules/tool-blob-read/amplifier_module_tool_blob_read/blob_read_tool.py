@@ -33,7 +33,7 @@ class BlobReadTool:
     def __init__(self, coordinator: Any, config: dict[str, Any] | None = None) -> None:
         self._coordinator = coordinator
         self._config: dict[str, Any] = config or {}
-        self._resolver: Any | None = None
+        self._hook_resolver: Any | None = None
         self._tool_resolver: Any | None = None
 
     @property
@@ -62,16 +62,16 @@ class BlobReadTool:
 
     async def execute(self, input: dict[str, Any]) -> ToolResult:  # noqa: A002
         # (1) Lazy capability resolution
-        if self._resolver is None:
-            self._resolver = self._coordinator.get_capability(
+        if self._hook_resolver is None:
+            self._hook_resolver = self._coordinator.get_capability(
                 "context_intelligence.hook_config_resolver"
             )
 
         # (2) Resolve server_url and api_key — from hook capability when
         # available, otherwise directly from the tool's mount() config dict.
-        if self._resolver is not None:
-            server_url: str | None = self._resolver.context_intelligence_server_url
-            api_key: str | None = self._resolver.context_intelligence_api_key
+        if self._hook_resolver is not None:
+            server_url: str | None = self._hook_resolver.context_intelligence_server_url
+            api_key: str | None = self._hook_resolver.context_intelligence_api_key
         else:
             # Analytics-only mode: hook not mounted. Create ToolConfigResolver lazily —
             # only when needed, only once per tool instance.

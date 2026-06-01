@@ -449,3 +449,20 @@ class TestAnalyticsOnlyMode:
         assert result.error is not None
         assert result.error["type"] == "configuration_error"
         assert "server URL not configured" in result.error["message"]
+
+
+# ---------------------------------------------------------------------------
+# (9) Attribute naming
+# ---------------------------------------------------------------------------
+
+
+class TestResolverAttributeName:
+    """BlobReadTool must use _hook_resolver (not _resolver) for the cached capability."""
+
+    def test_init_has_hook_resolver_attribute(self) -> None:
+        from amplifier_module_tool_blob_read.blob_read_tool import BlobReadTool
+
+        tool = BlobReadTool(coordinator=_make_coordinator(resolver=None))
+        assert hasattr(tool, "_hook_resolver"), "Expected _hook_resolver attribute"
+        assert tool._hook_resolver is None
+        assert not hasattr(tool, "_resolver"), "Found old _resolver attribute — rename incomplete"
