@@ -670,6 +670,13 @@ class TestExpandEnvPlaceholders:
         monkeypatch.delenv("_CI_TEST_PLACEHOLDER_VAR", raising=False)
         assert _expand_env_placeholders("${_CI_TEST_PLACEHOLDER_VAR:my_default}") == "my_default"
 
+    def test_var_with_default_env_set(self, monkeypatch) -> None:
+        """${VAR:default} with env set → env var value (default is ignored)."""
+        from context_intelligence.config import _expand_env_placeholders
+
+        monkeypatch.setenv("_CI_TEST_PLACEHOLDER_VAR", "from_env")
+        assert _expand_env_placeholders("${_CI_TEST_PLACEHOLDER_VAR:my_default}") == "from_env"
+
     def test_plain_string_passes_through_unchanged(self) -> None:
         """A non-placeholder string passes through unchanged."""
         from context_intelligence.config import _expand_env_placeholders
