@@ -32,9 +32,6 @@ class GraphQueryTool:
         self._coordinator = coordinator
         self._config: dict[str, Any] = config or {}
         self._hook_resolver: Any | None = None
-        from context_intelligence.tool_resolver import ToolConfigResolver
-
-        self._tool_resolver: Any = ToolConfigResolver(self._config, coordinator)
 
     @property
     def name(self) -> str:
@@ -79,15 +76,19 @@ class GraphQueryTool:
             "required": ["query"],
         }
 
-    def _resolve_server_config(
-        self, coordinator: Any
-    ) -> tuple[str | None, str | None, str]:
-        """Return (server_url, api_key, workspace) from hook resolver or tool resolver.
+    def _resolve_server_config(self, coordinator: Any) -> tuple[str | None, str | None, str]:
+        """Return (server_url, api_key, workspace) from hook resolver or config dict.
 
         While ``_hook_resolver`` is ``None``, calls ``get_capability`` on every
         invocation so that a hook mounted after tool construction is picked up on
         the very next ``execute()`` call (late-mount upgrade path).  Once set,
         ``_hook_resolver`` is cached and ``get_capability`` is no longer called.
+
+        In analytics-only mode (no hook), values are read directly from the
+        ``config`` dict.  No env-var or settings-file fallback is applied here:
+        if ``context_intelligence_server_url`` is absent from the config dict,
+        ``server_url`` is ``None`` and ``execute()`` will return a
+        ``configuration_error`` before reaching the query path.
         """
         if self._hook_resolver is None:
             self._hook_resolver = coordinator.get_capability(
@@ -100,9 +101,9 @@ class GraphQueryTool:
                 self._hook_resolver.workspace,
             )
         return (
-            self._tool_resolver.context_intelligence_server_url,
-            self._tool_resolver.context_intelligence_api_key,
-            self._tool_resolver.workspace,
+            self._config.get("context_intelligence_server_url"),
+            self._config.get("context_intelligence_api_key"),
+            self._config.get("workspace") or "default",
         )
 
     async def execute(self, input: dict[str, Any]) -> ToolResult:  # noqa: A002
