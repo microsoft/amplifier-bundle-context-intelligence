@@ -85,3 +85,27 @@ class TestMountBehavior:
         tool = coordinator.mount.call_args.args[1]
         assert tool._config["context_intelligence_server_url"] == "http://test"
         assert tool._config["workspace"] == "ws1"
+
+
+class TestOnSessionReadyWiring:
+    """on_session_ready is exposed at module level and mount() registers the tool capability."""
+
+    def test_module_exposes_on_session_ready(self) -> None:
+        import amplifier_module_tool_graph_query as mod
+
+        fn = getattr(mod, "on_session_ready", None)
+        assert fn is not None
+        assert inspect.iscoroutinefunction(fn)
+        sig = inspect.signature(fn)
+        first_param = list(sig.parameters.keys())[0]
+        assert first_param == "coordinator"
+
+    async def test_mount_registers_graph_query_tool_capability(self) -> None:
+        from amplifier_module_tool_graph_query import mount
+
+        coordinator = MagicMock()
+        coordinator.mount = AsyncMock()
+        coordinator.register_capability = MagicMock()
+        await mount(coordinator, config={})
+        names = [c.args[0] for c in coordinator.register_capability.call_args_list]
+        assert "context_intelligence._graph_query_tool" in names

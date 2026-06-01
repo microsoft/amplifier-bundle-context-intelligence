@@ -9,7 +9,11 @@ from __future__ import annotations
 
 from typing import Any
 
+from .skill_sync import _GRAPH_QUERY_TOOL_CAPABILITY, on_session_ready
+
 __amplifier_module_type__ = "tool"
+
+__all__ = ["mount", "on_session_ready"]
 
 
 async def mount(coordinator: Any, config: dict[str, Any]) -> dict[str, Any]:
@@ -24,4 +28,5 @@ async def mount(coordinator: Any, config: dict[str, Any]) -> dict[str, Any]:
 
     tool = GraphQueryTool(coordinator=coordinator, config=config)
     await coordinator.mount("tools", tool, name=tool.name)
+    coordinator.register_capability(_GRAPH_QUERY_TOOL_CAPABILITY, tool)
     return {"tool": tool.name, "status": "mounted"}
