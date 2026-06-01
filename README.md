@@ -62,10 +62,24 @@ The hook resolves `workspace` using the same `config → coordinator → default
 
 ### 1. Install
 
-**Add to an existing app** (recommended) — layers the behavior on top of your active bundle without pulling in foundation as a dependency:
+**Add to an existing app** — the `--app` flag layers a behavior onto **every** session, regardless of which primary bundle is active. Pick the behavior that fits your needs:
+
+**Full** (telemetry hook + analytics agents, tools, and skills):
 
 ```bash
-amplifier bundle add git+https://github.com/microsoft/amplifier-bundle-context-intelligence@main#subdirectory=behaviors/context-intelligence.yaml --app
+amplifier bundle add "git+https://github.com/microsoft/amplifier-bundle-context-intelligence@main#subdirectory=behaviors/context-intelligence.yaml" --app
+```
+
+**Analytics only** (graph-powered analysis agents + tools + skills, no telemetry hook):
+
+```bash
+amplifier bundle add "git+https://github.com/microsoft/amplifier-bundle-context-intelligence@main#subdirectory=behaviors/context-intelligence-analytics.yaml" --app
+```
+
+**Logging only** (telemetry hook only — ideal as an always-on app bundle):
+
+```bash
+amplifier bundle add "git+https://github.com/microsoft/amplifier-bundle-context-intelligence@main#subdirectory=behaviors/context-intelligence-logging.yaml" --app
 ```
 
 **Standalone** — creates a dedicated session configuration using the full root bundle (includes foundation):
@@ -76,6 +90,18 @@ amplifier bundle use context-intelligence
 ```
 
 Every Amplifier session will now write events to local JSONL files automatically — no server required.
+
+### Behaviors
+
+Three composable behaviors are included. Mix and match via `--app`:
+
+| Behavior | What it installs | When to use |
+|----------|-----------------|-------------|
+| **`context-intelligence-logging`** | `hook-context-intelligence` telemetry hook only (JSONL capture + optional server forwarding) | Always-on, team-wide session telemetry. Natural `--app` fit — composes silently onto every session. |
+| **`context-intelligence-analytics`** | `graph-analyst` + `session-navigator` agents, `/context-intelligence` mode, graph-query + blob-read tools, and navigation/query skills | Graph-powered session analysis and querying without the telemetry hook. |
+| **`context-intelligence`** (full) | Pure composition of `analytics` + `logging` | Telemetry **and** analysis in one install. |
+
+**`--app` vs standalone:** `--app` composes the behavior onto every session regardless of which primary bundle is active — it never becomes the primary bundle. The standalone form (`bundle add` + `bundle use`) makes context-intelligence the primary bundle for explicitly selected sessions.
 
 ### 2. (Optional) Enable server forwarding
 
@@ -434,12 +460,28 @@ amplifier-bundle-context-intelligence/
 
 ## Development
 
-```bash
-# Module tests
-cd modules/hook-context-intelligence
-uv sync
-uv run pytest tests/ -q
+Each module is an independent `uv` package. Set up and test them separately:
 
+```bash
+# Setup
+cd modules/tool-graph-query           && uv sync
+cd modules/tool-blob-read             && uv sync
+cd modules/hook-context-intelligence  && uv sync
+
+# Tests (run from the respective module directory)
+cd modules/tool-graph-query           && uv run pytest -q   # 87 tests
+cd modules/tool-blob-read             && uv run pytest -q   # 35 tests
+cd modules/hook-context-intelligence  && uv run pytest -q   # 299 tests
+
+# Lint + types (run from the respective module directory)
+uv run ruff check . && uv run ruff format --check . && uv run pyright
+```
+
+> **Built-copy caveat — mandatory before any red-green cycle on shared code:** modules install the shared `context_intelligence` package as a **built (non-editable) copy** in their venv. After editing shared code under `context_intelligence/`, run `uv sync --reinstall --refresh` in the affected module before testing — otherwise the stale built copy silently shadows your change and tests falsely pass even with the fix reverted.
+
+End-to-end behavior is validated in Digital Twin Universe (DTU) scenarios against a live context-intelligence server. See [AGENTS.md](AGENTS.md) for the DTU gate and the `.amplifier/digital-twin-universe/profiles/` profiles.
+
+```bash
 # Bundle-level tests
 uv run pytest ../../tests/ -q
 
