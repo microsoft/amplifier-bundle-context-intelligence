@@ -31,8 +31,10 @@ class GraphQueryTool:
     def __init__(self, coordinator: Any, config: dict[str, Any] | None = None) -> None:
         self._coordinator = coordinator
         self._config: dict[str, Any] = config or {}
-        self._resolver: Any | None = None
-        self._tool_resolver: Any | None = None
+        self._hook_resolver: Any | None = None
+        from context_intelligence.tool_resolver import ToolConfigResolver
+
+        self._tool_resolver: Any = ToolConfigResolver(self._config, coordinator)
 
     @property
     def name(self) -> str:
@@ -77,28 +79,34 @@ class GraphQueryTool:
             "required": ["query"],
         }
 
-    async def execute(self, input: dict[str, Any]) -> ToolResult:  # noqa: A002
-        if self._resolver is None:
-            self._resolver = self._coordinator.get_capability(
+    def _resolve_server_config(
+        self, coordinator: Any
+    ) -> tuple[str | None, str | None, str]:
+        """Return (server_url, api_key, workspace) from hook resolver or tool resolver.
+
+        While ``_hook_resolver`` is ``None``, calls ``get_capability`` on every
+        invocation so that a hook mounted after tool construction is picked up on
+        the very next ``execute()`` call (late-mount upgrade path).  Once set,
+        ``_hook_resolver`` is cached and ``get_capability`` is no longer called.
+        """
+        if self._hook_resolver is None:
+            self._hook_resolver = coordinator.get_capability(
                 "context_intelligence.hook_config_resolver"
             )
+        if self._hook_resolver is not None:
+            return (
+                self._hook_resolver.context_intelligence_server_url,
+                self._hook_resolver.context_intelligence_api_key,
+                self._hook_resolver.workspace,
+            )
+        return (
+            self._tool_resolver.context_intelligence_server_url,
+            self._tool_resolver.context_intelligence_api_key,
+            self._tool_resolver.workspace,
+        )
 
-        # Resolve server_url, api_key, workspace — from hook capability when
-        # available, otherwise directly from the tool's mount() config dict.
-        if self._resolver is not None:
-            server_url = self._resolver.context_intelligence_server_url
-            api_key = self._resolver.context_intelligence_api_key
-            workspace = self._resolver.workspace
-        else:
-            # Analytics-only mode: hook not mounted. Create ToolConfigResolver lazily —
-            # only when needed, only once per tool instance.
-            if self._tool_resolver is None:
-                from context_intelligence.tool_resolver import ToolConfigResolver
-
-                self._tool_resolver = ToolConfigResolver(self._config, self._coordinator)
-            server_url = self._tool_resolver.context_intelligence_server_url
-            api_key = self._tool_resolver.context_intelligence_api_key
-            workspace = self._tool_resolver.workspace
+    async def execute(self, input: dict[str, Any]) -> ToolResult:  # noqa: A002
+        server_url, api_key, workspace = self._resolve_server_config(self._coordinator)
 
         if not server_url:
             return ToolResult(

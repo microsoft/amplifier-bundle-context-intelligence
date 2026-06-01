@@ -519,3 +519,65 @@ class TestLateMountUpgrade:
         assert second_url == "http://hook-server:9000", (
             f"Expected hook URL on second call, got {second_url!r}"
         )
+
+
+# ---------------------------------------------------------------------------
+# TestResolveServerConfigHelper
+# ---------------------------------------------------------------------------
+
+
+class TestResolveServerConfigHelper:
+    """Tests for the _resolve_server_config(coordinator) helper method."""
+
+    def test_uses_hook_resolver_when_present(self) -> None:
+        """When a hook resolver is registered, it drives server_url/api_key/workspace."""
+        from amplifier_module_tool_graph_query.graph_query_tool import GraphQueryTool
+
+        hook = _make_resolver(
+            server_url="http://hook:9000",
+            api_key="hook-key",
+            workspace="hook-ws",
+        )
+        coordinator = _make_coordinator(resolver=hook)
+        tool = GraphQueryTool(coordinator=coordinator)
+
+        server_url, api_key, workspace = tool._resolve_server_config(coordinator)
+
+        assert server_url == "http://hook:9000"
+        assert api_key == "hook-key"
+        assert workspace == "hook-ws"
+
+    def test_falls_back_to_tool_resolver_when_hook_absent(self) -> None:
+        """When no hook resolver is registered, config dict values are returned."""
+        from amplifier_module_tool_graph_query.graph_query_tool import GraphQueryTool
+
+        coordinator = _make_coordinator(resolver=None)
+        coordinator.config = {}
+        config = {
+            "context_intelligence_server_url": "http://tool:8000",
+            "context_intelligence_api_key": "tool-key",
+            "workspace": "tool-ws",
+        }
+        tool = GraphQueryTool(coordinator=coordinator, config=config)
+
+        server_url, api_key, workspace = tool._resolve_server_config(coordinator)
+
+        assert server_url == "http://tool:8000"
+        assert api_key == "tool-key"
+        assert workspace == "tool-ws"
+
+    def test_caches_hook_resolver_on_attribute(self) -> None:
+        """After resolution, _hook_resolver is set to the hook resolver object."""
+        from amplifier_module_tool_graph_query.graph_query_tool import GraphQueryTool
+
+        hook = _make_resolver(
+            server_url="http://hook:9000",
+            api_key="hook-key",
+            workspace="hook-ws",
+        )
+        coordinator = _make_coordinator(resolver=hook)
+        tool = GraphQueryTool(coordinator=coordinator)
+
+        tool._resolve_server_config(coordinator)
+
+        assert tool._hook_resolver is hook
