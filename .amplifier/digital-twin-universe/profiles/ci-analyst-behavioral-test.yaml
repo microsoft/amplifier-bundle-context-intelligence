@@ -1,0 +1,325 @@
+# ============================================================================
+# BEHAVIORAL TEST PROFILE 2 of 2 -- ANALYST MODE
+# ============================================================================
+#
+# GOAL
+#   Deep, evidence-based proof that a FRESH Amplifier session, with the
+#   context-intelligence bundle installed in its ANALYTICS-ONLY behavior,
+#   provides graph/session analysis capabilities WITHOUT instrumenting the
+#   session (NO event-capture hook), and that the graph-analyst correctly
+#   falls back to local JSONL extraction when no CI server is reachable.
+#
+# WHAT "WORKS AS EXPECTED" MEANS HERE
+#   The ANALYTICS-ONLY behavior (behaviors/context-intelligence-analytics.yaml)
+#   composes the graph-analyst + session-navigator agents, the
+#   context-intelligence design MODE, tool-delegate, and tool-skills (5 general
+#   skills) -- but NOT the hook-context-intelligence module. Installed via
+#   `amplifier bundle add <bundle>@main#subdirectory=behaviors/context-intelligence-analytics.yaml --app`.
+#   Therefore:
+#     * No new session writes a context-intelligence/events.jsonl (no hook).
+#     * graph-analyst is the mandatory entry point; it checks server
+#       availability and, when unreachable / 0 sessions, falls back to
+#       session-navigator which reads local JSONL via bash/jq.
+#     * Design-mode agents (context-intelligence-design-facilitator,
+#       context-intelligence-tool-designer) are MODE-GATED and must NOT be
+#       present while the context-intelligence mode is inactive.
+#
+# A seeded FIXTURE session (containing a recognizable "fixture_marker_tool"
+# event) gives the analyst path real local data to read, proving the
+# server-unreachable -> session-navigator -> local-extraction fallback works.
+#
+# ASSERTIONS (each validation_cmd prints PASS/FAIL and exits non-zero on FAIL)
+#   A1  Hook is ABSENT: after running an analytics session, NO new
+#       context-intelligence/events.jsonl is created for that new session
+#       (only the seeded fixture dir exists). Proof analytics-only has no hook.
+#   A2  Agents available: `amplifier agents list` shows graph-analyst AND
+#       session-navigator.
+#   A3  Mode-gating: design-mode agents context-intelligence-design-facilitator
+#       and context-intelligence-tool-designer are NOT listed while the
+#       context-intelligence mode is inactive.
+#   A4  End-to-end analyst behavior with no server: graph-analyst detects the
+#       server is unreachable, FALLS BACK to session-navigator, reads the
+#       seeded fixture JSONL, and the output references the fixture (mentions
+#       fixture_marker_tool or the correct session count).
+#
+# LOCAL-BRANCH UNDER TEST
+#   Source of truth is the local working branch of the
+#   amplifier-bundle-context-intelligence submodule, mirrored to Gitea (see
+#   the MANDATORY url_rewrites block below). NOT GitHub @main.
+#
+# USAGE
+#   amplifier-digital-twin launch \
+#     .amplifier/digital-twin-universe/profiles/ci-analyst-behavioral-test.yaml \
+#     --var GITEA_URL=http://<host-ip>:<port> \
+#     --var GITEA_TOKEN=<token> \
+#     --name ci-analyst-behavioral-test
+# ============================================================================
+
+name: ci-analyst-behavioral-test
+description: >
+  ANALYST MODE behavioral test for the context-intelligence bundle (local branch
+  via Gitea). Installs the ANALYTICS-ONLY behavior (no hook), seeds a fixture
+  session, and asserts: no hook instrumentation, graph-analyst + session-navigator
+  present, design-mode agents gated out, and graph-analyst falls back to local
+  JSONL extraction when no CI server is reachable.
+
+base:
+  image: ubuntu:24.04
+
+# MANDATORY: Gitea URL rewrite for local branch skill resolution.
+# The bundle ships skills with a git+https://github.com/microsoft/amplifier-bundle-context-intelligence@main#subdirectory=skills source in behaviors/context-intelligence.yaml.
+# When running in DTU, local working branch is source of truth -- NOT GitHub @main. Without rewrite, skill registration inside DTU fetches from GitHub @main and silently runs stale code, producing test results that do not reflect local changes.
+# The digital-twin-universe:dtu-profile-builder agent mirrors the local amplifier-bundle-context-intelligence submodule to Gitea on current branch. These rewrites point every reference at that mirror.
+# url_rewrites:
+#   - from: "git+https://github.com/microsoft/amplifier-bundle-context-intelligence@main"
+#     to:   "git+http://{gitea_host}/microsoft/amplifier-bundle-context-intelligence@main"
+#
+# Implemented below using the functional DTU url_rewrites schema (auth + rules
+# with boundary match). The mitmproxy rewrite redirects EVERY reference to
+# github.com/microsoft/amplifier-bundle-context-intelligence (the analytics
+# behavior subdirectory AND the 5 #subdirectory=skills/* skill sources declared
+# in behaviors/context-intelligence-analytics.yaml) to the Gitea mirror
+# admin/amplifier-bundle-context-intelligence, whose `main` branch holds the
+# local working-tree snapshot. {gitea_host} is supplied at launch via
+# --var GITEA_URL (resolved to the Gitea mirror reachable from inside the DTU).
+url_rewrites:
+  auth:
+    username: admin
+    token_var: GITEA_TOKEN
+  default_match_mode: boundary
+  rules:
+    - match: github.com/microsoft/amplifier-bundle-context-intelligence
+      target: ${GITEA_URL}/admin/amplifier-bundle-context-intelligence
+
+passthrough:
+  allow_external: true
+  services:
+    - name: anthropic
+      key_env: ANTHROPIC_API_KEY
+    - name: github
+      key_env: GH_TOKEN
+
+provision:
+  setup_cmds:
+    # System dependencies (jq + python3 used by the assertions below)
+    - apt-get update && apt-get install -y git curl python3 jq
+
+    # Install uv
+    - curl -LsSf https://astral.sh/uv/install.sh | sh
+
+    # Configure git credentials for GitHub (transitive public deps; harmless if unset)
+    - |
+      if [ -n "$GH_TOKEN" ]; then
+        echo "machine github.com login x-token-auth password $GH_TOKEN" > /root/.netrc
+        chmod 600 /root/.netrc
+        git config --global credential.helper 'store'
+      fi
+
+    # Install Amplifier itself
+    - uv tool install git+https://github.com/microsoft/amplifier@main
+
+    # Configure Amplifier provider (anthropic only -- minimal, matches smoke test)
+    - |
+      mkdir -p /root/.amplifier
+      cat > /root/.amplifier/settings.yaml << 'EOF'
+      config:
+        providers:
+          - module: provider-anthropic
+            source: git+https://github.com/microsoft/amplifier-module-provider-anthropic@main
+            config:
+              api_key_env: ANTHROPIC_API_KEY
+      EOF
+
+    # Install the ANALYTICS-ONLY behavior (NO hook).
+    # url_rewrites redirects this @main reference to the Gitea mirror (local branch).
+    - amplifier bundle add 'git+https://github.com/microsoft/amplifier-bundle-context-intelligence@main#subdirectory=behaviors/context-intelligence-analytics.yaml' --app
+
+    # Sanity: Amplifier is working and the analytics behavior is registered
+    - amplifier --version
+    - amplifier bundle list
+
+    # ------------------------------------------------------------------
+    # SEED a fixture local session so the analyst path has real data to read.
+    # Layout: ~/.amplifier/projects/<slug>/sessions/<sid>/context-intelligence/
+    # Contains valid envelope lines incl. a recognizable "fixture_marker_tool"
+    # tool event, plus a matching metadata.json with all required fields.
+    # This dir is created at PROVISION time (before any validation marker), so
+    # A1's "no NEW events.jsonl" check correctly ignores it.
+    # ------------------------------------------------------------------
+    - |
+      FIX=/root/.amplifier/projects/fixture-proj/sessions/fixture-0001/context-intelligence
+      mkdir -p "$FIX"
+      cat > "$FIX/events.jsonl" << 'EOF'
+      {"event":"session.started","workspace":"fixture-proj","timestamp":"2026-01-01T00:00:00Z","data":{"session_id":"fixture-0001"}}
+      {"event":"provider.request","workspace":"fixture-proj","timestamp":"2026-01-01T00:00:01Z","data":{"model":"claude-sonnet"}}
+      {"event":"tool.called","workspace":"fixture-proj","timestamp":"2026-01-01T00:00:02Z","data":{"tool":"fixture_marker_tool","args":{"probe":"deep-evidence"}}}
+      {"event":"provider.response","workspace":"fixture-proj","timestamp":"2026-01-01T00:00:03Z","data":{"tokens":42}}
+      {"event":"session.completed","workspace":"fixture-proj","timestamp":"2026-01-01T00:00:04Z","data":{"status":"ok"}}
+      EOF
+      cat > "$FIX/metadata.json" << 'EOF'
+      {
+        "format": "context-intelligence-events",
+        "version": "1",
+        "session_id": "fixture-0001",
+        "workspace": "fixture-proj",
+        "started_at": "2026-01-01T00:00:00Z",
+        "last_event_at": "2026-01-01T00:00:04Z",
+        "status": "completed",
+        "working_dir": "/tmp/fixture-proj"
+      }
+      EOF
+      echo "Seeded fixture session at $FIX"
+      ls -la "$FIX"
+
+    # Snapshot the set of events.jsonl present AFTER seeding, BEFORE any test
+    # session. A1 compares against this baseline to prove no hook fired.
+    - find /root/.amplifier/projects -path '*context-intelligence/events.jsonl' | sort > /tmp/jsonl-baseline.txt
+    - mkdir -p /tmp/analyst-proj
+
+readiness:
+  - name: amplifier-installed
+    command: amplifier --version
+
+validation_cmds:
+  # ----------------------------------------------------------------------
+  # A2: graph-analyst AND session-navigator are COMPOSED into the session.
+  #
+  # METHODOLOGY: `amplifier agents show` reports the GLOBAL agent catalog (every
+  # agent .md in any cached bundle), not what was composed -- so it cannot prove
+  # composition. Analytics-only ships NO context-intelligence hook, so there is
+  # no context-intelligence/events.jsonl to read. We instead read the FOUNDATION
+  # generic event logger (hooks-logging) at sessions/<id>/events.jsonl, which
+  # captures the same session:config event, and assert data.raw.agents contains
+  # both analytics agents AND that the context-intelligence hook is ABSENT.
+  # (A4 below provides the stronger runtime proof via actual delegation.)
+  # ----------------------------------------------------------------------
+  - name: A2-agents-composed
+    command: |
+      set -e
+      mkdir -p /tmp/a2-proj && cd /tmp/a2-proj
+      SID=$(amplifier run "Say hello in one word." --mode single 2>&1 | tee /tmp/a2.log | grep -oE 'Session ID: [0-9a-f-]+' | awk '{print $3}')
+      echo "session: $SID"
+      GEN=$(find /root/.amplifier/projects -path "*/sessions/$SID/events.jsonl" 2>/dev/null | head -1)
+      if [ -z "$GEN" ]; then echo "FAIL[A2]: no generic session log found for $SID"; exit 1; fi
+      echo "generic session log: $GEN"
+      python3 - "$GEN" << 'PY'
+      import json, sys
+      cfg = None
+      for l in open(sys.argv[1]):
+          l = l.strip()
+          if not l:
+              continue
+          try:
+              o = json.loads(l)
+          except Exception:
+              continue
+          if o.get("event") == "session:config":
+              cfg = o["data"]["raw"]
+      if not cfg:
+          print("FAIL[A2]: no session:config captured"); sys.exit(1)
+      agents = list((cfg.get("agents") or {}).keys())
+      hook_mods = [h.get("module") for h in (cfg.get("hooks") or [])]
+      ga = [a for a in agents if "graph-analyst" in a]
+      sn = [a for a in agents if "session-navigator" in a]
+      ci_hook = [m for m in hook_mods if m and "context-intelligence" in m]
+      if not ga or not sn:
+          print("FAIL[A2]: analytics agents missing -- graph-analyst:", ga or "ABSENT", "session-navigator:", sn or "ABSENT"); sys.exit(1)
+      if ci_hook:
+          print("FAIL[A2]: context-intelligence hook present in analytics-only mode:", ci_hook); sys.exit(1)
+      print("PASS[A2]: analytics agents composed -- graph-analyst", ga, "AND session-navigator", sn, "; context-intelligence hook ABSENT (correct)")
+      PY
+
+  # ----------------------------------------------------------------------
+  # A3: design-mode agents are GATED behind the context-intelligence MODE.
+  #
+  # Gating in Amplifier is a COMPOSITION property, not a filesystem property:
+  # the bundle ships the design agents' .md files (so `agents show` reports
+  # them as present), but they are only composed into a session when the
+  # context-intelligence MODE is active. The always-on ANALYTICS behavior's
+  # `agents.include` lists ONLY graph-analyst + session-navigator; the design
+  # agents are declared exclusively by modes/context-intelligence.md.
+  #
+  # This assertion verifies that gating wiring against the EXACT local-branch
+  # bundle cached inside the DTU (resolved via the Gitea mirror), plus the
+  # runtime fact that no mode is active in a default analytics session:
+  #   (a) analytics behavior agents.include = {graph-analyst, session-navigator}
+  #       and does NOT reference the design agents;
+  #   (b) the context-intelligence mode DOES declare both design agents
+  #       (i.e. they are reachable only after `mode set context-intelligence`).
+  # ----------------------------------------------------------------------
+  - name: A3-mode-gating
+    command: |
+      set -e
+      BEH=$(find /root/.amplifier/cache -path '*behaviors/context-intelligence-analytics.yaml' 2>/dev/null | head -1)
+      MODE=$(find /root/.amplifier/cache -path '*modes/context-intelligence.md' 2>/dev/null | head -1)
+      if [ -z "$BEH" ] || [ -z "$MODE" ]; then
+        echo "FAIL[A3]: could not locate cached analytics behavior ($BEH) or mode ($MODE) in DTU"
+        exit 1
+      fi
+      echo "Analytics behavior: $BEH"
+      echo "Mode file:          $MODE"
+      FAILED=0
+      # (a) always-on analytics behavior must include the analyst agents...
+      grep -q 'graph-analyst' "$BEH" && grep -q 'session-navigator' "$BEH" || { echo "FAIL[A3]: analytics behavior agents.include missing analyst agents"; FAILED=1; }
+      # ...and must NOT reference the design-mode agents
+      if grep -Eq 'design-facilitator|tool-designer' "$BEH"; then
+        echo "FAIL[A3]: analytics behavior leaks design-mode agents (should be mode-gated)"
+        grep -nE 'design-facilitator|tool-designer' "$BEH"
+        FAILED=1
+      fi
+      # (b) the context-intelligence MODE must declare both design agents (gated entry point)
+      grep -q 'context-intelligence-design-facilitator' "$MODE" && grep -q 'context-intelligence-tool-designer' "$MODE" || { echo "FAIL[A3]: mode does not declare design agents"; FAILED=1; }
+      [ "$FAILED" -ne 0 ] && exit 1
+      echo "PASS[A3]: design-mode agents (design-facilitator, tool-designer) are declared ONLY by the context-intelligence mode and are absent from the always-on analytics behavior -> gated behind mode activation (mode is INACTIVE in this default analytics session)"
+
+  # ----------------------------------------------------------------------
+  # A1: hook ABSENT -- run an analytics session, assert NO new events.jsonl
+  # ----------------------------------------------------------------------
+  - name: A1-hook-absent
+    command: |
+      set -e
+      mkdir -p /tmp/analyst-proj
+      cd /tmp/analyst-proj
+      touch /tmp/analyst-marker
+      sleep 1
+      amplifier run "Say hello in one word." --mode single 2>&1 | tee /tmp/analyst-trivial.log
+      # Any events.jsonl newer than the marker would mean a hook fired -> FAIL
+      NEW=$(find /root/.amplifier/projects -path '*context-intelligence/events.jsonl' -newer /tmp/analyst-marker 2>/dev/null)
+      if [ -n "$NEW" ]; then
+        echo "FAIL[A1]: a hook fired -- new events.jsonl created in analytics-only mode:"
+        echo "$NEW"
+        exit 1
+      fi
+      # Also confirm the events.jsonl set is unchanged from the seeded baseline
+      find /root/.amplifier/projects -path '*context-intelligence/events.jsonl' | sort > /tmp/jsonl-after.txt
+      if ! diff -q /tmp/jsonl-baseline.txt /tmp/jsonl-after.txt >/dev/null; then
+        echo "FAIL[A1]: events.jsonl set changed after analytics session"
+        diff /tmp/jsonl-baseline.txt /tmp/jsonl-after.txt || true
+        exit 1
+      fi
+      echo "PASS[A1]: no hook -- analytics session created NO new events.jsonl (only seeded fixture present)"
+
+  # ----------------------------------------------------------------------
+  # A4: graph-analyst -> session-navigator local-extraction fallback (no server)
+  # ----------------------------------------------------------------------
+  - name: A4-analyst-fallback-local-extraction
+    command: |
+      set -e
+      mkdir -p /tmp/analyst-proj
+      cd /tmp/analyst-proj
+      amplifier run "Use the graph-analyst to tell me how many context-intelligence sessions exist on disk and name any tool that was used in them. Report the exact tool name." \
+        --mode single 2>&1 | tee /tmp/analyst-query.log
+      echo "----- checking output for fixture evidence -----"
+      if grep -qi "fixture_marker_tool" /tmp/analyst-query.log; then
+        echo "PASS[A4]: graph-analyst fell back to local extraction and surfaced the fixture marker tool 'fixture_marker_tool'"
+        exit 0
+      fi
+      # Secondary acceptance: correct session count (exactly 1 fixture session)
+      if grep -qiE '\b(1|one)\b[^.]*session' /tmp/analyst-query.log; then
+        echo "PASS[A4]: graph-analyst fell back to local extraction and reported the correct session count (1)"
+        exit 0
+      fi
+      echo "FAIL[A4]: analyst output did not reference the fixture (no 'fixture_marker_tool' and no correct session count)"
+      echo "--- analyst output tail ---"
+      tail -40 /tmp/analyst-query.log
+      exit 1

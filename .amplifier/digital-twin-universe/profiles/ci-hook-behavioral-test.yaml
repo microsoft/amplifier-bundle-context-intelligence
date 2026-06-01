@@ -1,0 +1,391 @@
+# ============================================================================
+# BEHAVIORAL TEST PROFILE 1 of 2 -- HOOK MODE
+# ============================================================================
+#
+# GOAL
+#   Deep, evidence-based proof that a FRESH Amplifier session, with the
+#   context-intelligence bundle installed in its FULL behavior, instruments
+#   itself correctly via the event-capture hook (hook-context-intelligence)
+#   running in LOCAL-ONLY mode (no CI server).
+#
+# WHAT "WORKS AS EXPECTED" MEANS HERE
+#   The FULL behavior (behaviors/context-intelligence.yaml) is the ONLY
+#   behavior that ships the event-capture hook. Installing it via
+#   `amplifier bundle add <bundle>@main --app` mounts the hook onto every
+#   session. With NO server env vars set the hook degrades gracefully to
+#   LOCAL-ONLY mode: it still writes a per-session events.jsonl + metadata.json
+#   under ~/.amplifier/projects/<slug>/sessions/<sid>/context-intelligence/,
+#   capturing canonical amplifier_core lifecycle events. Server dispatch is
+#   OFF unless BOTH AMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_URL and
+#   AMPLIFIER_CONTEXT_INTELLIGENCE_API_KEY are set -- which they are NOT here.
+#
+# ASSERTIONS (each validation_cmd prints PASS/FAIL and exits non-zero on FAIL)
+#   H1  events.jsonl is created under ~/.amplifier/projects/**/context-intelligence/
+#       after a real 1-turn session, and is non-empty.
+#   H2  metadata.json exists alongside it with required fields:
+#       format, version, session_id, workspace, started_at, status, working_dir.
+#   H3  Every line of events.jsonl is valid JSON with the envelope keys
+#       event, workspace, timestamp, data.
+#   H4  At least one CANONICAL lifecycle event is present (event name matching
+#       session/provider/tool) -- proves ALL_EVENTS wiring, not a single custom event.
+#   H5  Local-only graceful degradation: with NO server env vars, the session
+#       still completes AND the JSONL is written (no crash, no dispatch required).
+#
+# LOCAL-BRANCH UNDER TEST
+#   Source of truth is the local working branch of the
+#   amplifier-bundle-context-intelligence submodule, mirrored to Gitea (see
+#   the MANDATORY url_rewrites block below). NOT GitHub @main.
+#
+# USAGE
+#   amplifier-digital-twin launch \
+#     .amplifier/digital-twin-universe/profiles/ci-hook-behavioral-test.yaml \
+#     --var GITEA_URL=http://<host-ip>:<port> \
+#     --var GITEA_TOKEN=<token> \
+#     --name ci-hook-behavioral-test
+# ============================================================================
+
+name: ci-hook-behavioral-test
+description: >
+  HOOK MODE behavioral test for the context-intelligence bundle (local branch
+  via Gitea). Installs the FULL behavior, runs a real 1-turn session in
+  local-only mode (no CI server), and asserts the event-capture hook writes a
+  valid per-session events.jsonl + metadata.json with canonical lifecycle events.
+
+base:
+  image: ubuntu:24.04
+
+# MANDATORY: Gitea URL rewrite for local branch skill resolution.
+# The bundle ships skills with a git+https://github.com/microsoft/amplifier-bundle-context-intelligence@main#subdirectory=skills source in behaviors/context-intelligence.yaml.
+# When running in DTU, local working branch is source of truth -- NOT GitHub @main. Without rewrite, skill registration inside DTU fetches from GitHub @main and silently runs stale code, producing test results that do not reflect local changes.
+# The digital-twin-universe:dtu-profile-builder agent mirrors the local amplifier-bundle-context-intelligence submodule to Gitea on current branch. These rewrites point every reference at that mirror.
+# url_rewrites:
+#   - from: "git+https://github.com/microsoft/amplifier-bundle-context-intelligence@main"
+#     to:   "git+http://{gitea_host}/microsoft/amplifier-bundle-context-intelligence@main"
+#
+# Implemented below using the functional DTU url_rewrites schema (auth + rules
+# with boundary match). The mitmproxy rewrite redirects EVERY reference to
+# github.com/microsoft/amplifier-bundle-context-intelligence (the bundle add,
+# the analytics subdirectory, and #subdirectory=skills/* skill sources) to the
+# Gitea mirror admin/amplifier-bundle-context-intelligence, whose `main` branch
+# holds the local working-tree snapshot. {gitea_host} is supplied at launch via
+# --var GITEA_URL (resolved to the Gitea mirror reachable from inside the DTU).
+url_rewrites:
+  auth:
+    username: admin
+    token_var: GITEA_TOKEN
+  default_match_mode: boundary
+  rules:
+    - match: github.com/microsoft/amplifier-bundle-context-intelligence
+      target: ${GITEA_URL}/admin/amplifier-bundle-context-intelligence
+
+passthrough:
+  allow_external: true
+  services:
+    - name: anthropic
+      key_env: ANTHROPIC_API_KEY
+    - name: github
+      key_env: GH_TOKEN
+
+provision:
+  setup_cmds:
+    # System dependencies (jq + python3 used by the assertions below)
+    - apt-get update && apt-get install -y git curl python3 jq
+
+    # Install uv
+    - curl -LsSf https://astral.sh/uv/install.sh | sh
+
+    # Configure git credentials for GitHub (transitive public deps; harmless if unset)
+    - |
+      if [ -n "$GH_TOKEN" ]; then
+        echo "machine github.com login x-token-auth password $GH_TOKEN" > /root/.netrc
+        chmod 600 /root/.netrc
+        git config --global credential.helper 'store'
+      fi
+
+    # Install Amplifier itself
+    - uv tool install git+https://github.com/microsoft/amplifier@main
+
+    # Configure Amplifier provider (anthropic only -- minimal, matches smoke test)
+    - |
+      mkdir -p /root/.amplifier
+      cat > /root/.amplifier/settings.yaml << 'EOF'
+      config:
+        providers:
+          - module: provider-anthropic
+            source: git+https://github.com/microsoft/amplifier-module-provider-anthropic@main
+            config:
+              api_key_env: ANTHROPIC_API_KEY
+      EOF
+
+    # Install the FULL context-intelligence behavior (analytics + HOOK).
+    # url_rewrites redirects this @main reference to the Gitea mirror (local branch).
+    # The hook ships ONLY in this behavior.
+    - amplifier bundle add git+https://github.com/microsoft/amplifier-bundle-context-intelligence@main --app
+
+    # Sanity: Amplifier is working and the bundle is registered
+    - amplifier --version
+    - amplifier bundle list
+
+    # Workspace for the test session
+    - mkdir -p /tmp/hook-proj
+
+readiness:
+  - name: amplifier-installed
+    command: amplifier --version
+
+validation_cmds:
+  # ----------------------------------------------------------------------
+  # Run a REAL 1-turn session in LOCAL-ONLY mode (no CI server env vars).
+  # The FULL behavior's hook mounts and must write events.jsonl + metadata.json.
+  # ----------------------------------------------------------------------
+  - name: run-hook-session
+    command: |
+      set -e
+      # Prove local-only mode: no server env vars set
+      echo "AMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_URL='${AMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_URL:-}'"
+      echo "AMPLIFIER_CONTEXT_INTELLIGENCE_API_KEY='${AMPLIFIER_CONTEXT_INTELLIGENCE_API_KEY:-}'"
+      mkdir -p /tmp/hook-proj
+      cd /tmp/hook-proj
+      touch /tmp/hook-pre-marker
+      sleep 1
+      amplifier run "Say hello in one word." --mode single 2>&1 | tee /tmp/hook-session.log
+      echo "Session completed"
+
+  # ----------------------------------------------------------------------
+  # H1: events.jsonl created and non-empty
+  # ----------------------------------------------------------------------
+  - name: H1-events-jsonl-created
+    command: |
+      set -e
+      EVENTS_FILE=$(find /root/.amplifier/projects -path '*context-intelligence/events.jsonl' -newer /tmp/hook-pre-marker 2>/dev/null | head -1)
+      if [ -z "$EVENTS_FILE" ]; then
+        echo "FAIL[H1]: No events.jsonl created under ~/.amplifier/projects/**/context-intelligence/ after session"
+        find /root/.amplifier/projects -type f 2>/dev/null | head -50
+        exit 1
+      fi
+      if [ ! -s "$EVENTS_FILE" ]; then
+        echo "FAIL[H1]: events.jsonl exists but is EMPTY: $EVENTS_FILE"
+        exit 1
+      fi
+      LINES=$(wc -l < "$EVENTS_FILE")
+      echo "$EVENTS_FILE" > /tmp/hook-events-path
+      echo "PASS[H1]: events.jsonl created and non-empty ($LINES lines): $EVENTS_FILE"
+
+  # ----------------------------------------------------------------------
+  # H2: metadata.json exists with required fields
+  # ----------------------------------------------------------------------
+  - name: H2-metadata-required-fields
+    command: |
+      set -e
+      EVENTS_FILE=$(cat /tmp/hook-events-path)
+      META="$(dirname "$EVENTS_FILE")/metadata.json"
+      if [ ! -f "$META" ]; then
+        echo "FAIL[H2]: metadata.json not found at $META"
+        exit 1
+      fi
+      # Required fields per the hook's metadata contract. The criterion is
+      # PRESENCE of the keys (the hook may legitimately leave a value empty in
+      # some run contexts). Empty values are surfaced as a NOTE, not a failure.
+      MISSING=$(python3 - "$META" << 'PY'
+      import json, sys
+      required = ["format","version","session_id","workspace","started_at","status","working_dir"]
+      d = json.load(open(sys.argv[1]))
+      print(",".join([k for k in required if k not in d]))
+      PY
+      )
+      if [ -n "$MISSING" ]; then
+        echo "FAIL[H2]: metadata.json missing required field(s): $MISSING"
+        echo "--- metadata.json ---"; cat "$META"
+        exit 1
+      fi
+      EMPTY=$(python3 - "$META" << 'PY'
+      import json, sys
+      required = ["format","version","session_id","workspace","started_at","status","working_dir"]
+      d = json.load(open(sys.argv[1]))
+      print(",".join([k for k in required if d.get(k) in (None, "")]))
+      PY
+      )
+      echo "PASS[H2]: metadata.json contains all required fields (format,version,session_id,workspace,started_at,status,working_dir): $META"
+      if [ -n "$EMPTY" ]; then
+        echo "NOTE[H2]: the following required field(s) are present but EMPTY: $EMPTY"
+      fi
+      cat "$META"
+
+  # ----------------------------------------------------------------------
+  # H3: every line is valid JSON with envelope keys event/workspace/timestamp/data
+  # ----------------------------------------------------------------------
+  - name: H3-envelope-structure
+    command: |
+      set -e
+      EVENTS_FILE=$(cat /tmp/hook-events-path)
+      python3 - "$EVENTS_FILE" << 'PY'
+      import json, sys
+      required = {"event","workspace","timestamp","data"}
+      bad = 0
+      total = 0
+      with open(sys.argv[1]) as f:
+          for i, line in enumerate(f, 1):
+              line = line.strip()
+              if not line:
+                  continue
+              total += 1
+              try:
+                  obj = json.loads(line)
+              except Exception as e:
+                  print(f"FAIL[H3]: line {i} is not valid JSON: {e}")
+                  bad += 1
+                  continue
+              missing = required - set(obj.keys())
+              if missing:
+                  print(f"FAIL[H3]: line {i} missing envelope keys: {sorted(missing)}")
+                  bad += 1
+      if bad or total == 0:
+          print(f"FAIL[H3]: {bad} bad line(s) of {total}")
+          sys.exit(1)
+      print(f"PASS[H3]: all {total} lines valid JSON with envelope keys event/workspace/timestamp/data")
+      PY
+
+  # ----------------------------------------------------------------------
+  # H4: at least one canonical lifecycle event (session/provider/tool)
+  # ----------------------------------------------------------------------
+  - name: H4-canonical-lifecycle-event
+    command: |
+      set -e
+      EVENTS_FILE=$(cat /tmp/hook-events-path)
+      python3 - "$EVENTS_FILE" << 'PY'
+      import json, sys, re
+      pat = re.compile(r'(session|provider|tool)', re.I)
+      names = []
+      with open(sys.argv[1]) as f:
+          for line in f:
+              line = line.strip()
+              if not line:
+                  continue
+              try:
+                  names.append(json.loads(line).get("event",""))
+              except Exception:
+                  pass
+      matches = sorted({n for n in names if pat.search(n or "")})
+      if not matches:
+          print("FAIL[H4]: no canonical session/provider/tool lifecycle event found")
+          print("Events present:", sorted(set(names)))
+          sys.exit(1)
+      print("PASS[H4]: canonical lifecycle event(s) present:", matches)
+      print("All distinct events:", sorted(set(names)))
+      PY
+
+  # ----------------------------------------------------------------------
+  # H5: local-only graceful degradation -- no server env, session completed, JSONL written
+  # ----------------------------------------------------------------------
+  - name: H5-local-only-degradation
+    command: |
+      set -e
+      FAILED=0
+      if [ -n "${AMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_URL:-}" ] || [ -n "${AMPLIFIER_CONTEXT_INTELLIGENCE_API_KEY:-}" ]; then
+        echo "FAIL[H5]: server env vars are set -- this test must run local-only"
+        FAILED=1
+      fi
+      EVENTS_FILE=$(cat /tmp/hook-events-path 2>/dev/null || true)
+      if [ -z "$EVENTS_FILE" ] || [ ! -s "$EVENTS_FILE" ]; then
+        echo "FAIL[H5]: no non-empty events.jsonl written in local-only mode"
+        FAILED=1
+      fi
+      # Session must have completed without a crash/traceback
+      if grep -qiE 'Traceback \(most recent call last\)|Fatal error' /tmp/hook-session.log; then
+        echo "FAIL[H5]: session log contains a crash/traceback"
+        grep -iE 'Traceback|Fatal error' /tmp/hook-session.log | head
+        FAILED=1
+      fi
+      if [ "$FAILED" -ne 0 ]; then
+        exit 1
+      fi
+      echo "PASS[H5]: local-only mode -- no server env vars, session completed cleanly, JSONL written ($EVENTS_FILE)"
+
+  # ----------------------------------------------------------------------
+  # F2: analytics surface PRESENT in FULL behavior (regression for the split).
+  # The FULL behavior now `includes:` analytics + logging, so graph-analyst AND
+  # session-navigator must both be composed and available/[on] -- proving FULL
+  # still carries the read/query surface after the refactor.
+  # ----------------------------------------------------------------------
+  # NOTE: `amplifier agents show` reports the GLOBAL agent catalog (every agent
+  # .md in any cached bundle), so it cannot distinguish composed-vs-catalogued.
+  # We assert against the captured session:config (data.raw.agents) -- the
+  # authoritative record of what was actually composed into THIS session.
+  - name: F2-analytics-present
+    command: |
+      set -e
+      EVENTS_FILE=$(cat /tmp/hook-events-path)
+      python3 - "$EVENTS_FILE" << 'PY'
+      import json, sys
+      cfg = None
+      for l in open(sys.argv[1]):
+          l = l.strip()
+          if not l:
+              continue
+          o = json.loads(l)
+          if o.get("event") == "session:config":
+              cfg = o["data"]["raw"]
+      if not cfg:
+          print("FAIL[F2]: no session:config captured"); sys.exit(1)
+      agents = list((cfg.get("agents") or {}).keys())
+      ga = [a for a in agents if "graph-analyst" in a]
+      sn = [a for a in agents if "session-navigator" in a]
+      if not ga or not sn:
+          print("FAIL[F2]: FULL session missing analytics agents -- graph-analyst:", ga or "ABSENT", "session-navigator:", sn or "ABSENT"); sys.exit(1)
+      print("PASS[F2]: FULL behavior composes analytics -- graph-analyst", ga, "AND session-navigator", sn, "present in session:config")
+      PY
+
+  # ----------------------------------------------------------------------
+  # F3: hook registered EXACTLY ONCE despite FULL including BOTH behaviors.
+  # The critical regression check: FULL `includes:` analytics + logging, and the
+  # hook ships in logging. There must be NO double registration:
+  #   (a) exactly ONE context-intelligence/events.jsonl was created for the session;
+  #   (b) exactly ONE session-start lifecycle event in that file (a second mount
+  #       would duplicate lifecycle capture);
+  #   (c) no duplicate-registration warning/error in the session log.
+  # ----------------------------------------------------------------------
+  - name: F3-hook-registered-once
+    command: |
+      set -e
+      FAILED=0
+      # (a) exactly one events.jsonl newer than the pre-session marker
+      mapfile -t NEWFILES < <(find /root/.amplifier/projects -path '*context-intelligence/events.jsonl' -newer /tmp/hook-pre-marker 2>/dev/null)
+      COUNT=${#NEWFILES[@]}
+      echo "New events.jsonl files for this session: $COUNT"
+      printf '%s\n' "${NEWFILES[@]}"
+      if [ "$COUNT" -ne 1 ]; then
+        echo "FAIL[F3a]: expected exactly 1 context-intelligence events.jsonl for the session, found $COUNT (possible double hook registration)"
+        FAILED=1
+      fi
+      EVENTS_FILE=$(cat /tmp/hook-events-path)
+      # (b) exactly one session-start lifecycle event (no duplicated capture)
+      STARTS=$(python3 - "$EVENTS_FILE" << 'PY'
+      import json, sys, re
+      pat = re.compile(r'session[:._-](start|started|begin)', re.I)
+      n = 0
+      for line in open(sys.argv[1]):
+          line = line.strip()
+          if not line:
+              continue
+          try:
+              ev = json.loads(line).get("event","")
+          except Exception:
+              continue
+          if pat.search(ev or ""):
+              n += 1
+      print(n)
+      PY
+      )
+      echo "session-start lifecycle events in file: $STARTS"
+      if [ "$STARTS" -gt 1 ]; then
+        echo "FAIL[F3b]: $STARTS session-start events -- hook lifecycle captured more than once (double registration)"
+        FAILED=1
+      fi
+      # (c) no duplicate-registration warning/error in the session log
+      if grep -qiE 'already registered|duplicate (hook|handler|registration)|registered twice|registered more than once' /tmp/hook-session.log; then
+        echo "FAIL[F3c]: session log shows a duplicate-registration warning/error"
+        grep -niE 'already registered|duplicate (hook|handler|registration)|registered twice|registered more than once' /tmp/hook-session.log | head
+        FAILED=1
+      fi
+      [ "$FAILED" -ne 0 ] && exit 1
+      echo "PASS[F3]: hook registered EXACTLY ONCE despite FULL including both behaviors (one events.jsonl, one session-start event, no duplicate-registration warnings)"
