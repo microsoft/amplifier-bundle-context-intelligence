@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -121,3 +122,108 @@ class TestSyncSkill:
 
         mock_fetcher_cls.assert_called_once_with("http://up:9000", api_key="k")
         instance.fetch.assert_awaited_once_with("my-skill", skill)
+
+
+# ======================================================================
+# Helpers for on_session_ready tests
+# ======================================================================
+
+
+def _make_tool(server_url: str, api_key: str = "k", workspace: str = "ws") -> MagicMock:
+    tool = MagicMock()
+    tool._resolve_server_config = MagicMock(return_value=(server_url, api_key, workspace))
+    return tool
+
+
+def _make_ready_coordinator(
+    skill_path: Path,
+    tool: MagicMock,
+    *,
+    discovery_present: bool = True,
+    find_returns_meta: bool = True,
+) -> MagicMock:
+    discovery: MagicMock | None = None
+    if discovery_present:
+        discovery = MagicMock()
+        meta = MagicMock()
+        meta.path = skill_path
+        discovery.find = MagicMock(return_value=meta if find_returns_meta else None)
+
+    caps: dict[str, object] = {
+        "skills_discovery": discovery,
+        "context_intelligence._graph_query_tool": tool,
+    }
+
+    coord = MagicMock()
+    coord.get_capability = MagicMock(side_effect=lambda name: caps.get(name))
+    coord.hooks = MagicMock()
+    coord.hooks.register = MagicMock(return_value=MagicMock())
+    return coord
+
+
+class TestOnSessionReadyHardGuards:
+    async def test_missing_discovery_capability_is_loud_noop(self, tmp_path: Path, caplog) -> None:
+        from amplifier_module_tool_graph_query.skill_sync import on_session_ready
+
+        tool = _make_tool("http://up:9000")
+        coord = _make_ready_coordinator(tmp_path / "SKILL.md", tool, discovery_present=False)
+
+        with patch(
+            "amplifier_module_tool_graph_query.skill_sync._sync_skill",
+            new_callable=AsyncMock,
+        ) as mock_sync:
+            with caplog.at_level(logging.WARNING):
+                await on_session_ready(coord)
+
+        mock_sync.assert_not_awaited()
+        assert any("skill_sync" in record.message for record in caplog.records)
+
+    async def test_find_returns_none_is_loud_noop(self, tmp_path: Path, caplog) -> None:
+        from amplifier_module_tool_graph_query.skill_sync import on_session_ready
+
+        tool = _make_tool("http://up:9000")
+        coord = _make_ready_coordinator(tmp_path / "SKILL.md", tool, find_returns_meta=False)
+
+        with patch(
+            "amplifier_module_tool_graph_query.skill_sync._sync_skill",
+            new_callable=AsyncMock,
+        ) as mock_sync:
+            with caplog.at_level(logging.WARNING):
+                await on_session_ready(coord)
+
+        mock_sync.assert_not_awaited()
+        assert any("skill_sync" in record.message for record in caplog.records)
+
+
+class TestOnSessionReadyOrchestration:
+    async def test_dispatches_sync_with_resolved_config(self, tmp_path: Path) -> None:
+        from amplifier_module_tool_graph_query.skill_sync import on_session_ready
+
+        skill_path = tmp_path / "SKILL.md"
+        tool = _make_tool("http://up:9000", api_key="key-1", workspace="ws-1")
+        coord = _make_ready_coordinator(skill_path, tool)
+
+        with patch(
+            "amplifier_module_tool_graph_query.skill_sync._sync_skill",
+            new_callable=AsyncMock,
+        ) as mock_sync:
+            await on_session_ready(coord)
+
+        mock_sync.assert_awaited_once_with(
+            "context-intelligence-graph-query", skill_path, "http://up:9000", "key-1"
+        )
+
+    async def test_registers_skill_unloaded_handler(self, tmp_path: Path) -> None:
+        from amplifier_module_tool_graph_query.skill_sync import on_session_ready
+
+        skill_path = tmp_path / "SKILL.md"
+        tool = _make_tool("http://up:9000")
+        coord = _make_ready_coordinator(skill_path, tool)
+
+        with patch(
+            "amplifier_module_tool_graph_query.skill_sync._sync_skill",
+            new_callable=AsyncMock,
+        ):
+            await on_session_ready(coord)
+
+        assert "skill:unloaded" in [c.args[0] for c in coord.hooks.register.call_args_list]

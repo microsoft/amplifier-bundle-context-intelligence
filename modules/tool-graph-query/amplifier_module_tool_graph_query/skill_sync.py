@@ -120,3 +120,64 @@ async def _sync_skill(
         await fetcher.fetch(skill_name, skill_path)
     except Exception as exc:  # noqa: BLE001 — one bad skill must not break the session
         log.warning("skill_sync_failed: %s — %s", skill_name, exc)
+
+
+async def _resync_all_watched(coordinator: object) -> None:
+    """Re-sync all watched skills using coordinator capabilities.
+
+    Hard guards:
+    - Logs a WARNING and returns when skills_discovery capability is absent.
+    - Logs a WARNING and skips a skill when discovery.find() returns None.
+
+    Config is resolved via the tool's _resolve_server_config so that the
+    correct server URL and API key are used for the current session.
+    """
+    discovery = coordinator.get_capability(TOOL_SKILLS_DISCOVERY_CAPABILITY)  # type: ignore[union-attr]
+    if discovery is None:
+        log.warning(
+            "skill_sync_skipped: skills_discovery capability not available — "
+            "skill sync will be deferred until the capability is registered"
+        )
+        return
+
+    tool = coordinator.get_capability(_GRAPH_QUERY_TOOL_CAPABILITY)  # type: ignore[union-attr]
+
+    for skill_name in WATCHED_SKILLS:
+        meta = discovery.find(skill_name)
+        if meta is None:
+            log.warning(
+                "skill_sync_skipped: %s — discovery.find() returned None; "
+                "skill may not be registered in this session",
+                skill_name,
+            )
+            continue
+
+        skill_path = Path(meta.path)
+
+        if tool is not None:
+            server_url, api_key, _workspace = tool._resolve_server_config(coordinator)
+        else:
+            server_url, api_key = None, None
+
+        await _sync_skill(skill_name, skill_path, server_url, api_key)
+
+
+async def on_session_ready(coordinator: object) -> None:
+    """Orchestrate skill sync on session start and register a reload handler.
+
+    Performs an initial sync of all watched skills, then registers a
+    ``skill:unloaded`` hook so that mid-session skill reloads trigger a
+    re-sync automatically.
+    """
+    await _resync_all_watched(coordinator)
+
+    async def _on_skill_unloaded(event_name: str, data: dict) -> None:  # type: ignore[type-arg]
+        if data.get("skill_name") in WATCHED_SKILLS:
+            await _resync_all_watched(coordinator)
+
+    coordinator.hooks.register(  # type: ignore[union-attr]
+        "skill:unloaded",
+        _on_skill_unloaded,
+        priority=100,
+        name="SkillSync",
+    )
