@@ -547,7 +547,7 @@ class TestResolveServerConfigHelper:
         assert api_key == "hook-key"
         assert workspace == "hook-ws"
 
-    def test_falls_back_to_tool_resolver_when_hook_absent(self) -> None:
+    def test_falls_back_to_config_dict_when_hook_absent(self) -> None:
         """When no hook resolver is registered, config dict values are returned."""
         from amplifier_module_tool_graph_query.graph_query_tool import GraphQueryTool
 

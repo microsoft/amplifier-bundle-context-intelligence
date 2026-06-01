@@ -37,8 +37,7 @@ __all__ = [
     "TOOL_SKILLS_DISCOVERY_CAPABILITY",
     "WATCHED_SKILLS",
     "_GRAPH_QUERY_TOOL_CAPABILITY",
-    "_invalidate_if_drift",
-    "_sync_skill",
+    "on_session_ready",
 ]
 
 

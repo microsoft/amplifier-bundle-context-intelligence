@@ -3,6 +3,11 @@
 Implements the Amplifier Tool protocol.  Configuration is resolved lazily
 via the ``context_intelligence.hook_config_resolver`` coordinator capability
 registered by the hook-context-intelligence module.
+
+This module also owns analytics-path skill-content sync: it exposes a
+module-level ``on_session_ready`` (see ``skill_sync``) that the kernel runs
+after all modules mount, syncing the context-intelligence-graph-query skill
+in the graph-analyst sub-session where it is consumed.
 """
 
 from __future__ import annotations
