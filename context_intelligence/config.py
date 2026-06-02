@@ -126,9 +126,12 @@ def _expand_env_placeholders(value: str) -> str:
     Note: ``os.path.expandvars`` does **not** support the ``${VAR:default}``
     colon syntax used by the agent behavior YAML files shipped with this bundle,
     hence this small regex-based helper.
+
+    Note: every ``${...}`` token is treated as an expandable placeholder.
+    There is NO escape syntax — literal ``${...}`` sequences are not preserved.
     """
 
-    def _replace(m: re.Match) -> str:  # type: ignore[type-arg]
+    def _replace(m: re.Match[str]) -> str:
         var_name = m.group(1)
         default = m.group(2) if m.group(2) is not None else ""
         return os.environ.get(var_name, default)

@@ -1,8 +1,11 @@
 """ToolConfigResolver — lazy config resolver for CI tools in analytics-only mode.
 
 Used by tool-graph-query and tool-blob-read when the hook-context-intelligence
-module is NOT mounted.  Created lazily at execute() time on the first call where
-``context_intelligence.hook_config_resolver`` coordinator capability is absent.
+module is NOT mounted.  Constructed **eagerly** inside the tool's ``__init__``
+(both tools always create a ``ToolConfigResolver`` at construction time).  Its
+properties are evaluated lazily on each access.  The hook resolver
+(``context_intelligence.hook_config_resolver`` coordinator capability), when
+present, takes priority over ``ToolConfigResolver`` at call time.
 
 Resolution priority for every property (mirrors HookConfigResolver for the
 shared keys):
@@ -54,11 +57,15 @@ def _expand(value: Any) -> Any:
 
 
 class ToolConfigResolver:
-    """Lazy config resolver for CI tools — analytics-only mode (no hook mounted).
+    """Config resolver for CI tools — analytics-only mode (no hook mounted).
 
-    Instantiated once per tool session, lazily, only when the hook capability
-    is absent.  Reads ``server_url``, ``api_key``, and ``workspace`` using the
-    same four-level priority chain as ``HookConfigResolver`` for those keys.
+    Constructed eagerly in the tool's ``__init__`` (both tools always create a
+    ``ToolConfigResolver`` at construction time, alongside ``_hook_resolver = None``).
+    Its properties are evaluated lazily on each access.  At call time, the hook
+    resolver (when present via the coordinator capability) takes priority; this
+    class is only consulted when the hook capability is absent.  Reads
+    ``server_url``, ``api_key``, and ``workspace`` using the same four-level
+    priority chain as ``HookConfigResolver`` for those keys.
     See module docstring for the workspace asymmetry rationale.
     """
 

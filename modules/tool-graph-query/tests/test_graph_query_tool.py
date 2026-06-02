@@ -683,6 +683,17 @@ class TestExpandEnvPlaceholders:
 
         assert _expand_env_placeholders("http://plain:8000") == "http://plain:8000"
 
+    def test_multiple_placeholders_in_one_string(self, monkeypatch) -> None:
+        """Multiple ${VAR} placeholders in a single string — one re.sub pass expands all."""
+        from context_intelligence.config import _expand_env_placeholders
+
+        monkeypatch.setenv("_CI_TEST_PLACEHOLDER_VAR_A", "valA")
+        monkeypatch.setenv("_CI_TEST_PLACEHOLDER_VAR_B", "valB")
+        assert (
+            _expand_env_placeholders("${_CI_TEST_PLACEHOLDER_VAR_A}:${_CI_TEST_PLACEHOLDER_VAR_B}")
+            == "valA:valB"
+        )
+
 
 # ---------------------------------------------------------------------------
 # TestToolConfigResolverPlaceholderExpansion — Cases 1-3
@@ -699,21 +710,24 @@ class TestToolConfigResolverPlaceholderExpansion:
     """
 
     def test_server_url_placeholder_with_env_set(self, monkeypatch) -> None:
-        """Case 1: placeholder config + env set → real URL is returned."""
+        """Case 1: placeholder config + env set → real URL and api_key are both returned."""
         from context_intelligence.tool_resolver import ToolConfigResolver
 
         monkeypatch.setenv("AMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_URL", "http://real:8000")
+        monkeypatch.setenv("AMPLIFIER_CONTEXT_INTELLIGENCE_API_KEY", "real-key")
         # Isolate the settings.yaml fallback so only env var or placeholder matters.
         import context_intelligence.tool_resolver as _tr
 
         monkeypatch.setattr(_tr, "_parse_settings_yaml", lambda _: {})
 
         config = {
-            "context_intelligence_server_url": "${AMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_URL:}"
+            "context_intelligence_server_url": "${AMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_URL:}",
+            "context_intelligence_api_key": "${AMPLIFIER_CONTEXT_INTELLIGENCE_API_KEY:}",
         }
         resolver = ToolConfigResolver(config=config, coordinator=MagicMock())
 
         assert resolver.context_intelligence_server_url == "http://real:8000"
+        assert resolver.context_intelligence_api_key == "real-key"
 
     def test_server_url_placeholder_with_env_unset_returns_none(self, monkeypatch) -> None:
         """Case 2: placeholder config + env unset → None (falls through entire chain)."""
@@ -746,3 +760,35 @@ class TestToolConfigResolverPlaceholderExpansion:
         resolver = ToolConfigResolver(config=config, coordinator=MagicMock())
 
         assert resolver.context_intelligence_api_key == "secret"
+
+    def test_workspace_placeholder_with_env_set(self, monkeypatch) -> None:
+        """workspace placeholder config + env set → env value is returned."""
+        from context_intelligence.tool_resolver import ToolConfigResolver
+
+        monkeypatch.setenv("AMPLIFIER_CONTEXT_INTELLIGENCE_WORKSPACE", "_CI_TEST_my-ws")
+
+        config = {"workspace": "${AMPLIFIER_CONTEXT_INTELLIGENCE_WORKSPACE:}"}
+        resolver = ToolConfigResolver(config=config, coordinator=MagicMock())
+
+        assert resolver.workspace == "_CI_TEST_my-ws"
+
+    def test_server_url_placeholder_via_coordinator_config(self, monkeypatch) -> None:
+        """coordinator.config placeholder + env set → env URL returned (step 2 of chain)."""
+        from context_intelligence.tool_resolver import ToolConfigResolver
+
+        monkeypatch.setenv(
+            "AMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_URL", "http://_ci_test_coord:7000"
+        )
+        import context_intelligence.tool_resolver as _tr
+
+        monkeypatch.setattr(_tr, "_parse_settings_yaml", lambda _: {})
+
+        # No key in mount config dict (step 1 absent) — placeholder lives in coordinator.config
+        config: dict = {}
+        coordinator = MagicMock()
+        coordinator.config = {
+            "context_intelligence_server_url": ("${AMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_URL:}")
+        }
+        resolver = ToolConfigResolver(config=config, coordinator=coordinator)
+
+        assert resolver.context_intelligence_server_url == "http://_ci_test_coord:7000"
