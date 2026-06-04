@@ -55,7 +55,12 @@ class GraphQueryTool:
                     "type": "object",
                     "description": (
                         "Optional query parameters dict passed to the Cypher query as "
-                        'named parameters (e.g. {"id": "abc-123"}). Defaults to empty dict.'
+                        'named parameters (e.g. {"id": "abc-123"}). Defaults to empty dict. '
+                        "Note: the effective workspace is bound into the query as the "
+                        '"$workspace" parameter. A specific (non-"*") workspace overrides '
+                        'any "workspace" key you supply here; when querying across all '
+                        'workspaces ("*"), no override occurs and your "workspace" key (if '
+                        "any) is passed through unchanged."
                     ),
                 },
                 "workspace": {
