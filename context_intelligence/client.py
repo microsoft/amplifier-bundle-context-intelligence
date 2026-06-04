@@ -192,7 +192,12 @@ class CIClient:
     # Public API
     # ------------------------------------------------------------------
 
-    def cypher(self, query: str, workspace: str = "*") -> list[dict[str, Any]]:
+    def cypher(
+        self,
+        query: str,
+        workspace: str = "*",
+        params: dict[str, Any] | None = None,
+    ) -> list[dict[str, Any]]:
         """Execute a Cypher query against the graph store.
 
         Parameters
@@ -201,6 +206,9 @@ class CIClient:
             Cypher query string.
         workspace:
             Workspace to scope the query. Defaults to ``"*"`` (all workspaces).
+        params:
+            Named query parameters passed to the Cypher engine. Defaults to
+            an empty dict when ``None``.
 
         Returns
         -------
@@ -210,7 +218,7 @@ class CIClient:
         url = f"{self._server_url}/cypher"
         body: dict[str, Any] = {
             "query": query,
-            "params": {},
+            "params": params if params is not None else {},
             "workspace": workspace,
         }
         result = _http_post(url, body, self._auth_headers())

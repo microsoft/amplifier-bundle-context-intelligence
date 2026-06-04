@@ -178,6 +178,38 @@ class TestCIClientCypher:
         headers = call_args[0][2] if len(call_args[0]) > 2 else call_args[1].get("headers", {})
         assert headers.get("Authorization") == "Bearer secretkey"
 
+    def test_cypher_forwards_params(self):
+        """cypher() forwards a user-supplied params dict in the POST body."""
+        from context_intelligence.client import CIClient
+
+        client = CIClient("http://localhost:8000", "testkey")
+
+        with patch("context_intelligence.client._http_post") as mock_post:
+            mock_post.return_value = []
+            client.cypher(
+                "MATCH (n {id: $id}) RETURN n",
+                workspace="myworkspace",
+                params={"id": "abc-123"},
+            )
+
+        call_args = mock_post.call_args
+        body = call_args[0][1] if call_args[0] else call_args[1]["body"]
+        assert body["params"] == {"id": "abc-123"}
+
+    def test_cypher_default_params_is_empty_dict(self):
+        """cypher() with no params still sends an empty dict (backward compat)."""
+        from context_intelligence.client import CIClient
+
+        client = CIClient("http://localhost:8000", "testkey")
+
+        with patch("context_intelligence.client._http_post") as mock_post:
+            mock_post.return_value = []
+            client.cypher("MATCH (n) RETURN n")
+
+        call_args = mock_post.call_args
+        body = call_args[0][1] if call_args[0] else call_args[1]["body"]
+        assert body["params"] == {}
+
 
 class TestCIClientListBlobKeys:
     """CIClient.list_blob_keys() must return set[str] of ci-blob:// URIs."""
