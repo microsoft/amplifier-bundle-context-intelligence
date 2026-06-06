@@ -60,6 +60,82 @@ Do NOT pre-load reference material. Load skills only at phase entry:
 - **Phase 2 entry:** load the `context-intelligence-tool-design` skill. This skill loads `context/context-intelligence-primitives-reference.md` as its companion file — you do not load that context file directly.
 - **Phase 3 entry:** load the `context-intelligence-eval-design` skill.
 
+## Phase 2 — Output-First Entry (hard gate)
+
+**Your FIRST tool call in Phase 2 must be:**
+
+```
+read_file(".context-intelligence-investigation/output-example.md")
+```
+
+Act on what you find:
+
+| `read_file` result | Your ONLY permitted next action |
+|---|---|
+| File **not found** | Call `write_file` to create `.context-intelligence-investigation/output-example.md` with a concrete rendered output table (see required format below). Then **your first message to the user must contain the full table inline** — copied from the file — and end with: "Does this match what you expected?" You may not proceed to Step 2.1 until the user confirms. |
+| File **found** | Re-show the existing table to the user inline in your response. Ask for re-confirmation if needed, then proceed to Step 2.1. |
+
+**Required output table format** (copy into the file AND into your message — never describe it, show it):
+
+```
+=== [Tool name] example output ===
+
+[Column 1]      [Column 2]      [Column 3]      ...
+──────────────  ──────────────  ──────────────  ...
+[real value]    [real value]    [real value]    ...
+[real value]    [real value]    [real value]    ...
+[real value]    [real value]    [real value]    ...
+```
+
+Use realistic values derived from the domain signals — not placeholders like `<X>` or `[TBD]`.
+The table must be visible in your response, not just written to disk.
+
+**Why a file check, not an instruction:** An instruction to "show the output first" can be
+skipped. A `read_file` check cannot — it produces a concrete result that either gates or
+releases signal classification. The file is the lock.
+
+Example file contents:
+
+```
+=== Bundle usage report: session abc123 ===
+
+Bundle          Component              Type     Invocations  First seen     Last seen
+──────────────  ────────────────────  ────────  ───────────  ─────────────  ─────────────
+foundation      foundation:explorer   agent          3        12:43:01       14:18:55
+recipes         @recipes:code-review  recipe         1        15:02:44       15:02:44
+context-intel.  (mode activated)      mode           1        12:34:17       17:55:12
+
+Installed but never invoked: [superpowers, deepwiki, perplexity] (3 of 7 installed)
+```
+
+The hard gate is intentional: agents that skip the output demonstration produce designs that
+the user cannot evaluate. Writing the file first makes the output contract explicit before
+any implementation work begins.
+
+### Step 2.1 — Primitive trade-off interview
+
+Before settling on any implementation primitive, present the trade-off comparison explicitly:
+
+| Primitive | When to use | Cost | Composability |
+|---|---|---|---|
+| **Mode** (transient, user-invoked) | Finite, intentful investigation tasks | Low token overhead; zero-cost when off | Activated explicitly; doesn't compose automatically |
+| **Behavior** (always-on) | Capabilities that should be available passively in every session | Loads on every session start | Composes into bundles; always available |
+| **Tool-only** (on-demand, no mode/behavior) | Capabilities called explicitly from a recipe or agent | Zero overhead until invoked | Requires explicit invocation; no auto-routing |
+| **Recipe** | Multi-step workflows with approval gates | Orchestration overhead | High — parameterised, resumable |
+
+Ask: "Given your goal [state the WHY from handoff.md], which of these best fits how you'll
+use this capability?" The user's answer drives primitive selection. Do not select a primitive
+unilaterally.
+
+### Step 2.2 — Usage interview
+
+Ask two questions:
+1. "How will you invoke this in practice — from a session while working, as a standalone CLI
+   command, as a step in another agent's workflow, or as a scheduled job?"
+2. "Who else might use this — other agents in the mode, external recipes, a specific bundle?"
+
+Record the answers. They become the integration contract for `design.md`.
+
 ## Phase 2 — Signal Processing via Delegation
 
 For each signal (or logical batch of related signals) in `domain-signals.md`:
@@ -84,11 +160,26 @@ For each signal (or logical batch of related signals) in `domain-signals.md`:
 
 Your own context never accumulates signal-by-signal reasoning. It stays lean throughout Phase 2.
 
-When all signals are either classified or routed to `signal-gaps.md`, write `design.md` capturing:
-- The shared library functions to be created in `context_intelligence/`
-- The thin module wrappers
-- The CLI subcommands
-- For LLM-evaluated/hybrid signals: which classification surfaces (skill, agent with declared `model_role`, recipe step) are required
+When all signals are either classified or routed to `signal-gaps.md`, write `design.md` capturing
+**all four mandatory sections** — a design without any of these sections is incomplete:
+
+1. **Shared library** — Python functions in `context_intelligence/` (one per signal group or
+   detection algorithm). For each: function signature, input, output, detection logic summary.
+
+2. **CLI subcommands** — thin wrappers exposing the library as a CLI tool. For each: command
+   name, parameters, output format.
+
+3. **Amplifier integration layer** — **how the capability is callable from within an agent
+   session**. Required sub-sections:
+   - *Primitive chosen*: mode | behavior | tool-only | recipe (with the user-confirmed trade-off
+     rationale from Step 2.1)
+   - *Agent wrapper* (if mode or behavior): the `delegate()` call shape, which agent carries
+     the tool, how the tool is mounted in `contributes.`
+   - *Usage contract*: one worked example showing exactly how an agent in a session invokes
+     this capability and what it receives back.
+
+4. **Output contract** — the confirmed output schema from Step 2.0. Update if the user's
+   confirmation changed anything.
 
 Then Phase 2 ends.
 

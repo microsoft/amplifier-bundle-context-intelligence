@@ -31,9 +31,9 @@ mode:
       - glob
       - grep
       - delegate
-      - load_skill
       - todo
     warn:
+      - load_skill   # Warned so routing check fires BEFORE any skill loads
       - bash
       - write_file
       - edit_file
@@ -45,7 +45,42 @@ This mode orchestrates a goal-driven design process for context intelligence too
 
 ## Mandatory Routing
 
-**When a user provides any goal statement, investigation request, or domain framing — delegate IMMEDIATELY to `context-intelligence:context-intelligence-design-facilitator` with `context_depth="none"`.** The facilitator drives Phase 0 (concept elicitation) and Phase 1 (signal discovery). The orchestrator must NOT delegate directly to `context-intelligence:graph-analyst` until the facilitator has completed at least Phase 0 and written `domain-concepts.md`.
+**Your FIRST tool call in every session, before anything else, must be:**
+
+```
+read_file(".context-intelligence-investigation/domain-concepts.md")
+```
+
+Act on what you find:
+
+| `read_file` result | Your ONLY permitted next action |
+|---|---|
+| File **not found** | Delegate to `context-intelligence:context-intelligence-design-facilitator` with `context_depth="none"`. Do NOT call `graph-analyst`. Do NOT ask the user questions. Do NOT run any investigation. The single permitted action is the delegation. |
+| File **found, incomplete** | Delegate to `context-intelligence:context-intelligence-design-facilitator` with `context_depth="none"` to complete Phase 0. |
+| File **found, complete** | Check `handoff.md`. If present → delegate to `context-intelligence:context-intelligence-tool-designer`. If absent → delegate to the facilitator to begin Phase 1. |
+
+**If the facilitator delegation returns `delegate:error`:**
+
+This is a hard stop. Do all three of the following, in order, before doing anything else:
+
+1. **Write a single sentence to the user** naming the failure:
+   *"The context-intelligence-design-facilitator agent failed: [paste the error message]."*
+2. **Stop completely.** Do NOT attempt Phase 0 inline. Do NOT call graph-analyst. Do NOT ask
+   the user clarifying questions. Do NOT investigate. Do NOT try to work around the failure.
+3. **Wait** for the user to respond.
+
+This rule overrides everything else in this document. There is no fallback path when the
+facilitator fails. The mode cannot proceed without it.
+
+**`load_skill` is a warned tool.** If you attempt to load a skill before completing
+the `read_file` routing check, the mode will block it. When that happens: do not retry
+`load_skill`. Instead, follow the routing table above — call `read_file` on
+`domain-concepts.md`, then act on the result.
+
+**Why a file check, not a routing instruction:** A routing instruction can be
+overridden by the LLM's own judgement. A `read_file` call cannot — it produces a concrete
+result that locks the next action. The file state is the source of truth for which phase
+is active.
 
 ## Standing Rules
 
