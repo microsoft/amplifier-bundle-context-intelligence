@@ -83,7 +83,7 @@ done | sort -t$'\t' -k3
 ### Extract events by type
 
 ```bash
-jq -c 'select(.event == "tool:pre")' events.jsonl
+jq -c 'select(.event == "tool:pre")' events.jsonl | head -20
 ```
 
 ### Extract events matching a pattern
@@ -95,7 +95,7 @@ grep -n '"event":"session:' events.jsonl | cut -d: -f1
 ### Extract a specific field from matching events
 
 ```bash
-jq -c 'select(.event == "tool:pre") | .data.tool_name' events.jsonl
+jq -c 'select(.event == "tool:pre") | .data.tool_name' events.jsonl | head -20
 ```
 
 ### Extract a specific line by number
@@ -113,7 +113,7 @@ grep -n '"event":"provider:error"\|"event":"tool:error"' events.jsonl | cut -d: 
 ### Extract error details
 
 ```bash
-jq -c 'select(.event == "provider:error" or .event == "tool:error") | {event: .event, ts: .timestamp, error: .data.error}' events.jsonl
+jq -c 'select(.event == "provider:error" or .event == "tool:error") | {event: .event, ts: .timestamp, error: .data.error}' events.jsonl | head -20
 ```
 
 ---
@@ -149,7 +149,7 @@ sed -n '10,25p' events.jsonl | jq -c 'select(.event == "tool:pre") | {tool: .dat
 ```bash
 # Find a specific tool call's pre and post
 CALL_ID="call_abc123"
-jq -c "select(.data.tool_call_id == \"$CALL_ID\") | {event: .event, tool: .data.tool_name, ts: .timestamp}" events.jsonl
+jq -c "select(.data.tool_call_id == \"$CALL_ID\") | {event: .event, tool: .data.tool_name, ts: .timestamp}" events.jsonl | head -20
 ```
 
 ---
