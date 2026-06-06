@@ -1,7 +1,7 @@
 // Delegation Strategy — Agent Delegation Chain
 // Context-Intelligence Bundle
 //
-// Shows the delegation flow: graph-analyst → session-navigator → foundation:session-analyst
+// Shows the delegation flow: graph-analyst → session-navigator → external session-data-analysis-capable agent
 //
 // Render: dot -Tsvg delegation-strategy.dot -o delegation-strategy.svg
 
@@ -47,7 +47,7 @@ digraph delegation_strategy {
     ];
 
     session_analyst [
-        label="foundation:session-analyst\n(external bundle)",
+        label="session-data-analysis-capable agent\n(external, if available)",
         shape=box,
         style="filled,dashed",
         fillcolor="#F5A623",
