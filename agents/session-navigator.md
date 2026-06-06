@@ -121,7 +121,7 @@ After completing the ladder with no hit:
 
 Do NOT retry. Do NOT broaden the search. Do NOT delegate upward to `graph-analyst`.
 
-> **Delegation constraint:** You MAY delegate ONCE to `foundation:session-analyst` ONLY for data that is **present-but-hard** to extract locally — **never for absent data**.
+> **Delegation constraint:** You MAY delegate ONCE to another session-data-analysis-capable agent (if one is available in the host environment) ONLY for data that is **present-but-hard** to extract locally — **never for absent data**.
 
 ### Rule 4 — Tool-call budget
 
@@ -295,10 +295,10 @@ Run `context-intelligence-upload --help` for full options including progress mon
 
 > **⛔ Delegation is only valid for data that is present-but-hard to extract.** If the Defensive Navigation Protocol's 3-strategy ladder found nothing, you MUST return "not found" — do NOT delegate. Delegation does not bypass the Defensive Navigation Protocol.
 
-When local JSONL extraction is insufficient for data that **exists but is too complex** to process here, delegate to `foundation:session-analyst` as the final safety net.
+When local JSONL extraction is insufficient for data that **exists but is too complex** to process here, delegate to another session-data-analysis-capable agent (if one is available in the host environment) as the final safety net.
 
 ```
-Delegate to: foundation:session-analyst
+Delegate to: a session-data-analysis-capable agent (if one is available in the host environment)
 Reason: Local JSONL navigation exhausted — needs deeper session repair or analysis
 Task: [original analysis task]
 Workspace: [pass through the workspace received from graph-analyst]
@@ -308,9 +308,9 @@ Workspace: [pass through the workspace received from graph-analyst]
 
 - **Never delegate to `graph-analyst`** — That agent requires the graph server, which is why you were invoked in the first place. Delegating to it creates an infinite fallback loop.
 - **Never delegate to yourself** — Do not delegate to `session-navigator`. That is a self-delegation loop.
-- **`foundation:session-analyst` is the only valid delegation target** — Use it at most once, only for data that is present-but-hard to process locally. Never for absent data.
+- **A session-data-analysis-capable agent is the only valid delegation target** — Use it at most once, only for data that is present-but-hard to process locally. Never for absent data. Do not assume any specific agent exists; only delegate if such a capability is available in the host environment.
 - **Always complete the Defensive Navigation Protocol first** — Exhaust the 3-strategy ladder (Rule 2) before considering delegation. If the session was not found, stop — do not delegate.
-- **Pass workspace through** — When delegating to `foundation:session-analyst`, include the workspace so it can scope its analysis correctly.
+- **Pass workspace through** — When delegating, include the workspace so the agent can scope its analysis correctly.
 
 ---
 
@@ -326,7 +326,7 @@ Workspace: [pass through the workspace received from graph-analyst]
 <!-- Diagram of the session directory layout on disk -->
 
 @context-intelligence:context/delegation-strategy.dot
-<!-- Delegation chain diagram: graph-analyst → session-navigator → foundation:session-analyst -->
+<!-- Delegation chain diagram: graph-analyst → session-navigator → external session-data-analysis-capable agent -->
 
 ---
 
