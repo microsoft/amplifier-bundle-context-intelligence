@@ -6,6 +6,26 @@ The bundle writes every session event to a local JSONL log and — when configur
 
 ---
 
+## Part of the behavioral-plasticity suite
+
+This repo is the **session-signal-scoring** component of the **behavioral-plasticity suite**, composed by the conductor bundle [`amplifier-bundle-behavioral-plasticity`](https://github.com/michaeljabbour/amplifier-bundle-behavioral-plasticity) — context-intelligence scoring + the context-intelligence **survey** measurement chassis + **memory** (episodic write target) + **amplifier-data** (durable substrate) + a falsification harness. The suite consumes this bundle **unchanged** from `main`; installing the conductor pulls it in automatically.
+
+**Install the full suite (always-on):**
+```bash
+amplifier bundle add git+https://github.com/michaeljabbour/amplifier-bundle-behavioral-plasticity@main --app
+amplifier bundle update behavioral-plasticity -y
+```
+
+**Test:**
+```bash
+amplifier run --mode single "List your tools, then call falsification_harness once and print its JSON."
+```
+Passing: the tool list includes `falsification_harness` plus the memory tools (`palace`, `add_memory`, …); the JSON shows `"verdict": "proxy"`, `"n_probes": 50`, `"lift": ~0.17`, `"success": true`. `proxy` is the expected correct result, not a failure. The first compose is slow (it pulls the included bundles and compiles amplifier-data's native Rust/PyO3 component); cached after. Remove with `amplifier bundle remove behavioral-plasticity`.
+
+> The off-by-default **amplifier-data floor pilot** in this bundle's `LoggingHandler` evaluates the *same* `amplifier-data` substrate the suite uses durably — here as a read-only dual-write / byte-for-byte regeneration check over `events.jsonl`, gated behind `resolver.amplifier_data_pilot`, with the primary capture path unchanged.
+
+---
+
 ## What it does
 
 | Always active | When `context_intelligence_server_url` is set |
