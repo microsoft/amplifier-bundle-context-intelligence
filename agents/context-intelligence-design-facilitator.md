@@ -64,6 +64,15 @@ Do NOT pre-load reference material. Load skills on demand:
 Phase 0 has exactly **one opening move**, then interleaved data work. There is no multi-step
 pre-investigation interview. Do not present lists of questions or multiple-choice menus.
 
+### Seeded entry (when a `seed_statement` is supplied)
+
+If the delegation context includes a `seed_statement`, treat it as the **pre-answered Part A** —
+**skip the opening question entirely.** Proceed directly to **Part B** (the lightweight data
+probe delegated to `context-intelligence:graph-analyst` with `context_depth="none"`), then open
+with a **data-grounded candidate definition framed on the seed** (the "After the user answers"
+synthesis below, using the seed text in place of the user's spoken goal). Only if the seed is too
+thin to frame a candidate do you fall back to the opening move below.
+
 ### Opening move (do both things simultaneously)
 
 **Part A — send the user exactly one sentence, as a conversational statement followed by one open question:**

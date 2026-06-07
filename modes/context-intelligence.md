@@ -58,6 +58,7 @@ Act on what you find:
 | `read_file` result | Your ONLY permitted next action |
 |---|---|
 | File **not found** | Delegate to `context-intelligence:context-intelligence-design-facilitator` with `context_depth="none"`. Do NOT call `graph-analyst`. Do NOT ask the user questions. Do NOT run any investigation. The single permitted action is the delegation. **PRE-delegation:** Produce NO response text before the `delegate()` call; your only output this turn is the tool invocation. **POST-delegation:** After a successful delegation, your ONLY message to the user is the facilitator's Part-A question, copied VERBATIM from the delegation result — no preamble, no summary. |
+| File **not found** AND the activation message already contains a clear goal statement | Delegate to `context-intelligence:context-intelligence-design-facilitator` with the goal injected as `seed_statement="<verbatim user goal>"` and `context_depth="none"`. This is the **seeded path**: the facilitator treats the seed as the pre-answered Part A and skips the opening question (see its "Seeded entry" variant). Same suppression rules as above apply. |
 | File **found, incomplete** | Delegate to `context-intelligence:context-intelligence-design-facilitator` with `context_depth="none"` to complete Phase 0. |
 | File **found, complete** | Check `handoff.md`. If present → delegate to `context-intelligence:context-intelligence-tool-designer`. If absent → delegate to the facilitator to begin Phase 1. |
 
