@@ -30,6 +30,12 @@ Always delegate session analysis to the specialist agents:
 The graph-analyst checks server availability automatically and falls back to
 `session-navigator` when the server is unreachable or returns 0 sessions.
 
+## Navigation Discipline (reference)
+
+| Concept | Authoritative source (open on demand — not auto-loaded) |
+|---------|----------------------------------------------------------|
+| Bounded local-JSONL navigation budget | `context-intelligence:context/navigation-budget-discipline.md` |
+
 ## Configuration
 
 | Variable | Purpose | Default |
