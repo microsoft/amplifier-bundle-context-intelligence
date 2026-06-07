@@ -14,6 +14,7 @@ from typing import Any
 
 import httpx
 
+from amplifier_module_hook_context_intelligence.amplifier_data_pilot import DualWriteStore
 from amplifier_module_hook_context_intelligence.upload import (
     _canonical_json,
     _compute_idempotency_key,  # noqa: F401 — re-exported for test imports
@@ -110,6 +111,13 @@ class LoggingHandler:
         )
         self._dispatch_worker_task: asyncio.Task[None] | None = None
 
+        # amplifier-data floor pilot (OFF by default). Fail-safe in-memory mirror
+        # of every events.jsonl line; verifies byte-identical regeneration (E1)
+        # at session end. Never touches the primary disk-write path.
+        self._pilot = DualWriteStore(
+            enabled=bool(getattr(resolver, "amplifier_data_pilot", False))
+        )
+
     def _session_dir(self, session_id: str) -> Path:
         return self._resolver.session_dir(session_id)
 
@@ -138,6 +146,22 @@ class LoggingHandler:
             self._touch_last_event_at(session_dir, sanitized_data.get("timestamp", ""))
         except Exception:
             logger.warning("LoggingHandler disk write error processing %s", event, exc_info=True)
+
+        # amplifier-data floor pilot — fully isolated from the disk-write path.
+        # Mirrors the exact canonical line, then verifies E1 regeneration at end.
+        if self._pilot.enabled:
+            try:
+                record = self._build_record(event, sanitized_data, self._workspace)
+                self._pilot.record_line(_canonical_json(record))
+                if event in ("session:end", "execution:end"):
+                    report = self._pilot.verify_recorded()
+                    logger.info(
+                        "amplifier-data floor pilot: byte_identical=%s %s",
+                        report.byte_identical,
+                        report.as_dict(),
+                    )
+            except Exception:
+                logger.debug("floor pilot processing failed for %s", event, exc_info=True)
 
         if self._server_url and self._dispatch_enabled:
             self._enqueue_dispatch(event, sanitized_data)
@@ -259,6 +283,9 @@ class LoggingHandler:
         if self._client is not None and not self._client.is_closed:
             await self._client.aclose()
 
+        # Release the floor-pilot store (no-op when the pilot is disabled).
+        self._pilot.close()
+
     def _ensure_dispatch_worker(self) -> None:
         if self._dispatch_worker_task is None or self._dispatch_worker_task.done():
             self._dispatch_worker_task = asyncio.create_task(self._dispatch_worker())
@@ -369,14 +396,24 @@ class LoggingHandler:
 
     # -- shared JSONL appender ----------------------------------------------
     @staticmethod
-    def _append_event(
-        session_dir: Path, event: str, data: dict[str, Any], workspace: str | None
-    ) -> None:
-        record = {
+    def _build_record(event: str, data: dict[str, Any], workspace: str | None) -> dict[str, Any]:
+        """Canonical event record — the single source of the events.jsonl line.
+
+        Shared by the disk appender and the amplifier-data floor pilot so the
+        pilot stores the exact bytes written to disk (byte-identical by
+        construction).
+        """
+        return {
             "event": event,
             "workspace": workspace or "",
             "timestamp": data.get("timestamp", ""),
             "data": data,
         }
+
+    @staticmethod
+    def _append_event(
+        session_dir: Path, event: str, data: dict[str, Any], workspace: str | None
+    ) -> None:
+        record = LoggingHandler._build_record(event, data, workspace)
         with (session_dir / "events.jsonl").open("a") as f:
             f.write(_canonical_json(record) + "\n")
