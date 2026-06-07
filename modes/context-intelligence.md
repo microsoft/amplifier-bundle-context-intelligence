@@ -19,9 +19,11 @@ mode:
     context:
       - "@context-intelligence:context/jsonl-event-schema.md"
       - "@context-intelligence:context/dual-path-library-template.md"
+      - "@context-intelligence:context/context-intelligence-strategy.md"
     skills:
       - "@context-intelligence:skills/context-intelligence-tool-design"
       - "@context-intelligence:skills/context-intelligence-eval-design"
+      - "@context-intelligence:skills/context-intelligence-evaluation-methodology"
 
   tools:
     safe:

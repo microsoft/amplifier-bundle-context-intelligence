@@ -115,6 +115,10 @@ scripts/context-intelligence.py           — gains a new --subcommand for CLI u
 
 The shared library function holds all logic. The agent tool is the `mount()` + protocol adapter that calls it. The CLI subcommand is the argparse/click handler that calls it. Same algorithm, three surfaces, zero duplication.
 
+**Wrapper form is chosen by consumer** (module for an agent consumer, CLI for a human/script
+consumer). This is the mode's Standing Rule 3 applied per consumer; see **R1** in the
+`context-intelligence-tool-design` skill for the decision — not restated here.
+
 ## Routing Matrix Roles for Context-Intelligence Signal Detection
 
 When `reasoning_requirement` is not `none`, choose the model role:

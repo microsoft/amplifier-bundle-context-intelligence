@@ -24,6 +24,42 @@ The companion contains:
 
 Treat as authoritative reference — do not duplicate.
 
+## Wrapper Form, Specialization & Progressive Discovery (R1–R3)
+
+Design depth for *how* a chosen primitive is shaped. These are mode-only design guidance; they
+point to existing homes rather than restating them.
+
+### R1 — Wrapper form by consumer: **module vs CLI**
+
+The shared-library → thin-wrapper *pattern itself* already has a home: it is the mode's
+**Standing Rule 3** (`modes/context-intelligence.md`). **Do not restate that pattern — point to
+Standing Rule 3.** R1 adds only the new nuance: once you have a shared library, choose its
+wrapper form **by who consumes it**:
+
+- **An agent consumes it** → wrap the shared library as an Amplifier **module** (agent tool).
+- **A human or script consumes it** → wrap it as a **CLI** (bash subcommand).
+
+Same library, wrapper form chosen by consumer — **module vs CLI** is a consumer decision, not a
+default.
+
+### R2 — Exploit narrow-domain knowledge
+
+When the domain is specific enough, build a **specialized** tool that returns exactly what is
+needed — avoiding discovery round-trips and bloated tool responses. A narrow, purpose-built
+result beats a general query the caller must post-process.
+
+### R3 — Progressive over upfront
+
+Prefer **progressive discovery + pagination/navigation** over big upfront reads. The operational
+rules for this (probe-first, ≤3-strategy ladder, head-limited extraction, summarize-and-discard,
+the call budget) live in the authoritative discipline file — open it on demand:
+`context-intelligence:context/navigation-budget-discipline.md`. **Do not rephrase those rules
+here.**
+
+> **Guard — event semantics:** Do not restate the event-semantics authority principle here. It
+> is named once in `context-intelligence:context/context-intelligence-strategy.md` — reference
+> it there.
+
 ## Scope
 
 ### In Scope
