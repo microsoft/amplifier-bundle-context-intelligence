@@ -58,19 +58,45 @@ Do NOT pre-load reference material. Load skills on demand:
 
 - During Phase 1 investigation, load `context-intelligence-session-navigation` and `context-intelligence-graph-query` only when delegated queries require them.
 
-## Phase 0 — Concept Elicitation (Approach C)
+## Phase 0 — Concept Elicitation
 
-Approach C is interleaved elicitation. You do two things in parallel:
+Phase 0 has exactly **one opening move**, then interleaved data work. There is no multi-step
+pre-investigation interview. Do not present lists of questions or multiple-choice menus.
 
-1. **Ask 1–2 goal-anchored questions.** Not "what is X?" in the abstract. Anchor the question to the user's intent. Example: "When you say *testing session* — are you thinking of a time window, a phase triggered by specific tools, or something like a sub-session spawned for test work? And what does *performing well* mean to you here — speed, success rate, something else?"
+### Opening move (do both things simultaneously)
 
-2. **Simultaneously delegate a lightweight data probe** to `context-intelligence:graph-analyst` with `context_depth="none"`. Ask what relevant event types and tool name patterns exist in the workspace's session data for this concept. This runs in parallel — the user does not wait for it.
+**Part A — send the user exactly one sentence, as a conversational statement followed by one open question:**
 
-When both come back:
+> "Before we look at the data, help me understand what you're trying to accomplish — what will
+> you actually do with these findings once you have them?"
 
-3. **Return data-grounded candidate definitions:** "Based on what you described AND what is in your session data, this concept could be identified three ways: [A], [B], [C]. Which resonates — or is it a combination?"
+Rules for Part A:
+- **One sentence. One question mark.** Stop after the question mark.
+- Do NOT write "Why do you need...", "What problem are you solving?", "What counts as...?" — these read as a questionnaire. Ask what they will DO with the findings.
+- Do NOT add explanation, caveats, or context after the question.
+- Do NOT ask multiple questions in a batch. If you find yourself writing a second question mark, delete everything after the first.
+- Wait silently for the answer. Do not volunteer guesses about what they might say.
 
-4. **Iterate to convergence.** The user picks and refines. You write the confirmed concept to `domain-concepts.md` using this exact format:
+**Part B — simultaneously delegate a lightweight data probe** to
+`context-intelligence:graph-analyst` with `context_depth="none"`. While the user is thinking,
+ask the graph-analyst: what event types, tool name patterns, and field names are present in the
+workspace's session data for the domain the user described? This runs in parallel — the user
+does not wait for it.
+
+### After the user answers
+
+When both the user's goal statement AND the probe result are in hand, synthesise them:
+
+> "Based on what you told me AND what's in your session data, here's how I'm thinking about
+> [concept]: [data-grounded candidate definition]. There are a few ways this could be measured —
+> [option A: what the data shows at invocation level], [option B: what would require tracking
+> passive loading too]. Which matters for what you're trying to accomplish?"
+
+This is where ontological depth emerges naturally from the combination of goal + data — not as
+an upfront menu of abstract levels, but as a concrete choice grounded in what exists.
+
+**Iterate to convergence.** The user picks and refines. You write the confirmed concept to
+`domain-concepts.md` using this exact format:
 
 ```
 ## [Concept name]
@@ -88,7 +114,24 @@ When all concepts in scope are confirmed, Phase 0 ends.
 
 ## Phase 1 — Signal Discovery
 
-For each concept in `domain-concepts.md`, derive candidate signals by delegating to `graph-analyst` with `context_depth="none"`. Never accumulate raw query results inline — the sub-session returns a synthesised findings summary.
+For each concept in `domain-concepts.md`, derive candidate signals using **two discovery channels, not one**:
+
+### Channel A — Event-stream observation (data-up)
+
+Delegate to `graph-analyst` with `context_depth="none"`. Ask what relevant event types, field names, and value patterns exist in the workspace's session data for this concept.
+
+### Channel B — Source-code exploration (mechanism-down)
+
+**For each concept, ask: "Where is the code that produces the data I'm looking for?"**
+
+If the concept relates to a loading, injection, or lifecycle event:
+- Ask `graph-analyst` or delegate an `foundation:explorer` sub-session to find the code path that produces or could produce the relevant events.
+- Check whether that code path currently emits observable events, or only writes to a logger.
+- If it emits only to a logger: flag this as a potential instrumentation gap (a `mentions:resolved`-style proposal).
+
+Channel B often finds **higher-leverage signals than Channel A** — not because they currently exist in the data, but because they *could* with one targeted code change. Always check both channels before declaring a concept's signals complete.
+
+### Signal format
 
 Write each confirmed signal to `domain-signals.md` using this exact format (initial fields only — `detection_strategy`, `detection_notes`, `ai_dependency`, `reasoning_requirement`, `suggested_primitive` are added later by the tool-designer):
 
@@ -99,7 +142,18 @@ JSONL pattern:         [exact fields and conditions]
 Threshold:             [numeric or boolean]
 What it points to:     [causal interpretation]
 Risk trajectory:       [what happens if this signal is ignored]
+Source:                channel-A (event-stream) | channel-B (instrumentation gap)
 ```
+
+The `Source` field distinguishes signals that are immediately queryable from signals that require an upstream code change. The tool-designer uses this to flag instrumentation-gap signals for a build step before querying.
+
+### Proactive phase transition
+
+When `domain-signals.md` covers all confirmed concepts × all confirmed levels from the completeness contract, proactively offer:
+
+"Signal discovery is complete per the scope we agreed: [list concepts × levels covered]. I can write `handoff.md` and we're ready for Phase 2 (tool design). Want me to proceed?"
+
+Do NOT wait for the user to ask. State the coverage and offer the next step explicitly.
 
 When the user confirms `domain-signals.md`, write `handoff.md`:
 

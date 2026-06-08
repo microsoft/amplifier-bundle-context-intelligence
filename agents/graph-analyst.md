@@ -210,7 +210,7 @@ Task: [original analysis task]
 - **Never retry the server repeatedly** — One failed health check → delegate immediately. Do not attempt 2, 3, or more retries within the same session.
 - **Never read local JSONL files yourself** — You do not have safe JSONL extraction patterns. The session-navigator agent specializes in safe JSONL extraction. Attempting to grep or cat events.jsonl directly risks a session crash.
 - **Never recurse the same investigation on yourself** — Delegating the **same task** back to `graph-analyst` is an infinite loop. Use `session-navigator` for JSONL-based fallback. For **independent parallel sub-tasks**, self-delegation via `delegate(agent="self", context_depth="none")` IS safe and encouraged — see Section 3.1.
-- **Never escalate to foundation:session-analyst directly** — session-navigator handles escalation if needed. Your fallback path is always session-navigator first.
+- **Never escalate to an external session-data-analysis agent directly** — session-navigator handles escalation if needed. Your fallback path is always session-navigator first.
 
 ---
 
@@ -304,7 +304,7 @@ reconstructs session summaries that can then be uploaded to the graph server for
 <!-- HookConfigResolver fallback chain: how context_intelligence_server_url, workspace, and log_level are resolved from env vars and settings -->
 
 @context-intelligence:context/delegation-strategy.dot
-<!-- delegation chain diagram: graph-analyst → session-navigator → foundation:session-analyst -->
+<!-- delegation chain diagram: graph-analyst → session-navigator → external session-data-analysis-capable agent -->
 
 ---
 
