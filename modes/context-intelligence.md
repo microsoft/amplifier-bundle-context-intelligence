@@ -34,8 +34,8 @@ mode:
       - grep
       - delegate
       - todo
+      - load_skill   # safe: required so the mode's contributed skills are discoverable/loadable by the LLM
     warn:
-      - load_skill   # Warned so routing check fires BEFORE any skill loads
       - bash
       - write_file
       - edit_file
@@ -75,10 +75,11 @@ This is a hard stop. Do all three of the following, in order, before doing anyth
 This rule overrides everything else in this document. There is no fallback path when the
 facilitator fails. The mode cannot proceed without it.
 
-**`load_skill` is a warned tool.** If you attempt to load a skill before completing
-the `read_file` routing check, the mode will block it. When that happens: do not retry
-`load_skill`. Instead, follow the routing table above — call `read_file` on
-`domain-concepts.md`, then act on the result.
+**Routing comes before skills.** `load_skill` is allowed — the mode's contributed skills
+must stay discoverable to the LLM — but you must still complete the `read_file` routing
+check FIRST. Do not load any skill before you have called `read_file` on
+`domain-concepts.md` and acted on the result. Routing-first is a discipline enforced by the
+rule above, not by a tool gate.
 
 **Why a file check, not a routing instruction:** A routing instruction can be
 overridden by the LLM's own judgement. A `read_file` call cannot — it produces a concrete
