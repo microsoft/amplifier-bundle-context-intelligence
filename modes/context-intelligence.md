@@ -33,8 +33,10 @@ mode:
       - glob
       - grep
       - delegate
+      - load_skill   # Safe: required so the mode's contributed skills are discoverable/loadable by the LLM.
+                     # Routing discipline is enforced by the mandatory read_file
+                     # first-call check below, not by gating load_skill.
       - todo
-      - load_skill   # safe: required so the mode's contributed skills are discoverable/loadable by the LLM
     warn:
       - bash
       - write_file
