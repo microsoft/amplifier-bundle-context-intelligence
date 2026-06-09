@@ -21,6 +21,30 @@ Two agents are included for querying session data:
 
 A **`/context-intelligence` mode** is also included for building new context intelligence-aware tooling. Activate it to enter a design workspace where you can investigate session data, explore the graph model, and produce reusable Amplifier components (skills, agents, context files, recipes, CLIs) for your project.
 
+### Composable layers (the "onion")
+
+The bundle's behaviors are organized as a **layered onion** — each layer adds **exactly one capability** and `includes:` the layer beneath it. Compose the smallest layer that covers your need; everything below it comes along automatically.
+
+```
+context-intelligence                         ← FULL umbrella: design + logging
+├── context-intelligence-design                  + /context-intelligence design MODE
+│   └── context-intelligence-analysis              + graph-analyst agent & graph skills
+│       └── context-intelligence-navigation         session-navigator (local JSONL only)
+└── context-intelligence-logging                 telemetry hook only (independent layer)
+```
+
+| Layer | Adds | Builds on | Use when |
+|-------|------|-----------|----------|
+| **`context-intelligence-navigation`** | `session-navigator` agent + local-JSONL navigation skill | — (innermost) | You only need offline/local session navigation, no graph server. |
+| **`context-intelligence-analysis`** | `graph-analyst` agent + graph-query / blob-read / reconstruction / pattern skills | navigation | You need graph-powered query & exploration (still no design mode). |
+| **`context-intelligence-design`** | the `/context-intelligence` design **mode** (`advertised: false`, activate on demand) | analysis | You also want the goal-driven tooling-design workflow. |
+| **`context-intelligence-logging`** | `hook-context-intelligence` telemetry hook only | — (independent) | Always-on, team-wide session telemetry. Natural `--app` fit. |
+| **`context-intelligence`** (full) | composes **design + logging** | both | Telemetry **and** full analysis/design in one install. |
+
+> The design mode ships `advertised: false` — it never clutters `/modes`; users activate it explicitly with `/mode context-intelligence` when they want the design workspace.
+>
+> `context-intelligence-analytics` is retained as a **deprecated alias** that redirects to `context-intelligence-design`, so existing installs keep working.
+
 ---
 
 ## Understanding workspace
@@ -62,18 +86,30 @@ The hook resolves `workspace` using the same `config → coordinator → default
 
 ### 1. Install
 
-**Add to an existing app** — the `--app` flag layers a behavior onto **every** session, regardless of which primary bundle is active. Pick the behavior that fits your needs:
+**Add to an existing app** — the `--app` flag layers a behavior onto **every** session, regardless of which primary bundle is active. Pick the layer from the onion above that fits your needs (each one includes everything beneath it):
 
-**Full** (telemetry hook + analytics agents, tools, and skills):
+**Full** (everything — analysis agents + design mode + telemetry hook):
 
 ```bash
 amplifier bundle add "git+https://github.com/microsoft/amplifier-bundle-context-intelligence@main#subdirectory=behaviors/context-intelligence.yaml" --app
 ```
 
-**Analytics only** (graph-powered analysis agents + tools + skills, no telemetry hook):
+**Design** (analysis + the `/context-intelligence` design mode, no telemetry hook):
 
 ```bash
-amplifier bundle add "git+https://github.com/microsoft/amplifier-bundle-context-intelligence@main#subdirectory=behaviors/context-intelligence-analytics.yaml" --app
+amplifier bundle add "git+https://github.com/microsoft/amplifier-bundle-context-intelligence@main#subdirectory=behaviors/context-intelligence-design.yaml" --app
+```
+
+**Analysis** (graph-analyst + graph skills, no design mode, no telemetry hook):
+
+```bash
+amplifier bundle add "git+https://github.com/microsoft/amplifier-bundle-context-intelligence@main#subdirectory=behaviors/context-intelligence-analysis.yaml" --app
+```
+
+**Navigation** (innermost — `session-navigator` for local-JSONL navigation only):
+
+```bash
+amplifier bundle add "git+https://github.com/microsoft/amplifier-bundle-context-intelligence@main#subdirectory=behaviors/context-intelligence-navigation.yaml" --app
 ```
 
 **Logging only** (telemetry hook only — ideal as an always-on app bundle):
@@ -91,17 +127,14 @@ amplifier bundle use context-intelligence
 
 Every Amplifier session will now write events to local JSONL files automatically — no server required.
 
-### Behaviors
-
-Three composable behaviors are included. Mix and match via `--app`:
-
-| Behavior | What it installs | When to use |
-|----------|-----------------|-------------|
-| **`context-intelligence-logging`** | `hook-context-intelligence` telemetry hook only (JSONL capture + optional server forwarding) | Always-on, team-wide session telemetry. Natural `--app` fit — composes silently onto every session. |
-| **`context-intelligence-analytics`** | `graph-analyst` + `session-navigator` agents, `/context-intelligence` mode, graph-query + blob-read tools, and navigation/query skills | Graph-powered session analysis and querying without the telemetry hook. |
-| **`context-intelligence`** (full) | Pure composition of `analytics` + `logging` | Telemetry **and** analysis in one install. |
+> **Composing in your own bundle?** Use the bare `namespace:path` include form, e.g.
+> `- bundle: context-intelligence:behaviors/context-intelligence-analysis`. Because the layers
+> nest via `includes:`, picking one layer pulls in every layer beneath it — and the
+> tool-skills config merges additively, so each layer contributes exactly its own skills.
 
 **`--app` vs standalone:** `--app` composes the behavior onto every session regardless of which primary bundle is active — it never becomes the primary bundle. The standalone form (`bundle add` + `bundle use`) makes context-intelligence the primary bundle for explicitly selected sessions.
+
+> **Migrating from `context-intelligence-analytics`?** It still works — it is now a deprecated alias that redirects to `context-intelligence-design`. Switch to `context-intelligence-design` (same capabilities) or drop down to `context-intelligence-analysis` if you don't need the design mode.
 
 ### 2. (Optional) Enable server forwarding
 

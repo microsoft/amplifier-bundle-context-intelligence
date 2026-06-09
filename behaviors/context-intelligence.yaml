@@ -2,14 +2,16 @@ bundle:
   name: context-intelligence-behavior
   version: 0.1.0
   description: >
-    Full context intelligence: graph-powered session analysis, navigation agents,
-    skills, design mode, AND the event-capture hook for session telemetry.
-    Composes the analytics behavior (read/query/design) and the logging behavior
-    (event-capture hook) into a single drop-in. Use this when you want both
-    read/query capabilities AND session instrumentation. For finer-grained control,
-    compose context-intelligence-analytics (read only) or
-    context-intelligence-logging (hook only) directly.
+    FULL drop-in context intelligence: graph-powered session analysis,
+    navigation agents, skills, the design mode, AND the event-capture hook for
+    session telemetry. Composes the design behavior (read/query/design) and the
+    logging behavior (event-capture hook) into one unit. Use this when you want
+    both read/query capabilities AND session instrumentation. For finer control,
+    compose a single layer directly: context-intelligence-navigation (LAYER 1 —
+    JSONL fallback navigation only), context-intelligence-analysis (LAYER 2 —
+    graph read/query/exploration, no design mode), context-intelligence-design
+    (LAYER 3 — adds the design mode), or context-intelligence-logging (hook only).
 
 includes:
-  - bundle: context-intelligence:behaviors/context-intelligence-analytics
+  - bundle: context-intelligence:behaviors/context-intelligence-design
   - bundle: context-intelligence:behaviors/context-intelligence-logging

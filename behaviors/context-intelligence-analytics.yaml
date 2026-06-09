@@ -2,35 +2,12 @@ bundle:
   name: context-intelligence-analytics-behavior
   version: 0.1.0
   description: >
-    Context intelligence: navigation, exploration, and tool-design capabilities.
-    Provides graph-powered session analysis agents, navigation skills, and the
-    context-intelligence design mode — without the event-capture hook.
-    Compose this behavior into any app that needs CI read/query/exploration
-    capabilities without instrumenting the session itself.
+    DEPRECATED ALIAS. Retained for backward compatibility only. The former
+    "analytics" behavior (graph agents + navigation + skills + design mode,
+    no hook) is now the LAYER 3 "design" behavior. This file is a thin redirect
+    that includes context-intelligence-design. New consumers should compose
+    context-intelligence-design (or a narrower layer:
+    context-intelligence-analysis / context-intelligence-navigation) directly.
 
-agents:
-  include:
-    - context-intelligence:graph-analyst
-    - context-intelligence:session-navigator
-
-modes:
-  include:
-    - context-intelligence:modes/context-intelligence.md
-
-tools:
-  - module: tool-delegate
-    source: git+https://github.com/microsoft/amplifier-foundation@main#subdirectory=modules/tool-delegate
-  - module: tool-skills
-    source: git+https://github.com/microsoft/amplifier-bundle-skills@main#subdirectory=modules/tool-skills
-    config:
-      skills:
-        # General context-intelligence skills only — design-phase skills gated behind the context-intelligence mode
-        - "git+https://github.com/microsoft/amplifier-bundle-context-intelligence@main#subdirectory=skills/blob-reading"
-        - "git+https://github.com/microsoft/amplifier-bundle-context-intelligence@main#subdirectory=skills/context-intelligence-graph-query"
-        - "git+https://github.com/microsoft/amplifier-bundle-context-intelligence@main#subdirectory=skills/context-intelligence-session-navigation"
-        - "git+https://github.com/microsoft/amplifier-bundle-context-intelligence@main#subdirectory=skills/context-intelligence-session-reconstruction"
-        - "git+https://github.com/microsoft/amplifier-bundle-context-intelligence@main#subdirectory=skills/workflow-pattern-analysis"
-
-context:
-  include:
-    - context-intelligence:context/context-intelligence-awareness.md
+includes:
+  - bundle: context-intelligence:behaviors/context-intelligence-design
