@@ -6,8 +6,9 @@ import os
 from pathlib import Path
 from typing import Any
 
-from context_intelligence.config import SETTINGS_PATH, _parse_settings_yaml
-from context_intelligence.reconstruct.discover import workspace_slug
+from ._vendored import SETTINGS_PATH
+from ._vendored import _parse_settings_yaml
+from ._vendored import workspace_slug
 
 _DEFAULT_BASE_PATH = "~/.amplifier/projects"
 _DEFAULT_PROJECT_SLUG = "default"

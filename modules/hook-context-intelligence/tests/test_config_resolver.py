@@ -750,7 +750,7 @@ class TestSlugifyPath:
         assert _slugify_path("/home/user/project") == "-home-user-project"
 
     def test_unix_path_matches_workspace_slug(self) -> None:
-        from context_intelligence.reconstruct.discover import workspace_slug
+        from amplifier_module_hook_context_intelligence._vendored import workspace_slug
 
         path = "/home/user/project"
         assert _slugify_path(path) == workspace_slug(path)
