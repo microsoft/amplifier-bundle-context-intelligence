@@ -1,6 +1,6 @@
 [project]
 name = "amplifier-module-hook-context-intelligence"
-version = "0.1.1"
+version = "0.1.2"
 description = "Context intelligence hook — event-driven property graph builder for Amplifier sessions"
 requires-python = ">=3.11"
 license = "MIT"
@@ -8,7 +8,7 @@ license = "MIT"
 dependencies = [
     "httpx>=0.28.1",
     "idna>=3.15",
-    "amplifier-bundle-context-intelligence",
+    "amplifier-bundle-context-intelligence @ git+https://github.com/microsoft/amplifier-bundle-context-intelligence@v0.1.1",
 ]
 
 [project.entry-points."amplifier.modules"]
@@ -24,6 +24,10 @@ package = true
 [tool.hatch.build.targets.wheel]
 packages = ["amplifier_module_hook_context_intelligence"]
 
+[tool.hatch.metadata]
+# Required to build a wheel that carries a PEP 508 direct-reference (git+https) dependency.
+allow-direct-references = true
+
 [dependency-groups]
 dev = [
     "amplifier-core>=1.4.1",
@@ -36,7 +40,10 @@ dev = [
 
 [tool.uv.sources]
 amplifier-core = { git = "https://github.com/microsoft/amplifier-core", rev = "v1.4.1" }
-amplifier-bundle-context-intelligence = { path = "../.." }
+# Note: the bundle dependency is declared as a PEP 508 direct git reference in
+# [project.dependencies] above (survives `uv pip install --no-sources`). It is
+# intentionally NOT given a `path = "../.."` source here, so the module installs
+# identically inside the monorepo and standalone.
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
