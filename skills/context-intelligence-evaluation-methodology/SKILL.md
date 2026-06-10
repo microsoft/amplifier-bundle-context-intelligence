@@ -1,7 +1,7 @@
 ---
 name: context-intelligence-evaluation-methodology
 version: 1.0.0
-description: Measurement methodology for context-intelligence tooling — how to design good metrics (quality / efficiency / efficacy), avoid artifact metrics by measuring the precursor rather than only the failure, apply A/B and statistical-N discipline, and test on real sessions or faithfully-modeled synthetic data. Mode-only design-depth skill; points to context-intelligence-eval-design (scenario mechanics) and digital-twin-universe (machinery) rather than restating them. Loaded under the context-intelligence mode.
+description: Measurement methodology for context-intelligence tooling — metric design across quality/efficiency/efficacy axes, artifact-metric avoidance via precursor measurement, A/B and statistical-N discipline, and test-data fidelity (real sessions or faithfully-modeled synthetic data).
 user-invocable: false
 allowed-tools: read_file, glob, grep, delegate, load_skill, todo
 model_role: reasoning

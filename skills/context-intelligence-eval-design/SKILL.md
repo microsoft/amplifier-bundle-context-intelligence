@@ -1,7 +1,7 @@
 ---
 name: context-intelligence-eval-design
 version: 1.0.0
-description: Evaluation scenario design for context-intelligence tooling. Derives success criteria from domain-concepts.md (user-confirmed definitions, not from implementation details). Produces evaluation-scenarios.md entries and DTU profile templates with mandatory Gitea URL rewrite configuration for local-branch testing. Designed to be loaded by the context-intelligence-tool-designer at Phase 3 entry, in a sub-session with context_depth="none", scoped to one concept at a time.
+description: Evaluation scenario design for context-intelligence tooling — derives success criteria from domain-concepts.md, produces evaluation-scenarios.md entries and DTU profile templates with mandatory Gitea URL rewrite configuration for local-branch testing.
 user-invocable: false
 allowed-tools: read_file, glob, grep, delegate, load_skill, todo
 model_role: reasoning

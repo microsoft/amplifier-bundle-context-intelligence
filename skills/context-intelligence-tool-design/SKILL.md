@@ -1,7 +1,7 @@
 ---
 name: context-intelligence-tool-design
 version: 1.0.0
-description: Detection strategy classification and primitive selection for context-intelligence signals. Classifies each signal as deterministic, probabilistic, llm-evaluated, or hybrid. Selects the correct Amplifier primitive using the cheapest-sufficient-capability principle. Applies the shared library + thin wrapper pattern for deterministic and probabilistic signals. Declares reasoning_requirement and model_role for LLM-evaluated signals. Designed to be loaded by the context-intelligence-tool-designer at Phase 2 entry, in a sub-session with context_depth="none", scoped to exactly one signal at a time.
+description: Detection strategy classification and primitive selection for context-intelligence signals — classifies signals as deterministic/probabilistic/llm-evaluated/hybrid, applies cheapest-sufficient-capability principle, selects shared library + thin wrapper pattern, declares model_role for LLM-evaluated signals.
 user-invocable: false
 allowed-tools: read_file, glob, grep, delegate, load_skill, todo
 model_role: reasoning
