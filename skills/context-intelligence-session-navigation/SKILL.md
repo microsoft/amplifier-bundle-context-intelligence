@@ -1,6 +1,6 @@
 ---
 name: context-intelligence-session-navigation
-description: 'Navigate flat JSONL session files — the universal baseline for session data extraction'
+description: 'Use when extracting session data directly from JSONL files — the baseline path when the graph server is unavailable or when operating outside graph-analyst'
 version: 0.2.0
 license: MIT
 ---
