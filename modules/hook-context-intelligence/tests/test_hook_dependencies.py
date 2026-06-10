@@ -83,7 +83,9 @@ class TestHookDependencies:
     def test_allow_direct_references_enabled(self) -> None:
         """Building a wheel that carries a direct reference requires this hatch flag."""
         data = _load_pyproject()
-        allow = data.get("tool", {}).get("hatch", {}).get("metadata", {}).get("allow-direct-references")
+        allow = (
+            data.get("tool", {}).get("hatch", {}).get("metadata", {}).get("allow-direct-references")
+        )
         assert allow is True, (
             "tool.hatch.metadata.allow-direct-references must be true to build a wheel "
             f"carrying the direct git reference, got: {allow!r}"

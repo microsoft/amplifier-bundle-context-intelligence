@@ -24,7 +24,7 @@ class TestProjectSection:
 
     def test_project_version(self):
         data = _load()
-        assert data["project"]["version"] == "0.1.0"
+        assert data["project"]["version"] == "0.1.1"
 
     def test_requires_python(self):
         data = _load()
