@@ -1,6 +1,13 @@
-"""Test that the hook module pyproject.toml declares the context_intelligence dependency.
+"""Test that the hook module pyproject.toml declares the bundle dependency in a
+form that installs standalone (outside the monorepo).
 
-TDD: This test is written FIRST and will FAIL until pyproject.toml is updated.
+The hook imports from the `context_intelligence` package shipped by the parent
+bundle. For the hook to install standalone under the Amplifier agent's
+`uv pip install --no-sources` policy, the bundle MUST be referenced as a PEP 508
+direct git reference inside [project.dependencies] (which survives --no-sources),
+NOT via a [tool.uv.sources] `path = "../.."` entry (which --no-sources strips).
+
+See microsoft-amplifier/amplifier-support#269 for the full root-cause analysis.
 """
 
 from __future__ import annotations
@@ -11,43 +18,75 @@ from pathlib import Path
 MODULE_ROOT = Path(__file__).parent.parent
 PYPROJECT = MODULE_ROOT / "pyproject.toml"
 
+BUNDLE = "amplifier-bundle-context-intelligence"
+
 
 def _load_pyproject() -> dict:
     return tomllib.loads(PYPROJECT.read_text())
 
 
-class TestHookDependencies:
-    """Verify hook module's pyproject.toml declares amplifier-bundle-context-intelligence."""
+def _dep_name(dep: str) -> str:
+    """Extract the bare package name from a requirement string.
 
-    def test_amplifier_bundle_context_intelligence_in_dependencies(self) -> None:
-        """amplifier-bundle-context-intelligence must appear in the dependencies list."""
+    Handles version specifiers (>=, ==) and PEP 508 direct references
+    (`name @ git+https://...`).
+    """
+    return dep.split("@")[0].split(">=")[0].split("==")[0].strip()
+
+
+class TestHookDependencies:
+    """Verify the hook declares the bundle as a standalone-installable dependency."""
+
+    def test_bundle_declared_as_direct_git_reference(self) -> None:
+        """The bundle must be a PEP 508 direct git reference in [project.dependencies].
+
+        A direct `name @ git+https://...` reference survives `--no-sources`,
+        unlike a bare name (only resolvable from PyPI) or a [tool.uv.sources] entry.
+        """
         data = _load_pyproject()
         deps: list[str] = data["project"]["dependencies"]
-        dep_names = [d.split(">=")[0].split("==")[0].strip() for d in deps]
-        assert "amplifier-bundle-context-intelligence" in dep_names, (
-            f"Expected 'amplifier-bundle-context-intelligence' in dependencies, got: {deps}"
+        bundle_deps = [d for d in deps if _dep_name(d) == BUNDLE]
+        assert bundle_deps, f"Expected '{BUNDLE}' in dependencies, got: {deps}"
+        assert "git+https://" in bundle_deps[0], (
+            f"Bundle dependency must be a direct git+https reference so it survives "
+            f"`uv pip install --no-sources`, got: {bundle_deps[0]!r}"
         )
 
-    def test_uv_sources_has_path_entry_for_bundle(self) -> None:
-        """[tool.uv.sources] must have path = '../..' for amplifier-bundle-context-intelligence."""
+    def test_bundle_is_not_a_uv_path_source(self) -> None:
+        """The bundle must NOT be a [tool.uv.sources] path entry.
+
+        The `path = '../..'` assumption is exactly what breaks standalone install:
+        --no-sources strips [tool.uv.sources], leaving an unresolvable reference.
+        """
         data = _load_pyproject()
         sources: dict = data.get("tool", {}).get("uv", {}).get("sources", {})
-        assert "amplifier-bundle-context-intelligence" in sources, (
-            f"Expected 'amplifier-bundle-context-intelligence' in [tool.uv.sources], got: {sources}"
+        assert BUNDLE not in sources, (
+            f"'{BUNDLE}' must not be a [tool.uv.sources] entry (breaks standalone "
+            f"install under --no-sources); declare it as a direct git reference in "
+            f"[project.dependencies] instead. Got sources: {sources}"
         )
-        entry = sources["amplifier-bundle-context-intelligence"]
-        assert entry.get("path") == "../..", f"Expected path = '../..', got: {entry}"
 
     def test_dependencies_list_has_httpx_and_bundle(self) -> None:
-        """The production dependencies must include httpx and amplifier-bundle-context-intelligence.
-        amplifier-core is NOT a production dep — it is runtime-provided by the Amplifier CLI.
+        """Production deps must include httpx and the bundle.
+
+        amplifier-core is NOT a production dep — it is runtime-provided by the
+        Amplifier CLI.
         """
         data = _load_pyproject()
         deps: list[str] = data["project"]["dependencies"]
         assert any("httpx" in d for d in deps), f"httpx not found in {deps}"
-        assert any("amplifier-bundle-context-intelligence" in d for d in deps), (
-            f"amplifier-bundle-context-intelligence not found in {deps}"
-        )
-        assert not any("amplifier-core" in d for d in deps), (
+        assert any(_dep_name(d) == BUNDLE for d in deps), f"{BUNDLE} not found in {deps}"
+        assert not any(_dep_name(d) == "amplifier-core" for d in deps), (
             f"amplifier-core must not be a production dep (runtime-provided): {deps}"
+        )
+
+    def test_allow_direct_references_enabled(self) -> None:
+        """Building a wheel that carries a direct reference requires this hatch flag."""
+        data = _load_pyproject()
+        allow = (
+            data.get("tool", {}).get("hatch", {}).get("metadata", {}).get("allow-direct-references")
+        )
+        assert allow is True, (
+            "tool.hatch.metadata.allow-direct-references must be true to build a wheel "
+            f"carrying the direct git reference, got: {allow!r}"
         )
