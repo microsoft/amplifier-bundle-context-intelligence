@@ -6,7 +6,7 @@ requires-python = ">=3.11"
 license = "MIT"
 
 dependencies = [
-    "amplifier-bundle-context-intelligence",
+    "amplifier-bundle-context-intelligence @ git+https://github.com/microsoft/amplifier-bundle-context-intelligence@main",
     "httpx>=0.28.1",
     "idna>=3.15",
 ]
@@ -21,6 +21,10 @@ build-backend = "hatchling.build"
 [tool.uv]
 package = true
 
+[tool.hatch.metadata]
+# Required to build a wheel that carries a PEP 508 direct-reference (git+https) dependency.
+allow-direct-references = true
+
 [tool.hatch.build.targets.wheel]
 packages = ["amplifier_module_tool_blob_read"]
 
@@ -34,7 +38,6 @@ dev = [
 ]
 
 [tool.uv.sources]
-amplifier-bundle-context-intelligence = { path = "../.." }
 amplifier-core = { git = "https://github.com/microsoft/amplifier-core", branch = "main" }
 
 [tool.pytest.ini_options]
