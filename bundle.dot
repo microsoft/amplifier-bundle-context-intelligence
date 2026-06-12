@@ -1,61 +1,60 @@
-// This repository provides tools and helpers that let you explore, search, and understand the history of your past AI sessions.
 digraph context_intelligence {
     rankdir=LR
     fontname="Helvetica"
     fontsize=12
-    label="Context Intelligence\nTools that help you explore and understand your past AI sessions"
+    label="context-intelligence v0.1.0 — bundle repo"
     labelloc=t
     labeljust=c
     nodesep=0.6
     ranksep=0.7
     bgcolor="white"
-    source_hash="bf6a2e798b67aff8106a285f44fea27f2d3d68913787e4d477005c79e2b68b7c"
+    source_hash="d2382bd324975ed606231a7e1d2e89aac583d6819b6935ed98e38ff5f2d1acce"
 
     node [fontname="Helvetica", fontsize=11, style="filled,rounded"]
     edge [fontname="Helvetica", fontsize=9]
 
-    root_context_intelligence [label="Context Intelligence v0.1.0\nThis repository (the starting point)\n0 tools · 0 agents\n~98 tok aggregate", shape=box, fillcolor="#80cbc4", style="filled,rounded,bold", penwidth=2]
+    root_context_intelligence [label="context-intelligence v0.1.0\n0 tools · 0 agents\n~98 tok aggregate", shape=box, fillcolor="#80cbc4", style="filled,rounded,bold", penwidth=2]
 
     subgraph cluster_behaviors {
-        label="What This Repository Does"
+        label="Behaviors"
         style="filled"
         fillcolor="#f9f9f9"
         color="#999999"
 
-        beh_context_intelligence_behavior [label="Session Analysis Toolkit\nBundles the tools, helpers, and notes together\n3 tools · 1 ctx\n~1646 tok", shape=box, fillcolor="#e0f2f1", style="filled,rounded"]
+        beh_context_intelligence_behavior [label="context-intelligence-behavior\n4 tools · 1 ctx\n~1891 tok", shape=box, fillcolor="#e0f2f1", style="filled,rounded"]
     }
 
     subgraph cluster_agents {
-        label="Helpers (AI assistants for specific jobs)"
+        label="Agents"
         style="filled"
         fillcolor="#f9f9f9"
         color="#999999"
 
-        agt_context_intelligence_design_facilitator [label="Design Helper\nGuides planning of new analysis tools\n~187 tok desc", shape=box, fillcolor="#c8e6c9", style="filled,rounded"]
-        agt_context_intelligence_tool_designer [label="Tool Builder\nDesigns new tools to query session data\n~198 tok desc", shape=box, fillcolor="#c8e6c9", style="filled,rounded"]
-        agt_graph_analyst [label="History Investigator\nAnswers questions about past sessions\n~543 tok desc", shape=box, fillcolor="#c8e6c9", style="filled,rounded"]
-        agt_session_navigator [label="Session Browser\nFinds and explores individual sessions\n~366 tok desc", shape=box, fillcolor="#c8e6c9", style="filled,rounded"]
+        agt_context_intelligence_design_facilitator [label="context-intelligence-design-facilitator\n~187 tok desc", shape=box, fillcolor="#c8e6c9", style="filled,rounded"]
+        agt_context_intelligence_tool_designer [label="context-intelligence-tool-designer\n~198 tok desc", shape=box, fillcolor="#c8e6c9", style="filled,rounded"]
+        agt_graph_analyst [label="graph-analyst\n~543 tok desc", shape=box, fillcolor="#c8e6c9", style="filled,rounded"]
+        agt_session_navigator [label="session-navigator\n~366 tok desc", shape=box, fillcolor="#c8e6c9", style="filled,rounded"]
     }
 
     subgraph cluster_modules {
-        label="Building Blocks (the actual machinery)"
+        label="Modules"
         style="filled"
         fillcolor="#f9f9f9"
         color="#999999"
 
-        mod_hook_context_intelligence [label="Auto Recorder\nCaptures activity as sessions run", shape=box, fillcolor="#bbdefb", style="filled,rounded"]
-        mod_tool_blob_read [label="Detail Reader\nOpens large stored pieces of data", shape=box, fillcolor="#bbdefb", style="filled,rounded"]
-        mod_tool_context_intelligence_upload [label="Data Uploader\nSends session data into the history store", shape=box, fillcolor="#bbdefb", style="filled,rounded"]
-        mod_tool_graph_query [label="History Search\nLooks up answers in the history store", shape=box, fillcolor="#bbdefb", style="filled,rounded"]
+        mod_hook_context_intelligence [label="hook-context-intelligence", shape=box, fillcolor="#bbdefb", style="filled,rounded"]
+        mod_tool_blob_read [label="tool-blob-read", shape=box, fillcolor="#bbdefb", style="filled,rounded"]
+        mod_tool_context_intelligence_upload [label="tool-context-intelligence-upload", shape=box, fillcolor="#bbdefb", style="filled,rounded"]
+        mod_tool_graph_query [label="tool-graph-query", shape=box, fillcolor="#bbdefb", style="filled,rounded"]
     }
 
     subgraph cluster_context {
-        label="Background Notes (reference text)"
+        label="Context Files"
         style="filled"
         fillcolor="#f9f9f9"
         color="#999999"
 
-        ctx_context_intelligence_awareness_md [label="Quick Reference\ncontext-intelligence-awareness.md\n~37 tok", shape=box, fillcolor="#e1bee7", style="filled,rounded"]
+        ctx_context_intelligence_awareness_md [label="context-intelligence-awareness.md\n~37 tok", shape=box, fillcolor="#e1bee7", style="filled,rounded"]
     }
 
     subgraph cluster_legend {
