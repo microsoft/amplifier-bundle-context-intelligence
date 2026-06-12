@@ -1,0 +1,54 @@
+[project]
+name = "amplifier-module-tool-context-intelligence-migrate"
+version = "0.0.0+dev"
+requires-python = ">=3.11"
+license = "MIT"
+
+dependencies = [
+    "amplifier-module-tool-context-intelligence-upload",
+    "amplifier-module-hook-context-intelligence",
+    "httpx>=0.28.1",
+]
+
+[project.scripts]
+context-intelligence-migrate = "amplifier_module_tool_context_intelligence_migrate.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.uv]
+package = true
+
+[tool.hatch.build.targets.wheel]
+packages = ["amplifier_module_tool_context_intelligence_migrate"]
+
+[tool.hatch.metadata]
+allow-direct-references = true
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.3",
+    "pyright>=1.1",
+    "ruff>=0.4",
+    "httpx>=0.28.1",
+    "amplifier-core>=1.4.1",
+    "pytest-asyncio>=0.24",
+]
+
+[tool.uv.sources]
+amplifier-module-tool-context-intelligence-upload = { path = "../tool-context-intelligence-upload", editable = true }
+amplifier-module-hook-context-intelligence = { path = "../hook-context-intelligence", editable = true }
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+
+[tool.pyright]
+pythonVersion = "3.11"
+typeCheckingMode = "basic"
+ignore = ["tests/**"]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
