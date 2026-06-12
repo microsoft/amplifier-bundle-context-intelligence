@@ -360,7 +360,7 @@ class TestBuildDiskOnlyMetadata:
 
 
 class TestGenerateSessionName:
-    """_generate_session_name() must generate a name from first prompt_preview."""
+    """_generate_session_name() must generate a name from first Prompt node."""
 
     def _make_mock_client(self, cypher_result):
         """Create a mock CIClient that returns cypher_result for any query."""
@@ -368,36 +368,36 @@ class TestGenerateSessionName:
         mock_client.cypher.return_value = cypher_result
         return mock_client
 
-    def test_returns_prompt_preview(self):
-        """Returns the prompt_preview of the first OrchestratorRun."""
+    def test_returns_prompt_text(self):
+        """Returns the prompt text of the first Prompt node (p.prompt)."""
         from context_intelligence.reconstruct.metadata import _generate_session_name
 
-        mock_client = self._make_mock_client([{"r.prompt_preview": "What is the weather today?"}])
+        mock_client = self._make_mock_client([{"p.prompt": "What is the weather today?"}])
         result = _generate_session_name(mock_client, "workspace1", "sess-abc")
         assert result == "What is the weather today?"
 
     def test_truncates_to_50_chars(self):
-        """Truncates prompt_preview to 50 chars with ellipsis."""
+        """Truncates prompt to 50 chars with ellipsis."""
         from context_intelligence.reconstruct.metadata import _generate_session_name
 
         long_preview = "A" * 60  # 60 chars
-        mock_client = self._make_mock_client([{"r.prompt_preview": long_preview}])
+        mock_client = self._make_mock_client([{"p.prompt": long_preview}])
         result = _generate_session_name(mock_client, "workspace1", "sess-abc")
         assert len(result) == 53  # 50 chars + "..."
         assert result.endswith("...")
 
     def test_no_truncation_for_short_preview(self):
-        """Does not add ellipsis for previews <= 50 chars."""
+        """Does not add ellipsis for prompts <= 50 chars."""
         from context_intelligence.reconstruct.metadata import _generate_session_name
 
         short_preview = "Short prompt"
-        mock_client = self._make_mock_client([{"r.prompt_preview": short_preview}])
+        mock_client = self._make_mock_client([{"p.prompt": short_preview}])
         result = _generate_session_name(mock_client, "workspace1", "sess-abc")
         assert result == "Short prompt"
         assert not result.endswith("...")
 
     def test_returns_empty_when_no_rows(self):
-        """Returns empty string when no OrchestratorRun rows found."""
+        """Returns empty string when no Prompt rows found."""
         from context_intelligence.reconstruct.metadata import _generate_session_name
 
         mock_client = self._make_mock_client([])
@@ -405,10 +405,10 @@ class TestGenerateSessionName:
         assert result == ""
 
     def test_returns_empty_when_preview_is_empty(self):
-        """Returns empty string when prompt_preview is empty."""
+        """Returns empty string when p.prompt is empty."""
         from context_intelligence.reconstruct.metadata import _generate_session_name
 
-        mock_client = self._make_mock_client([{"r.prompt_preview": ""}])
+        mock_client = self._make_mock_client([{"p.prompt": ""}])
         result = _generate_session_name(mock_client, "workspace1", "sess-abc")
         assert result == ""
 
@@ -709,21 +709,37 @@ class TestExtractMetadata:
         session_name_rows=None,
         blob_keys=None,
         session_start_blob=None,
+        parent_id_event_rows=None,
     ):
-        """Create a mock CIClient with configured cypher responses."""
+        """Create a mock CIClient with configured cypher responses.
+
+        Dispatches cypher queries to the right fixture rows:
+        - Session node query  -> session_rows
+        - session:start Event -> parent_id_event_rows
+        - OrchestratorRun count (HAS_EXECUTION) -> run_rows
+        - Prompt node name (HAS_PART) -> session_name_rows
+        """
         mock_client = MagicMock()
 
         def cypher_side_effect(query, workspace="*"):
+            # Session node basic properties query (no Event / Prompt / OrchestratorRun)
             if (
                 "Session" in query
                 and "node_id" in query
                 and "turn_count" not in query
                 and "OrchestratorRun" not in query
+                and "Event" not in query
+                and "Prompt" not in query
             ):
                 return session_rows if session_rows is not None else []
+            # Event query to get parent_id from session:start data
+            if "Event" in query and "session:start" in query:
+                return parent_id_event_rows if parent_id_event_rows is not None else []
+            # OrchestratorRun count via HAS_EXECUTION
             if "OrchestratorRun" in query and "count" in query:
                 return run_rows if run_rows is not None else [{"turn_count": 0}]
-            if "OrchestratorRun" in query and "prompt_preview" in query:
+            # Session name from first Prompt node
+            if "Prompt" in query and "p.prompt" in query:
                 return session_name_rows if session_name_rows is not None else []
             return []
 
@@ -753,7 +769,6 @@ class TestExtractMetadata:
                 "s.started_at": "2026-04-10T13:00:00.000+00:00",
                 "s.ended_at": None,
                 "s.status": "active",
-                "s.data": json.dumps({}),
             }
         ]
         mock_client = self._make_mock_client(session_rows=session_rows)
@@ -772,9 +787,9 @@ class TestExtractMetadata:
                 "s.started_at": "2026-04-10T13:00:00.000+00:00",
                 "s.ended_at": None,
                 "s.status": "active",
-                "s.data": json.dumps({"parent_id": "root-sess-abc"}),
             }
         ]
+        # No parent_id event rows needed; subsession detected by ID regex
         mock_client = self._make_mock_client(session_rows=session_rows)
         result = extract_metadata(mock_client, "workspace1", subsession_id)
         assert result is not None
@@ -783,7 +798,7 @@ class TestExtractMetadata:
         assert "child_span" in result
 
     def test_detects_subsession_by_parent_id(self):
-        """Detects subsession when Session.data contains parent_id."""
+        """Detects subsession when session:start Event.data contains parent_id."""
         from context_intelligence.reconstruct.metadata import extract_metadata
 
         session_rows = [
@@ -792,16 +807,29 @@ class TestExtractMetadata:
                 "s.started_at": "2026-04-10T13:00:00.000+00:00",
                 "s.ended_at": None,
                 "s.status": "active",
-                "s.data": json.dumps({"parent_id": "root-sess-abc"}),
             }
         ]
-        mock_client = self._make_mock_client(session_rows=session_rows)
+        # parent_id now comes from the Event node, not s.data
+        parent_id_event_rows = [
+            {
+                "e.data": json.dumps(
+                    {
+                        "timestamp": "2026-04-10T13:00:00Z",
+                        "session_id": "some-regular-id",
+                        "parent_id": "root-sess-abc",
+                    }
+                )
+            }
+        ]
+        mock_client = self._make_mock_client(
+            session_rows=session_rows, parent_id_event_rows=parent_id_event_rows
+        )
         result = extract_metadata(mock_client, "workspace1", "some-regular-id")
         assert result is not None
         assert result["parent_id"] == "root-sess-abc"
 
     def test_turn_count_from_orchestrator_run_count(self):
-        """Counts OrchestratorRun nodes for turn_count."""
+        """Counts OrchestratorRun nodes via HAS_EXECUTION for turn_count."""
         from context_intelligence.reconstruct.metadata import extract_metadata
 
         session_rows = [
@@ -810,7 +838,6 @@ class TestExtractMetadata:
                 "s.started_at": "2026-04-10T13:00:00.000+00:00",
                 "s.ended_at": None,
                 "s.status": "active",
-                "s.data": json.dumps({}),
             }
         ]
         run_rows = [{"turn_count": 7}]
@@ -820,7 +847,7 @@ class TestExtractMetadata:
         assert result["turn_count"] == 7
 
     def test_generates_session_name_when_missing(self):
-        """Generates session name from first prompt_preview when name is absent."""
+        """Generates session name from first Prompt node when name is absent."""
         from context_intelligence.reconstruct.metadata import extract_metadata
 
         session_rows = [
@@ -829,10 +856,9 @@ class TestExtractMetadata:
                 "s.started_at": "2026-04-10T13:00:00.000+00:00",
                 "s.ended_at": None,
                 "s.status": "active",
-                "s.data": json.dumps({}),
             }
         ]
-        session_name_rows = [{"r.prompt_preview": "Help me debug this code"}]
+        session_name_rows = [{"p.prompt": "Help me debug this code"}]
         mock_client = self._make_mock_client(
             session_rows=session_rows, session_name_rows=session_name_rows
         )
@@ -850,7 +876,6 @@ class TestExtractMetadata:
                 "s.started_at": "",
                 "s.ended_at": None,
                 "s.status": "active",
-                "s.data": json.dumps({}),
             }
         ]
         mock_client = self._make_mock_client(session_rows=session_rows)

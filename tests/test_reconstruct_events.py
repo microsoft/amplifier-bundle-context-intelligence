@@ -50,6 +50,10 @@ class TestImport:
         """_resolve_event_blobs must be importable."""
         from context_intelligence.reconstruct.events import _resolve_event_blobs  # noqa: F401
 
+    def test_resolve_blobs_in_value_import(self):
+        """_resolve_blobs_in_value must be importable (shared generic helper)."""
+        from context_intelligence.reconstruct.events import _resolve_blobs_in_value  # noqa: F401
+
     def test_imports_ciclient_from_client(self):
         """Module must import CIClient from context_intelligence.client."""
         import inspect
@@ -390,7 +394,7 @@ class TestResolveEventBlobs:
 
         events = [self._make_event("llm:request", "raw", {"$blob_ref": "ci-blob://sess1/key1"})]
 
-        _resolve_event_blobs(events, mock_client, "sess1")
+        _resolve_event_blobs(events, mock_client)
 
         assert events[0]["data"]["raw"] == blob_content
         mock_client.fetch_blob.assert_called_once_with("sess1", "key1")
@@ -405,7 +409,7 @@ class TestResolveEventBlobs:
 
         events = [self._make_event("llm:response", "raw", {"$blob_ref": "ci-blob://sess1/key2"})]
 
-        _resolve_event_blobs(events, mock_client, "sess1")
+        _resolve_event_blobs(events, mock_client)
 
         assert events[0]["data"]["raw"] == blob_content
 
@@ -419,21 +423,76 @@ class TestResolveEventBlobs:
 
         events = [self._make_event("tool:post", "result", {"$blob_ref": "ci-blob://sess1/key3"})]
 
-        _resolve_event_blobs(events, mock_client, "sess1")
+        _resolve_event_blobs(events, mock_client)
 
         assert events[0]["data"]["result"] == blob_content
 
-    def test_skips_other_event_types(self):
-        """Does not attempt blob resolution for other event types."""
+    def test_resolves_all_event_types_generically(self):
+        """Resolves $blob_ref for ANY event type, including session:start (no allow-list)."""
         from context_intelligence.reconstruct.events import _resolve_event_blobs
 
+        blob_content = {"schema": "1.0", "tools": ["bash"]}
         mock_client = MagicMock()
+        mock_client.fetch_blob.return_value = blob_content
 
+        # session:start.raw was the live bug: 10 unresolved markers on CI server
         events = [self._make_event("session:start", "raw", {"$blob_ref": "ci-blob://sess1/key4"})]
 
-        _resolve_event_blobs(events, mock_client, "sess1")
+        _resolve_event_blobs(events, mock_client)
 
-        mock_client.fetch_blob.assert_not_called()
+        assert events[0]["data"]["raw"] == blob_content
+        mock_client.fetch_blob.assert_called_once_with("sess1", "key4")
+
+    def test_resolves_deeply_nested_blob_ref_in_list(self):
+        """Resolves a $blob_ref nested inside a list within data (generic recursion)."""
+        from context_intelligence.reconstruct.events import _resolve_event_blobs
+
+        blob_content = {"output": "nested result"}
+        mock_client = MagicMock()
+        mock_client.fetch_blob.return_value = blob_content
+
+        events = [
+            {
+                "event": "some:event",
+                "session_id": "sess1",
+                "data": {
+                    "items": [
+                        {"x": 1},
+                        {"$blob_ref": "ci-blob://sess1/nested_key"},
+                    ]
+                },
+            }
+        ]
+
+        _resolve_event_blobs(events, mock_client)
+
+        assert events[0]["data"]["items"][1] == blob_content
+        mock_client.fetch_blob.assert_called_once_with("sess1", "nested_key")
+
+    def test_resolves_deeply_nested_blob_ref_in_subdict(self):
+        """Resolves a $blob_ref nested inside a sub-dict within data (generic recursion)."""
+        from context_intelligence.reconstruct.events import _resolve_event_blobs
+
+        blob_content = "deep string value"
+        mock_client = MagicMock()
+        mock_client.fetch_blob.return_value = blob_content
+
+        events = [
+            {
+                "event": "some:event",
+                "session_id": "sess1",
+                "data": {
+                    "outer": {
+                        "inner": {"$blob_ref": "ci-blob://sess1/deep_key"},
+                    }
+                },
+            }
+        ]
+
+        _resolve_event_blobs(events, mock_client)
+
+        assert events[0]["data"]["outer"]["inner"] == blob_content
+        mock_client.fetch_blob.assert_called_once_with("sess1", "deep_key")
 
     def test_skips_when_no_blob_ref(self):
         """Does not call fetch_blob when field has no $blob_ref."""
@@ -443,7 +502,7 @@ class TestResolveEventBlobs:
 
         events = [self._make_event("llm:request", "raw", {"messages": []})]
 
-        _resolve_event_blobs(events, mock_client, "sess1")
+        _resolve_event_blobs(events, mock_client)
 
         mock_client.fetch_blob.assert_not_called()
 
@@ -461,7 +520,7 @@ class TestResolveEventBlobs:
             self._make_event("llm:response", "raw", blob_ref),
         ]
 
-        _resolve_event_blobs(events, mock_client, "sess1")
+        _resolve_event_blobs(events, mock_client)
 
         # Should only fetch once despite two events with the same blob ref
         mock_client.fetch_blob.assert_called_once()
@@ -474,229 +533,392 @@ class TestResolveEventBlobs:
 
         events = [{"event": "llm:request", "session_id": "sess1", "data": "not-a-dict"}]
 
-        _resolve_event_blobs(events, mock_client, "sess1")
+        _resolve_event_blobs(events, mock_client)
 
         mock_client.fetch_blob.assert_not_called()
 
 
 class TestExtractEvents:
-    """extract_events() must query all graph node types and return sorted events."""
+    """extract_events() uses a single Event-node query — the live schema source of truth."""
 
-    def _make_mock_client(self, cypher_returns: dict | None = None) -> MagicMock:
-        """Create a mock CIClient.
+    # -----------------------------------------------------------------------
+    # Helpers
+    # -----------------------------------------------------------------------
 
-        cypher_returns maps query substrings to list-of-dict return values.
+    def _make_event_row(
+        self,
+        event_name: str,
+        ts: str,
+        session_id: str = "sess-abc",
+        **extra_data,
+    ) -> dict:
+        """Build one row as returned by the single-Event-node cypher query.
+
+        data is a JSON string containing the inner event payload (timestamp +
+        session_id + event-specific fields), matching the live graph schema.
         """
+        data = {"timestamp": ts, "session_id": session_id, **extra_data}
+        return {
+            "event_name": event_name,
+            "data": json.dumps(data),
+            "occurred_at": ts,
+        }
+
+    def _make_mock_client(self, event_rows: list | None = None) -> MagicMock:
+        """Build a mock CIClient whose cypher() returns event_rows."""
         mock_client = MagicMock()
-
-        def cypher_side_effect(query: str, workspace: str = "*"):
-            if cypher_returns:
-                for key, value in cypher_returns.items():
-                    if key in query:
-                        return value
-            return []
-
-        mock_client.cypher.side_effect = cypher_side_effect
+        mock_client.cypher.return_value = event_rows if event_rows is not None else []
+        mock_client.fetch_blob.return_value = None
         return mock_client
 
-    def _make_ts_data(self, ts: str, session_id: str = "sess-abc", **extra) -> str:
-        data = {"timestamp": ts, "session_id": session_id, **extra}
-        return json.dumps(data)
+    # -----------------------------------------------------------------------
+    # Basic contract tests
+    # -----------------------------------------------------------------------
 
     def test_returns_list(self):
         """extract_events returns a list."""
         from context_intelligence.reconstruct.events import extract_events
 
-        mock_client = self._make_mock_client()
-        result = extract_events(mock_client, "sess-abc", "workspace1")
+        result = extract_events(self._make_mock_client(), "sess-abc", "ws")
         assert isinstance(result, list)
 
-    def test_queries_session_node(self):
-        """Queries Session node type."""
+    def test_single_cypher_call(self):
+        """Issues exactly one cypher call (single Event-node query)."""
         from context_intelligence.reconstruct.events import extract_events
 
         mock_client = self._make_mock_client()
-        extract_events(mock_client, "sess-abc", "workspace1")
+        extract_events(mock_client, "sess-abc", "ws")
+        assert mock_client.cypher.call_count == 1
 
-        # Check that at least one cypher call references :Session
-        calls = [str(c) for c in mock_client.cypher.call_args_list]
-        assert any(":Session" in c or "Session" in c for c in calls)
-
-    def test_queries_subsession_node(self):
-        """Queries Subsession node type."""
+    def test_query_targets_event_node_by_session_id(self):
+        """The single cypher query matches Event nodes on session_id."""
         from context_intelligence.reconstruct.events import extract_events
 
         mock_client = self._make_mock_client()
-        extract_events(mock_client, "sess-abc", "workspace1")
-
-        calls = [str(c) for c in mock_client.cypher.call_args_list]
-        assert any("Subsession" in c for c in calls)
-
-    def test_queries_orchestrator_run_node(self):
-        """Queries OrchestratorRun node type."""
-        from context_intelligence.reconstruct.events import extract_events
-
-        mock_client = self._make_mock_client()
-        extract_events(mock_client, "sess-abc", "workspace1")
-
-        calls = [str(c) for c in mock_client.cypher.call_args_list]
-        assert any("OrchestratorRun" in c for c in calls)
-
-    def test_queries_prompt_step_node(self):
-        """Queries PromptStep node type."""
-        from context_intelligence.reconstruct.events import extract_events
-
-        mock_client = self._make_mock_client()
-        extract_events(mock_client, "sess-abc", "workspace1")
-
-        calls = [str(c) for c in mock_client.cypher.call_args_list]
-        assert any("PromptStep" in c for c in calls)
-
-    def test_queries_assistant_step_node(self):
-        """Queries AssistantStep node type."""
-        from context_intelligence.reconstruct.events import extract_events
-
-        mock_client = self._make_mock_client()
-        extract_events(mock_client, "sess-abc", "workspace1")
-
-        calls = [str(c) for c in mock_client.cypher.call_args_list]
-        assert any("AssistantStep" in c for c in calls)
-
-    def test_queries_tool_execution_non_delegate(self):
-        """Queries ToolExecution (non-delegate) node type."""
-        from context_intelligence.reconstruct.events import extract_events
-
-        mock_client = self._make_mock_client()
-        extract_events(mock_client, "sess-abc", "workspace1")
-
-        calls = [str(c) for c in mock_client.cypher.call_args_list]
-        # Non-delegate: filters out delegate tool_name
-        assert any("ToolExecution" in c and "delegate" in c for c in calls)
-
-    def test_queries_event_node(self):
-        """Queries Event node type."""
-        from context_intelligence.reconstruct.events import extract_events
-
-        mock_client = self._make_mock_client()
-        extract_events(mock_client, "sess-abc", "workspace1")
-
-        calls = [str(c) for c in mock_client.cypher.call_args_list]
-        assert any(":Event" in c or "HAS_EVENT" in c for c in calls)
+        extract_events(mock_client, "sess-abc", "ws")
+        query = mock_client.cypher.call_args[0][0]
+        assert "Event" in query
+        assert "session_id" in query
+        assert "sess-abc" in query
 
     def test_passes_workspace_to_cypher(self):
-        """Passes the workspace argument to all cypher calls."""
+        """Passes the workspace keyword argument to cypher."""
         from context_intelligence.reconstruct.events import extract_events
 
         mock_client = self._make_mock_client()
         extract_events(mock_client, "sess-abc", "my-workspace")
+        _, kwargs = mock_client.cypher.call_args
+        assert kwargs.get("workspace") == "my-workspace"
 
-        for c in mock_client.cypher.call_args_list:
-            # workspace is the second positional arg or keyword arg
-            assert "my-workspace" in str(c)
-
-    def test_returns_events_sorted_by_timestamp(self):
-        """Events are sorted by timestamp ascending."""
+    def test_empty_when_no_events(self):
+        """Returns empty list when no Event rows returned."""
         from context_intelligence.reconstruct.events import extract_events
 
-        ts1 = "2026-04-10T10:00:00.000+00:00"
-        ts2 = "2026-04-10T10:01:00.000+00:00"
-        ts3 = "2026-04-10T10:02:00.000+00:00"
-
-        # Return session:start event first, then session:end, in reversed order
-        data1 = json.dumps({"timestamp": ts3, "session_id": "sess-abc"})
-        data2 = json.dumps({"timestamp": ts1, "session_id": "sess-abc"})
-        data3 = json.dumps({"timestamp": ts2, "session_id": "sess-abc"})
-
-        # Return events in non-sorted order from Session query
-        cypher_returns = {
-            "Session": [
-                {"s.data": data1, "s.data_session_end": data2},
-            ],
-            "Subsession": [],
-            "OrchestratorRun": [],
-            "PromptStep": [{"p.data": data3}],
-            "AssistantStep": [],
-            "ToolExecution": [],
-            "HAS_EVENT": [],
-        }
-
-        mock_client = self._make_mock_client(cypher_returns)
-        result = extract_events(mock_client, "sess-abc", "workspace1")
-
-        # Should be sorted ascending
-        timestamps = [e["ts"] for e in result]
-        assert timestamps == sorted(timestamps)
-
-    def test_empty_when_no_graph_data(self):
-        """Returns empty list when all queries return empty results."""
-        from context_intelligence.reconstruct.events import extract_events
-
-        mock_client = self._make_mock_client()
-        result = extract_events(mock_client, "sess-abc", "workspace1")
+        result = extract_events(self._make_mock_client([]), "sess-abc", "ws")
         assert result == []
 
-    def test_resolve_blobs_false_by_default(self):
-        """resolve_blobs defaults to False, fetch_blob not called."""
+    # -----------------------------------------------------------------------
+    # Event-type coverage
+    # -----------------------------------------------------------------------
+
+    def test_returns_session_start_event(self):
+        """session:start event is returned (attached via SOURCED_FROM, NOT HAS_EVENT)."""
         from context_intelligence.reconstruct.events import extract_events
 
-        ts = "2026-04-10T10:00:00.000+00:00"
-        data_str = json.dumps(
-            {
-                "timestamp": ts,
-                "session_id": "sess-abc",
-                "raw": {"$blob_ref": "ci-blob://sess-abc/k1"},
-            }
-        )
-        cypher_returns = {
-            "AssistantStep": [
-                {
-                    "a.data": None,
-                    "a.data_llm_request": data_str,
-                    "a.data_llm_response": None,
-                }
-            ]
+        rows = [self._make_event_row("session:start", "2026-04-10T10:00:00.000+00:00")]
+        result = extract_events(self._make_mock_client(rows), "sess-abc", "ws")
+        assert any(e["event"] == "session:start" for e in result)
+
+    def test_returns_session_end_event(self):
+        """session:end event is returned."""
+        from context_intelligence.reconstruct.events import extract_events
+
+        rows = [self._make_event_row("session:end", "2026-04-10T11:00:00.000+00:00")]
+        result = extract_events(self._make_mock_client(rows), "sess-abc", "ws")
+        assert any(e["event"] == "session:end" for e in result)
+
+    def test_returns_prompt_submit_event(self):
+        """prompt:submit event is returned."""
+        from context_intelligence.reconstruct.events import extract_events
+
+        rows = [
+            self._make_event_row("prompt:submit", "2026-04-10T10:05:00.000+00:00", prompt="Hello")
+        ]
+        result = extract_events(self._make_mock_client(rows), "sess-abc", "ws")
+        assert any(e["event"] == "prompt:submit" for e in result)
+
+    def test_returns_llm_response_event(self):
+        """llm:response event is returned."""
+        from context_intelligence.reconstruct.events import extract_events
+
+        rows = [self._make_event_row("llm:response", "2026-04-10T10:10:00.000+00:00")]
+        result = extract_events(self._make_mock_client(rows), "sess-abc", "ws")
+        assert any(e["event"] == "llm:response" for e in result)
+
+    def test_returns_tool_post_event(self):
+        """tool:post event is returned."""
+        from context_intelligence.reconstruct.events import extract_events
+
+        rows = [
+            self._make_event_row(
+                "tool:post",
+                "2026-04-10T10:11:00.000+00:00",
+                tool_name="bash",
+                tool_call_id="tc1",
+            )
+        ]
+        result = extract_events(self._make_mock_client(rows), "sess-abc", "ws")
+        assert any(e["event"] == "tool:post" for e in result)
+
+    def test_all_events_returned_including_session_events(self):
+        """All 5 event types in the fixture are present (including session:start/end)."""
+        from context_intelligence.reconstruct.events import extract_events
+
+        rows = [
+            self._make_event_row("session:start", "2026-04-10T10:00:00.000+00:00"),
+            self._make_event_row("prompt:submit", "2026-04-10T10:01:00.000+00:00", prompt="Hi"),
+            self._make_event_row("llm:response", "2026-04-10T10:02:00.000+00:00"),
+            self._make_event_row("tool:post", "2026-04-10T10:03:00.000+00:00"),
+            self._make_event_row("session:end", "2026-04-10T10:04:00.000+00:00"),
+        ]
+        result = extract_events(self._make_mock_client(rows), "sess-abc", "ws")
+        types = {e["event"] for e in result}
+        assert types == {
+            "session:start",
+            "prompt:submit",
+            "llm:response",
+            "tool:post",
+            "session:end",
         }
 
-        mock_client = self._make_mock_client(cypher_returns)
-        extract_events(mock_client, "sess-abc", "workspace1")
+    # -----------------------------------------------------------------------
+    # Ordering
+    # -----------------------------------------------------------------------
 
+    def test_events_sorted_by_timestamp_ascending(self):
+        """Events are returned in ascending timestamp order."""
+        from context_intelligence.reconstruct.events import extract_events
+
+        rows = [
+            self._make_event_row("session:end", "2026-04-10T10:03:00.000+00:00"),
+            self._make_event_row("prompt:submit", "2026-04-10T10:01:00.000+00:00"),
+            self._make_event_row("session:start", "2026-04-10T10:00:00.000+00:00"),
+            self._make_event_row("llm:response", "2026-04-10T10:02:00.000+00:00"),
+        ]
+        result = extract_events(self._make_mock_client(rows), "sess-abc", "ws")
+        ts = [e["ts"] for e in result]
+        assert ts == sorted(ts)
+
+    # -----------------------------------------------------------------------
+    # Envelope synthesis
+    # -----------------------------------------------------------------------
+
+    def test_synthesises_envelope_fields(self):
+        """Each event has ts, lvl, schema, event, session_id, data."""
+        from context_intelligence.reconstruct.events import extract_events
+
+        rows = [self._make_event_row("prompt:submit", "2026-04-10T10:00:00.000+00:00")]
+        result = extract_events(self._make_mock_client(rows), "sess-abc", "ws")
+        assert len(result) == 1
+        ev = result[0]
+        assert "ts" in ev
+        assert "lvl" in ev
+        assert "schema" in ev
+        assert "event" in ev
+        assert "session_id" in ev
+        assert "data" in ev
+
+    def test_data_field_is_dict_not_string(self):
+        """data field is parsed into a dict, not left as a JSON string."""
+        from context_intelligence.reconstruct.events import extract_events
+
+        rows = [self._make_event_row("prompt:submit", "2026-04-10T10:00:00.000+00:00", prompt="Hi")]
+        result = extract_events(self._make_mock_client(rows), "sess-abc", "ws")
+        assert isinstance(result[0]["data"], dict)
+
+    def test_event_specific_data_preserved(self):
+        """Event-specific data fields (e.g. prompt) are preserved in data."""
+        from context_intelligence.reconstruct.events import extract_events
+
+        rows = [
+            self._make_event_row(
+                "prompt:submit", "2026-04-10T10:00:00.000+00:00", prompt="Hello world"
+            )
+        ]
+        result = extract_events(self._make_mock_client(rows), "sess-abc", "ws")
+        assert result[0]["data"]["prompt"] == "Hello world"
+
+    # -----------------------------------------------------------------------
+    # Blob resolution
+    # -----------------------------------------------------------------------
+
+    def test_resolve_blobs_false_by_default(self):
+        """resolve_blobs=False (default) does not call fetch_blob."""
+        from context_intelligence.reconstruct.events import extract_events
+
+        rows = [
+            self._make_event_row(
+                "llm:response",
+                "2026-04-10T10:00:00.000+00:00",
+                raw={"$blob_ref": "ci-blob://sess-abc/k1"},
+            )
+        ]
+        mock_client = self._make_mock_client(rows)
+        extract_events(mock_client, "sess-abc", "ws")
         mock_client.fetch_blob.assert_not_called()
 
-    def test_resolve_blobs_true_calls_fetch_blob(self):
-        """When resolve_blobs=True, blob refs are resolved."""
+    def test_resolve_blobs_true_resolves_llm_response_raw(self):
+        """resolve_blobs=True fetches and substitutes the raw blob for llm:response."""
         from context_intelligence.reconstruct.events import extract_events
 
-        ts = "2026-04-10T10:00:00.000+00:00"
-        data_str = json.dumps(
-            {
-                "timestamp": ts,
-                "session_id": "sess-abc",
-                "raw": {"$blob_ref": "ci-blob://sess-abc/k1"},
-            }
-        )
-        cypher_returns = {
-            "AssistantStep": [
-                {
-                    "a.data": None,
-                    "a.data_llm_request": data_str,
-                    "a.data_llm_response": None,
-                }
-            ]
-        }
+        resolved_content = {"content": [{"type": "text", "text": "Hello"}]}
+        rows = [
+            self._make_event_row(
+                "llm:response",
+                "2026-04-10T10:00:00.000+00:00",
+                raw={"$blob_ref": "ci-blob://sess-abc/k1"},
+            )
+        ]
+        mock_client = self._make_mock_client(rows)
+        mock_client.fetch_blob.return_value = resolved_content
 
-        mock_client = self._make_mock_client(cypher_returns)
-        mock_client.fetch_blob.return_value = {"messages": []}
-        extract_events(mock_client, "sess-abc", "workspace1", resolve_blobs=True)
+        result = extract_events(mock_client, "sess-abc", "ws", resolve_blobs=True)
+        mock_client.fetch_blob.assert_called_once_with("sess-abc", "k1")
+        assert result[0]["data"]["raw"] == resolved_content
 
-        mock_client.fetch_blob.assert_called()
-
-    def test_at_least_seven_cypher_calls(self):
-        """At least 7 Cypher queries (one per node type)."""
+    def test_resolve_blobs_true_resolves_tool_post_result(self):
+        """resolve_blobs=True fetches and substitutes the result blob for tool:post."""
         from context_intelligence.reconstruct.events import extract_events
 
-        mock_client = self._make_mock_client()
-        extract_events(mock_client, "sess-abc", "workspace1")
+        resolved_result = "some tool output"
+        rows = [
+            self._make_event_row(
+                "tool:post",
+                "2026-04-10T10:00:00.000+00:00",
+                tool_call_id="tc1",
+                result={"$blob_ref": "ci-blob://sess-abc/k2"},
+            )
+        ]
+        mock_client = self._make_mock_client(rows)
+        mock_client.fetch_blob.return_value = resolved_result
 
-        # 7 node types: Session, Subsession, OrchestratorRun, PromptStep,
-        # AssistantStep, ToolExecution non-delegate, ToolExecution delegate, Event
-        assert mock_client.cypher.call_count >= 7
+        result = extract_events(mock_client, "sess-abc", "ws", resolve_blobs=True)
+        mock_client.fetch_blob.assert_called_once_with("sess-abc", "k2")
+        assert result[0]["data"]["result"] == resolved_result
+
+    def test_resolve_blobs_caches_repeated_keys(self):
+        """Same blob key is fetched only once even when referenced twice."""
+        from context_intelligence.reconstruct.events import extract_events
+
+        blob_data = {"content": [{"type": "text", "text": "Hi"}]}
+        rows = [
+            self._make_event_row(
+                "llm:response",
+                "2026-04-10T10:00:00.000+00:00",
+                raw={"$blob_ref": "ci-blob://sess-abc/same_key"},
+            ),
+            self._make_event_row(
+                "llm:response",
+                "2026-04-10T10:01:00.000+00:00",
+                raw={"$blob_ref": "ci-blob://sess-abc/same_key"},
+            ),
+        ]
+        mock_client = self._make_mock_client(rows)
+        mock_client.fetch_blob.return_value = blob_data
+
+        extract_events(mock_client, "sess-abc", "ws", resolve_blobs=True)
+        assert mock_client.fetch_blob.call_count == 1
+
+    # -----------------------------------------------------------------------
+    # Round-trip: synthetic session
+    # -----------------------------------------------------------------------
+
+    def test_synthetic_session_round_trip(self):
+        """A complete synthetic session returns all event types in order."""
+        from context_intelligence.reconstruct.events import extract_events
+
+        blob_response = {"content": [{"type": "text", "text": "I can help."}]}
+        blob_result = "file1.txt\nfile2.txt"
+
+        rows = [
+            self._make_event_row("session:start", "2026-04-10T10:00:00.000+00:00"),
+            self._make_event_row(
+                "prompt:submit", "2026-04-10T10:01:00.000+00:00", prompt="List files"
+            ),
+            self._make_event_row("execution:start", "2026-04-10T10:02:00.000+00:00"),
+            self._make_event_row(
+                "llm:response",
+                "2026-04-10T10:03:00.000+00:00",
+                raw={"$blob_ref": "ci-blob://sess-abc/resp_key"},
+            ),
+            self._make_event_row(
+                "tool:post",
+                "2026-04-10T10:04:00.000+00:00",
+                tool_call_id="tc1",
+                tool_name="bash",
+                result={"$blob_ref": "ci-blob://sess-abc/result_key"},
+            ),
+            self._make_event_row("execution:end", "2026-04-10T10:05:00.000+00:00"),
+            self._make_event_row("session:end", "2026-04-10T10:06:00.000+00:00"),
+        ]
+
+        mock_client = self._make_mock_client(rows)
+        mock_client.fetch_blob.side_effect = lambda s, k: {
+            "resp_key": blob_response,
+            "result_key": blob_result,
+        }.get(k)
+
+        result = extract_events(mock_client, "sess-abc", "ws", resolve_blobs=True)
+
+        # All 7 events present
+        assert len(result) == 7
+        # In time order
+        ts = [e["ts"] for e in result]
+        assert ts == sorted(ts)
+        # Blobs resolved
+        llm_ev = next(e for e in result if e["event"] == "llm:response")
+        assert llm_ev["data"]["raw"] == blob_response
+        tool_ev = next(e for e in result if e["event"] == "tool:post")
+        assert tool_ev["data"]["result"] == blob_result
+        # Session events present
+        assert any(e["event"] == "session:start" for e in result)
+        assert any(e["event"] == "session:end" for e in result)
+
+    def test_resolve_blobs_true_resolves_session_start_raw(self):
+        """extract_events with resolve_blobs=True resolves $blob_ref in session:start.data.raw."""
+        from context_intelligence.reconstruct.events import extract_events
+
+        resolved_schema = {"version": "1.0", "mount_plan": {"providers": []}}
+        rows = [
+            self._make_event_row(
+                "session:start",
+                "2026-04-10T10:00:00.000+00:00",
+                raw={"$blob_ref": "ci-blob://sess-abc/session_raw_key"},
+            )
+        ]
+        mock_client = self._make_mock_client(rows)
+        mock_client.fetch_blob.return_value = resolved_schema
+
+        result = extract_events(mock_client, "sess-abc", "ws", resolve_blobs=True)
+
+        mock_client.fetch_blob.assert_called_once_with("sess-abc", "session_raw_key")
+        assert result[0]["data"]["raw"] == resolved_schema
+
+    def test_resolve_blobs_leaves_unresolvable_ref_in_place(self):
+        """When fetch_blob returns None the original marker is left intact (fail-soft)."""
+        from context_intelligence.reconstruct.events import extract_events
+
+        rows = [
+            self._make_event_row(
+                "session:start",
+                "2026-04-10T10:00:00.000+00:00",
+                raw={"$blob_ref": "ci-blob://sess-abc/missing_key"},
+            )
+        ]
+        mock_client = self._make_mock_client(rows)
+        # fetch_blob already returns None by default in _make_mock_client
+
+        result = extract_events(mock_client, "sess-abc", "ws", resolve_blobs=True)
+
+        # Marker remains; no exception raised
+        assert result[0]["data"]["raw"] == {"$blob_ref": "ci-blob://sess-abc/missing_key"}

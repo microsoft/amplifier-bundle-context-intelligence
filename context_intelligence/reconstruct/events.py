@@ -77,6 +77,8 @@ def _make_event_line(
     sid = data.pop("session_id", session_id)
     redaction = data.pop("redaction", None)
 
+    # NOTE: lvl/schema are SYNTHESIZED constants (not read from the original line) and ts is
+    # millisecond-truncated — this envelope is a faithful-but-synthesized reconstruction, not byte-identical metadata.
     result: dict[str, Any] = {
         "ts": ts,
         "lvl": "INFO",
@@ -95,11 +97,18 @@ def _maybe_append(
     event_type: str,
     data_json_str: str | None,
     session_id: str,
-) -> None:
-    """Build one event line and append it to *events* if the result is not None."""
+) -> bool:
+    """Build one event line and append it to *events* if the result is not None.
+
+    Returns ``True`` when an event was DROPPED because its data was present but
+    unparseable / not a dict (a JSON decode failure), so callers can surface the
+    loss.  A falsy *data_json_str* (legitimately empty) is not counted as a drop.
+    """
     ev = _make_event_line(event_type, data_json_str, session_id)
     if ev:
         events.append(ev)
+        return False
+    return bool(data_json_str)
 
 
 # ---------------------------------------------------------------------------
@@ -107,63 +116,82 @@ def _maybe_append(
 # ---------------------------------------------------------------------------
 
 
+def _resolve_blobs_in_value(
+    value: Any,
+    client: CIClient,
+    blob_cache: dict[str, Any],
+    stats: dict[str, int] | None = None,
+) -> Any:
+    """Recursively resolve ``$blob_ref`` markers anywhere in a value.
+
+    - A dict that contains a ``$blob_ref`` key is treated as a blob reference
+      and replaced with the fetched content.
+    - A plain dict (no ``$blob_ref``) has each of its values recursively
+      resolved; a new dict is returned.
+    - A list has each element recursively resolved; a new list is returned.
+    - Scalars are returned unchanged.
+
+    If a blob fetch fails (returns ``None``) or the URI cannot be parsed, the
+    original marker is left in place (fail-soft, no exception raised) and, when
+    a *stats* dict is provided, its ``"unresolved"`` counter is incremented so
+    callers can surface the silent loss.
+
+    The *blob_cache* is a mutable dict shared across calls within a session
+    to avoid redundant fetches.  Keys are the blob key component of the URI
+    (the portion after ``ci-blob://SESSION_ID/``).
+    """
+    if isinstance(value, dict):
+        if "$blob_ref" in value:
+            uri = value["$blob_ref"]
+            if isinstance(uri, str) and uri.startswith("ci-blob://"):
+                parts = uri[len("ci-blob://") :].split("/", 1)
+                if len(parts) == 2:
+                    blob_session, blob_key = parts
+                    # Cache key is blob_key only — extract_events is
+                    # session-scoped so keys are unique within one call.
+                    if blob_key in blob_cache:
+                        return blob_cache[blob_key]
+                    resolved = client.fetch_blob(blob_session, blob_key)
+                    if resolved is not None:
+                        blob_cache[blob_key] = resolved
+                        return resolved
+                    log.debug("Could not resolve blob ref: %s", uri)
+            # fail-soft: return original marker unchanged, but record the loss
+            if stats is not None:
+                stats["unresolved"] += 1
+            return value
+        # Plain dict — recurse into each value
+        return {k: _resolve_blobs_in_value(v, client, blob_cache, stats) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_resolve_blobs_in_value(item, client, blob_cache, stats) for item in value]
+    return value
+
+
 def _resolve_event_blobs(
     events: list[dict[str, Any]],
     client: CIClient,
-    session_id: str,
-) -> None:
+) -> int:
     """Resolve ``$blob_ref`` values in event data in-place.
 
-    For ``llm:request`` / ``llm:response``: resolves ``data.raw``.
-    For ``tool:post``: resolves ``data.result``.
+    Recursively walks the entire ``data`` dict of every event and replaces any
+    ``{"$blob_ref": "ci-blob://SESSION_ID/KEY"}`` marker at any nesting depth
+    with the fetched blob content.  All event types are covered — no allow-list.
 
-    Resolved blobs are cached by key to avoid redundant fetches.
+    Resolved blobs are cached by key to avoid redundant fetches.  Returns the
+    number of blob refs that could not be resolved (markers left in place).
     """
     blob_cache: dict[str, Any] = {}
+    stats: dict[str, int] = {"unresolved": 0}
 
     for event in events:
         data = event.get("data")
         if not isinstance(data, dict):
             continue
 
-        event_type = event.get("event", "")
+        for key in list(data.keys()):
+            data[key] = _resolve_blobs_in_value(data[key], client, blob_cache, stats)
 
-        # Determine which field to resolve based on event type
-        if event_type in ("llm:request", "llm:response"):
-            field = "raw"
-        elif event_type == "tool:post":
-            field = "result"
-        else:
-            continue
-
-        value = data.get(field)
-        if not isinstance(value, dict) or "$blob_ref" not in value:
-            continue
-
-        uri = value["$blob_ref"]
-        if not isinstance(uri, str) or not uri.startswith("ci-blob://"):
-            continue
-
-        parts = uri[len("ci-blob://") :].split("/", 1)
-        if len(parts) != 2:
-            continue
-
-        blob_session, blob_key = parts
-
-        # Cache key is blob_key only (not blob_session/blob_key) because
-        # extract_events is session-scoped, so a session's blob keys are unique
-        # within a single invocation and cannot collide with themselves.
-        if blob_key in blob_cache:
-            data[field] = blob_cache[blob_key]
-            continue
-
-        # Fetch and cache
-        resolved = client.fetch_blob(blob_session, blob_key)
-        if resolved is not None:
-            blob_cache[blob_key] = resolved
-            data[field] = resolved
-        else:
-            log.debug("Could not resolve blob ref: %s", uri)
+    return stats["unresolved"]
 
 
 # ---------------------------------------------------------------------------
@@ -180,15 +208,11 @@ def extract_events(
 ) -> list[dict[str, Any]]:
     """Extract all events for a session and return them sorted by timestamp.
 
-    Queries 7+ graph node types:
-    - Session (session:start, session:end)
-    - Subsession (session:start, session:end)
-    - OrchestratorRun (execution:start, execution:end, orchestrator:complete)
-    - PromptStep (prompt:submit)
-    - AssistantStep (provider:request, llm:request, llm:response)
-    - ToolExecution non-delegate (tool:pre, tool:post)
-    - ToolExecution delegate (tool:pre, tool:post, delegate:agent_spawned, delegate:agent_completed)
-    - Event (generic events: prompt:complete, session:resume, etc.)
+    Uses the single source-of-truth query against the ``Event`` node type,
+    filtering by ``session_id``.  All event types — including ``session:start``
+    and ``session:end``, which are attached via ``SOURCED_FROM`` rather than
+    ``HAS_EVENT`` — are stored as ``Event`` nodes and returned by this query.
+    A ``Session``-based traversal (``HAS_EVENT``) would be lossy.
 
     Parameters
     ----------
@@ -199,119 +223,54 @@ def extract_events(
     workspace:
         Workspace to scope all cypher queries.
     resolve_blobs:
-        When True, resolve ``$blob_ref`` values in-place for llm:request,
-        llm:response (data.raw), and tool:post (data.result).
+        When True, recursively resolve any ``$blob_ref`` markers found
+        anywhere in each event's ``data`` dict, regardless of event type
+        or nesting depth.
 
     Returns
     -------
     list[dict]
-        Events sorted ascending by timestamp.
+        Events sorted ascending by occurred_at / timestamp.
     """
     events: list[dict[str, Any]] = []
 
-    # ── Session-level events ────────────────────────────────────────────────
+    # Single source-of-truth: all Event nodes for this session, ordered by
+    # occurred_at.  The graph server returns them pre-sorted; we also apply a
+    # secondary in-process sort on the synthesised `ts` field (millisecond
+    # precision) so the final list is stable even if occurred_at has ties.
     rows = client.cypher(
-        f'MATCH (s:Session {{node_id: "{session_id}"}}) RETURN s.data, s.data_session_end',
+        f'MATCH (e:Event {{session_id: "{session_id}"}}) '
+        f"RETURN e.event_name AS event_name, e.data AS data, e.occurred_at AS occurred_at "
+        f"ORDER BY e.occurred_at",
         workspace=workspace,
     )
+    dropped = 0
     for row in rows:
-        _maybe_append(events, "session:start", row.get("s.data"), session_id)
-        _maybe_append(events, "session:end", row.get("s.data_session_end"), session_id)
+        event_name = row.get("event_name") or "unknown"
+        if _maybe_append(events, event_name, row.get("data"), session_id):
+            dropped += 1
 
-    # ── Subsession events ───────────────────────────────────────────────────
-    rows = client.cypher(
-        f'MATCH (sub:Subsession)-[:SUBSESSION_OF]->(root:Session {{node_id: "{session_id}"}}) '
-        f"RETURN sub.node_id, sub.data, sub.data_session_end",
-        workspace=workspace,
-    )
-    for row in rows:
-        _maybe_append(events, "session:start", row.get("sub.data"), session_id)
-        _maybe_append(events, "session:end", row.get("sub.data_session_end"), session_id)
-
-    # ── OrchestratorRun events ──────────────────────────────────────────────
-    rows = client.cypher(
-        f'MATCH (s:Session {{node_id: "{session_id}"}})-[:HAS_RUN]->(r:OrchestratorRun) '
-        f"RETURN r.data, r.data_execution_end, r.data_orchestrator_complete",
-        workspace=workspace,
-    )
-    for row in rows:
-        _maybe_append(events, "execution:start", row.get("r.data"), session_id)
-        _maybe_append(events, "execution:end", row.get("r.data_execution_end"), session_id)
-        _maybe_append(
-            events, "orchestrator:complete", row.get("r.data_orchestrator_complete"), session_id
-        )
-
-    # ── PromptStep events ───────────────────────────────────────────────────
-    rows = client.cypher(
-        f'MATCH (p:PromptStep) WHERE p.session_id = "{session_id}" RETURN p.data',
-        workspace=workspace,
-    )
-    for row in rows:
-        _maybe_append(events, "prompt:submit", row.get("p.data"), session_id)
-
-    # ── AssistantStep events ────────────────────────────────────────────────
-    rows = client.cypher(
-        f'MATCH (a:AssistantStep) WHERE a.session_id = "{session_id}" '
-        f"RETURN a.data, a.data_llm_request, a.data_llm_response",
-        workspace=workspace,
-    )
-    for row in rows:
-        _maybe_append(events, "provider:request", row.get("a.data"), session_id)
-        _maybe_append(events, "llm:request", row.get("a.data_llm_request"), session_id)
-        _maybe_append(events, "llm:response", row.get("a.data_llm_response"), session_id)
-
-    # ── ToolExecution events (non-delegate) ─────────────────────────────────
-    rows = client.cypher(
-        f'MATCH (t:ToolExecution) WHERE t.session_id = "{session_id}" '
-        f"AND (t.tool_name IS NULL OR t.tool_name <> 'delegate') "
-        f"RETURN t.data, t.data_tool_post",
-        workspace=workspace,
-    )
-    for row in rows:
-        _maybe_append(events, "tool:pre", row.get("t.data"), session_id)
-        _maybe_append(events, "tool:post", row.get("t.data_tool_post"), session_id)
-
-    # ── Delegate events from ToolExecution nodes ────────────────────────────
-    rows = client.cypher(
-        f'MATCH (t:ToolExecution) WHERE t.session_id = "{session_id}" '
-        f"AND t.tool_name = 'delegate' "
-        f"RETURN t.data, t.data_tool_post, "
-        f"t.data_delegate_agent_spawned, t.data_delegate_agent_completed",
-        workspace=workspace,
-    )
-    for row in rows:
-        _maybe_append(events, "tool:pre", row.get("t.data"), session_id)
-        _maybe_append(events, "tool:post", row.get("t.data_tool_post"), session_id)
-        _maybe_append(
-            events, "delegate:agent_spawned", row.get("t.data_delegate_agent_spawned"), session_id
-        )
-        _maybe_append(
-            events,
-            "delegate:agent_completed",
-            row.get("t.data_delegate_agent_completed"),
-            session_id,
-        )
-
-    # ── Generic Event nodes (prompt:complete, session:resume, etc.) ──────────
-    rows = client.cypher(
-        f'MATCH (s:Session {{node_id: "{session_id}"}})-[:HAS_EVENT]->(e:Event) '
-        f"RETURN e.event_name, e.data, e.occurred_at",
-        workspace=workspace,
-    )
-    for row in rows:
-        event_name = row.get("e.event_name", "unknown")
-        data_str = row.get("e.data")
-        _maybe_append(events, event_name, data_str, session_id)
-
-    # ── Sort by timestamp ───────────────────────────────────────────────────
+    # Stable sort on the synthesised `ts` (derived from each event's
+    # `data.timestamp`, i.e. emission time, millisecond-truncated).  Python's
+    # sort is stable, so the server's `occurred_at` ORDER BY is preserved as the
+    # fallback ordering whenever two events share the same `ts`.
     def _sort_key(e: dict[str, Any]) -> str:
         return e.get("ts", "") or ""
 
     events.sort(key=_sort_key)
 
-    # ── Optionally resolve blob refs ────────────────────────────────────────
+    # Optionally resolve blob refs in-place
+    unresolved = 0
     if resolve_blobs:
         log.info("  Resolving blob references ...")
-        _resolve_event_blobs(events, client, session_id)
+        unresolved = _resolve_event_blobs(events, client)
+
+    # Surface silent losses (both are 0 on the happy path, so nothing logs).
+    if unresolved or dropped:
+        log.warning(
+            "reconstruct: %d blob ref(s) left unresolved; %d event(s) dropped due to unparseable data",
+            unresolved,
+            dropped,
+        )
 
     return events

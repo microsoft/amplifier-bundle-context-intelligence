@@ -6,7 +6,6 @@ Covers:
 - _content_blocks_to_tool_calls() converts to {id, tool, arguments} format
 - _make_assistant_content() renames tool_use->tool_call, strips caller, adds visibility to thinking
 - _stringify_tool_result() converts various types to string
-- _resolve_blob_ref() resolves $blob_ref with cache (Level 2)
 - extract_transcript() walks graph: Session -> OrchestratorRun -> PromptStep -> AssistantStep -> ToolExecution
 """
 
@@ -48,10 +47,6 @@ class TestImport:
     def test_stringify_tool_result_import(self):
         """_stringify_tool_result must be importable."""
         from context_intelligence.reconstruct.transcript import _stringify_tool_result  # noqa: F401
-
-    def test_resolve_blob_ref_import(self):
-        """_resolve_blob_ref must be importable."""
-        from context_intelligence.reconstruct.transcript import _resolve_blob_ref  # noqa: F401
 
 
 class TestExtractContentBlocks:
@@ -334,361 +329,379 @@ class TestStringifyToolResult:
         assert _stringify_tool_result(True) == "True"
 
 
-class TestResolveBlobRef:
-    """_resolve_blob_ref() tests."""
-
-    def test_returns_value_when_no_blob_ref(self):
-        """Should return value unchanged when no $blob_ref present."""
-        from context_intelligence.reconstruct.transcript import _resolve_blob_ref
-
-        client = MagicMock()
-        data = {"result": "plain_value"}
-        result = _resolve_blob_ref(data, "result", {}, client, "sess1")
-        assert result == "plain_value"
-
-    def test_resolves_from_blob_index_cache(self):
-        """Should use blob_index cache without calling client.fetch_blob."""
-        from context_intelligence.reconstruct.transcript import _resolve_blob_ref
-
-        client = MagicMock()
-        blob_index = {"mykey": {"resolved": "data"}}
-        data = {"result": {"$blob_ref": "ci-blob://sess1/mykey"}}
-        result = _resolve_blob_ref(data, "result", blob_index, client, "sess1")
-        assert result == {"resolved": "data"}
-        client.fetch_blob.assert_not_called()
-
-    def test_fetches_blob_from_client_when_not_cached(self):
-        """Should call client.fetch_blob when key not in cache."""
-        from context_intelligence.reconstruct.transcript import _resolve_blob_ref
-
-        client = MagicMock()
-        client.fetch_blob.return_value = {"fetched": "blob_data"}
-        blob_index: dict = {}
-        data = {"result": {"$blob_ref": "ci-blob://sess1/somekey"}}
-        result = _resolve_blob_ref(data, "result", blob_index, client, "sess1")
-        assert result == {"fetched": "blob_data"}
-        client.fetch_blob.assert_called_once_with("sess1", "somekey")
-
-    def test_caches_fetched_blob(self):
-        """Should cache fetched blob in blob_index."""
-        from context_intelligence.reconstruct.transcript import _resolve_blob_ref
-
-        client = MagicMock()
-        client.fetch_blob.return_value = {"fetched": "data"}
-        blob_index: dict = {}
-        data = {"result": {"$blob_ref": "ci-blob://sess1/newkey"}}
-        _resolve_blob_ref(data, "result", blob_index, client, "sess1")
-        assert "newkey" in blob_index
-        assert blob_index["newkey"] == {"fetched": "data"}
-
-    def test_returns_original_when_fetch_fails(self):
-        """Should return original value when fetch_blob returns None."""
-        from context_intelligence.reconstruct.transcript import _resolve_blob_ref
-
-        client = MagicMock()
-        client.fetch_blob.return_value = None
-        blob_ref = {"$blob_ref": "ci-blob://sess1/badkey"}
-        data = {"result": blob_ref}
-        result = _resolve_blob_ref(data, "result", {}, client, "sess1")
-        # Returns the original blob_ref value when fetch fails
-        assert result == blob_ref
-
-    def test_handles_missing_field(self):
-        """Should return None when field not present in data."""
-        from context_intelligence.reconstruct.transcript import _resolve_blob_ref
-
-        client = MagicMock()
-        data = {}
-        result = _resolve_blob_ref(data, "nonexistent", {}, client, "sess1")
-        assert result is None
-
-
 class TestExtractTranscript:
-    """extract_transcript() tests."""
+    """extract_transcript() rebuilds the transcript from raw Event nodes."""
+
+    # -----------------------------------------------------------------------
+    # Helpers
+    # -----------------------------------------------------------------------
+
+    def _make_event_row(
+        self,
+        event_name: str,
+        ts: str,
+        session_id: str = "sess1",
+        **extra_data,
+    ) -> dict:
+        """Build one Event-node row as returned by the single cypher query."""
+        data = {"timestamp": ts, "session_id": session_id, **extra_data}
+        return {
+            "event_name": event_name,
+            "data": json.dumps(data),
+            "occurred_at": ts,
+        }
 
     def _make_client(
         self,
-        runs=None,
-        prompts=None,
-        steps=None,
-        tools=None,
-        blob_keys=None,
+        event_rows: list | None = None,
+        blob_side_effect=None,
     ) -> MagicMock:
-        """Build a mock CIClient with predictable return values."""
+        """Build a mock CIClient whose cypher() returns event rows.
+
+        blob_side_effect may be a callable(session_id, key)->value or a fixed
+        return value.  If None, fetch_blob returns None.
+        """
         client = MagicMock()
-        client.list_blob_keys.return_value = blob_keys or set()
-
-        def cypher_side_effect(query, workspace):
-            if "OrchestratorRun" in query and "RETURN r.node_id" in query:
-                return runs or []
-            elif "PromptStep" in query:
-                return prompts or []
-            # TRIGGERED query mentions both AssistantStep and ToolExecution; check ToolExecution first
-            elif "TRIGGERED" in query and "ToolExecution" in query:
-                return tools or []
-            elif "AssistantStep" in query:
-                return steps or []
-            return []
-
-        client.cypher.side_effect = cypher_side_effect
+        client.cypher.return_value = event_rows if event_rows is not None else []
+        if callable(blob_side_effect):
+            client.fetch_blob.side_effect = blob_side_effect
+        elif blob_side_effect is not None:
+            client.fetch_blob.return_value = blob_side_effect
+        else:
+            client.fetch_blob.return_value = None
         return client
 
-    def test_returns_empty_list_when_no_runs(self):
-        """Should return empty list when session has no OrchestratorRuns."""
+    # -----------------------------------------------------------------------
+    # Basic contract tests
+    # -----------------------------------------------------------------------
+
+    def test_returns_empty_list_when_no_events(self):
+        """Returns empty list when no events in the session."""
         from context_intelligence.reconstruct.transcript import extract_transcript
 
-        client = self._make_client(runs=[])
-        result = extract_transcript(client, "sess1", "workspace1")
+        result = extract_transcript(self._make_client([]), "sess1", "workspace1")
         assert result == []
 
-    def test_returns_user_message_for_prompt(self):
-        """Should return a user message for each PromptStep."""
+    def test_returns_list(self):
+        """Always returns a list."""
         from context_intelligence.reconstruct.transcript import extract_transcript
 
-        client = self._make_client(
-            runs=[{"r.node_id": "run1", "r.started_at": "2026-01-01T00:00:00Z"}],
-            prompts=[
-                {
-                    "p.prompt_text": "Hello, world!",
-                    "p.occurred_at": "2026-01-01T00:00:01Z",
-                }
-            ],
-            steps=[],
-            tools=[],
-        )
-        result = extract_transcript(client, "sess1", "workspace1")
+        result = extract_transcript(self._make_client(), "sess1", "ws")
+        assert isinstance(result, list)
+
+    def test_single_cypher_call(self):
+        """Internally makes exactly one cypher call (delegated to extract_events)."""
+        from context_intelligence.reconstruct.transcript import extract_transcript
+
+        client = self._make_client()
+        extract_transcript(client, "sess1", "ws")
+        assert client.cypher.call_count == 1
+
+    def test_uses_workspace_in_cypher_call(self):
+        """Passes workspace to the underlying cypher call."""
+        from context_intelligence.reconstruct.transcript import extract_transcript
+
+        client = self._make_client()
+        extract_transcript(client, "sess1", "my_workspace")
+        _, kwargs = client.cypher.call_args
+        assert kwargs.get("workspace") == "my_workspace"
+
+    # -----------------------------------------------------------------------
+    # User messages from prompt:submit
+    # -----------------------------------------------------------------------
+
+    def test_returns_user_message_for_prompt_submit(self):
+        """prompt:submit event produces a user message."""
+        from context_intelligence.reconstruct.transcript import extract_transcript
+
+        rows = [
+            self._make_event_row("prompt:submit", "2026-01-01T00:00:01Z", prompt="Hello, world!")
+        ]
+        result = extract_transcript(self._make_client(rows), "sess1", "ws")
         assert len(result) == 1
         assert result[0]["role"] == "user"
         assert result[0]["content"] == "Hello, world!"
 
     def test_user_message_has_metadata_timestamp(self):
-        """User messages should include metadata.timestamp."""
+        """User messages include metadata.timestamp."""
         from context_intelligence.reconstruct.transcript import extract_transcript
 
-        client = self._make_client(
-            runs=[{"r.node_id": "run1", "r.started_at": "2026-01-01"}],
-            prompts=[{"p.prompt_text": "Hello", "p.occurred_at": "2026-01-01T00:00:01Z"}],
-            steps=[],
-        )
-        result = extract_transcript(client, "sess1", "workspace1")
+        rows = [self._make_event_row("prompt:submit", "2026-01-01T00:00:01Z", prompt="Hi")]
+        result = extract_transcript(self._make_client(rows), "sess1", "ws")
         assert result[0]["metadata"]["timestamp"] == "2026-01-01T00:00:01Z"
 
-    def test_skips_empty_prompt_text(self):
-        """Should skip prompts with empty/falsy text."""
+    def test_skips_prompt_submit_with_empty_text(self):
+        """Skips prompt:submit events with empty prompt text."""
         from context_intelligence.reconstruct.transcript import extract_transcript
 
-        client = self._make_client(
-            runs=[{"r.node_id": "run1", "r.started_at": "t"}],
-            prompts=[{"p.prompt_text": "", "p.occurred_at": "t"}],
-            steps=[],
-        )
-        result = extract_transcript(client, "sess1", "workspace1")
+        rows = [self._make_event_row("prompt:submit", "2026-01-01T00:00:01Z", prompt="")]
+        result = extract_transcript(self._make_client(rows), "sess1", "ws")
         assert result == []
 
-    def test_returns_assistant_message_for_step_with_content(self):
-        """Should return assistant message for AssistantStep with content blocks."""
+    def test_skips_prompt_submit_with_no_prompt_field(self):
+        """Skips prompt:submit events with no prompt field."""
         from context_intelligence.reconstruct.transcript import extract_transcript
 
-        raw_response = {"raw": {"content": [{"type": "text", "text": "I will help you."}]}}
-        llm_resp_data = json.dumps(raw_response)
+        rows = [self._make_event_row("prompt:submit", "2026-01-01T00:00:01Z")]
+        result = extract_transcript(self._make_client(rows), "sess1", "ws")
+        assert result == []
 
-        client = MagicMock()
-        client.list_blob_keys.return_value = set()
+    # -----------------------------------------------------------------------
+    # Assistant messages from llm:response
+    # -----------------------------------------------------------------------
 
-        def cypher_side_effect(query, workspace):
-            if "OrchestratorRun" in query and "RETURN r.node_id" in query:
-                return [{"r.node_id": "run1", "r.started_at": "t"}]
-            elif "PromptStep" in query and "RETURN p.prompt_text" in query:
-                return []
-            elif "AssistantStep" in query:
-                return [
-                    {
-                        "a.node_id": "step1",
-                        "a.iteration": 1,
-                        "a.response_at": "2026-01-01T00:00:02Z",
-                        "a.data_llm_response": llm_resp_data,
-                    }
-                ]
-            elif "ToolExecution" in query:
-                return []
-            return []
+    def test_returns_assistant_message_for_llm_response(self):
+        """llm:response with a resolved raw blob produces an assistant message."""
+        from context_intelligence.reconstruct.transcript import extract_transcript
 
-        client.cypher.side_effect = cypher_side_effect
-        result = extract_transcript(client, "sess1", "workspace1")
+        raw = {"content": [{"type": "text", "text": "I will help you."}]}
+        rows = [
+            self._make_event_row(
+                "llm:response",
+                "2026-01-01T00:00:02Z",
+                raw={"$blob_ref": "ci-blob://sess1/resp1"},
+            )
+        ]
+        client = self._make_client(rows, blob_side_effect=lambda s, k: raw)
+        result = extract_transcript(client, "sess1", "ws")
         assert any(m["role"] == "assistant" for m in result)
 
-    def test_deduplicates_assistant_steps(self):
-        """Should deduplicate AssistantSteps by node_id."""
+    def test_assistant_message_has_text_content_block(self):
+        """Assistant message content blocks include text blocks."""
         from context_intelligence.reconstruct.transcript import extract_transcript
 
-        raw = {"raw": {"content": [{"type": "text", "text": "Hi"}]}}
-        llm_resp = json.dumps(raw)
+        raw = {"content": [{"type": "text", "text": "Here is the answer."}]}
+        rows = [
+            self._make_event_row(
+                "llm:response",
+                "2026-01-01T00:00:02Z",
+                raw={"$blob_ref": "ci-blob://sess1/resp1"},
+            )
+        ]
+        client = self._make_client(rows, blob_side_effect=lambda s, k: raw)
+        result = extract_transcript(client, "sess1", "ws")
+        asst = next(m for m in result if m["role"] == "assistant")
+        text_blocks = [
+            b for b in asst["content"] if isinstance(b, dict) and b.get("type") == "text"
+        ]
+        assert any(b["text"] == "Here is the answer." for b in text_blocks)
 
-        client = MagicMock()
-        client.list_blob_keys.return_value = set()
-
-        def cypher_side_effect(query, workspace):
-            if "OrchestratorRun" in query and "RETURN r.node_id" in query:
-                return [{"r.node_id": "run1", "r.started_at": "t"}]
-            elif "PromptStep" in query and "RETURN p.prompt_text" in query:
-                return []
-            elif "AssistantStep" in query:
-                # Duplicate step_id
-                return [
-                    {
-                        "a.node_id": "step1",
-                        "a.iteration": 1,
-                        "a.response_at": "t",
-                        "a.data_llm_response": llm_resp,
-                    },
-                    {
-                        "a.node_id": "step1",
-                        "a.iteration": 1,
-                        "a.response_at": "t",
-                        "a.data_llm_response": llm_resp,
-                    },
-                ]
-            elif "ToolExecution" in query:
-                return []
-            return []
-
-        client.cypher.side_effect = cypher_side_effect
-        result = extract_transcript(client, "sess1", "workspace1")
-        assistant_msgs = [m for m in result if m["role"] == "assistant"]
-        assert len(assistant_msgs) == 1
-
-    def test_returns_tool_message_for_tool_execution(self):
-        """Should return tool message for each ToolExecution."""
+    def test_assistant_message_has_tool_calls_when_tool_use_present(self):
+        """tool_use blocks are extracted into tool_calls on the assistant message."""
         from context_intelligence.reconstruct.transcript import extract_transcript
 
-        tool_post_data = json.dumps({"result": "file list output"})
-        llm_resp = json.dumps({"raw": {"content": [{"type": "text", "text": "ok"}]}})
+        raw = {
+            "content": [
+                {"type": "text", "text": "Running bash"},
+                {"type": "tool_use", "id": "toolu_1", "name": "bash", "input": {"cmd": "ls"}},
+            ]
+        }
+        rows = [
+            self._make_event_row(
+                "llm:response",
+                "2026-01-01T00:00:02Z",
+                raw={"$blob_ref": "ci-blob://sess1/resp1"},
+            )
+        ]
+        client = self._make_client(rows, blob_side_effect=lambda s, k: raw)
+        result = extract_transcript(client, "sess1", "ws")
+        asst = next(m for m in result if m["role"] == "assistant")
+        assert "tool_calls" in asst
+        assert asst["tool_calls"][0]["tool"] == "bash"
+        assert asst["tool_calls"][0]["arguments"] == {"cmd": "ls"}
 
-        client = MagicMock()
-        client.list_blob_keys.return_value = set()
+    def test_llm_response_without_blob_ref_is_skipped(self):
+        """llm:response with no raw content produces no assistant message."""
+        from context_intelligence.reconstruct.transcript import extract_transcript
 
-        def cypher_side_effect(query, workspace):
-            if "OrchestratorRun" in query and "RETURN r.node_id" in query:
-                return [{"r.node_id": "run1", "r.started_at": "t"}]
-            elif "PromptStep" in query and "RETURN p.prompt_text" in query:
-                return []
-            # TRIGGERED query contains both AssistantStep and ToolExecution; check ToolExecution first
-            elif "TRIGGERED" in query and "ToolExecution" in query:
-                return [
-                    {
-                        "t.tool_name": "bash",
-                        "t.tool_call_id": "tc_1",
-                        "t.ended_at": "t",
-                        "t.data_tool_post": tool_post_data,
-                    }
-                ]
-            elif "AssistantStep" in query:
-                return [
-                    {
-                        "a.node_id": "step1",
-                        "a.iteration": 1,
-                        "a.response_at": "t",
-                        "a.data_llm_response": llm_resp,
-                    }
-                ]
-            return []
+        rows = [self._make_event_row("llm:response", "2026-01-01T00:00:02Z")]
+        result = extract_transcript(self._make_client(rows), "sess1", "ws")
+        assert not any(m["role"] == "assistant" for m in result)
 
-        client.cypher.side_effect = cypher_side_effect
-        result = extract_transcript(client, "sess1", "workspace1")
+    # -----------------------------------------------------------------------
+    # Tool result messages from tool:post
+    # -----------------------------------------------------------------------
+
+    def test_returns_tool_message_for_tool_post(self):
+        """tool:post event produces a tool result message."""
+        from context_intelligence.reconstruct.transcript import extract_transcript
+
+        rows = [
+            self._make_event_row(
+                "tool:post",
+                "2026-01-01T00:00:03Z",
+                tool_name="bash",
+                tool_call_id="tc_1",
+                result={"$blob_ref": "ci-blob://sess1/res1"},
+            )
+        ]
+        client = self._make_client(rows, blob_side_effect=lambda s, k: "file list output")
+        result = extract_transcript(client, "sess1", "ws")
         tool_msgs = [m for m in result if m["role"] == "tool"]
         assert len(tool_msgs) == 1
         assert tool_msgs[0]["name"] == "bash"
         assert tool_msgs[0]["tool_call_id"] == "tc_1"
 
-    def test_queries_runs_ordered_by_started_at(self):
-        """Should query OrchestratorRuns ordered by started_at."""
+    def test_tool_message_content_from_resolved_result(self):
+        """Tool message content is the resolved result blob."""
         from context_intelligence.reconstruct.transcript import extract_transcript
 
-        client = MagicMock()
-        client.list_blob_keys.return_value = set()
-        client.cypher.return_value = []
-        extract_transcript(client, "sess1", "ws1")
-
-        # Verify the first cypher call queries for runs ordered by started_at
-        calls = client.cypher.call_args_list
-        run_query_calls = [
-            c for c in calls if "OrchestratorRun" in c[0][0] and "ORDER BY r.started_at" in c[0][0]
+        rows = [
+            self._make_event_row(
+                "tool:post",
+                "2026-01-01T00:00:03Z",
+                tool_name="bash",
+                tool_call_id="tc_1",
+                result="direct string result",
+            )
         ]
-        assert len(run_query_calls) >= 1
+        result = extract_transcript(self._make_client(rows), "sess1", "ws")
+        tool_msgs = [m for m in result if m["role"] == "tool"]
+        assert "direct string result" in tool_msgs[0]["content"]
 
-    def test_queries_assistant_steps_ordered_by_iteration(self):
-        """Should query AssistantSteps ordered by iteration."""
+    # -----------------------------------------------------------------------
+    # Message ordering
+    # -----------------------------------------------------------------------
+
+    def test_messages_in_event_timestamp_order(self):
+        """Messages appear in chronological order of their source events."""
         from context_intelligence.reconstruct.transcript import extract_transcript
 
-        client = MagicMock()
-        client.list_blob_keys.return_value = set()
-
-        def cypher_side_effect(query, workspace):
-            if "OrchestratorRun" in query and "RETURN r.node_id" in query:
-                return [{"r.node_id": "run1", "r.started_at": "t"}]
-            return []
-
-        client.cypher.side_effect = cypher_side_effect
-        extract_transcript(client, "sess1", "ws1")
-
-        calls = client.cypher.call_args_list
-        step_query_calls = [
-            c for c in calls if "AssistantStep" in c[0][0] and "ORDER BY a.iteration" in c[0][0]
+        raw = {"content": [{"type": "text", "text": "OK"}]}
+        rows = [
+            self._make_event_row("session:start", "2026-01-01T00:00:00Z"),
+            self._make_event_row("prompt:submit", "2026-01-01T00:01:00Z", prompt="First"),
+            self._make_event_row(
+                "llm:response",
+                "2026-01-01T00:02:00Z",
+                raw={"$blob_ref": "ci-blob://sess1/r1"},
+            ),
+            self._make_event_row(
+                "tool:post",
+                "2026-01-01T00:03:00Z",
+                tool_name="bash",
+                tool_call_id="tc1",
+                result="output",
+            ),
+            self._make_event_row("prompt:submit", "2026-01-01T00:04:00Z", prompt="Second"),
         ]
-        assert len(step_query_calls) >= 1
+        client = self._make_client(rows, blob_side_effect=lambda s, k: raw)
+        result = extract_transcript(client, "sess1", "ws")
+        roles = [m["role"] for m in result]
+        assert roles == ["user", "assistant", "tool", "user"]
 
-    def test_assistant_message_has_tool_calls_when_tool_use_present(self):
-        """Should include tool_calls in assistant message when content has tool_use."""
+    # -----------------------------------------------------------------------
+    # Non-message events are ignored
+    # -----------------------------------------------------------------------
+
+    def test_session_start_end_events_ignored(self):
+        """session:start and session:end events produce no transcript messages."""
         from context_intelligence.reconstruct.transcript import extract_transcript
 
-        raw = {
-            "raw": {
-                "content": [
-                    {"type": "text", "text": "Running bash"},
-                    {"type": "tool_use", "id": "toolu_1", "name": "bash", "input": {"cmd": "ls"}},
-                ]
-            }
+        rows = [
+            self._make_event_row("session:start", "2026-01-01T00:00:00Z"),
+            self._make_event_row("session:end", "2026-01-01T00:05:00Z"),
+        ]
+        result = extract_transcript(self._make_client(rows), "sess1", "ws")
+        assert result == []
+
+    def test_execution_events_ignored(self):
+        """execution:start / execution:end / orchestrator:complete produce no messages."""
+        from context_intelligence.reconstruct.transcript import extract_transcript
+
+        rows = [
+            self._make_event_row("execution:start", "2026-01-01T00:01:00Z"),
+            self._make_event_row("execution:end", "2026-01-01T00:02:00Z"),
+            self._make_event_row("orchestrator:complete", "2026-01-01T00:02:01Z"),
+        ]
+        result = extract_transcript(self._make_client(rows), "sess1", "ws")
+        assert result == []
+
+    # -----------------------------------------------------------------------
+    # Blob resolution
+    # -----------------------------------------------------------------------
+
+    def test_blob_ref_resolved_for_llm_response(self):
+        """fetch_blob is called for $blob_ref in llm:response.data.raw."""
+        from context_intelligence.reconstruct.transcript import extract_transcript
+
+        raw = {"content": [{"type": "text", "text": "answer"}]}
+        rows = [
+            self._make_event_row(
+                "llm:response",
+                "2026-01-01T00:02:00Z",
+                raw={"$blob_ref": "ci-blob://sess1/resp_key"},
+            )
+        ]
+        client = self._make_client(rows, blob_side_effect=lambda s, k: raw)
+        extract_transcript(client, "sess1", "ws")
+        client.fetch_blob.assert_called_with("sess1", "resp_key")
+
+    def test_blob_ref_resolved_for_tool_post(self):
+        """fetch_blob is called for $blob_ref in tool:post.data.result."""
+        from context_intelligence.reconstruct.transcript import extract_transcript
+
+        rows = [
+            self._make_event_row(
+                "tool:post",
+                "2026-01-01T00:03:00Z",
+                tool_name="bash",
+                tool_call_id="tc1",
+                result={"$blob_ref": "ci-blob://sess1/result_key"},
+            )
+        ]
+        client = self._make_client(rows, blob_side_effect=lambda s, k: "output data")
+        extract_transcript(client, "sess1", "ws")
+        client.fetch_blob.assert_called_with("sess1", "result_key")
+
+    # -----------------------------------------------------------------------
+    # Round-trip: synthetic session
+    # -----------------------------------------------------------------------
+
+    def test_synthetic_session_round_trip(self):
+        """Full session: user + assistant (with tool_call) + tool result."""
+        from context_intelligence.reconstruct.transcript import extract_transcript
+
+        raw_response = {
+            "content": [
+                {"type": "text", "text": "Let me run that."},
+                {"type": "tool_use", "id": "toolu_1", "name": "bash", "input": {"cmd": "ls"}},
+            ]
         }
-        llm_resp = json.dumps(raw)
+        tool_result = "file1.py\nfile2.py"
 
-        client = MagicMock()
-        client.list_blob_keys.return_value = set()
+        rows = [
+            self._make_event_row("session:start", "2026-01-01T00:00:00Z"),
+            self._make_event_row("prompt:submit", "2026-01-01T00:01:00Z", prompt="List files"),
+            self._make_event_row(
+                "llm:response",
+                "2026-01-01T00:02:00Z",
+                raw={"$blob_ref": "ci-blob://sess1/resp"},
+            ),
+            self._make_event_row(
+                "tool:post",
+                "2026-01-01T00:03:00Z",
+                tool_name="bash",
+                tool_call_id="toolu_1",
+                result={"$blob_ref": "ci-blob://sess1/res"},
+            ),
+            self._make_event_row("session:end", "2026-01-01T00:04:00Z"),
+        ]
 
-        def cypher_side_effect(query, workspace):
-            if "OrchestratorRun" in query and "RETURN r.node_id" in query:
-                return [{"r.node_id": "run1", "r.started_at": "t"}]
-            elif "PromptStep" in query and "RETURN p.prompt_text" in query:
-                return []
-            elif "AssistantStep" in query:
-                return [
-                    {
-                        "a.node_id": "step1",
-                        "a.iteration": 1,
-                        "a.response_at": "t",
-                        "a.data_llm_response": llm_resp,
-                    }
-                ]
-            elif "ToolExecution" in query:
-                return []
-            return []
+        def blob_side_effect(s, k):
+            return {"resp": raw_response, "res": tool_result}.get(k)
 
-        client.cypher.side_effect = cypher_side_effect
-        result = extract_transcript(client, "sess1", "ws1")
-        assistant_msgs = [m for m in result if m["role"] == "assistant"]
-        assert len(assistant_msgs) == 1
-        assert "tool_calls" in assistant_msgs[0]
-        assert assistant_msgs[0]["tool_calls"][0]["tool"] == "bash"
-        assert assistant_msgs[0]["tool_calls"][0]["arguments"] == {"cmd": "ls"}
+        client = self._make_client(rows, blob_side_effect=blob_side_effect)
+        result = extract_transcript(client, "sess1", "ws")
 
-    def test_uses_workspace_in_all_queries(self):
-        """Should pass workspace to all cypher queries."""
-        from context_intelligence.reconstruct.transcript import extract_transcript
-
-        client = MagicMock()
-        client.list_blob_keys.return_value = set()
-        client.cypher.return_value = []
-        extract_transcript(client, "sess1", "my_workspace")
-
-        # Every cypher call should use "my_workspace"
-        for c in client.cypher.call_args_list:
-            assert c[1].get("workspace") == "my_workspace" or c[0][1] == "my_workspace"
+        # 3 messages: user, assistant, tool
+        assert len(result) == 3
+        assert result[0]["role"] == "user"
+        assert result[0]["content"] == "List files"
+        assert result[1]["role"] == "assistant"
+        assert "tool_calls" in result[1]
+        assert result[1]["tool_calls"][0]["tool"] == "bash"
+        assert result[2]["role"] == "tool"
+        assert result[2]["tool_call_id"] == "toolu_1"
+        assert result[2]["name"] == "bash"
+        assert "file1.py" in result[2]["content"]
