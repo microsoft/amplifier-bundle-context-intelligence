@@ -85,6 +85,67 @@ class TestBasePathResolution:
         assert isinstance(resolver.base_path, Path)
 
 
+class TestBasePathEnvFallback:
+    """``AMPLIFIER_CONTEXT_INTELLIGENCE_BASE_PATH`` env-var fallback for ``base_path``.
+
+    Mirrors the named-env-var fallback already used by ``server_url`` and
+    ``api_key`` (``_env("SERVER_URL")``/``_env("API_KEY")``). The env var
+    sits between coordinator config and the hard-coded default in the chain.
+    """
+
+    def test_base_path_falls_back_to_env_var(self, monkeypatch) -> None:
+        """When config and coordinator have no base_path, the env var is used."""
+        monkeypatch.setenv("AMPLIFIER_CONTEXT_INTELLIGENCE_BASE_PATH", "/var/lib/from-env")
+        coordinator = _make_coordinator(config={})
+        resolver = ConfigResolver(config={}, coordinator=coordinator)
+
+        assert resolver.base_path == Path("/var/lib/from-env")
+
+    def test_config_wins_over_env_var(self, monkeypatch) -> None:
+        """Explicit hook config base_path beats the env var (chain priority)."""
+        monkeypatch.setenv("AMPLIFIER_CONTEXT_INTELLIGENCE_BASE_PATH", "/var/lib/from-env")
+        coordinator = _make_coordinator(config={})
+        resolver = ConfigResolver(config={"base_path": "/from-config"}, coordinator=coordinator)
+
+        assert resolver.base_path == Path("/from-config")
+
+    def test_coordinator_config_wins_over_env_var(self, monkeypatch) -> None:
+        """coordinator.config['base_path'] beats the env var (chain priority)."""
+        monkeypatch.setenv("AMPLIFIER_CONTEXT_INTELLIGENCE_BASE_PATH", "/var/lib/from-env")
+        coordinator = _make_coordinator(config={"base_path": "/from-coordinator"})
+        resolver = ConfigResolver(config={}, coordinator=coordinator)
+
+        assert resolver.base_path == Path("/from-coordinator")
+
+    def test_env_var_wins_over_default(self, monkeypatch) -> None:
+        """The env var beats the hard-coded default (chain priority)."""
+        monkeypatch.setenv("AMPLIFIER_CONTEXT_INTELLIGENCE_BASE_PATH", "/var/lib/from-env")
+        coordinator = _make_coordinator(config={})
+        resolver = ConfigResolver(config={}, coordinator=coordinator)
+
+        # Confirms the env-var value is used (not ~/.amplifier/projects).
+        assert resolver.base_path == Path("/var/lib/from-env")
+        assert resolver.base_path != Path("~/.amplifier/projects").expanduser()
+
+    def test_env_var_value_is_tilde_expanded(self, monkeypatch) -> None:
+        """``~`` in the env var value is expanded, same as for other sources."""
+        monkeypatch.setenv("AMPLIFIER_CONTEXT_INTELLIGENCE_BASE_PATH", "~/from-env-tilde")
+        coordinator = _make_coordinator(config={})
+        resolver = ConfigResolver(config={}, coordinator=coordinator)
+
+        assert "~" not in str(resolver.base_path)
+        assert resolver.base_path == Path("~/from-env-tilde").expanduser()
+
+    def test_empty_env_var_treated_as_absent(self, monkeypatch) -> None:
+        """An empty env var falls through to the next source (default)."""
+        monkeypatch.setenv("AMPLIFIER_CONTEXT_INTELLIGENCE_BASE_PATH", "")
+        coordinator = _make_coordinator(config={})
+        resolver = ConfigResolver(config={}, coordinator=coordinator)
+
+        # Empty value is falsy in _env(); chain falls through to default.
+        assert resolver.base_path == Path("~/.amplifier/projects").expanduser()
+
+
 class TestProjectSlugResolution:
     def test_config_value_wins(self) -> None:
         """Explicit hook config project_slug wins over coordinator config."""

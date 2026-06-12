@@ -151,13 +151,30 @@ class ConfigResolver:
     def base_path(self) -> Path:
         """Resolved base path for project storage.
 
-        Chain: config['base_path'] → coordinator.config['base_path'] → default.
-        Tilde is expanded.  Result is cached after first access.
+        Resolution order (first truthy value wins):
+        1. ``config['base_path']``  — explicit hook config / settings.yaml override
+        2. ``coordinator.config['base_path']``  — coordinator-level config
+        3. ``AMPLIFIER_CONTEXT_INTELLIGENCE_BASE_PATH`` env var
+        4. default (``~/.amplifier/projects``)
+
+        Mirrors the named-env-var fallback already used by
+        :attr:`context_intelligence_server_url` and
+        :attr:`context_intelligence_api_key` in this resolver — the env var
+        name is fixed and documented, and lets hosts (e.g. amplifier-agent
+        relocating its storage root via ``AMPLIFIER_AGENT_HOME``) point the
+        hook at a host-specific path without changing the vendored
+        ``bundle.md``. No string interpolation of arbitrary ``$VAR``
+        references inside config values — the env var name is the contract.
+
+        Tilde is expanded on the resolved value, regardless of source
+        (config, coordinator, env, or default). Result is cached after
+        first access.
         """
         if self._base_path is None:
             raw = (
                 self._config.get("base_path")
                 or self._coordinator_config_get("base_path")
+                or _env("BASE_PATH")
                 or _DEFAULT_BASE_PATH
             )
             self._base_path = Path(raw).expanduser()
