@@ -9,9 +9,6 @@ Level 1 (pure transforms):
     _make_assistant_content(content_blocks)
     _stringify_tool_result(result)
 
-Level 2 (network I/O):
-    _resolve_blob_ref(data, field, blob_index, client, session_id)
-
 Level 3 (orchestration):
     extract_transcript(client, session_id, workspace) -> list[dict]
 
@@ -25,6 +22,7 @@ import logging
 from typing import Any
 
 from context_intelligence.client import CIClient, _safe_json_loads
+from context_intelligence.reconstruct.events import extract_events
 
 log = logging.getLogger("context_intelligence.reconstruct.transcript")
 
@@ -123,46 +121,7 @@ def _stringify_tool_result(result: Any) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Level 2 — Network I/O (blob resolution with cache)
-# ---------------------------------------------------------------------------
-
-
-def _resolve_blob_ref(
-    data: dict,
-    field: str,
-    blob_index: dict[str, Any],
-    client: CIClient,
-    session_id: str,
-) -> Any:
-    """Resolve a ``$blob_ref`` within a parsed data dict for the given field.
-
-    Returns the resolved data, or the original value if no blob ref.
-    The *blob_index* is a mutable cache dict shared across calls to avoid
-    redundant fetches within a session.
-    """
-    value = data.get(field)
-    if isinstance(value, dict) and "$blob_ref" in value:
-        uri = value["$blob_ref"]
-        # uri format: ci-blob://SESSION_ID/KEY
-        if uri.startswith("ci-blob://"):
-            parts = uri[len("ci-blob://") :].split("/", 1)
-            if len(parts) == 2:
-                blob_session, blob_key = parts
-                # Try the pre-fetched index first
-                if blob_key in blob_index:
-                    return blob_index[blob_key]
-                # Fall back to individual fetch
-                fetched = client.fetch_blob(blob_session, blob_key)
-                if fetched is not None:
-                    blob_index[blob_key] = fetched  # cache it
-                    return fetched
-        log.debug("Could not resolve blob ref: %s", uri)
-        return value
-    return value
-
-
-# ---------------------------------------------------------------------------
-# Level 3 — Orchestration (walks the graph structure)
+# Level 3 — Orchestration (derives transcript from raw Event nodes)
 # ---------------------------------------------------------------------------
 
 
@@ -173,13 +132,17 @@ def extract_transcript(
 ) -> list[dict]:
     """Extract and reconstruct the transcript for a session.
 
-    Walks the graph structure:
-    Session -> OrchestratorRun (ordered by started_at)
-            -> PromptStep (user messages)
-            -> AssistantStep chain (via NEXT, ordered by iteration, deduplicated)
-            -> ToolExecution (triggered by each step)
+    Derives the conversation transcript from raw ``Event`` nodes — the single
+    source of truth in the live graph schema.  Blob refs in ``data.raw``
+    (llm:response) and ``data.result`` (tool:post) are resolved before content
+    extraction.
 
-    Returns a list of message dicts (user, assistant, tool) in conversation order.
+    Mapping:
+    - ``prompt:submit``  → user message  (``data.prompt``)
+    - ``llm:response``   → assistant message (``data.raw`` content blocks +
+                           tool_calls derived from ``tool_use`` blocks)
+    - ``tool:post``      → tool result message (``data.tool_call_id``,
+                           ``data.tool_name``, ``data.result``)
 
     Parameters
     ----------
@@ -197,128 +160,59 @@ def extract_transcript(
     """
     messages: list[dict] = []
 
-    # List available blobs; actual data fetched on demand via fetch_blob()
-    log.debug("Listing available blobs for session %s ...", session_id)
-    available_keys = client.list_blob_keys(session_id)
-    blob_index: dict[str, Any] = {}  # cache for fetched blobs
-    log.debug("Found %d blob keys for session %s", len(available_keys), session_id)
+    # Fetch all events in chronological order with blob refs already resolved.
+    # extract_events makes a single cypher call and handles blob resolution.
+    events = extract_events(client, session_id, workspace, resolve_blobs=True)
 
-    # ── Get all runs ordered by started_at ────────────────────────────────
-    runs = client.cypher(
-        f'MATCH (s:Session {{node_id: "{session_id}"}}) -[:HAS_RUN]->(r:OrchestratorRun) '
-        f"RETURN r.node_id, r.started_at "
-        f"ORDER BY r.started_at",
-        workspace=workspace,
-    )
+    for ev in events:
+        event_type = ev.get("event", "")
+        data = ev.get("data") or {}
+        ts = ev.get("ts", "")
 
-    for run in runs:
-        run_id = run.get("r.node_id", "")
-        if not run_id:
-            continue
-
-        # ── PromptStep → user message ──────────────────────────────────────
-        prompts = client.cypher(
-            f'MATCH (r:OrchestratorRun {{node_id: "{run_id}"}}) -[:HAS_STEP]->(p:PromptStep) '
-            f"RETURN p.prompt_text, p.occurred_at "
-            f"ORDER BY p.occurred_at",
-            workspace=workspace,
-        )
-        for prompt in prompts:
-            prompt_text = prompt.get("p.prompt_text", "")
+        if event_type == "prompt:submit":
+            # ── User message ─────────────────────────────────────────────────
+            prompt_text = data.get("prompt", "")
             if prompt_text:
                 messages.append(
                     {
                         "role": "user",
                         "content": prompt_text,
-                        "metadata": {"timestamp": prompt.get("p.occurred_at", "")},
+                        "metadata": {"timestamp": ts},
                     }
                 )
 
-        # ── Walk the AssistantStep chain (ordered by iteration) ────────────
-        # Get all AssistantSteps for this run via the prompt->NEXT->assistant chain
-        steps = client.cypher(
-            f'MATCH (r:OrchestratorRun {{node_id: "{run_id}"}}) -[:HAS_STEP]->(p:PromptStep) '
-            f"MATCH path = (p)-[:NEXT*]->(a:AssistantStep) "
-            f"RETURN DISTINCT a.node_id, a.iteration, a.response_at, "
-            f"a.data_llm_response "
-            f"ORDER BY a.iteration",
-            workspace=workspace,
-        )
-
-        # Deduplicate in case the graph traversal returns duplicates
-        seen_steps: set[str] = set()
-
-        for step in steps:
-            step_id = step.get("a.node_id", "")
-            if not step_id or step_id in seen_steps:
-                continue
-            seen_steps.add(step_id)
-
-            # ── Resolve LLM response blob → assistant message ────────────
-            llm_resp_str = step.get("a.data_llm_response")
-            llm_resp_data = _safe_json_loads(llm_resp_str) if llm_resp_str else None
-
-            content_blocks: list = []
-            if isinstance(llm_resp_data, dict):
-                raw_response = _resolve_blob_ref(
-                    llm_resp_data, "raw", blob_index, client, session_id
-                )
-                content_blocks = _extract_content_blocks(raw_response)
-
+        elif event_type == "llm:response":
+            # ── Assistant message ─────────────────────────────────────────────
+            # data["raw"] is already resolved by extract_events(resolve_blobs=True)
+            raw_response = data.get("raw")
+            content_blocks = _extract_content_blocks(raw_response)
             if content_blocks:
                 assistant_content = _make_assistant_content(content_blocks)
-            elif isinstance(llm_resp_data, dict):
-                # No blob resolution possible — use what we have
-                # If there's a stop_reason of end_turn with no content, skip
-                assistant_content = []
-            else:
-                assistant_content = []
-
-            if assistant_content:
                 msg: dict[str, Any] = {
                     "role": "assistant",
                     "content": assistant_content,
-                    "metadata": {"timestamp": step.get("a.response_at", "")},
+                    "metadata": {"timestamp": ts},
                 }
-                # Generate tool_calls top-level array
                 tool_calls = _content_blocks_to_tool_calls(content_blocks)
                 if tool_calls:
                     msg["tool_calls"] = tool_calls
                 messages.append(msg)
 
-            # ── Tool executions triggered by this assistant step ──────────
-            tools = client.cypher(
-                f'MATCH (a:AssistantStep {{node_id: "{step_id}"}}) -[:TRIGGERED]->(t:ToolExecution) '
-                f"RETURN t.tool_name, t.tool_call_id, t.ended_at, "
-                f"t.data_tool_post "
-                f"ORDER BY t.started_at",
-                workspace=workspace,
+        elif event_type == "tool:post":
+            # ── Tool result message ───────────────────────────────────────────
+            # data["result"] is already resolved by extract_events(resolve_blobs=True)
+            tool_name = data.get("tool_name", "")
+            tool_call_id = data.get("tool_call_id", "")
+            result = data.get("result")
+            result_str = _stringify_tool_result(result) if result is not None else ""
+            messages.append(
+                {
+                    "role": "tool",
+                    "name": tool_name,
+                    "tool_call_id": tool_call_id,
+                    "content": result_str,
+                    "metadata": {"timestamp": ts},
+                }
             )
-
-            for tool in tools:
-                tool_name = tool.get("t.tool_name", "")
-                tool_call_id = tool.get("t.tool_call_id", "")
-                tool_post_str = tool.get("t.data_tool_post")
-
-                result_str = ""
-                if tool_post_str:
-                    tool_post = _safe_json_loads(tool_post_str)
-                    if isinstance(tool_post, dict):
-                        result = _resolve_blob_ref(
-                            tool_post, "result", blob_index, client, session_id
-                        )
-                        result_str = _stringify_tool_result(result)
-                    else:
-                        result_str = _stringify_tool_result(tool_post)
-
-                messages.append(
-                    {
-                        "role": "tool",
-                        "name": tool_name,
-                        "tool_call_id": tool_call_id,
-                        "content": result_str,
-                        "metadata": {"timestamp": tool.get("t.ended_at", "")},
-                    }
-                )
 
     return messages

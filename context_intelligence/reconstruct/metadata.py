@@ -154,19 +154,19 @@ def build_disk_only_metadata(session_id: str, session_dir: Path) -> dict:
 def _generate_session_name(client: CIClient, workspace: str, session_id: str) -> str:
     """Generate a session name from the first user prompt if available.
 
-    Queries the first OrchestratorRun's prompt_preview and truncates it
-    to a reasonable display length.
+    Queries the first Prompt node attached to the Session via HAS_PART and
+    truncates the prompt text to a reasonable display length.
     """
     try:
         rows = client.cypher(
-            f'MATCH (s:Session {{node_id: "{session_id}"}})- [:HAS_RUN]->(r:OrchestratorRun) '
-            f"RETURN r.prompt_preview "
-            f"ORDER BY r.started_at ASC LIMIT 1",
+            f'MATCH (s:Session {{node_id: "{session_id}"}})-[:HAS_PART]->(p:Prompt) '
+            f"RETURN p.prompt "
+            f"ORDER BY p.occurred_at ASC LIMIT 1",
             workspace=workspace,
         )
         if not rows:
             return ""
-        preview = rows[0].get("r.prompt_preview", "") or ""
+        preview = rows[0].get("p.prompt", "") or ""
         preview = preview.strip()
         if not preview:
             return ""
@@ -312,10 +312,10 @@ def extract_metadata(
     Returns a metadata dict suitable for writing as ``metadata.json``, or
     *None* if the session cannot be found.
     """
-    # -- Query session node for basic properties -----------------------------
+    # -- Query session node for basic properties (no s.data in live schema) --
     rows = client.cypher(
         f'MATCH (s:Session {{node_id: "{session_id}"}}) '
-        f"RETURN s.node_id, s.started_at, s.ended_at, s.status, s.data",
+        f"RETURN s.node_id, s.started_at, s.ended_at, s.status",
         workspace=workspace,
     )
     if not rows:
@@ -324,17 +324,26 @@ def extract_metadata(
 
     row = rows[0]
     started_at = row.get("s.started_at", "") or ""
-    session_data_str = row.get("s.data")
 
-    # -- Parse Session.data to extract parent_id -----------------------------
-    session_data = _safe_json_loads(session_data_str) if session_data_str else {}
-    if not isinstance(session_data, dict):
-        session_data = {}
-    parent_id = session_data.get("parent_id") or ""
+    # -- Get parent_id from session:start Event node -------------------------
+    # Session.data does not exist in the live schema; read from Event.data.
+    parent_id = ""
+    try:
+        event_rows = client.cypher(
+            f"MATCH (e:Event {{session_id: \"{session_id}\", event_name: 'session:start'}}) "
+            f"RETURN e.data LIMIT 1",
+            workspace=workspace,
+        )
+        if event_rows:
+            session_data = _safe_json_loads(event_rows[0].get("e.data") or "")
+            if isinstance(session_data, dict):
+                parent_id = session_data.get("parent_id") or ""
+    except Exception as exc:
+        log.debug("  Failed to read session:start event for parent_id: %s", exc)
 
-    # -- Count OrchestratorRun nodes for turn_count --------------------------
+    # -- Count OrchestratorRun nodes for turn_count (HAS_EXECUTION) ----------
     run_rows = client.cypher(
-        f'MATCH (s:Session {{node_id: "{session_id}"}})- [:HAS_RUN]->(r:OrchestratorRun) '
+        f'MATCH (s:Session {{node_id: "{session_id}"}})-[:HAS_EXECUTION]->(r:OrchestratorRun) '
         f"RETURN count(r) AS turn_count",
         workspace=workspace,
     )
@@ -360,7 +369,7 @@ def extract_metadata(
         session_id=session_id,
         started_at=started_at,
         turn_count=turn_count,
-        session_data=session_data,
+        session_data={},
     )
 
     # -- Generate session name from first user prompt if missing --------------
