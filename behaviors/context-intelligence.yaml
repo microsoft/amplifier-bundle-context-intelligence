@@ -5,14 +5,18 @@ bundle:
     Context intelligence capability: graph-powered session analysis
     and event-driven telemetry capture for Amplifier sessions.
 
+# Include the modes BEHAVIOR (not the full modes bundle). The full bundle
+# transitively includes foundation, which would override session.orchestrator.
+# The behavior provides the modes infrastructure (hooks-mode, tool-mode) and
+# registers the "modes" namespace; modes:context/modes-instructions.md arrives
+# automatically via the behavior's context.include accumulation.
+includes:
+  - bundle: git+https://github.com/microsoft/amplifier-bundle-modes@main#subdirectory=behaviors/modes.yaml
+
 agents:
   include:
     - context-intelligence:graph-analyst
     - context-intelligence:session-navigator
-
-modes:
-  include:
-    - context-intelligence:modes/context-intelligence.md
 
 tools:
   - module: tool-delegate
@@ -29,6 +33,16 @@ tools:
         - "git+https://github.com/microsoft/amplifier-bundle-context-intelligence@main#subdirectory=skills/workflow-pattern-analysis"
 
 hooks:
+  # Register this bundle's modes/ directory with hooks-mode so the
+  # context-intelligence mode is discoverable even when the host does not
+  # otherwise compose the modes infrastructure. The modes behavior brings
+  # hooks-mode with search_paths: []; this declaration deep-merges on top
+  # (same module ID, later wins on lists) to add the deferred @mention path.
+  - module: hooks-mode
+    source: git+https://github.com/microsoft/amplifier-bundle-modes@main#subdirectory=modules/hooks-mode
+    config:
+      search_paths:
+        - "@context-intelligence:modes"
   - module: hook-context-intelligence
     source: git+https://github.com/microsoft/amplifier-bundle-context-intelligence@main#subdirectory=modules/hook-context-intelligence
     config:
@@ -48,7 +62,3 @@ hooks:
       # base_path: ~/.amplifier/projects  (auto-resolved; uncomment to override)
       # project_slug: (auto-resolved from working directory; uncomment to override)
       # exclude_events: []  (optional fnmatch patterns; uncomment and list events to suppress)
-
-context:
-  include:
-    - context-intelligence:context/context-intelligence-awareness.md

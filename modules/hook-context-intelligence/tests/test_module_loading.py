@@ -67,10 +67,9 @@ class TestBundleYamlEntryPointConsistency:
 
     def test_behavior_yaml_module_matches_entry_point(self):
         data = self._load_behavior_yaml()
-        hook_specs = data.get("hooks", [])
-        assert len(hook_specs) >= 1
-        module_name = hook_specs[0]["module"]
-        assert module_name == "hook-context-intelligence"
+        # Located by module name, not position: the behavior also wires hooks-mode.
+        hook_modules = [h["module"] for h in data.get("hooks", [])]
+        assert "hook-context-intelligence" in hook_modules
 
     def test_entry_point_resolution_would_succeed(self):
         module_id = "hook-context-intelligence"
@@ -138,20 +137,32 @@ class TestBehaviorYamlConfigShape:
         path = REPO_ROOT / "behaviors" / "context-intelligence.yaml"
         return yaml.safe_load(path.read_text())
 
+    def _ci_hook(self, data: dict) -> dict:
+        """Return the hook-context-intelligence spec, located by module name.
+
+        The behavior may wire multiple hooks (e.g. hooks-mode for mode discovery),
+        so this must not assume a fixed position in the hooks list.
+        """
+        matches = [
+            h for h in data.get("hooks", []) if h.get("module") == "hook-context-intelligence"
+        ]
+        assert matches, "behavior must wire the hook-context-intelligence hook"
+        return matches[0]
+
     def test_yaml_parses_correctly(self):
         """YAML must parse without errors via yaml.safe_load."""
         data = self._load_behavior_yaml()
         assert isinstance(data, dict)
 
     def test_hook_module_name_preserved(self):
-        """hooks[0]['module'] must be 'hook-context-intelligence' for backward compat."""
+        """behavior must wire 'hook-context-intelligence' (located by module name)."""
         data = self._load_behavior_yaml()
-        assert data["hooks"][0]["module"] == "hook-context-intelligence"
+        assert self._ci_hook(data)["module"] == "hook-context-intelligence"
 
     def test_config_has_thin_forwarder_keys(self):
         """Config must have: context_intelligence_server_url, workspace, log_level."""
         data = self._load_behavior_yaml()
-        config = data["hooks"][0]["config"]
+        config = self._ci_hook(data)["config"]
         assert "context_intelligence_server_url" in config
         assert "workspace" in config
         assert "log_level" in config
@@ -159,12 +170,12 @@ class TestBehaviorYamlConfigShape:
     def test_no_graph_store_in_config(self):
         """graph_store (singular or plural) must not be in config."""
         data = self._load_behavior_yaml()
-        config = data["hooks"][0]["config"]
+        config = self._ci_hook(data)["config"]
         assert "graph_store" not in config
         assert "graph_stores" not in config
 
     def test_no_enable_graph_in_config(self):
         """enable_graph must not be in config (graph is server-side now)."""
         data = self._load_behavior_yaml()
-        config = data["hooks"][0]["config"]
+        config = self._ci_hook(data)["config"]
         assert "enable_graph" not in config

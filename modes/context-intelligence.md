@@ -19,9 +19,11 @@ mode:
     context:
       - "@context-intelligence:context/jsonl-event-schema.md"
       - "@context-intelligence:context/dual-path-library-template.md"
+      - "@context-intelligence:context/context-intelligence-strategy.md"
     skills:
       - "@context-intelligence:skills/context-intelligence-tool-design"
       - "@context-intelligence:skills/context-intelligence-eval-design"
+      - "@context-intelligence:skills/context-intelligence-evaluation-methodology"
 
   tools:
     safe:
@@ -31,7 +33,7 @@ mode:
       - glob
       - grep
       - delegate
-      - load_skill   # Safe: required so contributed skills are discoverable.
+      - load_skill   # Safe: required so the mode's contributed skills are discoverable/loadable by the LLM.
                      # Routing discipline is enforced by the mandatory read_file
                      # first-call check below, not by gating load_skill.
       - todo
@@ -57,7 +59,8 @@ Act on what you find:
 
 | `read_file` result | Your ONLY permitted next action |
 |---|---|
-| File **not found** | Delegate to `context-intelligence:context-intelligence-design-facilitator` with `context_depth="none"`. Do NOT call `graph-analyst`. Do NOT ask the user questions. Do NOT run any investigation. The single permitted action is the delegation. |
+| File **not found** | Delegate to `context-intelligence:context-intelligence-design-facilitator` with `context_depth="none"`. Do NOT call `graph-analyst`. Do NOT ask the user questions. Do NOT run any investigation. The single permitted action is the delegation. **PRE-delegation:** Produce NO response text before the `delegate()` call; your only output this turn is the tool invocation. **POST-delegation:** After a successful delegation, your ONLY message to the user is the facilitator's Part-A question, copied VERBATIM from the delegation result — no preamble, no summary. |
+| File **not found** AND the activating message already states the goal | Delegate to `context-intelligence:context-intelligence-design-facilitator`, passing that goal as `seed_statement="<verbatim user goal>"` with `context_depth="none"`. **Goal already provided:** the facilitator treats it as the pre-answered opening question and skips re-asking it (see its "Goal already provided" variant). This is also what lets the mode run **unattended** (e.g. from a recipe) instead of stalling on a question no one is there to answer. Same suppression rules as above apply. |
 | File **found, incomplete** | Delegate to `context-intelligence:context-intelligence-design-facilitator` with `context_depth="none"` to complete Phase 0. |
 | File **found, complete** | Check `handoff.md`. If present → delegate to `context-intelligence:context-intelligence-tool-designer`. If absent → delegate to the facilitator to begin Phase 1. |
 
@@ -74,12 +77,11 @@ This is a hard stop. Do all three of the following, in order, before doing anyth
 This rule overrides everything else in this document. There is no fallback path when the
 facilitator fails. The mode cannot proceed without it.
 
-**`load_skill` is allowed, but skills are not your entry point.** The contributed
-skills (`context-intelligence-tool-design`, `context-intelligence-eval-design`) are
-loaded by the tool-designer sub-agent at Phases 2 and 3 — not by you at session start.
-Do NOT load any skill before completing the `read_file` routing check. Your first action
-is always `read_file` on `domain-concepts.md`; follow the routing table above and act on
-the result before considering any skill.
+**Routing comes before skills.** `load_skill` is allowed — the mode's contributed skills
+must stay discoverable to the LLM — but you must still complete the `read_file` routing
+check FIRST. Do not load any skill before you have called `read_file` on
+`domain-concepts.md` and acted on the result. Routing-first is a discipline enforced by the
+rule above, not by a tool gate.
 
 **Why a file check, not a routing instruction:** A routing instruction can be
 overridden by the LLM's own judgement. A `read_file` call cannot — it produces a concrete

@@ -14,6 +14,18 @@ def _load_behavior() -> dict:
     return yaml.safe_load(path.read_text())
 
 
+def _ci_hook(data: dict) -> dict:
+    """Return the hook-context-intelligence spec, located by module name.
+
+    The behavior may wire multiple hooks (e.g. hooks-mode for mode discovery),
+    so this must not assume a fixed position in the hooks list.
+    """
+    hooks = data.get("hooks", [])
+    matches = [h for h in hooks if h.get("module") == "hook-context-intelligence"]
+    assert matches, "behavior must wire the hook-context-intelligence hook"
+    return matches[0]
+
+
 class TestBundleRoot:
     """Validate bundle.md exists and has correct frontmatter."""
 
@@ -77,18 +89,17 @@ class TestBehaviorYaml:
 
     def test_behavior_hook_module_name(self):
         data = _load_behavior()
-        hook_specs = data.get("hooks", [])
-        assert len(hook_specs) >= 1
-        assert hook_specs[0]["module"] == "hook-context-intelligence"
+        # Located by module name, not position: the behavior also wires hooks-mode.
+        assert _ci_hook(data)["module"] == "hook-context-intelligence"
 
     def test_behavior_hook_has_source(self):
         data = _load_behavior()
-        hook_spec = data["hooks"][0]
+        hook_spec = _ci_hook(data)
         assert "source" in hook_spec, "Hook spec must have a source field"
 
     def test_behavior_hook_has_config(self):
         data = _load_behavior()
-        hook_spec = data["hooks"][0]
+        hook_spec = _ci_hook(data)
         assert "config" in hook_spec, "Hook spec must have a config field"
         config = hook_spec["config"]
         # Thin forwarder config keys
@@ -105,14 +116,14 @@ class TestBehaviorYaml:
     def test_behavior_source_points_to_main(self):
         """Source must point to the main branch (post-merge)."""
         data = _load_behavior()
-        source = data["hooks"][0].get("source", "")
+        source = _ci_hook(data).get("source", "")
         # Source may have a #subdirectory= fragment after @main
         assert "@main" in source, f"Source must reference @main branch after merge, got: {source!r}"
 
     def test_no_graph_store_in_config(self):
         """Thin forwarder has no graph_store config (moved to server)."""
         data = _load_behavior()
-        config = data["hooks"][0].get("config", {})
+        config = _ci_hook(data).get("config", {})
         assert "graph_store" not in config, "graph_store must be removed from thin-forwarder config"
         assert "enable_graph" not in config, (
             "enable_graph must be removed from thin-forwarder config"
