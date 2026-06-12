@@ -7,7 +7,7 @@ bundle:
     a graph server) — without any analysis agents, tools, skills, or design mode.
     Compose this behavior into any app that needs pure session telemetry/logging.
     Note: this is the producer side only. It does NOT include graph_query, blob_read,
-    or the navigation agents — pair it with context-intelligence-analytics (or use
+    or the navigation agents — pair it with context-intelligence-design (or use
     the full context-intelligence behavior) if you also need to read events back.
 
 hooks:

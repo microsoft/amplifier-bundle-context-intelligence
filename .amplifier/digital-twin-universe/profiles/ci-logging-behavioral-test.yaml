@@ -13,10 +13,10 @@
 #   * LOGGING-ONLY   (this profile) -> behaviors/context-intelligence-logging.yaml
 #       hook-context-intelligence ONLY (event capture / JSONL). NO agents,
 #       NO tools, NO skills, NO mode. Pure producer side.
-#   * ANALYTICS-ONLY -> behaviors/context-intelligence-analytics.yaml
+#   * READ/QUERY     -> behaviors/context-intelligence-design.yaml
 #       graph-analyst + session-navigator + tools + skills + mode, NO hook.
 #   * FULL           -> behaviors/context-intelligence.yaml
-#       `includes:` BOTH analytics and logging (hook registered EXACTLY once).
+#       `includes:` BOTH design and logging (hook registered EXACTLY once).
 #
 # ASSERTIONS (each validation_cmd prints PASS/FAIL and exits non-zero on FAIL)
 #   L1  events.jsonl created & non-empty after a real 1-turn session AND

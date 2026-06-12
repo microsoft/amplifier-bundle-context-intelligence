@@ -22,17 +22,19 @@ analysis agents/tools (consumer) are independently composable.
   ```
   where `BASE_PATH` defaults to `~/.amplifier/projects`.
 
-**Analytics-only** (`context-intelligence-analytics` behavior):
+**Read/query-only** (`context-intelligence-design` behavior):
 - Agents, tools, skills, and design mode — **no event capture hook**.
 - Use when composing into apps that need session navigation/query/exploration
   without instrumenting the session itself.
 - `graph_query` and `blob_read` read from `AMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_URL`
   (env var or `~/.amplifier/settings.yaml`) — no hook required.
+- Step down to `context-intelligence-analysis` (no design mode) or
+  `context-intelligence-navigation` (local JSONL only) for a narrower surface.
 
 **Full** (`context-intelligence` behavior):
-- Composes **both** the analytics and logging behaviors — read/query capabilities
+- Composes **both** the design and logging behaviors — read/query capabilities
   AND the `hook-context-intelligence` event-capture module in one drop-in.
-- Equivalent to composing `context-intelligence-analytics` + `context-intelligence-logging`.
+- Equivalent to composing `context-intelligence-design` + `context-intelligence-logging`.
 
 ## Capabilities
 

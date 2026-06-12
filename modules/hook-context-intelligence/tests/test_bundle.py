@@ -189,7 +189,6 @@ class TestLayeredBehaviors:
             "context-intelligence-design",
             "context-intelligence-logging",
             "context-intelligence",
-            "context-intelligence-analytics",
         ):
             assert (REPO_ROOT / "behaviors" / f"{name}.yaml").is_file(), f"missing {name}.yaml"
 
@@ -237,11 +236,4 @@ class TestLayeredBehaviors:
         search_paths = mode_hook.get("config", {}).get("search_paths", [])
         assert any("@context-intelligence:modes" in p for p in search_paths), (
             f"hooks-mode must point at the CI modes dir, got search_paths: {search_paths!r}"
-        )
-
-    def test_analytics_is_deprecated_redirect_to_design(self):
-        data = _load_named_behavior("context-intelligence-analytics")
-        refs = _bundle_refs(data)
-        assert any("context-intelligence-design" in r for r in refs), (
-            f"analytics (deprecated alias) must redirect to design, got: {refs!r}"
         )

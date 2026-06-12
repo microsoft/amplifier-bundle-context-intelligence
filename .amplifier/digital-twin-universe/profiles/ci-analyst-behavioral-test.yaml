@@ -10,11 +10,11 @@
 #   falls back to local JSONL extraction when no CI server is reachable.
 #
 # WHAT "WORKS AS EXPECTED" MEANS HERE
-#   The ANALYTICS-ONLY behavior (behaviors/context-intelligence-analytics.yaml)
+#   The read/query-only DESIGN behavior (behaviors/context-intelligence-design.yaml)
 #   composes the graph-analyst + session-navigator agents, the
 #   context-intelligence design MODE, tool-delegate, and tool-skills (5 general
 #   skills) -- but NOT the hook-context-intelligence module. Installed via
-#   `amplifier bundle add <bundle>@main#subdirectory=behaviors/context-intelligence-analytics.yaml --app`.
+#   `amplifier bundle add <bundle>@main#subdirectory=behaviors/context-intelligence-design.yaml --app`.
 #   Therefore:
 #     * No new session writes a context-intelligence/events.jsonl (no hook).
 #     * graph-analyst is the mandatory entry point; it checks server
@@ -78,7 +78,7 @@ base:
 # with boundary match). The mitmproxy rewrite redirects EVERY reference to
 # github.com/microsoft/amplifier-bundle-context-intelligence (the analytics
 # behavior subdirectory AND the 5 #subdirectory=skills/* skill sources declared
-# in behaviors/context-intelligence-analytics.yaml) to the Gitea mirror
+# in behaviors/context-intelligence-design.yaml) to the Gitea mirror
 # admin/amplifier-bundle-context-intelligence, whose `main` branch holds the
 # local working-tree snapshot. {gitea_host} is supplied at launch via
 # --var GITEA_URL (resolved to the Gitea mirror reachable from inside the DTU).
@@ -130,9 +130,9 @@ provision:
               api_key_env: ANTHROPIC_API_KEY
       EOF
 
-    # Install the ANALYTICS-ONLY behavior (NO hook).
+    # Install the read/query-only DESIGN behavior (NO hook).
     # url_rewrites redirects this @main reference to the Gitea mirror (local branch).
-    - amplifier bundle add 'git+https://github.com/microsoft/amplifier-bundle-context-intelligence@main#subdirectory=behaviors/context-intelligence-analytics.yaml' --app
+    - amplifier bundle add 'git+https://github.com/microsoft/amplifier-bundle-context-intelligence@main#subdirectory=behaviors/context-intelligence-design.yaml' --app
 
     # Sanity: Amplifier is working and the analytics behavior is registered
     - amplifier --version
@@ -235,42 +235,49 @@ validation_cmds:
   # Gating in Amplifier is a COMPOSITION property, not a filesystem property:
   # the bundle ships the design agents' .md files (so `agents show` reports
   # them as present), but they are only composed into a session when the
-  # context-intelligence MODE is active. The always-on ANALYTICS behavior's
-  # `agents.include` lists ONLY graph-analyst + session-navigator; the design
-  # agents are declared exclusively by modes/context-intelligence.md.
+  # context-intelligence MODE is active. The design behavior is LAYER 3 of the
+  # onion: it reaches graph-analyst + session-navigator TRANSITIVELY via
+  # `includes: context-intelligence-analysis` (-> navigation), and it does NOT
+  # declare the design agents itself -- those are declared exclusively by
+  # modes/context-intelligence.md.
   #
   # This assertion verifies that gating wiring against the EXACT local-branch
-  # bundle cached inside the DTU (resolved via the Gitea mirror), plus the
-  # runtime fact that no mode is active in a default analytics session:
-  #   (a) analytics behavior agents.include = {graph-analyst, session-navigator}
-  #       and does NOT reference the design agents;
+  # bundle cached inside the DTU (resolved via the Gitea mirror):
+  #   (a) the design behavior includes the analysis layer (so the analyst
+  #       agents are reachable) and does NOT list the design agents as its OWN
+  #       agent includes -- matched against YAML list items only, so the
+  #       description prose mentioning the design agents is not a false positive;
   #   (b) the context-intelligence mode DOES declare both design agents
   #       (i.e. they are reachable only after `mode set context-intelligence`).
+  # The stronger runtime proof (composed session shows ONLY the analyst agents,
+  # design agents + CI hook absent while the mode is inactive) is given by A2.
   # ----------------------------------------------------------------------
   - name: A3-mode-gating
     command: |
       set -e
-      BEH=$(find /root/.amplifier/cache -path '*behaviors/context-intelligence-analytics.yaml' 2>/dev/null | head -1)
+      BEH=$(find /root/.amplifier/cache -path '*behaviors/context-intelligence-design.yaml' 2>/dev/null | head -1)
       MODE=$(find /root/.amplifier/cache -path '*modes/context-intelligence.md' 2>/dev/null | head -1)
       if [ -z "$BEH" ] || [ -z "$MODE" ]; then
-        echo "FAIL[A3]: could not locate cached analytics behavior ($BEH) or mode ($MODE) in DTU"
+        echo "FAIL[A3]: could not locate cached design behavior ($BEH) or mode ($MODE) in DTU"
         exit 1
       fi
-      echo "Analytics behavior: $BEH"
-      echo "Mode file:          $MODE"
+      echo "Design behavior: $BEH"
+      echo "Mode file:       $MODE"
       FAILED=0
-      # (a) always-on analytics behavior must include the analyst agents...
-      grep -q 'graph-analyst' "$BEH" && grep -q 'session-navigator' "$BEH" || { echo "FAIL[A3]: analytics behavior agents.include missing analyst agents"; FAILED=1; }
-      # ...and must NOT reference the design-mode agents
-      if grep -Eq 'design-facilitator|tool-designer' "$BEH"; then
-        echo "FAIL[A3]: analytics behavior leaks design-mode agents (should be mode-gated)"
-        grep -nE 'design-facilitator|tool-designer' "$BEH"
+      # (a) LAYER 3 design behavior must include the analysis layer so the analyst
+      #     agents (graph-analyst -> session-navigator) are reachable transitively.
+      grep -Eq '^[[:space:]]*-[[:space:]]+bundle:[[:space:]]*context-intelligence:behaviors/context-intelligence-analysis' "$BEH" || { echo "FAIL[A3]: design behavior does not include the analysis layer (analyst agents would be unreachable)"; FAILED=1; }
+      # ...and must NOT declare the design-mode agents as its OWN agent includes.
+      # Match YAML list items only (leading "- ") so the description prose that
+      # NAMES the design agents is not a false positive.
+      if grep -nE '^[[:space:]]*-[[:space:]].*(design-facilitator|tool-designer)' "$BEH"; then
+        echo "FAIL[A3]: design behavior lists design-mode agents as includes (should be mode-gated)"
         FAILED=1
       fi
       # (b) the context-intelligence MODE must declare both design agents (gated entry point)
       grep -q 'context-intelligence-design-facilitator' "$MODE" && grep -q 'context-intelligence-tool-designer' "$MODE" || { echo "FAIL[A3]: mode does not declare design agents"; FAILED=1; }
       [ "$FAILED" -ne 0 ] && exit 1
-      echo "PASS[A3]: design-mode agents (design-facilitator, tool-designer) are declared ONLY by the context-intelligence mode and are absent from the always-on analytics behavior -> gated behind mode activation (mode is INACTIVE in this default analytics session)"
+      echo "PASS[A3]: design-mode agents (design-facilitator, tool-designer) are declared ONLY by the context-intelligence mode; the always-on design behavior reaches the analyst agents via the analysis layer and does NOT list the design agents -> gated behind mode activation (mode is INACTIVE in this default session)"
 
   # ----------------------------------------------------------------------
   # A1: hook ABSENT -- run an analytics session, assert NO new events.jsonl

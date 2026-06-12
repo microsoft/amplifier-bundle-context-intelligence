@@ -12,7 +12,6 @@ Composable behaviors for session observability + context intelligence, organized
   (registered via `hooks-mode` `search_paths: ["@context-intelligence:modes"]`; mode is `advertised: false`, activated on demand).
 - **`context-intelligence-logging`** — independent; the `hook-context-intelligence` telemetry hook only.
 - **`context-intelligence`** (full umbrella) — composes `design` + `logging`.
-- **`context-intelligence-analytics`** — deprecated alias → redirects to `context-intelligence-design`.
 
 Ships as a bundle with behaviors in `behaviors/`.
 
@@ -22,7 +21,7 @@ Ships as a bundle with behaviors in `behaviors/`.
 
 | Path | Contents |
 |------|----------|
-| `behaviors/` | Layered behavior YAMLs: `-navigation` → `-analysis` → `-design` (nested onion) + independent `-logging` + the full `context-intelligence` umbrella, plus the deprecated `-analytics` alias |
+| `behaviors/` | Layered behavior YAMLs: `-navigation` → `-analysis` → `-design` (nested onion) + independent `-logging` + the full `context-intelligence` umbrella |
 | `modules/tool-graph-query/` | Graph query tool + `SkillFetcher` + `skill_sync` (`on_session_ready`) — owns dynamic skill-content sync from the server |
 | `modules/tool-blob-read/` | `blob_read` tool for resolving `ci-blob://` URIs |
 | `modules/hook-context-intelligence/` | Telemetry hook (logging behavior) — **pure telemetry**, no skill sync code |

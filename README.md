@@ -42,8 +42,6 @@ context-intelligence                         ← FULL umbrella: design + logging
 | **`context-intelligence`** (full) | composes **design + logging** | both | Telemetry **and** full analysis/design in one install. |
 
 > The design mode ships `advertised: false` — it never clutters `/modes`; users activate it explicitly with `/mode context-intelligence` when they want the design workspace.
->
-> `context-intelligence-analytics` is retained as a **deprecated alias** that redirects to `context-intelligence-design`, so existing installs keep working.
 
 ---
 
@@ -133,8 +131,6 @@ Every Amplifier session will now write events to local JSONL files automatically
 > tool-skills config merges additively, so each layer contributes exactly its own skills.
 
 **`--app` vs standalone:** `--app` composes the behavior onto every session regardless of which primary bundle is active — it never becomes the primary bundle. The standalone form (`bundle add` + `bundle use`) makes context-intelligence the primary bundle for explicitly selected sessions.
-
-> **Migrating from `context-intelligence-analytics`?** It still works — it is now a deprecated alias that redirects to `context-intelligence-design`. Switch to `context-intelligence-design` (same capabilities) or drop down to `context-intelligence-analysis` if you don't need the design mode.
 
 ### 2. (Optional) Enable server forwarding
 
