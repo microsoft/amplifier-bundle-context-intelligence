@@ -62,7 +62,3 @@ hooks:
       # base_path: ~/.amplifier/projects  (auto-resolved; uncomment to override)
       # project_slug: (auto-resolved from working directory; uncomment to override)
       # exclude_events: []  (optional fnmatch patterns; uncomment and list events to suppress)
-
-context:
-  include:
-    - context-intelligence:context/context-intelligence-awareness.md

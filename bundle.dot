@@ -8,7 +8,7 @@ digraph context_intelligence {
     nodesep=0.6
     ranksep=0.7
     bgcolor="white"
-    source_hash="d2382bd324975ed606231a7e1d2e89aac583d6819b6935ed98e38ff5f2d1acce"
+    source_hash="dba7ae999a5fd095337bcd9ede4c54b866044c0b31d63d20c4b0ef4483abaf6c"
 
     node [fontname="Helvetica", fontsize=11, style="filled,rounded"]
     edge [fontname="Helvetica", fontsize=9]
@@ -21,7 +21,7 @@ digraph context_intelligence {
         fillcolor="#f9f9f9"
         color="#999999"
 
-        beh_context_intelligence_behavior [label="context-intelligence-behavior\n4 tools · 1 ctx\n~1891 tok", shape=box, fillcolor="#e0f2f1", style="filled,rounded"]
+        beh_context_intelligence_behavior [label="context-intelligence-behavior\n4 tools\n~1832 tok", shape=box, fillcolor="#e0f2f1", style="filled,rounded"]
     }
 
     subgraph cluster_agents {
@@ -46,15 +46,6 @@ digraph context_intelligence {
         mod_tool_blob_read [label="tool-blob-read", shape=box, fillcolor="#bbdefb", style="filled,rounded"]
         mod_tool_context_intelligence_upload [label="tool-context-intelligence-upload", shape=box, fillcolor="#bbdefb", style="filled,rounded"]
         mod_tool_graph_query [label="tool-graph-query", shape=box, fillcolor="#bbdefb", style="filled,rounded"]
-    }
-
-    subgraph cluster_context {
-        label="Context Files"
-        style="filled"
-        fillcolor="#f9f9f9"
-        color="#999999"
-
-        ctx_context_intelligence_awareness_md [label="context-intelligence-awareness.md\n~37 tok", shape=box, fillcolor="#e1bee7", style="filled,rounded"]
     }
 
     subgraph cluster_legend {
@@ -85,5 +76,4 @@ digraph context_intelligence {
     beh_context_intelligence_behavior -> agt_graph_analyst [label="owns"]
     beh_context_intelligence_behavior -> agt_session_navigator [label="owns"]
     beh_context_intelligence_behavior -> mod_hook_context_intelligence [label="uses", penwidth=0.8]
-    beh_context_intelligence_behavior -> ctx_context_intelligence_awareness_md [style=dotted, color=purple]
 }
