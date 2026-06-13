@@ -1,11 +1,11 @@
 [project]
 name = "amplifier-module-tool-context-intelligence-upload"
-version = "0.1.0"
+version = "0.1.1"
 requires-python = ">=3.11"
 license = "MIT"
 
 dependencies = [
-    "amplifier-bundle-context-intelligence",
+    "amplifier-bundle-context-intelligence @ git+https://github.com/microsoft/amplifier-bundle-context-intelligence@main",
     "httpx>=0.28.1",
     "idna>=3.15",
     "amplifier-module-hook-context-intelligence",
@@ -24,6 +24,10 @@ package = true
 [tool.hatch.build.targets.wheel]
 packages = ["amplifier_module_tool_context_intelligence_upload"]
 
+[tool.hatch.metadata]
+# Required to build a wheel that carries a PEP 508 direct-reference (git+https) dependency.
+allow-direct-references = true
+
 [dependency-groups]
 dev = [
     "pytest>=9.0.3",
@@ -33,7 +37,8 @@ dev = [
 ]
 
 [tool.uv.sources]
-amplifier-bundle-context-intelligence = { path = "../.." }
+# The bundle is declared as a PEP 508 direct git reference in [project.dependencies]
+# (survives `uv pip install --no-sources`); it is intentionally NOT a path source here.
 amplifier-module-hook-context-intelligence = { path = "../hook-context-intelligence", editable = true }
 
 [tool.pytest.ini_options]

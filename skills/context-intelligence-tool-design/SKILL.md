@@ -1,7 +1,7 @@
 ---
 name: context-intelligence-tool-design
 version: 1.0.0
-description: Detection strategy classification and primitive selection for context-intelligence signals. Classifies each signal as deterministic, probabilistic, llm-evaluated, or hybrid. Selects the correct Amplifier primitive using the cheapest-sufficient-capability principle. Applies the shared library + thin wrapper pattern for deterministic and probabilistic signals. Declares reasoning_requirement and model_role for LLM-evaluated signals. Designed to be loaded by the context-intelligence-tool-designer at Phase 2 entry, in a sub-session with context_depth="none", scoped to exactly one signal at a time.
+description: Use when selecting a detection strategy and implementation primitive for a context-intelligence signal — classifies signals as deterministic/probabilistic/llm-evaluated/hybrid and applies the cheapest-sufficient-capability principle.
 user-invocable: false
 allowed-tools: read_file, glob, grep, delegate, load_skill, todo
 model_role: reasoning
@@ -23,6 +23,42 @@ The companion contains:
 - Routing matrix roles
 
 Treat as authoritative reference — do not duplicate.
+
+## Wrapper Form, Specialization & Progressive Discovery (R1–R3)
+
+Design depth for *how* a chosen primitive is shaped. These are mode-only design guidance; they
+point to existing homes rather than restating them.
+
+### R1 — Wrapper form by consumer: **module vs CLI**
+
+The shared-library → thin-wrapper *pattern itself* already has a home: it is the mode's
+**Standing Rule 3** (`modes/context-intelligence.md`). **Do not restate that pattern — point to
+Standing Rule 3.** R1 adds only the new nuance: once you have a shared library, choose its
+wrapper form **by who consumes it**:
+
+- **An agent consumes it** → wrap the shared library as an Amplifier **module** (agent tool).
+- **A human or script consumes it** → wrap it as a **CLI** (bash subcommand).
+
+Same library, wrapper form chosen by consumer — **module vs CLI** is a consumer decision, not a
+default.
+
+### R2 — Exploit narrow-domain knowledge
+
+When the domain is specific enough, build a **specialized** tool that returns exactly what is
+needed — avoiding discovery round-trips and bloated tool responses. A narrow, purpose-built
+result beats a general query the caller must post-process.
+
+### R3 — Progressive over upfront
+
+Prefer **progressive discovery + pagination/navigation** over big upfront reads. The operational
+rules for this (probe-first, ≤3-strategy ladder, head-limited extraction, summarize-and-discard,
+the call budget) live in the authoritative discipline file — open it on demand:
+`context-intelligence:context/navigation-budget-discipline.md`. **Do not rephrase those rules
+here.**
+
+> **Guard — event semantics:** Do not restate the event-semantics authority principle here. It
+> is named once in `context-intelligence:context/context-intelligence-strategy.md` — reference
+> it there.
 
 ## Scope
 

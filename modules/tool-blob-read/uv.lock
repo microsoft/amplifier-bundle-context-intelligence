@@ -5,20 +5,7 @@ requires-python = ">=3.11"
 [[package]]
 name = "amplifier-bundle-context-intelligence"
 version = "0.1.1"
-source = { directory = "../../" }
-
-[package.metadata]
-
-[package.metadata.requires-dev]
-dev = [
-    { name = "httpx", specifier = ">=0.25" },
-    { name = "idna", specifier = ">=3.15" },
-    { name = "pyright", specifier = ">=1.1" },
-    { name = "pytest", specifier = ">=9.0.3" },
-    { name = "pytest-asyncio", specifier = ">=0.24" },
-    { name = "pyyaml", specifier = ">=6.0" },
-    { name = "ruff", specifier = ">=0.4" },
-]
+source = { git = "https://github.com/microsoft/amplifier-bundle-context-intelligence?rev=main#5509b397eb61054039ba2e62a1e898be4b1d5519" }
 
 [[package]]
 name = "amplifier-core"
@@ -61,7 +48,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "amplifier-bundle-context-intelligence", directory = "../../" },
+    { name = "amplifier-bundle-context-intelligence", git = "https://github.com/microsoft/amplifier-bundle-context-intelligence?rev=main" },
     { name = "httpx", specifier = ">=0.28.1" },
     { name = "idna", specifier = ">=3.15" },
 ]

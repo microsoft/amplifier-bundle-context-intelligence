@@ -6,10 +6,6 @@ description: >
   context-intelligence session data. Use when you want to answer: "How is <workflow>
   failing?", "What does a successful run look like vs a failing one?", "Which steps are
   the most common failure points?", or "What patterns appear consistently across sessions?"
-  Designed to run inside the context-intelligence mode. Guides the full
-  investigation lifecycle: corpus enumeration, failure signal detection, JSONL payload
-  inspection, and structured findings production via the dual-agent loop
-  (context-intelligence:graph-analyst → context-intelligence:context-intelligence-design-facilitator).
   Triggers on: workflow failure patterns, session failure analysis, compare successful and
   failing runs, what patterns appear across sessions, session behaviour investigation,
   how is the workflow failing, success patterns, failure signals, identify session signals.
