@@ -49,9 +49,9 @@ cd modules/hook-context-intelligence  && uv sync
 Run before claiming done — reviewer expects evidence:
 
 ```bash
-cd modules/tool-graph-query           && uv run pytest -q   # 87 tests
-cd modules/tool-blob-read             && uv run pytest -q   # 35 tests
-cd modules/hook-context-intelligence  && uv run pytest -q   # 295 tests
+cd modules/tool-graph-query           && PYTHONPATH="$(git rev-parse --show-toplevel)" uv run pytest -q   # 87 tests
+cd modules/tool-blob-read             && PYTHONPATH="$(git rev-parse --show-toplevel)" uv run pytest -q   # 35 tests
+cd modules/hook-context-intelligence  && PYTHONPATH="$(git rev-parse --show-toplevel)" uv run pytest -q   # 295 tests
 ```
 
 Lint + types (run from each module directory):
@@ -101,11 +101,14 @@ DTU profiles live in `.amplifier/digital-twin-universe/profiles/` (including
 
 Each of these burned real debugging time:
 
-- **Venv built-copy shadowing** — modules install `context_intelligence` as a built
-  (non-editable) copy in their venv, not from source. After editing shared code under
-  `context_intelligence/`, run `uv sync --reinstall --refresh` in the affected module
-  **before** testing. Without this, a reverted fix still appears to pass (false-green tests).
-  Mandatory before any red-green cycle on shared code.
+- **Shared lib is a `@main` git self-reference, not a path source** — each module's `pyproject`
+  declares `amplifier-bundle-context-intelligence @ git+...@main` (with `[tool.hatch.metadata]`
+  `allow-direct-references = true`); there is no `[tool.uv.sources]` `path = "../.."` override.
+  This makes modules install identically in the monorepo and standalone (PR #36's intent). For
+  LOCAL unit runs, the installed copy is the git `@main` snapshot, so tests import the LOCAL shared
+  library by shadowing it with the repo root on `PYTHONPATH`:
+  `PYTHONPATH="$(git rev-parse --show-toplevel)" uv run pytest -q`. Do NOT reintroduce a
+  `[tool.uv.sources]` `path = "../.."` override to fix imports.
 
 - **`skills find()` returns `None` — SKILL.md must start with `---`** — tool-skills' catalog
   builder silently drops any `SKILL.md` lacking a leading `---` YAML frontmatter delimiter.
