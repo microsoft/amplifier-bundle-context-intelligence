@@ -38,13 +38,13 @@
 #
 # USAGE
 #   amplifier-digital-twin launch \
-#     .amplifier/digital-twin-universe/profiles/ci-hook-behavioral-test.yaml \
+#     .amplifier/digital-twin-universe/profiles/context-intelligence-hook-behavioral-test.yaml \
 #     --var GITEA_URL=http://<host-ip>:<port> \
 #     --var GITEA_TOKEN=<token> \
-#     --name ci-hook-behavioral-test
+#     --name context-intelligence-hook-behavioral-test
 # ============================================================================
 
-name: ci-hook-behavioral-test
+name: context-intelligence-hook-behavioral-test
 description: >
   HOOK MODE behavioral test for the context-intelligence bundle (local branch
   via Gitea). Installs the FULL behavior, runs a real 1-turn session in

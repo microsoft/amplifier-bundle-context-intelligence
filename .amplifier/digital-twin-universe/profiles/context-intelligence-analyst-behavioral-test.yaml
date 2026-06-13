@@ -49,13 +49,13 @@
 #
 # USAGE
 #   amplifier-digital-twin launch \
-#     .amplifier/digital-twin-universe/profiles/ci-analyst-behavioral-test.yaml \
+#     .amplifier/digital-twin-universe/profiles/context-intelligence-analyst-behavioral-test.yaml \
 #     --var GITEA_URL=http://<host-ip>:<port> \
 #     --var GITEA_TOKEN=<token> \
-#     --name ci-analyst-behavioral-test
+#     --name context-intelligence-analyst-behavioral-test
 # ============================================================================
 
-name: ci-analyst-behavioral-test
+name: context-intelligence-analyst-behavioral-test
 description: >
   ANALYST MODE behavioral test for the context-intelligence bundle (local branch
   via Gitea). Installs the ANALYTICS-ONLY behavior (no hook), seeds a fixture

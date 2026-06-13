@@ -1,4 +1,4 @@
-# ci-signals-validation.yaml
+# context-intelligence-signals-validation.yaml
 #
 # End-to-end integration test for context_intelligence.signals library,
 # CLI commands, render-findings output, and recipe YAML structural validity.
@@ -9,10 +9,10 @@
 # Usage:
 #   export GH_TOKEN=$(gh auth token)
 #   amplifier-digital-twin launch \
-#     .amplifier/digital-twin-universe/profiles/ci-signals-validation.yaml \
-#     --name ci-signals-validation
+#     .amplifier/digital-twin-universe/profiles/context-intelligence-signals-validation.yaml \
+#     --name context-intelligence-signals-validation
 #
-name: ci-signals-validation
+name: context-intelligence-signals-validation
 description: >
   Integration test for context_intelligence.signals library and
   workflow-pattern-analysis recipe. Validates signal scoring,
