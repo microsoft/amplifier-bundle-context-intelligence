@@ -49,9 +49,9 @@ cd modules/hook-context-intelligence  && uv sync
 Run before claiming done — reviewer expects evidence:
 
 ```bash
-cd modules/tool-graph-query           && PYTHONPATH="$(git rev-parse --show-toplevel)" uv run pytest -q   # 87 tests
+cd modules/tool-graph-query           && PYTHONPATH="$(git rev-parse --show-toplevel)" uv run pytest -q   # 90 tests
 cd modules/tool-blob-read             && PYTHONPATH="$(git rev-parse --show-toplevel)" uv run pytest -q   # 35 tests
-cd modules/hook-context-intelligence  && PYTHONPATH="$(git rev-parse --show-toplevel)" uv run pytest -q   # 295 tests
+cd modules/hook-context-intelligence  && PYTHONPATH="$(git rev-parse --show-toplevel)" uv run pytest -q   # 300 tests
 ```
 
 Lint + types (run from each module directory):
@@ -131,7 +131,7 @@ Each of these burned real debugging time:
 
 ## Done means
 
-- Module unit tests green (87 + 35 + 295).
+- Module unit tests green (90 + 35 + 300).
 - For sync/server changes: all 4 DTU scenarios pass.
 - `bundle.dot` regenerated (via `generate-bundle-docs` recipe) if bundle structure changed.
 - `.github/PULL_REQUEST_TEMPLATE.md` (if present) is honored.
