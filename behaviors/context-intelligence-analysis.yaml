@@ -24,7 +24,3 @@ tools:
         - "git+https://github.com/microsoft/amplifier-bundle-context-intelligence@main#subdirectory=skills/context-intelligence-graph-query"
         - "git+https://github.com/microsoft/amplifier-bundle-context-intelligence@main#subdirectory=skills/context-intelligence-session-reconstruction"
         - "git+https://github.com/microsoft/amplifier-bundle-context-intelligence@main#subdirectory=skills/workflow-pattern-analysis"
-
-context:
-  include:
-    - context-intelligence:context/context-intelligence-graph-awareness.md

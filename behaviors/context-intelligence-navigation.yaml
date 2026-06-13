@@ -18,7 +18,3 @@ tools:
     config:
       skills:
         - "git+https://github.com/microsoft/amplifier-bundle-context-intelligence@main#subdirectory=skills/context-intelligence-session-navigation"
-
-context:
-  include:
-    - context-intelligence:context/context-intelligence-navigation-awareness.md
