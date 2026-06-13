@@ -42,7 +42,7 @@ provision:
     # Clone the bundle (HEAD of main)
     - |
       export PATH="/root/.local/bin:$PATH"
-      git clone --depth 1 https://github.com/microsoft/amplifier-bundle-context-intelligence.git /opt/ci-bundle
+      git clone --depth 1 https://github.com/microsoft/amplifier-bundle-context-intelligence.git /opt/context-intelligence-bundle
 
     # Create a venv and install packages in dependency order.
     # Ubuntu 24.04 marks system Python as externally managed (PEP 668),
@@ -52,10 +52,10 @@ provision:
       uv venv /opt/venv --python python3
       export VIRTUAL_ENV=/opt/venv
       export PATH="/opt/venv/bin:$PATH"
-      uv pip install /opt/ci-bundle/
+      uv pip install /opt/context-intelligence-bundle/
       uv pip install "httpx>=0.28.1"
-      uv pip install --no-deps /opt/ci-bundle/modules/hook-context-intelligence/
-      uv pip install --no-deps /opt/ci-bundle/modules/tool-context-intelligence-upload/
+      uv pip install --no-deps /opt/context-intelligence-bundle/modules/hook-context-intelligence/
+      uv pip install --no-deps /opt/context-intelligence-bundle/modules/tool-context-intelligence-upload/
 
     # Quick sanity — library importable?
     - /opt/venv/bin/python3 -c "from context_intelligence.config import resolve_config; print('context_intelligence importable')"
@@ -107,7 +107,7 @@ validation_cmds:
     command: |
       export PATH="/opt/venv/bin:/root/.local/bin:$PATH"
       export VIRTUAL_ENV=/opt/venv
-      uv pip install --no-deps /opt/ci-bundle/modules/hook-context-intelligence/tests/dtu/fixtures/stub-event-contributor/
+      uv pip install --no-deps /opt/context-intelligence-bundle/modules/hook-context-intelligence/tests/dtu/fixtures/stub-event-contributor/
 
   # Run a short session that exercises the on_session_ready path.
   # The stub-event-contributor module contributes its event AFTER the hook
@@ -116,8 +116,8 @@ validation_cmds:
   - name: run-session-with-stub-module
     command: |
       export PATH="/root/.local/bin:$PATH"
-      mkdir -p /tmp/ci-validation-project
-      cd /tmp/ci-validation-project
+      mkdir -p /tmp/context-intelligence-validation-project
+      cd /tmp/context-intelligence-validation-project
       amplifier run \
         --module stub-event-contributor \
         "Say hello in one word." \

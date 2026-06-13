@@ -221,11 +221,11 @@ validation_cmds:
       hook_mods = [h.get("module") for h in (cfg.get("hooks") or [])]
       ga = [a for a in agents if "graph-analyst" in a]
       sn = [a for a in agents if "session-navigator" in a]
-      ci_hook = [m for m in hook_mods if m and "context-intelligence" in m]
+      context_intelligence_hook = [m for m in hook_mods if m and "context-intelligence" in m]
       if not ga or not sn:
           print("FAIL[A2]: analytics agents missing -- graph-analyst:", ga or "ABSENT", "session-navigator:", sn or "ABSENT"); sys.exit(1)
-      if ci_hook:
-          print("FAIL[A2]: context-intelligence hook present in analytics-only mode:", ci_hook); sys.exit(1)
+      if context_intelligence_hook:
+          print("FAIL[A2]: context-intelligence hook present in analytics-only mode:", context_intelligence_hook); sys.exit(1)
       print("PASS[A2]: analytics agents composed -- graph-analyst", ga, "AND session-navigator", sn, "; context-intelligence hook ABSENT (correct)")
       PY
 

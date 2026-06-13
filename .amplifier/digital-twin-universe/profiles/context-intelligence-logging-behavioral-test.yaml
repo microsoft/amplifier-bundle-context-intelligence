@@ -277,20 +277,20 @@ validation_cmds:
       tk = cfg.get("tools")
       tools = list(tk.keys()) if isinstance(tk, dict) else ([t.get("module") if isinstance(t, dict) else t for t in tk] if isinstance(tk, list) else (tk or []))
       hook_mods = [h.get("module") for h in (cfg.get("hooks") or [])]
-      ci_agents = [a for a in agents if "graph-analyst" in a or "session-navigator" in a]
-      ci_tools = [t for t in tools if t and ("graph_query" in str(t) or "blob_read" in str(t))]
-      ci_hook = [m for m in hook_mods if m and "context-intelligence" in m]
+      context_intelligence_agents = [a for a in agents if "graph-analyst" in a or "session-navigator" in a]
+      context_intelligence_tools = [t for t in tools if t and ("graph_query" in str(t) or "blob_read" in str(t))]
+      context_intelligence_hook = [m for m in hook_mods if m and "context-intelligence" in m]
       bad = False
-      if ci_agents:
-          print("FAIL[L3a]: analytics agents composed into logging-only session:", ci_agents); bad = True
+      if context_intelligence_agents:
+          print("FAIL[L3a]: analytics agents composed into logging-only session:", context_intelligence_agents); bad = True
       else:
           print("PASS[L3a]: NO context-intelligence graph-analyst/session-navigator composed (analytics agents ABSENT)")
-      if ci_tools:
-          print("FAIL[L3c]: analytics tools composed into logging-only session:", ci_tools); bad = True
+      if context_intelligence_tools:
+          print("FAIL[L3c]: analytics tools composed into logging-only session:", context_intelligence_tools); bad = True
       else:
           print("PASS[L3c]: NO graph_query/blob_read tools composed (analytics tools ABSENT)")
-      if ci_hook != ["hook-context-intelligence"]:
-          print("FAIL[L3]: expected exactly the logging hook composed, got:", ci_hook); bad = True
+      if context_intelligence_hook != ["hook-context-intelligence"]:
+          print("FAIL[L3]: expected exactly the logging hook composed, got:", context_intelligence_hook); bad = True
       else:
           print("PASS[L3]: hook-context-intelligence IS composed (producer side present)")
       if bad:

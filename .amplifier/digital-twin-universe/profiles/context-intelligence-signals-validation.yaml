@@ -50,7 +50,7 @@ provision:
       git clone \
         --depth 1 \
         https://github.com/microsoft/amplifier-bundle-context-intelligence.git \
-        /opt/ci-bundle
+        /opt/context-intelligence-bundle
 
     # Create a venv and install the signals library + pyyaml (for validation E)
     # Note: pyyaml is a dev dependency — not bundled in the wheel, must be explicit.
@@ -59,16 +59,16 @@ provision:
       uv venv /opt/venv --python python3
       export VIRTUAL_ENV=/opt/venv
       export PATH="/opt/venv/bin:$PATH"
-      uv pip install /opt/ci-bundle/
+      uv pip install /opt/context-intelligence-bundle/
       uv pip install pyyaml
 
     # Quick sanity — signals module importable?
     - /opt/venv/bin/python3 -c "from context_intelligence.signals import score_session; print('signals importable')"
 
-    # Set up fixture session directories under /root/.amplifier/projects/ci-test-workspace/
+    # Set up fixture session directories under /root/.amplifier/projects/context-intelligence-test-workspace/
     - |
       mkdir -p /root/.amplifier/projects
-      bash /opt/ci-bundle/tests/dtu/setup_fixtures.sh /root/.amplifier/projects
+      bash /opt/context-intelligence-bundle/tests/dtu/setup_fixtures.sh /root/.amplifier/projects
 
     # Persist PATH and VIRTUAL_ENV for exec commands
     - |
@@ -108,7 +108,7 @@ validation_cmds:
       import json, sys, subprocess
       result = subprocess.run(
           ["/opt/venv/bin/python3", "-m", "context_intelligence.signals",
-           "score-session", "/opt/ci-bundle/tests/fixtures/s1_session.jsonl"],
+           "score-session", "/opt/context-intelligence-bundle/tests/fixtures/s1_session.jsonl"],
           capture_output=True, text=True
       )
       if result.returncode != 0:
@@ -136,7 +136,7 @@ validation_cmds:
       import json, sys, subprocess
       result = subprocess.run(
           ["/opt/venv/bin/python3", "-m", "context_intelligence.signals",
-           "score-session", "/opt/ci-bundle/tests/fixtures/minimal_session.jsonl"],
+           "score-session", "/opt/context-intelligence-bundle/tests/fixtures/minimal_session.jsonl"],
           capture_output=True, text=True
       )
       if result.returncode != 0:
@@ -227,7 +227,7 @@ validation_cmds:
       set -e
       /opt/venv/bin/python3 -c "
       import yaml, pathlib, sys
-      text = pathlib.Path('/opt/ci-bundle/recipes/workflow-pattern-analysis.yaml').read_text()
+      text = pathlib.Path('/opt/context-intelligence-bundle/recipes/workflow-pattern-analysis.yaml').read_text()
       data = yaml.safe_load(text)
       stages = data.get('stages', [])
       stage_names = [s['name'] for s in stages]
@@ -253,7 +253,7 @@ validation_cmds:
     command: |
       set -e
       export PATH="/opt/venv/bin:$PATH"
-      FIXTURE_DIR="/opt/ci-bundle/tests/fixtures"
+      FIXTURE_DIR="/opt/context-intelligence-bundle/tests/fixtures"
       PASS_COUNT=0
       FAIL_COUNT=0
 
