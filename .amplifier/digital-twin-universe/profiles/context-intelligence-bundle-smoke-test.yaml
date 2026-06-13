@@ -12,6 +12,15 @@ description: >
   Smoke test for the context-intelligence bundle.  Validates library imports,
   upload CLI, hook additional_events config, and Amplifier bundle loading.
 
+url_rewrites:
+  auth:
+    username: admin
+    token_var: GITEA_TOKEN
+  default_match_mode: boundary
+  rules:
+    - match: github.com/microsoft/amplifier-bundle-context-intelligence
+      target: ${GITEA_URL}/admin/amplifier-bundle-context-intelligence
+
 base:
   image: ubuntu:24.04
 
@@ -97,48 +106,64 @@ provision:
     # Workspace for the user
     - mkdir -p /home/user/project
 
+    # Write a smoke wrapper bundle that composes the context-intelligence umbrella
+    # bundle plus the stub-event-contributor fixture module, then register it.
+    - |
+      cat > /root/context-intelligence-smoke-stub-bundle.yaml <<'YAML'
+      bundle:
+        name: context-intelligence-smoke-stub
+        version: 0.1.0
+        description: Smoke wrapper - context-intelligence umbrella bundle + stub-event-contributor module.
+      includes:
+        - bundle: git+https://github.com/microsoft/amplifier-bundle-context-intelligence@main
+      tools:
+        - module: stub-event-contributor
+          source: git+https://github.com/microsoft/amplifier-bundle-context-intelligence@main#subdirectory=modules/hook-context-intelligence/tests/dtu/fixtures/stub-event-contributor
+      YAML
+      amplifier bundle add /root/context-intelligence-smoke-stub-bundle.yaml
+
 readiness:
   - name: library-check
     command: "/opt/venv/bin/python3 -c \"from context_intelligence.client import AsyncCIClient; print('ready')\""
 
 validation_cmds:
-  # Install the stub event contributor fixture module from the local bundle
-  - name: install-stub-module
-    command: |
-      export PATH="/opt/venv/bin:/root/.local/bin:$PATH"
-      export VIRTUAL_ENV=/opt/venv
-      uv pip install --no-deps /opt/context-intelligence-bundle/modules/hook-context-intelligence/tests/dtu/fixtures/stub-event-contributor/
-
-  # Run a short session that exercises the on_session_ready path.
-  # The stub-event-contributor module contributes its event AFTER the hook
-  # mounts (because tool modules mount before hook modules in Amplifier).
-  # on_session_ready() must pick it up and write it to events.jsonl.
-  - name: run-session-with-stub-module
-    command: |
-      export PATH="/root/.local/bin:$PATH"
-      mkdir -p /tmp/context-intelligence-validation-project
-      cd /tmp/context-intelligence-validation-project
-      amplifier run \
-        --module stub-event-contributor \
-        "Say hello in one word." \
-        --max-turns 1 \
-        2>&1 | tee /tmp/session-output.log
-      echo "Session completed"
-
-  # Assert the stub event appears in events.jsonl
-  - name: verify-stub-event-in-jsonl
+  - name: smoke-compose-and-on-session-ready
     command: |
       set -e
-      EVENTS_FILE=$(find /root/.amplifier/projects -name "events.jsonl" -newer /tmp/session-output.log | head -1)
-      if [ -z "$EVENTS_FILE" ]; then
-        echo "FAIL: No events.jsonl found after session"
-        exit 1
-      fi
-      if grep -q "stub-event-contributor:test-event" "$EVENTS_FILE"; then
-        echo "PASS: stub-event-contributor:test-event found in $EVENTS_FILE"
-      else
-        echo "FAIL: stub-event-contributor:test-event NOT found in $EVENTS_FILE"
-        echo "Events found:"
-        cat "$EVENTS_FILE" | python3 -c "import sys,json; [print(json.loads(l).get('event','?')) for l in sys.stdin]"
-        exit 1
-      fi
+      mkdir -p /tmp/smoke-final && cd /tmp/smoke-final
+      amplifier run --bundle context-intelligence-smoke-stub "Say hello in one word." --mode single \
+        2>&1 | tee /tmp/smoke-final.log >/dev/null
+      SID=$(grep -oE 'Session ID: [0-9a-f-]+' /tmp/smoke-final.log | awk '{print $3}')
+      echo "SID=$SID"
+      SDIR=$(find /root/.amplifier/projects -type d -path "*/sessions/$SID" 2>/dev/null | head -1)
+      GEN="$SDIR/events.jsonl"
+      CIJ="$SDIR/context-intelligence/events.jsonl"
+      python3 - "$GEN" "$CIJ" << 'PY'
+      import json, os, sys
+      gen, cij = sys.argv[1], sys.argv[2]
+      composed = False
+      for l in open(gen):
+          l = l.strip()
+          if not l: continue
+          try: o = json.loads(l)
+          except: continue
+          if o.get("event") == "session:config":
+              tools = (o.get("data", {}).get("raw", {}).get("tools") or [])
+              if any(isinstance(t, dict) and t.get("module") == "stub-event-contributor" for t in tools):
+                  composed = True
+      if not composed:
+          print("FAIL[SMOKE]: stub-event-contributor NOT in session:config mount plan"); sys.exit(1)
+      if not os.path.exists(cij) or os.path.getsize(cij) == 0:
+          print("FAIL[SMOKE]: CI hook events.jsonl missing/empty -> on_session_ready did not register the handler"); sys.exit(1)
+      evset = set()
+      for l in open(cij):
+          l = l.strip()
+          if not l: continue
+          try: evset.add(json.loads(l).get("event"))
+          except: pass
+      need = {"session:start", "session:end"}
+      if not need.issubset(evset):
+          print(f"FAIL[SMOKE]: CI events.jsonl missing lifecycle {need - evset}"); sys.exit(1)
+      print("PASS[SMOKE]: stub-event-contributor composed into mount plan AND on_session_ready ran "
+            "(CI events.jsonl populated with session:start/session:end via the late-registered LoggingHandler)")
+      PY

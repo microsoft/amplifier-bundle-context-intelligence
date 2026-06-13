@@ -372,10 +372,36 @@ validation_cmds:
   - name: A6-mode-registered
     command: |
       set -e
-      amplifier mode list 2>&1 | tee /tmp/a6-modes.log
-      grep -q 'context-intelligence' /tmp/a6-modes.log \
-        && echo "PASS[A6]: 'amplifier mode list' shows the context-intelligence mode (registered by the design behavior)" \
-        || { echo "FAIL[A6]: context-intelligence mode not listed by 'amplifier mode list'"; exit 1; }
+      mkdir -p /tmp/a6 && cd /tmp/a6
+      SID=$(amplifier run "Call the mode tool exactly once with operation=set and name=context-intelligence. Report the raw result." \
+            --mode single 2>&1 | tee /tmp/a6.log | grep -oE 'Session ID: [0-9a-f-]+' | awk '{print $3}')
+      echo "session: $SID"
+      GEN=$(find /root/.amplifier/projects -path "*/sessions/$SID/events.jsonl" 2>/dev/null | head -1)
+      if [ -z "$GEN" ]; then echo "FAIL[A6]: no session log for $SID"; exit 1; fi
+      python3 - "$GEN" << 'PY'
+      import json, sys
+      recognized = False; unknown = False; detail = None
+      for l in open(sys.argv[1]):
+          l = l.strip()
+          if not l: continue
+          try: o = json.loads(l)
+          except: continue
+          d = o.get("data", {})
+          if o.get("event") == "tool:post" and d.get("tool_name") == "mode":
+              res = d.get("result", {}) or {}
+              out = res.get("output", {}) if isinstance(res.get("output", {}), dict) else {}
+              blob = json.dumps(res)
+              if out.get("active_mode") == "context-intelligence" or out.get("status") == "activated" \
+                 or out.get("denied_mode") == "context-intelligence" or out.get("status") == "denied":
+                  recognized = True; detail = out.get("status") or out.get("active_mode")
+              if ("not found" in blob.lower() or "unknown mode" in blob.lower()) and "context-intelligence" in blob:
+                  unknown = True
+      if unknown and not recognized:
+          print("FAIL[A6]: mode tool reports context-intelligence as unknown/not-found (NOT registered)"); sys.exit(1)
+      if not recognized:
+          print("FAIL[A6]: no mode(set) result referencing context-intelligence found"); sys.exit(1)
+      print(f"PASS[A6]: context-intelligence mode is REGISTERED/activatable -- mode(set) recognized it (result status: {detail})")
+      PY
 
   # ----------------------------------------------------------------------
   # A7: mode-only strategy context + eval skill RESOLVES via load_skill.
@@ -387,39 +413,39 @@ validation_cmds:
   # NOTE: replace `--mode context-intelligence` below with the exact activation
   # flag confirmed via `amplifier run --help` if it differs.
   # ----------------------------------------------------------------------
-  - name: A7-mode-active-strategy-and-eval-skill
+  - name: A7-mode-active-eval-skill-resolves
     command: |
       set -e
-      mkdir -p /tmp/a7-proj && cd /tmp/a7-proj
-      SID=$(amplifier run "Activate the context-intelligence mode. Then load the context-intelligence-evaluation-methodology skill with the load_skill tool and report its first heading verbatim." \
-            --mode context-intelligence 2>&1 | tee /tmp/a7.log | grep -oE 'Session ID: [0-9a-f-]+' | awk '{print $3}')
+      mkdir -p /tmp/a7 && cd /tmp/a7
+      SID=$(amplifier run "You must activate a mode and then load a skill. Step 1: call mode(operation=set, name=context-intelligence). Step 2: if the result status is 'denied' or asks to confirm, call mode(operation=set, name=context-intelligence) a SECOND time to confirm. Step 3: once active, call load_skill(skill_name=context-intelligence-evaluation-methodology). Step 4: report the skill's first heading. Do all four steps yourself; do not ask me anything." \
+            --mode single 2>&1 | tee /tmp/a7.log | grep -oE 'Session ID: [0-9a-f-]+' | awk '{print $3}')
       echo "session: $SID"
       GEN=$(find /root/.amplifier/projects -path "*/sessions/$SID/events.jsonl" 2>/dev/null | head -1)
-      if [ -z "$GEN" ]; then echo "FAIL[A7]: no generic session log for $SID"; exit 1; fi
+      if [ -z "$GEN" ]; then echo "FAIL[A7]: no session log for $SID"; exit 1; fi
       python3 - "$GEN" << 'PY'
       import json, sys
-      loaded_ok = False
-      strategy_seen = False
-      for line in open(sys.argv[1]):
-          line = line.strip()
-          if not line:
-              continue
-          try:
-              o = json.loads(line)
-          except Exception:
-              continue
-          blob = json.dumps(o)
-          if "context-intelligence-evaluation-methodology" in blob and ("load_skill" in blob or "skill" in blob):
-              ev = o.get("event", "")
-              data = o.get("data", {})
-              if "load_skill" in blob and "error" not in json.dumps(data).lower():
-                  loaded_ok = True
-          if "context-intelligence-strategy.md" in blob:
-              strategy_seen = True
-      if not loaded_ok:
-          print("FAIL[A7]: no successful load_skill of context-intelligence-evaluation-methodology found in the event log"); sys.exit(1)
-      if not strategy_seen:
-          print("WARN[A7]: strategy context file not observed in events (skill still resolved)")
-      print("PASS[A7]: eval skill resolved via load_skill while the context-intelligence mode was active",
-            "(strategy context observed)" if strategy_seen else "(strategy context not separately observed)")
+      mode_status = []; activated = False; skill_ok = False; skill_err = None
+      for l in open(sys.argv[1]):
+          l = l.strip()
+          if not l: continue
+          try: o = json.loads(l)
+          except: continue
+          d = o.get("data", {})
+          if o.get("event") == "tool:post" and d.get("tool_name") == "mode":
+              out = d.get("result", {}).get("output", {}) if isinstance(d.get("result", {}).get("output", {}), dict) else {}
+              mode_status.append(out.get("status") or out.get("active_mode"))
+              if out.get("status") == "activated" or out.get("active_mode") == "context-intelligence":
+                  activated = True
+          if o.get("event") == "tool:post" and d.get("tool_name") == "load_skill" \
+             and "context-intelligence-evaluation-methodology" in json.dumps(d.get("tool_input", {})):
+              res = d.get("result", {}) or {}
+              if res.get("error"): skill_err = res["error"].get("message", "")[:140]
+              else: skill_ok = True
+      print("mode set attempts (status):", mode_status)
+      print("eval skill load error:", skill_err)
+      if not activated:
+          print("FAIL[A7]: context-intelligence mode never activated"); sys.exit(1)
+      if not skill_ok:
+          print(f"FAIL[A7]: eval skill did NOT resolve via load_skill (err: {skill_err})"); sys.exit(1)
+      print("PASS[A7]: mode activated via retry-to-confirm AND context-intelligence-evaluation-methodology resolved via load_skill (error null) while mode active")
       PY
