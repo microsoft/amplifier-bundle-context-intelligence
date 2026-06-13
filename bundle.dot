@@ -1,69 +1,55 @@
-// context-intelligence: a toolkit that records what happens inside your AI sessions
-// (every tool call, agent hand-off, and step) into a searchable map, so you can
-// later ask "what happened and why?" and trace the story back through the history.
-
 digraph context_intelligence {
     rankdir=LR
     fontname="Helvetica"
     fontsize=12
-    label="Context Intelligence — Understand & Search Your AI Session History\ncontext-intelligence v0.1.0 — bundle repo"
+    label="context-intelligence v0.1.0 — bundle repo"
     labelloc=t
     labeljust=c
     nodesep=0.6
     ranksep=0.7
     bgcolor="white"
-    source_hash="3690b90101290112a256a5946f281f5a43ffdce50b3129757aa75969e5a8e095"
+    source_hash="b8319fbcaf08bc56718b69d03a5cf0015567db9891a1b58f4be73f6412e8ebf8"
 
     node [fontname="Helvetica", fontsize=11, style="filled,rounded"]
     edge [fontname="Helvetica", fontsize=9]
 
-    root_context_intelligence [label="Context Intelligence (main bundle)\nThe starting point that ties everything together\nv0.1.0\n0 tools · 0 agents\n~98 tok aggregate", shape=box, fillcolor="#80cbc4", style="filled,rounded,bold", penwidth=2]
+    root_context_intelligence [label="context-intelligence v0.1.0\n0 tools · 0 agents\n~98 tok aggregate", shape=box, fillcolor="#80cbc4", style="filled,rounded,bold", penwidth=2]
 
     subgraph cluster_behaviors {
-        label="Behaviors — Capabilities you can switch on"
+        label="Behaviors"
         style="filled"
         fillcolor="#f9f9f9"
         color="#999999"
 
-        beh_context_intelligence_analysis_behavior [label="Analysis\nDig into session data to find answers\n1 tools · 1 ctx\n~1592 tok", shape=box, fillcolor="#e0f2f1", style="filled,rounded"]
-        beh_context_intelligence_design_behavior [label="Design Helper\nHelps create new analysis tools\n1 tools\n~331 tok", shape=box, fillcolor="#e0f2f1", style="filled,rounded"]
-        beh_context_intelligence_logging_behavior [label="Logging\nRecords what happens during a session\n1 tools\n~497 tok", shape=box, fillcolor="#e0f2f1", style="filled,rounded"]
-        beh_context_intelligence_navigation_behavior [label="Navigation\nBrowse and move through session history\n2 tools · 1 ctx\n~820 tok", shape=box, fillcolor="#e0f2f1", style="filled,rounded"]
-        beh_context_intelligence_behavior [label="Core Behavior\nBaseline setup shared by the others\n~236 tok", shape=box, fillcolor="#e0f2f1", style="filled,rounded"]
+        beh_context_intelligence_analysis_behavior [label="context-intelligence-analysis-behavior\n1 tools\n~864 tok", shape=box, fillcolor="#e0f2f1", style="filled,rounded"]
+        beh_context_intelligence_design_behavior [label="context-intelligence-design-behavior\n1 tools\n~331 tok", shape=box, fillcolor="#e0f2f1", style="filled,rounded"]
+        beh_context_intelligence_logging_behavior [label="context-intelligence-logging-behavior\n1 tools\n~497 tok", shape=box, fillcolor="#e0f2f1", style="filled,rounded"]
+        beh_context_intelligence_navigation_behavior [label="context-intelligence-navigation-behavior\n2 tools\n~561 tok", shape=box, fillcolor="#e0f2f1", style="filled,rounded"]
+        beh_context_intelligence_behavior [label="context-intelligence-behavior\n~236 tok", shape=box, fillcolor="#e0f2f1", style="filled,rounded"]
     }
 
     subgraph cluster_agents {
-        label="Agents — AI helpers with a specialty"
+        label="Agents"
         style="filled"
         fillcolor="#f9f9f9"
         color="#999999"
 
-        agt_context_intelligence_design_facilitator [label="Design Facilitator\nGuides you through designing new tools\n~187 tok desc", shape=box, fillcolor="#c8e6c9", style="filled,rounded"]
-        agt_context_intelligence_tool_designer [label="Tool Designer\nBuilds the new tools you design\n~198 tok desc", shape=box, fillcolor="#c8e6c9", style="filled,rounded"]
-        agt_graph_analyst [label="Graph Analyst\nAnswers questions from the session map\n~543 tok desc", shape=box, fillcolor="#c8e6c9", style="filled,rounded"]
-        agt_session_navigator [label="Session Navigator\nFinds and walks through past sessions\n~366 tok desc", shape=box, fillcolor="#c8e6c9", style="filled,rounded"]
+        agt_context_intelligence_design_facilitator [label="context-intelligence-design-facilitator\n~187 tok desc", shape=box, fillcolor="#c8e6c9", style="filled,rounded"]
+        agt_context_intelligence_tool_designer [label="context-intelligence-tool-designer\n~198 tok desc", shape=box, fillcolor="#c8e6c9", style="filled,rounded"]
+        agt_graph_analyst [label="graph-analyst\n~543 tok desc", shape=box, fillcolor="#c8e6c9", style="filled,rounded"]
+        agt_session_navigator [label="session-navigator\n~366 tok desc", shape=box, fillcolor="#c8e6c9", style="filled,rounded"]
     }
 
     subgraph cluster_modules {
-        label="Modules — Building blocks that do the work"
+        label="Modules"
         style="filled"
         fillcolor="#f9f9f9"
         color="#999999"
 
-        mod_hook_context_intelligence [label="Session Recorder\nCaptures events as the session runs\nhook-context-intelligence", shape=box, fillcolor="#bbdefb", style="filled,rounded"]
-        mod_tool_blob_read [label="Detail Reader\nOpens large stored items on demand\ntool-blob-read", shape=box, fillcolor="#bbdefb", style="filled,rounded"]
-        mod_tool_context_intelligence_upload [label="Data Uploader\nSends recorded data to the session map\ntool-context-intelligence-upload", shape=box, fillcolor="#bbdefb", style="filled,rounded"]
-        mod_tool_graph_query [label="Map Query\nSearches the session map for answers\ntool-graph-query", shape=box, fillcolor="#bbdefb", style="filled,rounded"]
-    }
-
-    subgraph cluster_context {
-        label="Context Files — Background knowledge for the AI"
-        style="filled"
-        fillcolor="#f9f9f9"
-        color="#999999"
-
-        ctx_context_intelligence_graph_awareness_md [label="How to read the session map\ncontext-intelligence-graph-awareness.md\n~704 tok", shape=box, fillcolor="#e1bee7", style="filled,rounded"]
-        ctx_context_intelligence_navigation_awareness_md [label="How to browse sessions\ncontext-intelligence-navigation-awareness.md\n~234 tok", shape=box, fillcolor="#e1bee7", style="filled,rounded"]
+        mod_hook_context_intelligence [label="hook-context-intelligence", shape=box, fillcolor="#bbdefb", style="filled,rounded"]
+        mod_tool_blob_read [label="tool-blob-read", shape=box, fillcolor="#bbdefb", style="filled,rounded"]
+        mod_tool_context_intelligence_upload [label="tool-context-intelligence-upload", shape=box, fillcolor="#bbdefb", style="filled,rounded"]
+        mod_tool_graph_query [label="tool-graph-query", shape=box, fillcolor="#bbdefb", style="filled,rounded"]
     }
 
     subgraph cluster_legend {
@@ -87,13 +73,11 @@ digraph context_intelligence {
 
     disclaimer [label="Token estimates: ~4 chars/token\nSolid border = local (counted)\nDashed + red = external, hidden cost (not counted)\nDashed + muted = external, no cost\nExcludes: sub-session costs, runtime-dynamic", shape=note, fillcolor="#eceff1", style="filled", fontsize=9]
 
-    ext_githttps___github_com_microsoft_amplifier_foundation_main [label="amplifier-foundation\nShared building blocks from Amplifier\n(external, cost)", shape=box, fillcolor="#80cbc4", style="dashed", color="red", penwidth=2]
+    ext_githttps___github_com_microsoft_amplifier_foundation_main [label="amplifier-foundation\n(external, cost)", shape=box, fillcolor="#80cbc4", style="dashed", color="red", penwidth=2]
 
     root_context_intelligence -> ext_githttps___github_com_microsoft_amplifier_foundation_main [style=dashed]
     root_context_intelligence -> beh_context_intelligence_behavior [label="composes"]
     beh_context_intelligence_analysis_behavior -> agt_graph_analyst [label="owns"]
-    beh_context_intelligence_analysis_behavior -> ctx_context_intelligence_graph_awareness_md [style=dotted, color=purple]
     beh_context_intelligence_logging_behavior -> mod_hook_context_intelligence [label="uses", penwidth=0.8]
     beh_context_intelligence_navigation_behavior -> agt_session_navigator [label="owns"]
-    beh_context_intelligence_navigation_behavior -> ctx_context_intelligence_navigation_awareness_md [style=dotted, color=purple]
 }
