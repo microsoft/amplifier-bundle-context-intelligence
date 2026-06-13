@@ -51,7 +51,7 @@ Run before claiming done — reviewer expects evidence:
 ```bash
 cd modules/tool-graph-query           && uv run pytest -q   # 87 tests
 cd modules/tool-blob-read             && uv run pytest -q   # 35 tests
-cd modules/hook-context-intelligence  && uv run pytest -q   # 299 tests
+cd modules/hook-context-intelligence  && uv run pytest -q   # 295 tests
 ```
 
 Lint + types (run from each module directory):
@@ -128,7 +128,7 @@ Each of these burned real debugging time:
 
 ## Done means
 
-- Module unit tests green (87 + 35 + 299).
+- Module unit tests green (87 + 35 + 295).
 - For sync/server changes: all 4 DTU scenarios pass.
 - `bundle.dot` regenerated (via `generate-bundle-docs` recipe) if bundle structure changed.
 - `.github/PULL_REQUEST_TEMPLATE.md` (if present) is honored.
