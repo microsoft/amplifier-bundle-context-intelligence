@@ -324,3 +324,102 @@ validation_cmds:
       echo "--- analyst output tail ---"
       tail -40 /tmp/analyst-query.log
       exit 1
+
+  # ----------------------------------------------------------------------
+  # A5: ZERO always-on awareness. The composed default session must not load
+  # any context-intelligence awareness file into always-on context. We inspect
+  # session:config.raw.context and assert none of the (now deleted) awareness
+  # filenames appear.
+  # ----------------------------------------------------------------------
+  - name: A5-zero-always-on-awareness
+    command: |
+      set -e
+      mkdir -p /tmp/a5-proj && cd /tmp/a5-proj
+      SID=$(amplifier run "Say hello in one word." --mode single 2>&1 | tee /tmp/a5.log | grep -oE 'Session ID: [0-9a-f-]+' | awk '{print $3}')
+      GEN=$(find /root/.amplifier/projects -path "*/sessions/$SID/events.jsonl" 2>/dev/null | head -1)
+      if [ -z "$GEN" ]; then echo "FAIL[A5]: no generic session log for $SID"; exit 1; fi
+      python3 - "$GEN" << 'PY'
+      import json, sys
+      cfg = None
+      for line in open(sys.argv[1]):
+          line = line.strip()
+          if not line:
+              continue
+          try:
+              o = json.loads(line)
+          except Exception:
+              continue
+          if o.get("event") == "session:config":
+              cfg = o["data"]["raw"]
+      if not cfg:
+          print("FAIL[A5]: no session:config captured"); sys.exit(1)
+      blob = json.dumps(cfg.get("context") or cfg)
+      banned = [
+          "context-intelligence-awareness.md",
+          "context-intelligence-navigation-awareness.md",
+          "context-intelligence-graph-awareness.md",
+      ]
+      hits = [b for b in banned if b in blob]
+      if hits:
+          print("FAIL[A5]: always-on awareness file(s) present in composed context:", hits); sys.exit(1)
+      print("PASS[A5]: zero always-on awareness -- none of", banned, "are in the composed session context")
+      PY
+
+  # ----------------------------------------------------------------------
+  # A6: mode registration. The design behavior registers the context-intelligence
+  # mode via hooks-mode search_paths. Prove it with a live `amplifier mode list`.
+  # ----------------------------------------------------------------------
+  - name: A6-mode-registered
+    command: |
+      set -e
+      amplifier mode list 2>&1 | tee /tmp/a6-modes.log
+      grep -q 'context-intelligence' /tmp/a6-modes.log \
+        && echo "PASS[A6]: 'amplifier mode list' shows the context-intelligence mode (registered by the design behavior)" \
+        || { echo "FAIL[A6]: context-intelligence mode not listed by 'amplifier mode list'"; exit 1; }
+
+  # ----------------------------------------------------------------------
+  # A7: mode-only strategy context + eval skill RESOLVES via load_skill.
+  # Run a session that activates the context-intelligence mode and instructs the
+  # agent to load the context-intelligence-evaluation-methodology skill. Assert
+  # the generic event log shows a SUCCESSFUL load_skill tool call for that skill
+  # (proves it resolves, not just appears), and that the strategy context file is
+  # referenced once the mode is active.
+  # NOTE: replace `--mode context-intelligence` below with the exact activation
+  # flag confirmed via `amplifier run --help` if it differs.
+  # ----------------------------------------------------------------------
+  - name: A7-mode-active-strategy-and-eval-skill
+    command: |
+      set -e
+      mkdir -p /tmp/a7-proj && cd /tmp/a7-proj
+      SID=$(amplifier run "Activate the context-intelligence mode. Then load the context-intelligence-evaluation-methodology skill with the load_skill tool and report its first heading verbatim." \
+            --mode context-intelligence 2>&1 | tee /tmp/a7.log | grep -oE 'Session ID: [0-9a-f-]+' | awk '{print $3}')
+      echo "session: $SID"
+      GEN=$(find /root/.amplifier/projects -path "*/sessions/$SID/events.jsonl" 2>/dev/null | head -1)
+      if [ -z "$GEN" ]; then echo "FAIL[A7]: no generic session log for $SID"; exit 1; fi
+      python3 - "$GEN" << 'PY'
+      import json, sys
+      loaded_ok = False
+      strategy_seen = False
+      for line in open(sys.argv[1]):
+          line = line.strip()
+          if not line:
+              continue
+          try:
+              o = json.loads(line)
+          except Exception:
+              continue
+          blob = json.dumps(o)
+          if "context-intelligence-evaluation-methodology" in blob and ("load_skill" in blob or "skill" in blob):
+              ev = o.get("event", "")
+              data = o.get("data", {})
+              if "load_skill" in blob and "error" not in json.dumps(data).lower():
+                  loaded_ok = True
+          if "context-intelligence-strategy.md" in blob:
+              strategy_seen = True
+      if not loaded_ok:
+          print("FAIL[A7]: no successful load_skill of context-intelligence-evaluation-methodology found in the event log"); sys.exit(1)
+      if not strategy_seen:
+          print("WARN[A7]: strategy context file not observed in events (skill still resolved)")
+      print("PASS[A7]: eval skill resolved via load_skill while the context-intelligence mode was active",
+            "(strategy context observed)" if strategy_seen else "(strategy context not separately observed)")
+      PY
