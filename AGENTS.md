@@ -75,7 +75,7 @@ Changes touching `skill_sync.py`, `SkillFetcher`, `on_session_ready`, or `ToolCo
 | **S4** | Full behavior — telemetry hook + analysis-layer sync both active |
 
 DTU profiles live in `.amplifier/digital-twin-universe/profiles/` (including
-`ci-analyst-behavioral-test`, `ci-logging-behavioral-test`, `ci-hook-behavioral-test`,
+`context-intelligence-analyst-behavioral-test`, `context-intelligence-logging-behavioral-test`, `context-intelligence-hook-behavioral-test`,
 `example-dtu-external-server`). Load the `digital-twin-universe` skill or use the
 `amplifier-tester` bundle to run them.
 
