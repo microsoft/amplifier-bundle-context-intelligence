@@ -230,54 +230,48 @@ validation_cmds:
       PY
 
   # ----------------------------------------------------------------------
-  # A3: design-mode agents are GATED behind the context-intelligence MODE.
+  # A3: design-mode agents are GATED behind the context-intelligence MODE,
+  # proven by COMPOSED SESSION inspection (not by grepping cached YAML).
   #
-  # Gating in Amplifier is a COMPOSITION property, not a filesystem property:
-  # the bundle ships the design agents' .md files (so `agents show` reports
-  # them as present), but they are only composed into a session when the
-  # context-intelligence MODE is active. The design behavior is LAYER 3 of the
-  # onion: it reaches graph-analyst + session-navigator TRANSITIVELY via
-  # `includes: context-intelligence-analysis` (-> navigation), and it does NOT
-  # declare the design agents itself -- those are declared exclusively by
-  # modes/context-intelligence.md.
-  #
-  # This assertion verifies that gating wiring against the EXACT local-branch
-  # bundle cached inside the DTU (resolved via the Gitea mirror):
-  #   (a) the design behavior includes the analysis layer (so the analyst
-  #       agents are reachable) and does NOT list the design agents as its OWN
-  #       agent includes -- matched against YAML list items only, so the
-  #       description prose mentioning the design agents is not a false positive;
-  #   (b) the context-intelligence mode DOES declare both design agents
-  #       (i.e. they are reachable only after `mode set context-intelligence`).
-  # The stronger runtime proof (composed session shows ONLY the analyst agents,
-  # design agents + CI hook absent while the mode is inactive) is given by A2.
+  # In a default (mode-inactive) session composed from the design behavior,
+  # session:config.raw.agents MUST contain graph-analyst + session-navigator
+  # (reachable transitively via the analysis -> navigation layers) and MUST
+  # NOT contain the design-mode agents (context-intelligence-design-facilitator,
+  # context-intelligence-tool-designer) -- those are contributed ONLY by the
+  # context-intelligence mode and appear only after the mode is activated.
   # ----------------------------------------------------------------------
-  - name: A3-mode-gating
+  - name: A3-mode-gating-composed
     command: |
       set -e
-      BEH=$(find /root/.amplifier/cache -path '*behaviors/context-intelligence-design.yaml' 2>/dev/null | head -1)
-      MODE=$(find /root/.amplifier/cache -path '*modes/context-intelligence.md' 2>/dev/null | head -1)
-      if [ -z "$BEH" ] || [ -z "$MODE" ]; then
-        echo "FAIL[A3]: could not locate cached design behavior ($BEH) or mode ($MODE) in DTU"
-        exit 1
-      fi
-      echo "Design behavior: $BEH"
-      echo "Mode file:       $MODE"
-      FAILED=0
-      # (a) LAYER 3 design behavior must include the analysis layer so the analyst
-      #     agents (graph-analyst -> session-navigator) are reachable transitively.
-      grep -Eq '^[[:space:]]*-[[:space:]]+bundle:[[:space:]]*context-intelligence:behaviors/context-intelligence-analysis' "$BEH" || { echo "FAIL[A3]: design behavior does not include the analysis layer (analyst agents would be unreachable)"; FAILED=1; }
-      # ...and must NOT declare the design-mode agents as its OWN agent includes.
-      # Match YAML list items only (leading "- ") so the description prose that
-      # NAMES the design agents is not a false positive.
-      if grep -nE '^[[:space:]]*-[[:space:]].*(design-facilitator|tool-designer)' "$BEH"; then
-        echo "FAIL[A3]: design behavior lists design-mode agents as includes (should be mode-gated)"
-        FAILED=1
-      fi
-      # (b) the context-intelligence MODE must declare both design agents (gated entry point)
-      grep -q 'context-intelligence-design-facilitator' "$MODE" && grep -q 'context-intelligence-tool-designer' "$MODE" || { echo "FAIL[A3]: mode does not declare design agents"; FAILED=1; }
-      [ "$FAILED" -ne 0 ] && exit 1
-      echo "PASS[A3]: design-mode agents (design-facilitator, tool-designer) are declared ONLY by the context-intelligence mode; the always-on design behavior reaches the analyst agents via the analysis layer and does NOT list the design agents -> gated behind mode activation (mode is INACTIVE in this default session)"
+      mkdir -p /tmp/a3-proj && cd /tmp/a3-proj
+      SID=$(amplifier run "Say hello in one word." --mode single 2>&1 | tee /tmp/a3.log | grep -oE 'Session ID: [0-9a-f-]+' | awk '{print $3}')
+      echo "session: $SID"
+      GEN=$(find /root/.amplifier/projects -path "*/sessions/$SID/events.jsonl" 2>/dev/null | head -1)
+      if [ -z "$GEN" ]; then echo "FAIL[A3]: no generic session log for $SID"; exit 1; fi
+      python3 - "$GEN" << 'PY'
+      import json, sys
+      cfg = None
+      for line in open(sys.argv[1]):
+          line = line.strip()
+          if not line:
+              continue
+          try:
+              o = json.loads(line)
+          except Exception:
+              continue
+          if o.get("event") == "session:config":
+              cfg = o["data"]["raw"]
+      if not cfg:
+          print("FAIL[A3]: no session:config captured"); sys.exit(1)
+      agents = list((cfg.get("agents") or {}).keys())
+      analyst = [a for a in agents if "graph-analyst" in a or "session-navigator" in a]
+      design = [a for a in agents if "design-facilitator" in a or "tool-designer" in a]
+      if not analyst:
+          print("FAIL[A3]: analyst agents missing from composed session:", agents); sys.exit(1)
+      if design:
+          print("FAIL[A3]: design-mode agents present while mode INACTIVE (gating broken):", design); sys.exit(1)
+      print("PASS[A3]: composed session has analyst agents", analyst, "and design-mode agents are ABSENT (mode-gated) ->", design or "none")
+      PY
 
   # ----------------------------------------------------------------------
   # A1: hook ABSENT -- run an analytics session, assert NO new events.jsonl
