@@ -6,3 +6,7 @@ __pycache__/
 .venv/
 .investigation/
 .real-fixtures/
+
+# Internal implementer/reviewer design spec kept local (like plan.md); not shipped publicly.
+# Remove this line if/when a polished public design doc is intentionally published.
+modules/tool-context-intelligence-migrate/SPEC.md

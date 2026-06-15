@@ -179,7 +179,5 @@ double-deleting anything.
   (imported, not shelled out). The idempotency guarantee that makes re-runs safe comes from
   there.
 * **`hook-context-intelligence`** — defines the CI on-disk shape this tool transforms legacy
-  sessions into, so a migrated session matches a CI-native one.
-
-For the full design rationale, verified findings, and byte-level contracts, see `SPEC.md` in
-this directory.
+  sessions into, so a migrated session matches a CI-native one. That module is the canonical
+  source for the event-record and `metadata.json` byte-level contracts this tool reproduces.
