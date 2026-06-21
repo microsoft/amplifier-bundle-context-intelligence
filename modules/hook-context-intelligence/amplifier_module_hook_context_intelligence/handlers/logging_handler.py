@@ -64,6 +64,149 @@ def _sanitize_for_json(data: dict[str, Any]) -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
+# _DestinationDispatcher
+# ---------------------------------------------------------------------------
+class _DestinationDispatcher:
+    """One context-intelligence destination: own client, queue, breaker, worker.
+
+    Concurrent, non-blocking, drop-on-full PER destination. Failures are isolated;
+    breaker opens this destination only.
+    """
+
+    def __init__(
+        self,
+        name: str,
+        url: str,
+        api_key: str,
+        workspace: str | None,
+        *,
+        dispatch_timeout: float,
+        failure_threshold: int,
+        queue_capacity: int,
+        close_drain_timeout: float,
+    ) -> None:
+        self._name = name
+        self._url = url.rstrip("/")
+        self._api_key = api_key
+        self._workspace = workspace
+        self._dispatch_timeout = dispatch_timeout
+        self._failure_threshold = failure_threshold
+        self._queue_capacity = queue_capacity
+        self._close_drain_timeout = close_drain_timeout
+        self._client: httpx.AsyncClient | None = None
+        self._queue: asyncio.Queue[tuple[str, dict[str, Any]]] = asyncio.Queue(
+            maxsize=queue_capacity
+        )
+        self._worker_task: asyncio.Task[None] | None = None
+        self._consecutive_failures = 0
+        self._enabled = True
+
+    def _ensure_worker(self) -> None:
+        if self._worker_task is None or self._worker_task.done():
+            self._worker_task = asyncio.create_task(self._worker())
+
+    def enqueue(self, event: str, data: dict[str, Any]) -> None:
+        """Enqueue an event for dispatch. Drops if disabled or queue full."""
+        if not self._enabled:
+            return
+        self._ensure_worker()
+        try:
+            self._queue.put_nowait((event, data))
+        except asyncio.QueueFull:
+            self._enabled = False
+            logger.debug(
+                "server_dispatch_queue_full: dest=%s url=%s capacity=%d event=%s"
+                " dispatch disabled; local JSONL capture continues.",
+                self._name,
+                self._url,
+                self._queue_capacity,
+                event,
+            )
+
+    async def _worker(self) -> None:
+        while True:
+            event, payload_data = await self._queue.get()
+            try:
+                await self._post(event, payload_data)
+            finally:
+                self._queue.task_done()
+
+    async def _post(self, event: str, data: dict[str, Any]) -> None:
+        """POST one event to this destination. Circuit-breaker per-destination."""
+        if not self._enabled:
+            return
+
+        # Lazy client creation
+        if self._client is None or self._client.is_closed:
+            client_kwargs: dict[str, Any] = {
+                "timeout": httpx.Timeout(
+                    connect=_CONNECT_TIMEOUT,
+                    write=self._dispatch_timeout,
+                    read=_READ_TIMEOUT,
+                    pool=_POOL_TIMEOUT,
+                ),
+                "limits": httpx.Limits(max_connections=1, max_keepalive_connections=1),
+            }
+            if self._api_key:
+                client_kwargs["headers"] = {"Authorization": f"Bearer {self._api_key}"}
+            self._client = httpx.AsyncClient(**client_kwargs)
+
+        try:
+            payload = build_payload(event, self._workspace, data)
+            response = await self._client.post(f"{self._url}/events", json=payload)
+            response.raise_for_status()
+            self._consecutive_failures = 0
+        except RuntimeError as exc:
+            # Client closed during session teardown — skip silently.
+            if "closed" in str(exc):
+                return
+            raise
+        except Exception:
+            self._consecutive_failures += 1
+            logger.debug(
+                "server_dispatch_failed: attempt %d/%d event=%s dest=%s url=%s",
+                self._consecutive_failures,
+                self._failure_threshold,
+                event,
+                self._name,
+                self._url,
+                exc_info=True,
+            )
+            if self._consecutive_failures >= self._failure_threshold:
+                self._enabled = False
+                logger.debug(
+                    "Context intelligence server unreachable after %d attempts"
+                    " — dispatch disabled for this destination (dest=%s url=%s)."
+                    " Local JSONL capture continues.",
+                    self._consecutive_failures,
+                    self._name,
+                    self._url,
+                )
+
+    async def close(self) -> None:
+        """Drain, cancel worker, close client."""
+        if self._worker_task is not None:
+            try:
+                await asyncio.wait_for(self._queue.join(), timeout=self._close_drain_timeout)
+            except asyncio.TimeoutError:
+                logger.debug(
+                    "server_dispatch_drain_timeout: queued events discarded during shutdown"
+                    " dest=%s url=%s",
+                    self._name,
+                    self._url,
+                )
+            self._worker_task.cancel()
+            try:
+                await self._worker_task
+            except asyncio.CancelledError:
+                pass
+            self._worker_task = None
+
+        if self._client is not None and not self._client.is_closed:
+            await self._client.aclose()
+
+
+# ---------------------------------------------------------------------------
 # LoggingHandler
 # ---------------------------------------------------------------------------
 class LoggingHandler:
@@ -71,6 +214,10 @@ class LoggingHandler:
 
     Writes per-session ``events.jsonl`` and ``metadata.json`` files under
     ``base_path / project_slug / sessions / session_id / context-intelligence /``.
+
+    HTTP dispatch fans out to the active _DestinationDispatcher list (set via
+    set_dispatchers() in on_session_ready). Before dispatchers are installed,
+    all events are JSONL-only.
     """
 
     handled_events: set[str]
@@ -79,36 +226,14 @@ class LoggingHandler:
         self._resolver = resolver
         self.handled_events = set()
         self._seen_sessions: set[str] = set()
-        self._server_url: str | None = (
-            getattr(resolver, "context_intelligence_server_url", None) or None
-        )
-        self._api_key: str | None = getattr(resolver, "context_intelligence_api_key", None) or None
         self._workspace: str | None = getattr(resolver, "workspace", None) or None
         self._parent_id: str = getattr(resolver, "parent_id", "") or ""
         self._resolve_instance_id: str = getattr(resolver, "resolve_instance_id", "") or ""
-        self._client: httpx.AsyncClient | None = None
-        self._dispatch_timeout: float = getattr(resolver, "dispatch_timeout", 10.0)
-        self._consecutive_failures: int = 0
-        self._dispatch_enabled: bool = True
-        if not self._server_url:
-            self._dispatch_enabled = False
-        elif not self._api_key:
-            self._dispatch_enabled = False
-            logger.debug(
-                "context_intelligence: server URL is configured but api_key is missing — "
-                "HTTP dispatch disabled. Set context_intelligence_api_key in your bundle config."
-            )
-        self._failure_threshold: int = getattr(resolver, "dispatch_failure_threshold", 3)
-        self._dispatch_queue_capacity: int = getattr(
-            resolver, "dispatch_queue_capacity", _DEFAULT_DISPATCH_QUEUE_CAPACITY
-        )
-        self._close_drain_timeout: float = getattr(
-            resolver, "close_drain_timeout", _DEFAULT_CLOSE_DRAIN_TIMEOUT
-        )
-        self._dispatch_queue: asyncio.Queue[tuple[str, dict[str, Any]]] = asyncio.Queue(
-            maxsize=self._dispatch_queue_capacity
-        )
-        self._dispatch_worker_task: asyncio.Task[None] | None = None
+        self._dispatchers: list[_DestinationDispatcher] = []
+
+    def set_dispatchers(self, dispatchers: list[_DestinationDispatcher]) -> None:
+        """Install the active per-destination dispatchers (called from on_session_ready)."""
+        self._dispatchers = dispatchers
 
     def _session_dir(self, session_id: str) -> Path:
         return self._resolver.session_dir(session_id)
@@ -139,8 +264,9 @@ class LoggingHandler:
         except Exception:
             logger.warning("LoggingHandler disk write error processing %s", event, exc_info=True)
 
-        if self._server_url and self._dispatch_enabled:
-            self._enqueue_dispatch(event, sanitized_data)
+        # Fan-out to all active dispatchers (each self-gates via _enabled).
+        for dispatcher in self._dispatchers:
+            dispatcher.enqueue(event, sanitized_data)
 
         return HookResult(action="continue")
 
@@ -232,121 +358,8 @@ class LoggingHandler:
 
     # -- lifecycle management ------------------------------------------------
     async def close(self) -> None:
-        """Drain queued dispatch work briefly and close the HTTP client.
-
-        Called from the hook cleanup path. Waits briefly for queued
-        dispatches to complete, then cancels the worker and closes the underlying
-        ``httpx.AsyncClient`` so connections are released cleanly.
-        """
-        worker = self._dispatch_worker_task
-        if worker is not None:
-            try:
-                await asyncio.wait_for(
-                    self._dispatch_queue.join(), timeout=self._close_drain_timeout
-                )
-            except asyncio.TimeoutError:
-                logger.debug(
-                    "server_dispatch_drain_timeout: queued events discarded during shutdown url=%s",
-                    self._server_url,
-                )
-            worker.cancel()
-            try:
-                await worker
-            except asyncio.CancelledError:
-                pass
-            self._dispatch_worker_task = None
-
-        if self._client is not None and not self._client.is_closed:
-            await self._client.aclose()
-
-    def _ensure_dispatch_worker(self) -> None:
-        if self._dispatch_worker_task is None or self._dispatch_worker_task.done():
-            self._dispatch_worker_task = asyncio.create_task(self._dispatch_worker())
-
-    def _enqueue_dispatch(self, event: str, data: dict[str, Any]) -> None:
-        if not self._dispatch_enabled:
-            return
-
-        self._ensure_dispatch_worker()
-        try:
-            self._dispatch_queue.put_nowait((event, data))
-        except asyncio.QueueFull:
-            self._dispatch_enabled = False
-            logger.debug(
-                "server_dispatch_queue_full: capacity=%d event=%s url=%s dispatch disabled;"
-                " local JSONL capture continues.",
-                self._dispatch_queue_capacity,
-                event,
-                self._server_url,
-            )
-
-    async def _dispatch_worker(self) -> None:
-        while True:
-            event, payload_data = await self._dispatch_queue.get()
-            try:
-                await self._dispatch_to_server(event, payload_data)
-            finally:
-                self._dispatch_queue.task_done()
-
-    # -- server dispatch (fire-and-forget) ----------------------------------
-    async def _dispatch_to_server(self, event: str, data: dict[str, Any]) -> None:
-        """Fire-and-forget POST to the configured server URL.
-
-        JSONL writing is the durable record. HTTP dispatch is best-effort and
-        runs behind a single worker so server slowness never blocks the hook.
-        Failures are caught and logged at DEBUG level only — the remote server
-        is optional, so failures must not pollute the user's terminal.
-        Uses a persistent client (lazy-created) with a circuit breaker.
-        """
-        if not self._dispatch_enabled:
-            return
-
-        # Lazy client creation (or recreation if a prior close left it stale)
-        if self._client is None or self._client.is_closed:
-            client_kwargs: dict[str, Any] = {
-                "timeout": httpx.Timeout(
-                    connect=_CONNECT_TIMEOUT,
-                    write=self._dispatch_timeout,
-                    read=_READ_TIMEOUT,
-                    pool=_POOL_TIMEOUT,
-                ),
-                "limits": httpx.Limits(max_connections=1, max_keepalive_connections=1),
-            }
-            if self._api_key:
-                client_kwargs["headers"] = {"Authorization": f"Bearer {self._api_key}"}
-            client = httpx.AsyncClient(**client_kwargs)
-            self._client = client
-        else:
-            client = self._client
-
-        try:
-            payload = build_payload(event, self._workspace, data)
-            response = await client.post(f"{self._server_url}/events", json=payload)
-            response.raise_for_status()
-            self._consecutive_failures = 0
-        except RuntimeError as exc:
-            # Client closed during session teardown -- skip silently.
-            # These are the last events of a dying session; nothing to retry.
-            if "closed" in str(exc):
-                return
-            raise
-        except Exception:
-            self._consecutive_failures += 1
-            logger.debug(
-                "server_dispatch_failed: attempt %d/%d event=%s url=%s",
-                self._consecutive_failures,
-                self._failure_threshold,
-                event,
-                self._server_url,
-                exc_info=True,
-            )
-            if self._consecutive_failures >= self._failure_threshold:
-                self._dispatch_enabled = False
-                logger.debug(
-                    "Context intelligence server unreachable after %d attempts"
-                    " — dispatch disabled for this session. Local JSONL capture continues.",
-                    self._consecutive_failures,
-                )
+        """Close all destination dispatchers concurrently."""
+        await asyncio.gather(*(d.close() for d in self._dispatchers), return_exceptions=True)
 
     # -- metadata freshness update ------------------------------------------
     def _touch_last_event_at(self, session_dir: Path, timestamp: str) -> None:

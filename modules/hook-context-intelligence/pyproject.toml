@@ -8,6 +8,7 @@ license = "MIT"
 dependencies = [
     "httpx>=0.28.1",
     "idna>=3.15",
+    "pathspec>=0.12",
     "amplifier-bundle-context-intelligence @ git+https://github.com/microsoft/amplifier-bundle-context-intelligence@v0.1.1",
 ]
 

@@ -192,12 +192,8 @@ class TestWorkspaceResolution:
 class TestContextIntelligenceServerUrl:
     """context_intelligence_server_url property."""
 
-    def test_returns_none_when_absent(self, monkeypatch, tmp_path) -> None:
+    def test_returns_none_when_absent(self) -> None:
         """Returns None when context_intelligence_server_url not in config."""
-        monkeypatch.setattr(
-            "amplifier_module_hook_context_intelligence.config_resolver.SETTINGS_PATH",
-            tmp_path / "nonexistent.yaml",
-        )
         coordinator = _make_coordinator(config={})
         resolver = ConfigResolver(config={}, coordinator=coordinator)
 
@@ -213,12 +209,8 @@ class TestContextIntelligenceServerUrl:
 
         assert resolver.context_intelligence_server_url == "http://localhost:8000"
 
-    def test_returns_none_for_empty_string(self, monkeypatch, tmp_path) -> None:
+    def test_returns_none_for_empty_string(self) -> None:
         """Returns None when value is an empty string (falsy)."""
-        monkeypatch.setattr(
-            "amplifier_module_hook_context_intelligence.config_resolver.SETTINGS_PATH",
-            tmp_path / "nonexistent.yaml",
-        )
         coordinator = _make_coordinator(config={})
         resolver = ConfigResolver(
             config={"context_intelligence_server_url": ""},
@@ -440,12 +432,8 @@ class TestBlobStoreRoot:
 class TestContextIntelligenceApiKey:
     """context_intelligence_api_key property."""
 
-    def test_returns_none_when_not_configured(self, monkeypatch, tmp_path) -> None:
+    def test_returns_none_when_not_configured(self) -> None:
         """Returns None when context_intelligence_api_key not in config."""
-        monkeypatch.setattr(
-            "amplifier_module_hook_context_intelligence.config_resolver.SETTINGS_PATH",
-            tmp_path / "nonexistent.yaml",
-        )
         resolver = ConfigResolver(config={}, coordinator=_make_coordinator(config={}))
 
         assert resolver.context_intelligence_api_key is None
@@ -459,12 +447,8 @@ class TestContextIntelligenceApiKey:
 
         assert resolver.context_intelligence_api_key == "my-secret-key"
 
-    def test_returns_none_for_empty_string(self, monkeypatch, tmp_path) -> None:
+    def test_returns_none_for_empty_string(self) -> None:
         """Returns None when value is an empty string (falsy)."""
-        monkeypatch.setattr(
-            "amplifier_module_hook_context_intelligence.config_resolver.SETTINGS_PATH",
-            tmp_path / "nonexistent.yaml",
-        )
         resolver = ConfigResolver(
             config={"context_intelligence_api_key": ""},
             coordinator=_make_coordinator(config={}),
@@ -601,80 +585,30 @@ class TestAdditionalEvents:
 
 
 class TestSettingsYamlFallback:
-    """settings.yaml as lowest-priority fallback for server_url and api_key."""
+    """settings.yaml fallback was removed in D1 (contract fix). These tests verify the new behavior.
 
-    def test_server_url_falls_back_to_settings_yaml(self, monkeypatch, tmp_path):
-        monkeypatch.delenv("AMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_URL", raising=False)
+    The hook is now a pure mount-config consumer. Config arrives via the mount config dict,
+    already resolved by the app layer. No env vars, no settings.yaml reads.
+    """
 
-        settings_file = tmp_path / "settings.yaml"
-        settings_file.write_text(
-            "overrides:\n"
-            "  hook-context-intelligence:\n"
-            "    config:\n"
-            "      context_intelligence_server_url: http://from-settings-yaml\n"
-        )
-
-        monkeypatch.setattr(
-            "amplifier_module_hook_context_intelligence.config_resolver.SETTINGS_PATH",
-            settings_file,
-        )
-
+    def test_server_url_not_read_from_settings_yaml(self) -> None:
+        """server_url is NOT read from settings.yaml — the hook is a pure mount-config consumer."""
         resolver = ConfigResolver(config={}, coordinator=_make_coordinator(config={}))
-
-        assert resolver.context_intelligence_server_url == "http://from-settings-yaml"
-
-    def test_env_var_wins_over_settings_yaml(self, monkeypatch, tmp_path):
-        """Env var has higher priority than settings.yaml."""
-        monkeypatch.setenv("AMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_URL", "http://from-env")
-
-        settings_file = tmp_path / "settings.yaml"
-        settings_file.write_text(
-            "overrides:\n"
-            "  hook-context-intelligence:\n"
-            "    config:\n"
-            "      context_intelligence_server_url: http://from-settings-yaml\n"
-        )
-
-        monkeypatch.setattr(
-            "amplifier_module_hook_context_intelligence.config_resolver.SETTINGS_PATH",
-            settings_file,
-        )
-
-        resolver = ConfigResolver(config={}, coordinator=_make_coordinator(config={}))
-
-        assert resolver.context_intelligence_server_url == "http://from-env"
-
-    def test_api_key_falls_back_to_settings_yaml(self, monkeypatch, tmp_path):
-        """When config, coordinator, and env var are all absent, context_intelligence_api_key falls back to settings.yaml."""
-        monkeypatch.delenv("AMPLIFIER_CONTEXT_INTELLIGENCE_API_KEY", raising=False)
-
-        settings_file = tmp_path / "settings.yaml"
-        settings_file.write_text(
-            "overrides:\n"
-            "  hook-context-intelligence:\n"
-            "    config:\n"
-            "      context_intelligence_api_key: sk-from-settings-yaml\n"
-        )
-
-        monkeypatch.setattr(
-            "amplifier_module_hook_context_intelligence.config_resolver.SETTINGS_PATH",
-            settings_file,
-        )
-
-        resolver = ConfigResolver(config={}, coordinator=_make_coordinator(config={}))
-
-        assert resolver.context_intelligence_api_key == "sk-from-settings-yaml"
-
-    def test_settings_yaml_returns_none_when_file_missing(self, monkeypatch, tmp_path):
-        """When settings.yaml doesn't exist, still returns None gracefully."""
-        monkeypatch.delenv("AMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_URL", raising=False)
-        monkeypatch.setattr(
-            "amplifier_module_hook_context_intelligence.config_resolver.SETTINGS_PATH",
-            tmp_path / "nonexistent.yaml",
-        )
-        resolver = ConfigResolver(config={}, coordinator=_make_coordinator(config={}))
-
+        # Without the key in config, resolver returns None (no fallback to settings.yaml)
         assert resolver.context_intelligence_server_url is None
+
+    def test_api_key_not_read_from_settings_yaml(self) -> None:
+        """api_key is NOT read from settings.yaml — the hook is a pure mount-config consumer."""
+        resolver = ConfigResolver(config={}, coordinator=_make_coordinator(config={}))
+        assert resolver.context_intelligence_api_key is None
+
+    def test_server_url_from_config_works(self) -> None:
+        """server_url from mount config (already resolved by app) works correctly."""
+        resolver = ConfigResolver(
+            config={"context_intelligence_server_url": "http://from-config"},
+            coordinator=_make_coordinator(config={}),
+        )
+        assert resolver.context_intelligence_server_url == "http://from-config"
 
 
 class TestParentId:

@@ -50,8 +50,8 @@ class TestDiskAlwaysWrites:
         resolver = _make_resolver(tmp_path)
         handler = LoggingHandler(resolver)
 
-        assert handler._dispatch_enabled is False, (
-            "_dispatch_enabled should be False when no server URL is set"
+        assert handler._dispatchers == [], (
+            "_dispatchers should be empty when no destinations are configured"
         )
 
         data = {"session_id": "test-session-001", "timestamp": "2026-01-01T00:00:00"}
@@ -96,8 +96,8 @@ class TestSilentWithoutServerConfig:
         resolver = _make_resolver(tmp_path, server_url="http://localhost:9999")
         handler = LoggingHandler(resolver)
 
-        assert handler._dispatch_enabled is False, (
-            "_dispatch_enabled should be False when server URL is set but api_key is missing"
+        assert handler._dispatchers == [], (
+            "_dispatchers should be empty when no destinations have been configured via set_dispatchers"
         )
 
         data = {"session_id": "test-session-003", "timestamp": "2026-01-01T00:00:00"}

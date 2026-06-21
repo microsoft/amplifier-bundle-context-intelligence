@@ -2,21 +2,14 @@
 
 from __future__ import annotations
 
-import os
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from context_intelligence.config import SETTINGS_PATH, _parse_settings_yaml
 from context_intelligence.reconstruct.discover import workspace_slug
 
 _DEFAULT_BASE_PATH = "~/.amplifier/projects"
 _DEFAULT_PROJECT_SLUG = "default"
-
-# Environment variable prefix for all hook configuration.
-# AMPLIFIER_CONTEXT_INTELLIGENCE_WORKSPACE  → workspace
-# AMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_URL → context_intelligence_server_url
-# etc.
-_ENV_PREFIX = "AMPLIFIER_CONTEXT_INTELLIGENCE_"
 
 # Default event-name patterns (fnmatch) excluded from local JSONL logging and graph dispatch.
 #
@@ -35,13 +28,22 @@ _ENV_PREFIX = "AMPLIFIER_CONTEXT_INTELLIGENCE_"
 _DEFAULT_EXCLUDE_EVENTS: list[str] = ["llm:stream_*delta"]
 
 
-def _env(suffix: str) -> str | None:
-    """Read ``AMPLIFIER_CONTEXT_INTELLIGENCE_<SUFFIX>`` from the environment.
+@dataclass(frozen=True)
+class Destination:
+    """A single context-intelligence fan-out destination.
 
-    Returns the value as a string if set and non-empty, otherwise ``None``.
+    name:    dict key in config['destinations']; identifier + merge key.
+    url:     base URL (app already expanded ${VAR}). POSTs go to f"{url}/events".
+    api_key: bearer token (app already expanded ${VAR}).
+    include: pathspec (gitwildmatch) patterns; default catch-all ["**"] (S4).
+    exclude: pathspec patterns; exclude-wins, per-destination (S3). Default [].
     """
-    value = os.environ.get(_ENV_PREFIX + suffix)
-    return value if value else None
+
+    name: str
+    url: str
+    api_key: str
+    include: tuple[str, ...] = ("**",)
+    exclude: tuple[str, ...] = ()
 
 
 def _slugify_path(path_str: str) -> str:
@@ -87,6 +89,7 @@ class ConfigResolver:
         self._workspace: str | None = None
         self._exclude_events: frozenset[str] | None = None
         self._additional_events: frozenset[str] | None = None
+        self._destinations: dict[str, Destination] | None = None
 
     # ------------------------------------------------------------------
     # Private helpers
@@ -278,6 +281,111 @@ class ConfigResolver:
         """
         return str(self._config.get("resolve_instance_id", "") or "")
 
+    @property
+    def context_intelligence_server_url(self) -> str | None:
+        """URL of the context-intelligence server, or None if not configured.
+
+        Resolution order (first truthy value wins):
+        1. config['context_intelligence_server_url']  — bundle config / settings.yaml overrides
+        2. coordinator.config['context_intelligence_server_url']  — coordinator-level config
+
+        Note: env var and ~/.amplifier/settings.yaml reads have been removed (D1 contract fix).
+        The app layer (app-cli) is responsible for reading and expanding those sources before
+        passing config to mount().
+        """
+        value = self._config.get("context_intelligence_server_url") or self._coordinator_config_get(
+            "context_intelligence_server_url"
+        )
+        return str(value) if value else None
+
+    @property
+    def context_intelligence_api_key(self) -> str | None:
+        """API key for the context-intelligence server, or None if not configured.
+
+        Resolution order (first truthy value wins):
+        1. config['context_intelligence_api_key']  — bundle config / settings.yaml overrides
+        2. coordinator.config['context_intelligence_api_key']  — coordinator-level config
+
+        Note: env var and ~/.amplifier/settings.yaml reads have been removed (D1 contract fix).
+        The app layer (app-cli) is responsible for reading and expanding those sources before
+        passing config to mount().
+        """
+        value = self._config.get("context_intelligence_api_key") or self._coordinator_config_get(
+            "context_intelligence_api_key"
+        )
+        return str(value) if value else None
+
+    @property
+    def destinations(self) -> dict[str, Destination]:
+        """Resolved fan-out destinations, keyed by name.
+
+        Source: config['destinations'] (a dict). Each value is a dict with
+        keys url, api_key, include?, exclude?. Missing include -> ["**"] (S4);
+        missing exclude -> []. ${VAR} is already expanded by the app.
+
+        Back-compat (D10): if config['destinations'] is absent/empty BUT the
+        legacy scalar context_intelligence_server_url is present, synthesize
+        {"default": Destination(url=..., api_key=..., include=("**",))}.
+
+        Returns {} when neither destinations nor a legacy url is configured
+        (-> local-JSONL only, S4).
+        """
+        if self._destinations is not None:
+            return self._destinations
+
+        _sentinel = object()
+        raw = self._config.get("destinations", _sentinel)
+        destinations_key_present = raw is not _sentinel
+
+        if destinations_key_present:
+            # Key is explicitly set — parse the dict (may be empty or non-empty).
+            # An explicit empty dict {} is valid (local-only) — no legacy synthesis.
+            result: dict[str, Destination] = {}
+            if isinstance(raw, dict):
+                for name, spec in raw.items():
+                    if not isinstance(spec, dict):
+                        continue
+                    url = str(spec.get("url", "") or "").strip()
+                    api_key = str(spec.get("api_key", "") or "").strip()
+                    include = tuple(spec.get("include") or ["**"])
+                    exclude = tuple(spec.get("exclude") or [])
+                    result[name] = Destination(
+                        name=name,
+                        url=url,
+                        api_key=api_key,
+                        include=include,
+                        exclude=exclude,
+                    )
+            self._destinations = result
+            return self._destinations
+
+        # Key is absent: back-compat synthesis from legacy scalar if legacy url present.
+        legacy_url = self.context_intelligence_server_url
+        if legacy_url:
+            legacy_key = self.context_intelligence_api_key or ""
+            self._destinations = {
+                "default": Destination(
+                    name="default",
+                    url=legacy_url,
+                    api_key=legacy_key,
+                    include=("**",),
+                    exclude=(),
+                )
+            }
+            return self._destinations
+
+        self._destinations = {}
+        return self._destinations
+
+    @property
+    def neo4j_config(self) -> dict[str, Any] | None:
+        """Extracted Neo4j connection parameters, or None if unavailable.
+
+        Retained for backward compatibility — returns None since graph_store
+        configuration has been removed from the thin-forwarder bundle.
+        """
+        return None
+
     # ------------------------------------------------------------------
     # Methods
     # ------------------------------------------------------------------
@@ -301,47 +409,28 @@ class ConfigResolver:
         """
         return self.base_path / self.project_slug / "sessions"
 
-    @property
-    def context_intelligence_server_url(self) -> str | None:
-        """URL of the context-intelligence server, or None if not configured.
+    def validate_destinations(self) -> dict[str, Destination]:
+        """Validate and return all configured destinations. Fail-fast (C3).
 
-        Resolution order (first truthy value wins):
-        1. config['context_intelligence_server_url']  — bundle config / settings.yaml overrides
-        2. coordinator.config['context_intelligence_server_url']  — coordinator-level config
-        3. AMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_URL env var
-        4. ~/.amplifier/settings.yaml  — lowest-priority fallback
+        After the app's ${VAR} expansion, a destination with an empty/missing
+        url OR api_key is a configuration ERROR, not a silent per-event drop.
+
+        Raises:
+            ValueError: naming the offending destination(s) and the empty field(s).
+        Returns:
+            The validated destinations dict (possibly empty -> local-only, OK).
         """
-        value = (
-            self._config.get("context_intelligence_server_url")
-            or self._coordinator_config_get("context_intelligence_server_url")
-            or _env("SERVER_URL")
-            or _parse_settings_yaml(SETTINGS_PATH).get("server_url")
-        )
-        return str(value) if value else None
-
-    @property
-    def context_intelligence_api_key(self) -> str | None:
-        """API key for the context-intelligence server, or None if not configured.
-
-        Resolution order (first truthy value wins):
-        1. config['context_intelligence_api_key']  — bundle config / settings.yaml overrides
-        2. coordinator.config['context_intelligence_api_key']  — coordinator-level config
-        3. AMPLIFIER_CONTEXT_INTELLIGENCE_API_KEY env var
-        4. ~/.amplifier/settings.yaml  — lowest-priority fallback
-        """
-        value = (
-            self._config.get("context_intelligence_api_key")
-            or self._coordinator_config_get("context_intelligence_api_key")
-            or _env("API_KEY")
-            or _parse_settings_yaml(SETTINGS_PATH).get("api_key")
-        )
-        return str(value) if value else None
-
-    @property
-    def neo4j_config(self) -> dict[str, Any] | None:
-        """Extracted Neo4j connection parameters, or None if unavailable.
-
-        Retained for backward compatibility — returns None since graph_store
-        configuration has been removed from the thin-forwarder bundle.
-        """
-        return None
+        dests = self.destinations
+        problems: list[str] = []
+        for name, dest in dests.items():
+            if not dest.url:
+                problems.append(f"{name}: missing url")
+            if not dest.api_key:
+                problems.append(f"{name}: missing api_key")
+        if problems:
+            raise ValueError(
+                f"context-intelligence destinations misconfigured: {', '.join(problems)}. "
+                f"Set url and api_key (or the expanded ${{VAR}}) under "
+                f"overrides.hook-context-intelligence.config.destinations.<name>."
+            )
+        return dests
