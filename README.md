@@ -21,6 +21,66 @@ Two agents are included for querying session data:
 
 A **`/context-intelligence` mode** is also included for building new context intelligence-aware tooling. Activate it to enter a design workspace where you can investigate session data, explore the graph model, and produce reusable Amplifier components (skills, agents, context files, recipes, CLIs) for your project.
 
+### Composable layers (the "onion")
+
+The bundle's behaviors are organized as a **layered onion** — each layer adds **exactly one capability** and `includes:` the layer beneath it. Compose the smallest layer that covers your need; everything below it comes along automatically.
+
+```
+context-intelligence                         ← FULL umbrella: design + logging
+├── context-intelligence-design                  + /context-intelligence design MODE
+│   └── context-intelligence-analysis              + graph-analyst agent & graph skills
+│       └── context-intelligence-navigation         session-navigator (local JSONL only)
+└── context-intelligence-logging                 telemetry hook only (independent layer)
+```
+
+| Layer | Adds | Builds on | Use when |
+|-------|------|-----------|----------|
+| **`context-intelligence-navigation`** | `session-navigator` agent + local-JSONL navigation skill | — (innermost) | You only need offline/local session navigation, no graph server. |
+| **`context-intelligence-analysis`** | `graph-analyst` agent + graph-query / blob-read / reconstruction / pattern skills | navigation | You need graph-powered query & exploration (still no design mode). |
+| **`context-intelligence-design`** | the `/context-intelligence` design **mode** (`advertised: false`, activate on demand) | analysis | You also want the goal-driven tooling-design workflow. |
+| **`context-intelligence-logging`** | `hook-context-intelligence` telemetry hook only | — (independent) | Always-on, team-wide session telemetry. Natural `--app` fit. |
+| **`context-intelligence`** (full) | composes **design + logging** | both | Telemetry **and** full analysis/design in one install. |
+
+> The design mode ships `advertised: false` — it never clutters `/modes`; users activate it explicitly with `/mode context-intelligence` when they want the design workspace.
+
+### Skill sync and per-session overhead
+
+The `graph-analyst` agent relies on the `context-intelligence-graph-query` skill, whose content is kept current by `tool-graph-query`. On every session start — when a server URL is configured — the analytics path performs a lightweight sync: a `GET /version` reachability ping plus a conditional, ETag-cached `GET` of the skill. For one long-lived interactive session this is negligible. But workflows that drive Amplifier as a **series of one-shot commands** run the session-start lifecycle on *every* invocation, so the sync fires **per turn** and compounds over a long run.
+
+**Pick the layer that matches your traffic profile** — only the analysis/full layers carry any skill-sync cost at all:
+
+| If you… | Use | Skill-sync cost |
+|---------|-----|-----------------|
+| Forward telemetry only (headless / pipeline / event-forwarding) | `context-intelligence-logging` | **Zero** — no `tool-graph-query`, no version ping |
+| Navigate local JSONL only | `context-intelligence-navigation` | **Zero** |
+| Need graph-powered analysis | `context-intelligence-analysis` / `context-intelligence` (full) | Per-session sync (ETag-conditioned) |
+
+**Already on the full behavior but running a single-command series?** Set `skill_sync_enabled: false` on `tool-graph-query` to eliminate the per-turn skill traffic — **no `GET /version`, no `GET /skills/`, no `skill:unloaded` reload handler** — *without* downgrading your behavior.
+
+Disabling sync does **not** strand the graph-analyst, though. The bundle ships `context-intelligence-graph-query`'s `SKILL.md` as a pessimistic *"Server Unavailable"* stub (so a fresh install with no server never invites Cypher queries against a graph that isn't there). On the disabled path:
+
+| Disabled + … | What happens on disk | Network |
+|--------------|----------------------|---------|
+| **a server URL is configured** | The stub is **swapped** for the real graph-query body **vendored in the `tool-graph-query` package** (a byte-for-byte copy of the canonical server skill), so the graph-analyst stays fully usable | **Zero** — local file copy only |
+| **no server configured** | The *"Server Unavailable"* stub is **retained** (the graph genuinely isn't there) | **Zero** |
+
+The swap is idempotent (rewrites only on content change) and crash-safe. The trade-off to understand: with sync disabled you get the **bundled** body, which is refreshed from the canonical [`microsoft/amplifier-context-intelligence`](https://github.com/microsoft/amplifier-context-intelligence) skill at bundle-authoring time — it will not auto-refresh from your live server until you re-enable sync. And if the server is configured but actually **down** while sync is disabled, the agent receives the optimistic "graph available" body; its `graph_query` calls then error and the graph-analyst's built-in fallback delegates to `session-navigator` (local JSONL) — degraded but never broken.
+
+| Key | Env var | Default | Effect when `false` |
+|-----|---------|---------|---------------------|
+| `skill_sync_enabled` | `AMPLIFIER_CONTEXT_INTELLIGENCE_SKILL_SYNC_ENABLED` | `true` | Zero per-turn skill traffic; server-configured sessions get the vendored offline body, no-server sessions keep the stub |
+
+Configure it through the `tool-graph-query` module config (agent frontmatter or a `settings.yaml` override), or set the env var to disable per-turn sync host-wide:
+
+```bash
+# ~/.amplifier/keys.env or your shell — disable per-turn skill sync host-wide
+AMPLIFIER_CONTEXT_INTELLIGENCE_SKILL_SYNC_ENABLED=false
+```
+
+Accepted values are case-insensitive: `true`/`1`/`yes`/`on` and `false`/`0`/`no`/`off`. An empty or unset value resolves to the default (`true`) — an unexpanded `${VAR:}` placeholder can never silently disable sync.
+
+> **Want cheaper sync rather than no sync?** A per-process version-check cache with a short TTL (skip `GET /version` while a recent check is still fresh) is a tracked follow-up that would reduce per-turn cost for users who still want sync. `skill_sync_enabled` is the opt-out available today; the TTL cache is a separate, deferred enhancement.
+
 ---
 
 ## Understanding workspace
@@ -62,10 +122,36 @@ The hook resolves `workspace` using the same `config → coordinator → default
 
 ### 1. Install
 
-**Add to an existing app** (recommended) — layers the behavior on top of your active bundle without pulling in foundation as a dependency:
+**Add to an existing app** — the `--app` flag layers a behavior onto **every** session, regardless of which primary bundle is active. Pick the layer from the onion above that fits your needs (each one includes everything beneath it):
+
+**Full** (everything — analysis agents + design mode + telemetry hook):
 
 ```bash
-amplifier bundle add git+https://github.com/microsoft/amplifier-bundle-context-intelligence@main#subdirectory=behaviors/context-intelligence.yaml --app
+amplifier bundle add "git+https://github.com/microsoft/amplifier-bundle-context-intelligence@main#subdirectory=behaviors/context-intelligence.yaml" --app
+```
+
+**Design** (analysis + the `/context-intelligence` design mode, no telemetry hook):
+
+```bash
+amplifier bundle add "git+https://github.com/microsoft/amplifier-bundle-context-intelligence@main#subdirectory=behaviors/context-intelligence-design.yaml" --app
+```
+
+**Analysis** (graph-analyst + graph skills, no design mode, no telemetry hook):
+
+```bash
+amplifier bundle add "git+https://github.com/microsoft/amplifier-bundle-context-intelligence@main#subdirectory=behaviors/context-intelligence-analysis.yaml" --app
+```
+
+**Navigation** (innermost — `session-navigator` for local-JSONL navigation only):
+
+```bash
+amplifier bundle add "git+https://github.com/microsoft/amplifier-bundle-context-intelligence@main#subdirectory=behaviors/context-intelligence-navigation.yaml" --app
+```
+
+**Logging only** (telemetry hook only — ideal as an always-on app bundle):
+
+```bash
+amplifier bundle add "git+https://github.com/microsoft/amplifier-bundle-context-intelligence@main#subdirectory=behaviors/context-intelligence-logging.yaml" --app
 ```
 
 **Standalone** — creates a dedicated session configuration using the full root bundle (includes foundation):
@@ -76,6 +162,13 @@ amplifier bundle use context-intelligence
 ```
 
 Every Amplifier session will now write events to local JSONL files automatically — no server required.
+
+> **Composing in your own bundle?** Use the bare `namespace:path` include form, e.g.
+> `- bundle: context-intelligence:behaviors/context-intelligence-analysis`. Because the layers
+> nest via `includes:`, picking one layer pulls in every layer beneath it — and the
+> tool-skills config merges additively, so each layer contributes exactly its own skills.
+
+**`--app` vs standalone:** `--app` composes the behavior onto every session regardless of which primary bundle is active — it never becomes the primary bundle. The standalone form (`bundle add` + `bundle use`) makes context-intelligence the primary bundle for explicitly selected sessions.
 
 ### 2. (Optional) Enable server forwarding
 
@@ -157,7 +250,7 @@ overrides:
       context_intelligence_api_key: "${CONTEXT_INTELLIGENCE_TEAM_SERVER_API_KEY}"
 ```
 
-The `${...}` placeholder is resolved by the app-cli before the value reaches the hook, so `ConfigResolver` receives the secret value through its config dict (highest resolution priority). The custom key name in `keys.env` is invisible to the bundle itself.
+The `${...}` placeholder is resolved by the app-cli before the value reaches the hook, so `HookConfigResolver` receives the secret value through its config dict (highest resolution priority). The custom key name in `keys.env` is invisible to the bundle itself.
 
 ---
 
@@ -230,10 +323,10 @@ cleanup = await mount(coordinator, config={
 
 ### Accessing resolved values
 
-`mount()` registers a `ConfigResolver` as the `context_intelligence.config_resolver` capability:
+`mount()` registers a `HookConfigResolver` as the `context_intelligence.hook_config_resolver` capability:
 
 ```python
-resolver = coordinator.get_capability("context_intelligence.config_resolver")
+resolver = coordinator.get_capability("context_intelligence.hook_config_resolver")
 resolver.workspace                  # resolved workspace string
 resolver.base_path                  # resolved Path object
 resolver.session_dir("abc-123")     # Path to a session's CI directory
@@ -409,7 +502,7 @@ amplifier-bundle-context-intelligence/
 │   ├── event-schema.md                 ← all 51+ Amplifier events
 │   ├── graph-model-reference.md        ← Neo4j graph model for Cypher queries
 │   ├── safe-extraction-patterns.md     ← JSONL navigation patterns
-│   ├── config-resolution.dot           ← ConfigResolver fallback chain diagram
+│   ├── config-resolution.dot           ← HookConfigResolver fallback chain diagram
 │   ├── session-disk-layout.dot         ← on-disk session directory structure
 │   ├── delegation-strategy.dot         ← graph-analyst → session-navigator delegation logic
 │   ├── agents/
@@ -434,12 +527,28 @@ amplifier-bundle-context-intelligence/
 
 ## Development
 
-```bash
-# Module tests
-cd modules/hook-context-intelligence
-uv sync
-uv run pytest tests/ -q
+Each module is an independent `uv` package. Set up and test them separately:
 
+```bash
+# Setup
+cd modules/tool-graph-query           && uv sync
+cd modules/tool-blob-read             && uv sync
+cd modules/hook-context-intelligence  && uv sync
+
+# Tests (run from the respective module directory)
+cd modules/tool-graph-query           && uv run pytest -q   # 97 tests
+cd modules/tool-blob-read             && uv run pytest -q   # 35 tests
+cd modules/hook-context-intelligence  && uv run pytest -q   # 312 tests
+
+# Lint + types (run from the respective module directory)
+uv run ruff check . && uv run ruff format --check . && uv run pyright
+```
+
+> **Built-copy caveat — mandatory before any red-green cycle on shared code:** modules install the shared `context_intelligence` package as a **built (non-editable) copy** in their venv. After editing shared code under `context_intelligence/`, run `uv sync --reinstall --refresh` in the affected module before testing — otherwise the stale built copy silently shadows your change and tests falsely pass even with the fix reverted.
+
+End-to-end behavior is validated in Digital Twin Universe (DTU) scenarios against a live context-intelligence server. See [AGENTS.md](AGENTS.md) for the DTU gate and the `.amplifier/digital-twin-universe/profiles/` profiles.
+
+```bash
 # Bundle-level tests
 uv run pytest ../../tests/ -q
 

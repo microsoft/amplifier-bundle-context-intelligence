@@ -53,7 +53,7 @@ Each line in `events.jsonl` is a single JSON object with exactly **four** fields
 | `timestamp` | string | ISO 8601 timestamp of when the event was recorded |
 | `data` | object | Raw event payload, exactly as the kernel emitted it |
 
-**Key principle:** No field promotion, no level classification, no payload mutation. What the kernel emits is exactly what gets stored in `data`. The `workspace` field is the only addition the hook makes — it is injected at write time from `ConfigResolver.workspace`.
+**Key principle:** No field promotion, no level classification, no payload mutation. What the kernel emits is exactly what gets stored in `data`. The `workspace` field is the only addition the hook makes — it is injected at write time from `HookConfigResolver.workspace`.
 
 ---
 

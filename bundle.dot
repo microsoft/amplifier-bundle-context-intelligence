@@ -8,7 +8,7 @@ digraph context_intelligence {
     nodesep=0.6
     ranksep=0.7
     bgcolor="white"
-    source_hash="dba7ae999a5fd095337bcd9ede4c54b866044c0b31d63d20c4b0ef4483abaf6c"
+    source_hash="b8319fbcaf08bc56718b69d03a5cf0015567db9891a1b58f4be73f6412e8ebf8"
 
     node [fontname="Helvetica", fontsize=11, style="filled,rounded"]
     edge [fontname="Helvetica", fontsize=9]
@@ -21,7 +21,11 @@ digraph context_intelligence {
         fillcolor="#f9f9f9"
         color="#999999"
 
-        beh_context_intelligence_behavior [label="context-intelligence-behavior\n4 tools\n~1832 tok", shape=box, fillcolor="#e0f2f1", style="filled,rounded"]
+        beh_context_intelligence_analysis_behavior [label="context-intelligence-analysis-behavior\n1 tools\n~864 tok", shape=box, fillcolor="#e0f2f1", style="filled,rounded"]
+        beh_context_intelligence_design_behavior [label="context-intelligence-design-behavior\n1 tools\n~331 tok", shape=box, fillcolor="#e0f2f1", style="filled,rounded"]
+        beh_context_intelligence_logging_behavior [label="context-intelligence-logging-behavior\n1 tools\n~497 tok", shape=box, fillcolor="#e0f2f1", style="filled,rounded"]
+        beh_context_intelligence_navigation_behavior [label="context-intelligence-navigation-behavior\n2 tools\n~561 tok", shape=box, fillcolor="#e0f2f1", style="filled,rounded"]
+        beh_context_intelligence_behavior [label="context-intelligence-behavior\n~236 tok", shape=box, fillcolor="#e0f2f1", style="filled,rounded"]
     }
 
     subgraph cluster_agents {
@@ -73,7 +77,7 @@ digraph context_intelligence {
 
     root_context_intelligence -> ext_githttps___github_com_microsoft_amplifier_foundation_main [style=dashed]
     root_context_intelligence -> beh_context_intelligence_behavior [label="composes"]
-    beh_context_intelligence_behavior -> agt_graph_analyst [label="owns"]
-    beh_context_intelligence_behavior -> agt_session_navigator [label="owns"]
-    beh_context_intelligence_behavior -> mod_hook_context_intelligence [label="uses", penwidth=0.8]
+    beh_context_intelligence_analysis_behavior -> agt_graph_analyst [label="owns"]
+    beh_context_intelligence_logging_behavior -> mod_hook_context_intelligence [label="uses", penwidth=0.8]
+    beh_context_intelligence_navigation_behavior -> agt_session_navigator [label="owns"]
 }

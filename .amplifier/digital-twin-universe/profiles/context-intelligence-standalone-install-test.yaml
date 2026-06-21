@@ -1,0 +1,94 @@
+# ============================================================================
+# STANDALONE-INSTALL TEST PROFILE
+# ============================================================================
+# GOAL
+#   Prove the hook module installs and imports STANDALONE (outside the monorepo,
+#   with NO [tool.uv.sources] path override) via its PEP 508 direct git
+#   reference to the bundle. Reproduces foundation's `uv pip install --no-sources`
+#   module-activation policy, which strips [tool.uv.sources] -- so this only
+#   passes if the bundle dependency is a surviving `name @ git+https://...`
+#   direct reference that carries the shared `context_intelligence` package.
+#
+# LOCAL-BRANCH UNDER TEST
+#   The hook's bundle dependency points at
+#   git+https://github.com/microsoft/amplifier-bundle-context-intelligence@main.
+#   The url_rewrites block below redirects that to the Gitea mirror of the LOCAL
+#   working branch, so the install resolves local code, not GitHub @main.
+#
+# USAGE
+#   amplifier-digital-twin launch \
+#     .amplifier/digital-twin-universe/profiles/context-intelligence-standalone-install-test.yaml \
+#     --var GITEA_URL=http://<host-ip>:<port> \
+#     --var GITEA_TOKEN=<token> \
+#     --name context-intelligence-standalone-install-test
+# ============================================================================
+
+name: context-intelligence-standalone-install-test
+description: >
+  Standalone-install proof for the context-intelligence hook module. Installs the
+  hook straight from git with `uv pip install --no-sources` (no path override), with
+  the bundle self-reference redirected to the local-branch Gitea mirror, then imports
+  context_intelligence and the hook mount entry point.
+
+base:
+  image: ubuntu:24.04
+
+# MANDATORY: redirect every github.com/microsoft/amplifier-bundle-context-intelligence
+# reference (the hook's @main bundle self-dependency) to the Gitea mirror whose `main`
+# branch holds the local working-tree snapshot. {GITEA_URL} is supplied at launch.
+url_rewrites:
+  auth:
+    username: admin
+    token_var: GITEA_TOKEN
+  default_match_mode: boundary
+  rules:
+    - match: github.com/microsoft/amplifier-bundle-context-intelligence
+      target: ${GITEA_URL}/admin/amplifier-bundle-context-intelligence
+
+passthrough:
+  allow_external: true
+  services:
+    - name: github
+      key_env: GH_TOKEN
+
+provision:
+  setup_cmds:
+    - apt-get update && apt-get install -y git curl python3
+    - curl -LsSf https://astral.sh/uv/install.sh | sh
+    - |
+      if [ -n "$GH_TOKEN" ]; then
+        echo "machine github.com login x-token-auth password $GH_TOKEN" > /root/.netrc
+        chmod 600 /root/.netrc
+        git config --global credential.helper 'store'
+      fi
+
+readiness:
+  - name: uv-installed
+    command: bash -lc 'uv --version'
+
+validation_cmds:
+  # --------------------------------------------------------------------------
+  # S1: Standalone install from git with --no-sources, then import the shared
+  #     library and the hook mount entry point.
+  # --------------------------------------------------------------------------
+  - name: S1-standalone-install-and-import
+    command: |
+      set -e
+      export PATH="$HOME/.local/bin:$PATH"
+      # Fresh, isolated venv -- nothing from the monorepo on the path.
+      uv venv /tmp/standalone-venv
+      # Install the hook module straight from git, reproducing foundation's
+      # module-activation policy (--no-sources strips any [tool.uv.sources]).
+      # The bundle self-dependency (@main, github) is rewritten to the Gitea
+      # local-branch mirror by the url_rewrites block above.
+      VIRTUAL_ENV=/tmp/standalone-venv uv pip install --no-sources \
+        "git+https://github.com/microsoft/amplifier-bundle-context-intelligence@main#subdirectory=modules/hook-context-intelligence"
+      # Prove the shared library AND the hook entry point import in the clean venv.
+      /tmp/standalone-venv/bin/python - << 'PY'
+      import importlib
+      ci = importlib.import_module("context_intelligence")
+      mod = importlib.import_module("amplifier_module_hook_context_intelligence")
+      assert hasattr(mod, "mount") and callable(mod.mount), "hook module has no callable mount()"
+      print("PASS[S1]: standalone install OK -- imported context_intelligence from", ci.__file__,
+            "and amplifier_module_hook_context_intelligence.mount is callable")
+      PY

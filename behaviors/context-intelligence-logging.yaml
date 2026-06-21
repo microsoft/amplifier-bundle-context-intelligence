@@ -1,0 +1,34 @@
+bundle:
+  name: context-intelligence-logging-behavior
+  version: 0.1.0
+  description: >
+    Context intelligence: event-capture hook ONLY. Instruments the session by
+    capturing all events as structured JSONL (and optionally dispatching them to
+    a graph server) — without any analysis agents, tools, skills, or design mode.
+    Compose this behavior into any app that needs pure session telemetry/logging.
+    Note: this is the producer side only. It does NOT include graph_query, blob_read,
+    or the navigation agents — pair it with context-intelligence-design (or use
+    the full context-intelligence behavior) if you also need to read events back.
+
+hooks:
+  - module: hook-context-intelligence
+    source: git+https://github.com/microsoft/amplifier-bundle-context-intelligence@main#subdirectory=modules/hook-context-intelligence
+    config:
+      context_intelligence_server_url: "${AMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_URL:}"
+      context_intelligence_api_key: "${AMPLIFIER_CONTEXT_INTELLIGENCE_API_KEY:}"
+      # workspace: auto-resolved from coordinator project_slug → config → env var fallback
+      workspace: "${AMPLIFIER_CONTEXT_INTELLIGENCE_WORKSPACE:}"
+      log_level: "${AMPLIFIER_CONTEXT_INTELLIGENCE_LOG_LEVEL:INFO}"
+      dispatch_timeout: "${AMPLIFIER_CONTEXT_INTELLIGENCE_DISPATCH_TIMEOUT:30}"
+      dispatch_failure_threshold: "${AMPLIFIER_CONTEXT_INTELLIGENCE_DISPATCH_FAILURE_THRESHOLD:3}"
+      additional_events:
+        - delegate:agent_spawned
+        - delegate:agent_resumed
+        - delegate:agent_completed
+        - delegate:agent_cancelled
+        - delegate:error
+      # Base path where session files are written. Defaults to ~/.amplifier/projects.
+      # Override via env var or set explicitly here.
+      base_path: "${AMPLIFIER_CONTEXT_INTELLIGENCE_BASE_PATH:}"
+      # project_slug: (auto-resolved from working directory; uncomment to override)
+      # exclude_events: []  (optional fnmatch patterns; uncomment and list events to suppress)

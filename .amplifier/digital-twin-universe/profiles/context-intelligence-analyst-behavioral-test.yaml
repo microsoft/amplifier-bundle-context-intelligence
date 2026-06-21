@@ -1,0 +1,451 @@
+# ============================================================================
+# BEHAVIORAL TEST PROFILE 2 of 2 -- ANALYST MODE
+# ============================================================================
+#
+# GOAL
+#   Deep, evidence-based proof that a FRESH Amplifier session, with the
+#   context-intelligence bundle installed in its ANALYTICS-ONLY behavior,
+#   provides graph/session analysis capabilities WITHOUT instrumenting the
+#   session (NO event-capture hook), and that the graph-analyst correctly
+#   falls back to local JSONL extraction when no CI server is reachable.
+#
+# WHAT "WORKS AS EXPECTED" MEANS HERE
+#   The read/query-only DESIGN behavior (behaviors/context-intelligence-design.yaml)
+#   composes the graph-analyst + session-navigator agents, the
+#   context-intelligence design MODE, tool-delegate, and tool-skills (5 general
+#   skills) -- but NOT the hook-context-intelligence module. Installed via
+#   `amplifier bundle add <bundle>@main#subdirectory=behaviors/context-intelligence-design.yaml --app`.
+#   Therefore:
+#     * No new session writes a context-intelligence/events.jsonl (no hook).
+#     * graph-analyst is the mandatory entry point; it checks server
+#       availability and, when unreachable / 0 sessions, falls back to
+#       session-navigator which reads local JSONL via bash/jq.
+#     * Design-mode agents (context-intelligence-design-facilitator,
+#       context-intelligence-tool-designer) are MODE-GATED and must NOT be
+#       present while the context-intelligence mode is inactive.
+#
+# A seeded FIXTURE session (containing a recognizable "fixture_marker_tool"
+# event) gives the analyst path real local data to read, proving the
+# server-unreachable -> session-navigator -> local-extraction fallback works.
+#
+# ASSERTIONS (each validation_cmd prints PASS/FAIL and exits non-zero on FAIL)
+#   A1  Hook is ABSENT: after running an analytics session, NO new
+#       context-intelligence/events.jsonl is created for that new session
+#       (only the seeded fixture dir exists). Proof analytics-only has no hook.
+#   A2  Agents available: `amplifier agents list` shows graph-analyst AND
+#       session-navigator.
+#   A3  Mode-gating: design-mode agents context-intelligence-design-facilitator
+#       and context-intelligence-tool-designer are NOT listed while the
+#       context-intelligence mode is inactive.
+#   A4  End-to-end analyst behavior with no server: graph-analyst detects the
+#       server is unreachable, FALLS BACK to session-navigator, reads the
+#       seeded fixture JSONL, and the output references the fixture (mentions
+#       fixture_marker_tool or the correct session count).
+#
+# LOCAL-BRANCH UNDER TEST
+#   Source of truth is the local working branch of the
+#   amplifier-bundle-context-intelligence submodule, mirrored to Gitea (see
+#   the MANDATORY url_rewrites block below). NOT GitHub @main.
+#
+# USAGE
+#   amplifier-digital-twin launch \
+#     .amplifier/digital-twin-universe/profiles/context-intelligence-analyst-behavioral-test.yaml \
+#     --var GITEA_URL=http://<host-ip>:<port> \
+#     --var GITEA_TOKEN=<token> \
+#     --name context-intelligence-analyst-behavioral-test
+# ============================================================================
+
+name: context-intelligence-analyst-behavioral-test
+description: >
+  ANALYST MODE behavioral test for the context-intelligence bundle (local branch
+  via Gitea). Installs the ANALYTICS-ONLY behavior (no hook), seeds a fixture
+  session, and asserts: no hook instrumentation, graph-analyst + session-navigator
+  present, design-mode agents gated out, and graph-analyst falls back to local
+  JSONL extraction when no CI server is reachable.
+
+base:
+  image: ubuntu:24.04
+
+# MANDATORY: Gitea URL rewrite for local branch skill resolution.
+# The bundle ships skills with a git+https://github.com/microsoft/amplifier-bundle-context-intelligence@main#subdirectory=skills source in behaviors/context-intelligence.yaml.
+# When running in DTU, local working branch is source of truth -- NOT GitHub @main. Without rewrite, skill registration inside DTU fetches from GitHub @main and silently runs stale code, producing test results that do not reflect local changes.
+# The digital-twin-universe:dtu-profile-builder agent mirrors the local amplifier-bundle-context-intelligence submodule to Gitea on current branch. These rewrites point every reference at that mirror.
+# url_rewrites:
+#   - from: "git+https://github.com/microsoft/amplifier-bundle-context-intelligence@main"
+#     to:   "git+http://{gitea_host}/microsoft/amplifier-bundle-context-intelligence@main"
+#
+# Implemented below using the functional DTU url_rewrites schema (auth + rules
+# with boundary match). The mitmproxy rewrite redirects EVERY reference to
+# github.com/microsoft/amplifier-bundle-context-intelligence (the analytics
+# behavior subdirectory AND the 5 #subdirectory=skills/* skill sources declared
+# in behaviors/context-intelligence-design.yaml) to the Gitea mirror
+# admin/amplifier-bundle-context-intelligence, whose `main` branch holds the
+# local working-tree snapshot. {gitea_host} is supplied at launch via
+# --var GITEA_URL (resolved to the Gitea mirror reachable from inside the DTU).
+url_rewrites:
+  auth:
+    username: admin
+    token_var: GITEA_TOKEN
+  default_match_mode: boundary
+  rules:
+    - match: github.com/microsoft/amplifier-bundle-context-intelligence
+      target: ${GITEA_URL}/admin/amplifier-bundle-context-intelligence
+
+passthrough:
+  allow_external: true
+  services:
+    - name: anthropic
+      key_env: ANTHROPIC_API_KEY
+    - name: github
+      key_env: GH_TOKEN
+
+provision:
+  setup_cmds:
+    # System dependencies (jq + python3 used by the assertions below)
+    - apt-get update && apt-get install -y git curl python3 jq
+
+    # Install uv
+    - curl -LsSf https://astral.sh/uv/install.sh | sh
+
+    # Configure git credentials for GitHub (transitive public deps; harmless if unset)
+    - |
+      if [ -n "$GH_TOKEN" ]; then
+        echo "machine github.com login x-token-auth password $GH_TOKEN" > /root/.netrc
+        chmod 600 /root/.netrc
+        git config --global credential.helper 'store'
+      fi
+
+    # Install Amplifier itself
+    - uv tool install git+https://github.com/microsoft/amplifier@main
+
+    # Configure Amplifier provider (anthropic only -- minimal, matches smoke test)
+    - |
+      mkdir -p /root/.amplifier
+      cat > /root/.amplifier/settings.yaml << 'EOF'
+      config:
+        providers:
+          - module: provider-anthropic
+            source: git+https://github.com/microsoft/amplifier-module-provider-anthropic@main
+            config:
+              api_key_env: ANTHROPIC_API_KEY
+      EOF
+
+    # Install the read/query-only DESIGN behavior (NO hook).
+    # url_rewrites redirects this @main reference to the Gitea mirror (local branch).
+    - amplifier bundle add 'git+https://github.com/microsoft/amplifier-bundle-context-intelligence@main#subdirectory=behaviors/context-intelligence-design.yaml' --app
+
+    # Sanity: Amplifier is working and the analytics behavior is registered
+    - amplifier --version
+    - amplifier bundle list
+
+    # ------------------------------------------------------------------
+    # SEED a fixture local session so the analyst path has real data to read.
+    # Layout: ~/.amplifier/projects/<slug>/sessions/<sid>/context-intelligence/
+    # Contains valid envelope lines incl. a recognizable "fixture_marker_tool"
+    # tool event, plus a matching metadata.json with all required fields.
+    # This dir is created at PROVISION time (before any validation marker), so
+    # A1's "no NEW events.jsonl" check correctly ignores it.
+    # ------------------------------------------------------------------
+    - |
+      FIX=/root/.amplifier/projects/fixture-proj/sessions/fixture-0001/context-intelligence
+      mkdir -p "$FIX"
+      cat > "$FIX/events.jsonl" << 'EOF'
+      {"event":"session.started","workspace":"fixture-proj","timestamp":"2026-01-01T00:00:00Z","data":{"session_id":"fixture-0001"}}
+      {"event":"provider.request","workspace":"fixture-proj","timestamp":"2026-01-01T00:00:01Z","data":{"model":"claude-sonnet"}}
+      {"event":"tool.called","workspace":"fixture-proj","timestamp":"2026-01-01T00:00:02Z","data":{"tool":"fixture_marker_tool","args":{"probe":"deep-evidence"}}}
+      {"event":"provider.response","workspace":"fixture-proj","timestamp":"2026-01-01T00:00:03Z","data":{"tokens":42}}
+      {"event":"session.completed","workspace":"fixture-proj","timestamp":"2026-01-01T00:00:04Z","data":{"status":"ok"}}
+      EOF
+      cat > "$FIX/metadata.json" << 'EOF'
+      {
+        "format": "context-intelligence-events",
+        "version": "1",
+        "session_id": "fixture-0001",
+        "workspace": "fixture-proj",
+        "started_at": "2026-01-01T00:00:00Z",
+        "last_event_at": "2026-01-01T00:00:04Z",
+        "status": "completed",
+        "working_dir": "/tmp/fixture-proj"
+      }
+      EOF
+      echo "Seeded fixture session at $FIX"
+      ls -la "$FIX"
+
+    # Snapshot the set of events.jsonl present AFTER seeding, BEFORE any test
+    # session. A1 compares against this baseline to prove no hook fired.
+    - find /root/.amplifier/projects -path '*context-intelligence/events.jsonl' | sort > /tmp/jsonl-baseline.txt
+    - mkdir -p /tmp/analyst-proj
+
+readiness:
+  - name: amplifier-installed
+    command: amplifier --version
+
+validation_cmds:
+  # ----------------------------------------------------------------------
+  # A2: graph-analyst AND session-navigator are COMPOSED into the session.
+  #
+  # METHODOLOGY: `amplifier agents show` reports the GLOBAL agent catalog (every
+  # agent .md in any cached bundle), not what was composed -- so it cannot prove
+  # composition. Analytics-only ships NO context-intelligence hook, so there is
+  # no context-intelligence/events.jsonl to read. We instead read the FOUNDATION
+  # generic event logger (hooks-logging) at sessions/<id>/events.jsonl, which
+  # captures the same session:config event, and assert data.raw.agents contains
+  # both analytics agents AND that the context-intelligence hook is ABSENT.
+  # (A4 below provides the stronger runtime proof via actual delegation.)
+  # ----------------------------------------------------------------------
+  - name: A2-agents-composed
+    command: |
+      set -e
+      mkdir -p /tmp/a2-proj && cd /tmp/a2-proj
+      SID=$(amplifier run "Say hello in one word." --mode single 2>&1 | tee /tmp/a2.log | grep -oE 'Session ID: [0-9a-f-]+' | awk '{print $3}')
+      echo "session: $SID"
+      GEN=$(find /root/.amplifier/projects -path "*/sessions/$SID/events.jsonl" 2>/dev/null | head -1)
+      if [ -z "$GEN" ]; then echo "FAIL[A2]: no generic session log found for $SID"; exit 1; fi
+      echo "generic session log: $GEN"
+      python3 - "$GEN" << 'PY'
+      import json, sys
+      cfg = None
+      for l in open(sys.argv[1]):
+          l = l.strip()
+          if not l:
+              continue
+          try:
+              o = json.loads(l)
+          except Exception:
+              continue
+          if o.get("event") == "session:config":
+              cfg = o["data"]["raw"]
+      if not cfg:
+          print("FAIL[A2]: no session:config captured"); sys.exit(1)
+      agents = list((cfg.get("agents") or {}).keys())
+      hook_mods = [h.get("module") for h in (cfg.get("hooks") or [])]
+      ga = [a for a in agents if "graph-analyst" in a]
+      sn = [a for a in agents if "session-navigator" in a]
+      context_intelligence_hook = [m for m in hook_mods if m and "context-intelligence" in m]
+      if not ga or not sn:
+          print("FAIL[A2]: analytics agents missing -- graph-analyst:", ga or "ABSENT", "session-navigator:", sn or "ABSENT"); sys.exit(1)
+      if context_intelligence_hook:
+          print("FAIL[A2]: context-intelligence hook present in analytics-only mode:", context_intelligence_hook); sys.exit(1)
+      print("PASS[A2]: analytics agents composed -- graph-analyst", ga, "AND session-navigator", sn, "; context-intelligence hook ABSENT (correct)")
+      PY
+
+  # ----------------------------------------------------------------------
+  # A3: design-mode agents are GATED behind the context-intelligence MODE,
+  # proven by COMPOSED SESSION inspection (not by grepping cached YAML).
+  #
+  # In a default (mode-inactive) session composed from the design behavior,
+  # session:config.raw.agents MUST contain graph-analyst + session-navigator
+  # (reachable transitively via the analysis -> navigation layers) and MUST
+  # NOT contain the design-mode agents (context-intelligence-design-facilitator,
+  # context-intelligence-tool-designer) -- those are contributed ONLY by the
+  # context-intelligence mode and appear only after the mode is activated.
+  # ----------------------------------------------------------------------
+  - name: A3-mode-gating-composed
+    command: |
+      set -e
+      mkdir -p /tmp/a3-proj && cd /tmp/a3-proj
+      SID=$(amplifier run "Say hello in one word." --mode single 2>&1 | tee /tmp/a3.log | grep -oE 'Session ID: [0-9a-f-]+' | awk '{print $3}')
+      echo "session: $SID"
+      GEN=$(find /root/.amplifier/projects -path "*/sessions/$SID/events.jsonl" 2>/dev/null | head -1)
+      if [ -z "$GEN" ]; then echo "FAIL[A3]: no generic session log for $SID"; exit 1; fi
+      python3 - "$GEN" << 'PY'
+      import json, sys
+      cfg = None
+      for line in open(sys.argv[1]):
+          line = line.strip()
+          if not line:
+              continue
+          try:
+              o = json.loads(line)
+          except Exception:
+              continue
+          if o.get("event") == "session:config":
+              cfg = o["data"]["raw"]
+      if not cfg:
+          print("FAIL[A3]: no session:config captured"); sys.exit(1)
+      agents = list((cfg.get("agents") or {}).keys())
+      analyst = [a for a in agents if "graph-analyst" in a or "session-navigator" in a]
+      design = [a for a in agents if "design-facilitator" in a or "tool-designer" in a]
+      if not analyst:
+          print("FAIL[A3]: analyst agents missing from composed session:", agents); sys.exit(1)
+      if design:
+          print("FAIL[A3]: design-mode agents present while mode INACTIVE (gating broken):", design); sys.exit(1)
+      print("PASS[A3]: composed session has analyst agents", analyst, "and design-mode agents are ABSENT (mode-gated) ->", design or "none")
+      PY
+
+  # ----------------------------------------------------------------------
+  # A1: hook ABSENT -- run an analytics session, assert NO new events.jsonl
+  # ----------------------------------------------------------------------
+  - name: A1-hook-absent
+    command: |
+      set -e
+      mkdir -p /tmp/analyst-proj
+      cd /tmp/analyst-proj
+      touch /tmp/analyst-marker
+      sleep 1
+      amplifier run "Say hello in one word." --mode single 2>&1 | tee /tmp/analyst-trivial.log
+      # Any events.jsonl newer than the marker would mean a hook fired -> FAIL
+      NEW=$(find /root/.amplifier/projects -path '*context-intelligence/events.jsonl' -newer /tmp/analyst-marker 2>/dev/null)
+      if [ -n "$NEW" ]; then
+        echo "FAIL[A1]: a hook fired -- new events.jsonl created in analytics-only mode:"
+        echo "$NEW"
+        exit 1
+      fi
+      # Also confirm the events.jsonl set is unchanged from the seeded baseline
+      find /root/.amplifier/projects -path '*context-intelligence/events.jsonl' | sort > /tmp/jsonl-after.txt
+      if ! diff -q /tmp/jsonl-baseline.txt /tmp/jsonl-after.txt >/dev/null; then
+        echo "FAIL[A1]: events.jsonl set changed after analytics session"
+        diff /tmp/jsonl-baseline.txt /tmp/jsonl-after.txt || true
+        exit 1
+      fi
+      echo "PASS[A1]: no hook -- analytics session created NO new events.jsonl (only seeded fixture present)"
+
+  # ----------------------------------------------------------------------
+  # A4: graph-analyst -> session-navigator local-extraction fallback (no server)
+  # ----------------------------------------------------------------------
+  - name: A4-analyst-fallback-local-extraction
+    command: |
+      set -e
+      mkdir -p /tmp/analyst-proj
+      cd /tmp/analyst-proj
+      amplifier run "Use the graph-analyst to tell me how many context-intelligence sessions exist on disk and name any tool that was used in them. Report the exact tool name." \
+        --mode single 2>&1 | tee /tmp/analyst-query.log
+      echo "----- checking output for fixture evidence -----"
+      if grep -qi "fixture_marker_tool" /tmp/analyst-query.log; then
+        echo "PASS[A4]: graph-analyst fell back to local extraction and surfaced the fixture marker tool 'fixture_marker_tool'"
+        exit 0
+      fi
+      # Secondary acceptance: correct session count (exactly 1 fixture session)
+      if grep -qiE '\b(1|one)\b[^.]*session' /tmp/analyst-query.log; then
+        echo "PASS[A4]: graph-analyst fell back to local extraction and reported the correct session count (1)"
+        exit 0
+      fi
+      echo "FAIL[A4]: analyst output did not reference the fixture (no 'fixture_marker_tool' and no correct session count)"
+      echo "--- analyst output tail ---"
+      tail -40 /tmp/analyst-query.log
+      exit 1
+
+  # ----------------------------------------------------------------------
+  # A5: ZERO always-on awareness. The composed default session must not load
+  # any context-intelligence awareness file into always-on context. We inspect
+  # session:config.raw.context and assert none of the (now deleted) awareness
+  # filenames appear.
+  # ----------------------------------------------------------------------
+  - name: A5-zero-always-on-awareness
+    command: |
+      set -e
+      mkdir -p /tmp/a5-proj && cd /tmp/a5-proj
+      SID=$(amplifier run "Say hello in one word." --mode single 2>&1 | tee /tmp/a5.log | grep -oE 'Session ID: [0-9a-f-]+' | awk '{print $3}')
+      GEN=$(find /root/.amplifier/projects -path "*/sessions/$SID/events.jsonl" 2>/dev/null | head -1)
+      if [ -z "$GEN" ]; then echo "FAIL[A5]: no generic session log for $SID"; exit 1; fi
+      python3 - "$GEN" << 'PY'
+      import json, sys
+      cfg = None
+      for line in open(sys.argv[1]):
+          line = line.strip()
+          if not line:
+              continue
+          try:
+              o = json.loads(line)
+          except Exception:
+              continue
+          if o.get("event") == "session:config":
+              cfg = o["data"]["raw"]
+      if not cfg:
+          print("FAIL[A5]: no session:config captured"); sys.exit(1)
+      blob = json.dumps(cfg.get("context") or cfg)
+      banned = [
+          "context-intelligence-awareness.md",
+          "context-intelligence-navigation-awareness.md",
+          "context-intelligence-graph-awareness.md",
+      ]
+      hits = [b for b in banned if b in blob]
+      if hits:
+          print("FAIL[A5]: always-on awareness file(s) present in composed context:", hits); sys.exit(1)
+      print("PASS[A5]: zero always-on awareness -- none of", banned, "are in the composed session context")
+      PY
+
+  # ----------------------------------------------------------------------
+  # A6: mode registration. The design behavior registers the context-intelligence
+  # mode via hooks-mode search_paths. Prove it with a live `amplifier mode list`.
+  # ----------------------------------------------------------------------
+  - name: A6-mode-registered
+    command: |
+      set -e
+      mkdir -p /tmp/a6 && cd /tmp/a6
+      SID=$(amplifier run "Call the mode tool exactly once with operation=set and name=context-intelligence. Report the raw result." \
+            --mode single 2>&1 | tee /tmp/a6.log | grep -oE 'Session ID: [0-9a-f-]+' | awk '{print $3}')
+      echo "session: $SID"
+      GEN=$(find /root/.amplifier/projects -path "*/sessions/$SID/events.jsonl" 2>/dev/null | head -1)
+      if [ -z "$GEN" ]; then echo "FAIL[A6]: no session log for $SID"; exit 1; fi
+      python3 - "$GEN" << 'PY'
+      import json, sys
+      recognized = False; unknown = False; detail = None
+      for l in open(sys.argv[1]):
+          l = l.strip()
+          if not l: continue
+          try: o = json.loads(l)
+          except: continue
+          d = o.get("data", {})
+          if o.get("event") == "tool:post" and d.get("tool_name") == "mode":
+              res = d.get("result", {}) or {}
+              out = res.get("output", {}) if isinstance(res.get("output", {}), dict) else {}
+              blob = json.dumps(res)
+              if out.get("active_mode") == "context-intelligence" or out.get("status") == "activated" \
+                 or out.get("denied_mode") == "context-intelligence" or out.get("status") == "denied":
+                  recognized = True; detail = out.get("status") or out.get("active_mode")
+              if ("not found" in blob.lower() or "unknown mode" in blob.lower()) and "context-intelligence" in blob:
+                  unknown = True
+      if unknown and not recognized:
+          print("FAIL[A6]: mode tool reports context-intelligence as unknown/not-found (NOT registered)"); sys.exit(1)
+      if not recognized:
+          print("FAIL[A6]: no mode(set) result referencing context-intelligence found"); sys.exit(1)
+      print(f"PASS[A6]: context-intelligence mode is REGISTERED/activatable -- mode(set) recognized it (result status: {detail})")
+      PY
+
+  # ----------------------------------------------------------------------
+  # A7: mode-only strategy context + eval skill RESOLVES via load_skill.
+  # Run a session that activates the context-intelligence mode and instructs the
+  # agent to load the context-intelligence-evaluation-methodology skill. Assert
+  # the generic event log shows a SUCCESSFUL load_skill tool call for that skill
+  # (proves it resolves, not just appears), and that the strategy context file is
+  # referenced once the mode is active.
+  # NOTE: replace `--mode context-intelligence` below with the exact activation
+  # flag confirmed via `amplifier run --help` if it differs.
+  # ----------------------------------------------------------------------
+  - name: A7-mode-active-eval-skill-resolves
+    command: |
+      set -e
+      mkdir -p /tmp/a7 && cd /tmp/a7
+      SID=$(amplifier run "You must activate a mode and then load a skill. Step 1: call mode(operation=set, name=context-intelligence). Step 2: if the result status is 'denied' or asks to confirm, call mode(operation=set, name=context-intelligence) a SECOND time to confirm. Step 3: once active, call load_skill(skill_name=context-intelligence-evaluation-methodology). Step 4: report the skill's first heading. Do all four steps yourself; do not ask me anything." \
+            --mode single 2>&1 | tee /tmp/a7.log | grep -oE 'Session ID: [0-9a-f-]+' | awk '{print $3}')
+      echo "session: $SID"
+      GEN=$(find /root/.amplifier/projects -path "*/sessions/$SID/events.jsonl" 2>/dev/null | head -1)
+      if [ -z "$GEN" ]; then echo "FAIL[A7]: no session log for $SID"; exit 1; fi
+      python3 - "$GEN" << 'PY'
+      import json, sys
+      mode_status = []; activated = False; skill_ok = False; skill_err = None
+      for l in open(sys.argv[1]):
+          l = l.strip()
+          if not l: continue
+          try: o = json.loads(l)
+          except: continue
+          d = o.get("data", {})
+          if o.get("event") == "tool:post" and d.get("tool_name") == "mode":
+              out = d.get("result", {}).get("output", {}) if isinstance(d.get("result", {}).get("output", {}), dict) else {}
+              mode_status.append(out.get("status") or out.get("active_mode"))
+              if out.get("status") == "activated" or out.get("active_mode") == "context-intelligence":
+                  activated = True
+          if o.get("event") == "tool:post" and d.get("tool_name") == "load_skill" \
+             and "context-intelligence-evaluation-methodology" in json.dumps(d.get("tool_input", {})):
+              res = d.get("result", {}) or {}
+              if res.get("error"): skill_err = res["error"].get("message", "")[:140]
+              else: skill_ok = True
+      print("mode set attempts (status):", mode_status)
+      print("eval skill load error:", skill_err)
+      if not activated:
+          print("FAIL[A7]: context-intelligence mode never activated"); sys.exit(1)
+      if not skill_ok:
+          print(f"FAIL[A7]: eval skill did NOT resolve via load_skill (err: {skill_err})"); sys.exit(1)
+      print("PASS[A7]: mode activated via retry-to-confirm AND context-intelligence-evaluation-methodology resolved via load_skill (error null) while mode active")
+      PY

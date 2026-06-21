@@ -1,0 +1,27 @@
+bundle:
+  name: context-intelligence-design-behavior
+  version: 0.1.0
+  description: >
+    LAYER 3 of 3 (top). Adds the context-intelligence design MODE (gates
+    design-facilitator + tool-designer agents and design skills). Includes
+    context-intelligence-analysis. Use for full read/query + tooling-design
+    workflow.
+
+includes:
+  - bundle: context-intelligence:behaviors/context-intelligence-analysis
+  # Brings tool-mode + the approval hook + the default hooks-mode config (search_paths: []).
+  - bundle: git+https://github.com/microsoft/amplifier-bundle-modes@main#subdirectory=behaviors/modes.yaml
+
+# Register this bundle's modes/ directory with hooks-mode. This is the REAL
+# registration mechanism (a bare `modes: include:` block is NOT a recognized
+# foundation field and is silently dropped). The hooks-mode entry deep-merges by
+# module ID with the one from behaviors/modes.yaml, replacing its empty
+# search_paths with the CI modes directory. "@context-intelligence:modes"
+# resolves to <ci-bundle-root>/modes/, so modes/context-intelligence.md is
+# discovered and registered (visible in `mode list`).
+hooks:
+  - module: hooks-mode
+    source: git+https://github.com/microsoft/amplifier-bundle-modes@main#subdirectory=modules/hooks-mode
+    config:
+      search_paths:
+        - "@context-intelligence:modes"

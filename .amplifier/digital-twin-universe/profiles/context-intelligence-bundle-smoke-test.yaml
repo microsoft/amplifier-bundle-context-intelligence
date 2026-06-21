@@ -1,0 +1,169 @@
+# Smoke-test profile for amplifier-bundle-context-intelligence
+#
+# Tests: library imports, CLI tools, hook HookConfigResolver, and Amplifier
+# bundle loading.  Does NOT require an external CI server.
+#
+# Usage:
+#   export GH_TOKEN=$(gh auth token)
+#   amplifier-digital-twin launch .amplifier/digital-twin-universe/profiles/context-intelligence-bundle-smoke-test.yaml \
+#     --name context-intelligence-bundle-smoke-test
+name: context-intelligence-bundle-smoke-test
+description: >
+  Smoke test for the context-intelligence bundle.  Validates library imports,
+  upload CLI, hook additional_events config, and Amplifier bundle loading.
+
+url_rewrites:
+  auth:
+    username: admin
+    token_var: GITEA_TOKEN
+  default_match_mode: boundary
+  rules:
+    - match: github.com/microsoft/amplifier-bundle-context-intelligence
+      target: ${GITEA_URL}/admin/amplifier-bundle-context-intelligence
+
+base:
+  image: ubuntu:24.04
+
+passthrough:
+  allow_external: true
+  services:
+    - name: anthropic
+      key_env: ANTHROPIC_API_KEY
+    - name: github
+      key_env: GH_TOKEN
+
+provision:
+  setup_cmds:
+    # System dependencies
+    - apt-get update && apt-get install -y git curl python3 python3-venv
+
+    # Install uv
+    - curl -LsSf https://astral.sh/uv/install.sh | sh
+
+    # Configure git credentials for private GitHub repos
+    - |
+      if [ -n "$GH_TOKEN" ]; then
+        echo "machine github.com login x-token-auth password $GH_TOKEN" > /root/.netrc
+        chmod 600 /root/.netrc
+        git config --global credential.helper 'store'
+      fi
+
+    # Clone the bundle (HEAD of main)
+    - |
+      export PATH="/root/.local/bin:$PATH"
+      git clone --depth 1 https://github.com/microsoft/amplifier-bundle-context-intelligence.git /opt/context-intelligence-bundle
+
+    # Create a venv and install packages in dependency order.
+    # Ubuntu 24.04 marks system Python as externally managed (PEP 668),
+    # so we use a dedicated virtualenv for the smoke-test packages.
+    - |
+      export PATH="/root/.local/bin:$PATH"
+      uv venv /opt/venv --python python3
+      export VIRTUAL_ENV=/opt/venv
+      export PATH="/opt/venv/bin:$PATH"
+      uv pip install /opt/context-intelligence-bundle/
+      uv pip install "httpx>=0.28.1"
+      uv pip install --no-deps /opt/context-intelligence-bundle/modules/hook-context-intelligence/
+      uv pip install --no-deps /opt/context-intelligence-bundle/modules/tool-context-intelligence-upload/
+
+    # Quick sanity — library importable?
+    - /opt/venv/bin/python3 -c "from context_intelligence.config import resolve_config; print('context_intelligence importable')"
+
+    # Install Amplifier itself (uv tool uses its own isolated venv)
+    - |
+      export PATH="/root/.local/bin:$PATH"
+      uv tool install git+https://github.com/microsoft/amplifier@main
+
+    # Configure Amplifier provider
+    - |
+      mkdir -p /root/.amplifier
+      cat > /root/.amplifier/settings.yaml << 'EOF'
+      config:
+        providers:
+          - module: provider-anthropic
+            source: git+https://github.com/microsoft/amplifier-module-provider-anthropic@main
+            config:
+              api_key_env: ANTHROPIC_API_KEY
+      EOF
+
+    # Add the context-intelligence bundle to Amplifier
+    - |
+      export PATH="/root/.local/bin:$PATH"
+      amplifier bundle add git+https://github.com/microsoft/amplifier-bundle-context-intelligence@main --app
+
+    # Verify Amplifier is working
+    - |
+      export PATH="/root/.local/bin:$PATH"
+      amplifier --version
+
+    # Persist PATH for interactive shells and exec commands
+    - |
+      echo 'export PATH="/opt/venv/bin:/root/.local/bin:$PATH"' >> /root/.bashrc
+      echo 'export VIRTUAL_ENV=/opt/venv' >> /root/.bashrc
+      echo 'PATH=/opt/venv/bin:/root/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin' >> /etc/environment
+      echo 'VIRTUAL_ENV=/opt/venv' >> /etc/environment
+
+    # Workspace for the user
+    - mkdir -p /home/user/project
+
+    # Write a smoke wrapper bundle that composes the context-intelligence umbrella
+    # bundle plus the stub-event-contributor fixture module, then register it.
+    - |
+      cat > /root/context-intelligence-smoke-stub-bundle.yaml <<'YAML'
+      bundle:
+        name: context-intelligence-smoke-stub
+        version: 0.1.0
+        description: Smoke wrapper - context-intelligence umbrella bundle + stub-event-contributor module.
+      includes:
+        - bundle: git+https://github.com/microsoft/amplifier-bundle-context-intelligence@main
+      tools:
+        - module: stub-event-contributor
+          source: git+https://github.com/microsoft/amplifier-bundle-context-intelligence@main#subdirectory=modules/hook-context-intelligence/tests/dtu/fixtures/stub-event-contributor
+      YAML
+      amplifier bundle add /root/context-intelligence-smoke-stub-bundle.yaml
+
+readiness:
+  - name: library-check
+    command: "/opt/venv/bin/python3 -c \"from context_intelligence.client import AsyncCIClient; print('ready')\""
+
+validation_cmds:
+  - name: smoke-compose-and-on-session-ready
+    command: |
+      set -e
+      mkdir -p /tmp/smoke-final && cd /tmp/smoke-final
+      amplifier run --bundle context-intelligence-smoke-stub "Say hello in one word." --mode single \
+        2>&1 | tee /tmp/smoke-final.log >/dev/null
+      SID=$(grep -oE 'Session ID: [0-9a-f-]+' /tmp/smoke-final.log | awk '{print $3}')
+      echo "SID=$SID"
+      SDIR=$(find /root/.amplifier/projects -type d -path "*/sessions/$SID" 2>/dev/null | head -1)
+      GEN="$SDIR/events.jsonl"
+      CIJ="$SDIR/context-intelligence/events.jsonl"
+      python3 - "$GEN" "$CIJ" << 'PY'
+      import json, os, sys
+      gen, cij = sys.argv[1], sys.argv[2]
+      composed = False
+      for l in open(gen):
+          l = l.strip()
+          if not l: continue
+          try: o = json.loads(l)
+          except: continue
+          if o.get("event") == "session:config":
+              tools = (o.get("data", {}).get("raw", {}).get("tools") or [])
+              if any(isinstance(t, dict) and t.get("module") == "stub-event-contributor" for t in tools):
+                  composed = True
+      if not composed:
+          print("FAIL[SMOKE]: stub-event-contributor NOT in session:config mount plan"); sys.exit(1)
+      if not os.path.exists(cij) or os.path.getsize(cij) == 0:
+          print("FAIL[SMOKE]: CI hook events.jsonl missing/empty -> on_session_ready did not register the handler"); sys.exit(1)
+      evset = set()
+      for l in open(cij):
+          l = l.strip()
+          if not l: continue
+          try: evset.add(json.loads(l).get("event"))
+          except: pass
+      need = {"session:start", "session:end"}
+      if not need.issubset(evset):
+          print(f"FAIL[SMOKE]: CI events.jsonl missing lifecycle {need - evset}"); sys.exit(1)
+      print("PASS[SMOKE]: stub-event-contributor composed into mount plan AND on_session_ready ran "
+            "(CI events.jsonl populated with session:start/session:end via the late-registered LoggingHandler)")
+      PY

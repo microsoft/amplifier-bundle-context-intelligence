@@ -40,8 +40,18 @@ tools:
     source: git+https://github.com/microsoft/amplifier-foundation@main#subdirectory=modules/tool-delegate
   - module: tool-graph-query
     source: git+https://github.com/microsoft/amplifier-bundle-context-intelligence@main#subdirectory=modules/tool-graph-query
+    config:
+      # Used as fallback when hook-context-intelligence is not mounted (analytics-only mode).
+      # When the hook is present its config_resolver capability takes priority over these values.
+      context_intelligence_server_url: "${AMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_URL:}"
+      context_intelligence_api_key: "${AMPLIFIER_CONTEXT_INTELLIGENCE_API_KEY:}"
+      workspace: "${AMPLIFIER_CONTEXT_INTELLIGENCE_WORKSPACE:}"
   - module: tool-blob-read
     source: git+https://github.com/microsoft/amplifier-bundle-context-intelligence@main#subdirectory=modules/tool-blob-read
+    config:
+      # Same fallback semantics as tool-graph-query above.
+      context_intelligence_server_url: "${AMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_URL:}"
+      context_intelligence_api_key: "${AMPLIFIER_CONTEXT_INTELLIGENCE_API_KEY:}"
   - module: tool-filesystem
     source: git+https://github.com/microsoft/amplifier-module-tool-filesystem@main
     config:
@@ -291,7 +301,7 @@ reconstructs session summaries that can then be uploaded to the graph server for
 ## Section 4: Context File References
 
 @context-intelligence:context/config-resolution.dot
-<!-- ConfigResolver fallback chain: how context_intelligence_server_url, workspace, and log_level are resolved from env vars and settings -->
+<!-- HookConfigResolver fallback chain: how context_intelligence_server_url, workspace, and log_level are resolved from env vars and settings -->
 
 @context-intelligence:context/delegation-strategy.dot
 <!-- delegation chain diagram: graph-analyst → session-navigator → external session-data-analysis-capable agent -->

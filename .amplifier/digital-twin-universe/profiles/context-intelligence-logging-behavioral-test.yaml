@@ -1,0 +1,342 @@
+# ============================================================================
+# BEHAVIORAL TEST PROFILE 3 of 3 -- LOGGING-ONLY MODE  (the NEW granular split)
+# ============================================================================
+#
+# GOAL
+#   Deep, evidence-based proof that a FRESH Amplifier session, with the
+#   context-intelligence bundle installed in its NEW LOGGING-ONLY behavior
+#   (behaviors/context-intelligence-logging.yaml), instruments itself via the
+#   event-capture hook (hook-context-intelligence) running in LOCAL-ONLY mode
+#   (no CI server) -- AND carries NONE of the analytics read/query surface.
+#
+# THE NEW THREE-WAY SPLIT (consumers pick granularity)
+#   * LOGGING-ONLY   (this profile) -> behaviors/context-intelligence-logging.yaml
+#       hook-context-intelligence ONLY (event capture / JSONL). NO agents,
+#       NO tools, NO skills, NO mode. Pure producer side.
+#   * READ/QUERY     -> behaviors/context-intelligence-design.yaml
+#       graph-analyst + session-navigator + tools + skills + mode, NO hook.
+#   * FULL           -> behaviors/context-intelligence.yaml
+#       `includes:` BOTH design and logging (hook registered EXACTLY once).
+#
+# ASSERTIONS (each validation_cmd prints PASS/FAIL and exits non-zero on FAIL)
+#   L1  events.jsonl created & non-empty after a real 1-turn session AND
+#       metadata.json has all required fields: session_id, workspace,
+#       started_at, status, working_dir, format, version.
+#   L2  Every events.jsonl line is a valid envelope {event,workspace,timestamp,
+#       data} AND canonical lifecycle events are present (session/provider/
+#       llm/tool).
+#   L3  Analytics surface is ABSENT (this is the KEY new check):
+#         (a) `amplifier agents show graph-analyst` / `session-navigator`
+#             report NEITHER as available/[on];
+#         (b) the cached logging behavior YAML has a hooks: section but NO
+#             agents:/tools:/context: sections (structural proof of pure
+#             producer side);
+#         (c) graph_query / blob_read tools are NOT referenced anywhere in the
+#             composed session telemetry. Proves logging-only carries no
+#             read/query surface.
+#   L4  Local-only graceful degradation: with NO server env vars, the session
+#       still completes cleanly AND the JSONL is written (no crash, no dispatch).
+#
+# LOCAL-BRANCH UNDER TEST
+#   Source of truth is the local working branch of the
+#   amplifier-bundle-context-intelligence submodule, mirrored to Gitea (see the
+#   MANDATORY url_rewrites block below). NOT GitHub @main.
+#
+# USAGE
+#   amplifier-digital-twin launch \
+#     .amplifier/digital-twin-universe/profiles/context-intelligence-logging-behavioral-test.yaml \
+#     --var GITEA_URL=http://<host-ip>:<port> \
+#     --var GITEA_TOKEN=<token> \
+#     --name context-intelligence-logging-behavioral-test
+# ============================================================================
+
+name: context-intelligence-logging-behavioral-test
+description: >
+  LOGGING-ONLY behavioral test for the context-intelligence bundle (local branch
+  via Gitea). Installs the NEW logging-only behavior (hook only, no analytics),
+  runs a real 1-turn session in local-only mode (no CI server), and asserts the
+  event-capture hook writes a valid per-session events.jsonl + metadata.json with
+  canonical lifecycle events, while NONE of the analytics agents/tools/skills are
+  composed (proving the granular producer-only split).
+
+base:
+  image: ubuntu:24.04
+
+# MANDATORY: Gitea URL rewrite for local branch skill resolution.
+# The bundle ships skills with a git+https://github.com/microsoft/amplifier-bundle-context-intelligence@main#subdirectory=skills source in behaviors/context-intelligence.yaml.
+# When running in DTU, local working branch is source of truth -- NOT GitHub @main. Without rewrite, skill registration inside DTU fetches from GitHub @main and silently runs stale code, producing test results that do not reflect local changes.
+# The digital-twin-universe:dtu-profile-builder agent mirrors the local amplifier-bundle-context-intelligence submodule to Gitea on current branch. These rewrites point every reference at that mirror.
+# url_rewrites:
+#   - from: "git+https://github.com/microsoft/amplifier-bundle-context-intelligence@main"
+#     to:   "git+http://{gitea_host}/microsoft/amplifier-bundle-context-intelligence@main"
+#
+# Implemented below using the functional DTU url_rewrites schema (auth + rules
+# with boundary match). The mitmproxy rewrite redirects EVERY reference to
+# github.com/microsoft/amplifier-bundle-context-intelligence (the logging
+# behavior subdirectory AND the hook module #subdirectory=modules/... source
+# declared in behaviors/context-intelligence-logging.yaml) to the Gitea mirror
+# admin/amplifier-bundle-context-intelligence, whose `main` branch holds the
+# local working-tree snapshot. {gitea_host} is supplied at launch via
+# --var GITEA_URL (resolved to the Gitea mirror reachable from inside the DTU).
+url_rewrites:
+  auth:
+    username: admin
+    token_var: GITEA_TOKEN
+  default_match_mode: boundary
+  rules:
+    - match: github.com/microsoft/amplifier-bundle-context-intelligence
+      target: ${GITEA_URL}/admin/amplifier-bundle-context-intelligence
+
+passthrough:
+  allow_external: true
+  services:
+    - name: anthropic
+      key_env: ANTHROPIC_API_KEY
+    - name: github
+      key_env: GH_TOKEN
+
+provision:
+  setup_cmds:
+    # System dependencies (jq + python3 used by the assertions below)
+    - apt-get update && apt-get install -y git curl python3 jq
+
+    # Install uv
+    - curl -LsSf https://astral.sh/uv/install.sh | sh
+
+    # Configure git credentials for GitHub (transitive public deps; harmless if unset)
+    - |
+      if [ -n "$GH_TOKEN" ]; then
+        echo "machine github.com login x-token-auth password $GH_TOKEN" > /root/.netrc
+        chmod 600 /root/.netrc
+        git config --global credential.helper 'store'
+      fi
+
+    # Install Amplifier itself
+    - uv tool install git+https://github.com/microsoft/amplifier@main
+
+    # Configure Amplifier provider (anthropic only -- minimal, matches smoke test)
+    - |
+      mkdir -p /root/.amplifier
+      cat > /root/.amplifier/settings.yaml << 'EOF'
+      config:
+        providers:
+          - module: provider-anthropic
+            source: git+https://github.com/microsoft/amplifier-module-provider-anthropic@main
+            config:
+              api_key_env: ANTHROPIC_API_KEY
+      EOF
+
+    # Install the LOGGING-ONLY behavior (hook ONLY -- no analytics agents/tools/skills).
+    # url_rewrites redirects this @main reference to the Gitea mirror (local branch).
+    - amplifier bundle add 'git+https://github.com/microsoft/amplifier-bundle-context-intelligence@main#subdirectory=behaviors/context-intelligence-logging.yaml' --app
+
+    # Sanity: Amplifier is working and the logging behavior is registered
+    - amplifier --version
+    - amplifier bundle list
+
+    # Workspace for the test session
+    - mkdir -p /tmp/logging-proj
+
+readiness:
+  - name: amplifier-installed
+    command: amplifier --version
+
+validation_cmds:
+  # ----------------------------------------------------------------------
+  # Run a REAL 1-turn session in LOCAL-ONLY mode (no CI server env vars).
+  # The logging-only behavior's hook mounts and must write events.jsonl + metadata.json.
+  # ----------------------------------------------------------------------
+  - name: run-logging-session
+    command: |
+      set -e
+      echo "AMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_URL='${AMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_URL:-}'"
+      echo "AMPLIFIER_CONTEXT_INTELLIGENCE_API_KEY='${AMPLIFIER_CONTEXT_INTELLIGENCE_API_KEY:-}'"
+      mkdir -p /tmp/logging-proj
+      cd /tmp/logging-proj
+      touch /tmp/logging-pre-marker
+      sleep 1
+      amplifier run "Say hello in one word." --mode single 2>&1 | tee /tmp/logging-session.log
+      echo "Session completed"
+
+  # ----------------------------------------------------------------------
+  # L1: events.jsonl created & non-empty + metadata.json required fields
+  # ----------------------------------------------------------------------
+  - name: L1-events-and-metadata
+    command: |
+      set -e
+      EVENTS_FILE=$(find /root/.amplifier/projects -path '*context-intelligence/events.jsonl' -newer /tmp/logging-pre-marker 2>/dev/null | head -1)
+      if [ -z "$EVENTS_FILE" ]; then
+        echo "FAIL[L1]: No events.jsonl created under ~/.amplifier/projects/**/context-intelligence/ after session"
+        find /root/.amplifier/projects -type f 2>/dev/null | head -50
+        exit 1
+      fi
+      if [ ! -s "$EVENTS_FILE" ]; then
+        echo "FAIL[L1]: events.jsonl exists but is EMPTY: $EVENTS_FILE"
+        exit 1
+      fi
+      LINES=$(wc -l < "$EVENTS_FILE")
+      echo "$EVENTS_FILE" > /tmp/logging-events-path
+      echo "events.jsonl: $EVENTS_FILE ($LINES lines)"
+      META="$(dirname "$EVENTS_FILE")/metadata.json"
+      if [ ! -f "$META" ]; then
+        echo "FAIL[L1]: metadata.json not found at $META"
+        exit 1
+      fi
+      MISSING=$(python3 - "$META" << 'PY'
+      import json, sys
+      required = ["session_id","workspace","started_at","status","working_dir","format","version"]
+      d = json.load(open(sys.argv[1]))
+      print(",".join([k for k in required if k not in d]))
+      PY
+      )
+      if [ -n "$MISSING" ]; then
+        echo "FAIL[L1]: metadata.json missing required field(s): $MISSING"
+        echo "--- metadata.json ---"; cat "$META"
+        exit 1
+      fi
+      EMPTY=$(python3 - "$META" << 'PY'
+      import json, sys
+      required = ["session_id","workspace","started_at","status","working_dir","format","version"]
+      d = json.load(open(sys.argv[1]))
+      print(",".join([k for k in required if d.get(k) in (None, "")]))
+      PY
+      )
+      echo "PASS[L1]: events.jsonl non-empty ($LINES lines) AND metadata.json has all required fields (session_id,workspace,started_at,status,working_dir,format,version)"
+      if [ -n "$EMPTY" ]; then
+        echo "NOTE[L1]: present-but-EMPTY required field(s): $EMPTY"
+      fi
+      cat "$META"
+
+  # ----------------------------------------------------------------------
+  # L2: envelope structure + canonical lifecycle events
+  # ----------------------------------------------------------------------
+  - name: L2-envelope-and-lifecycle
+    command: |
+      set -e
+      EVENTS_FILE=$(cat /tmp/logging-events-path)
+      python3 - "$EVENTS_FILE" << 'PY'
+      import json, sys, re
+      required = {"event","workspace","timestamp","data"}
+      bad = 0; total = 0; names = []
+      with open(sys.argv[1]) as f:
+          for i, line in enumerate(f, 1):
+              line = line.strip()
+              if not line:
+                  continue
+              total += 1
+              try:
+                  obj = json.loads(line)
+              except Exception as e:
+                  print(f"FAIL[L2]: line {i} not valid JSON: {e}"); bad += 1; continue
+              missing = required - set(obj.keys())
+              if missing:
+                  print(f"FAIL[L2]: line {i} missing envelope keys: {sorted(missing)}"); bad += 1
+              names.append(obj.get("event",""))
+      if bad or total == 0:
+          print(f"FAIL[L2]: {bad} bad line(s) of {total}"); sys.exit(1)
+      pat = re.compile(r'(session|provider|llm|tool)', re.I)
+      lifecycle = sorted({n for n in names if pat.search(n or "")})
+      if not lifecycle:
+          print("FAIL[L2]: no canonical session/provider/llm/tool lifecycle event found")
+          print("Events present:", sorted(set(names))); sys.exit(1)
+      print(f"PASS[L2]: all {total} lines valid envelopes; canonical lifecycle events present: {lifecycle}")
+      print("All distinct events:", sorted(set(names)))
+      PY
+
+  # ----------------------------------------------------------------------
+  # L3: analytics surface ABSENT (the KEY new check)
+  #
+  # METHODOLOGY NOTE: `amplifier agents show <name>` reports the GLOBAL agent
+  # CATALOG (every agent .md present in any cached bundle repo). Because the
+  # url_rewrite mirrors the WHOLE amplifier-bundle-context-intelligence repo to
+  # Gitea, that catalog DOES contain graph-analyst/session-navigator even in
+  # logging-only mode -- so `agents show` is NOT a valid composition probe.
+  # The authoritative source of what was actually COMPOSED into the session is
+  # the `session:config` event the hook captured (data.raw.agents / .tools /
+  # .hooks). We assert against that.
+  # ----------------------------------------------------------------------
+  - name: L3-analytics-absent
+    command: |
+      set -e
+      FAILED=0
+      EVENTS_FILE=$(cat /tmp/logging-events-path)
+      # (a)/(c) authoritative composition probe via captured session:config
+      python3 - "$EVENTS_FILE" << 'PY' || FAILED=1
+      import json, sys
+      cfg = None
+      for l in open(sys.argv[1]):
+          l = l.strip()
+          if not l:
+              continue
+          o = json.loads(l)
+          if o.get("event") == "session:config":
+              cfg = o["data"]["raw"]
+      if not cfg:
+          print("FAIL[L3]: no session:config event captured -- cannot prove composition"); sys.exit(1)
+      agents = list((cfg.get("agents") or {}).keys())
+      tk = cfg.get("tools")
+      tools = list(tk.keys()) if isinstance(tk, dict) else ([t.get("module") if isinstance(t, dict) else t for t in tk] if isinstance(tk, list) else (tk or []))
+      hook_mods = [h.get("module") for h in (cfg.get("hooks") or [])]
+      context_intelligence_agents = [a for a in agents if "graph-analyst" in a or "session-navigator" in a]
+      context_intelligence_tools = [t for t in tools if t and ("graph_query" in str(t) or "blob_read" in str(t))]
+      context_intelligence_hook = [m for m in hook_mods if m and "context-intelligence" in m]
+      bad = False
+      if context_intelligence_agents:
+          print("FAIL[L3a]: analytics agents composed into logging-only session:", context_intelligence_agents); bad = True
+      else:
+          print("PASS[L3a]: NO context-intelligence graph-analyst/session-navigator composed (analytics agents ABSENT)")
+      if context_intelligence_tools:
+          print("FAIL[L3c]: analytics tools composed into logging-only session:", context_intelligence_tools); bad = True
+      else:
+          print("PASS[L3c]: NO graph_query/blob_read tools composed (analytics tools ABSENT)")
+      if context_intelligence_hook != ["hook-context-intelligence"]:
+          print("FAIL[L3]: expected exactly the logging hook composed, got:", context_intelligence_hook); bad = True
+      else:
+          print("PASS[L3]: hook-context-intelligence IS composed (producer side present)")
+      if bad:
+          sys.exit(1)
+      PY
+
+      # (b) structural: cached logging behavior YAML has hooks: and NO agents/tools/context/modes
+      BEH=$(find /root/.amplifier/cache -path '*behaviors/context-intelligence-logging.yaml' 2>/dev/null | head -1)
+      if [ -z "$BEH" ]; then
+        echo "FAIL[L3b]: could not locate cached logging behavior YAML in DTU (rewrite/resolution problem)"; FAILED=1
+      else
+        echo "Cached logging behavior: $BEH"
+        python3 - "$BEH" << 'PY' || FAILED=1
+      import sys, yaml
+      d = yaml.safe_load(open(sys.argv[1]))
+      bad = []
+      if "hooks" not in d: bad.append("missing hooks:")
+      for k in ("agents","tools","context","modes"):
+          if k in d: bad.append(f"unexpected {k}: section present")
+      if bad:
+          print("FAIL[L3b]:", "; ".join(bad)); sys.exit(1)
+      mods = [h.get("module") for h in d.get("hooks", [])]
+      print("PASS[L3b]: logging behavior has hooks:", mods, "and NO agents/tools/context/modes sections (pure producer side)")
+      PY
+      fi
+
+      [ "$FAILED" -ne 0 ] && exit 1
+      echo "PASS[L3]: analytics read/query surface is ABSENT in logging-only mode (no analytics agents/tools composed; structural producer-only; logging hook present)"
+
+  # ----------------------------------------------------------------------
+  # L4: local-only graceful degradation
+  # ----------------------------------------------------------------------
+  - name: L4-local-only-degradation
+    command: |
+      set -e
+      FAILED=0
+      if [ -n "${AMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_URL:-}" ] || [ -n "${AMPLIFIER_CONTEXT_INTELLIGENCE_API_KEY:-}" ]; then
+        echo "FAIL[L4]: server env vars are set -- this test must run local-only"; FAILED=1
+      fi
+      EVENTS_FILE=$(cat /tmp/logging-events-path 2>/dev/null || true)
+      if [ -z "$EVENTS_FILE" ] || [ ! -s "$EVENTS_FILE" ]; then
+        echo "FAIL[L4]: no non-empty events.jsonl written in local-only mode"; FAILED=1
+      fi
+      if grep -qiE 'Traceback \(most recent call last\)|Fatal error' /tmp/logging-session.log; then
+        echo "FAIL[L4]: session log contains a crash/traceback"
+        grep -iE 'Traceback|Fatal error' /tmp/logging-session.log | head; FAILED=1
+      fi
+      [ "$FAILED" -ne 0 ] && exit 1
+      echo "PASS[L4]: local-only mode -- no server env vars, session completed cleanly, JSONL written ($EVENTS_FILE)"

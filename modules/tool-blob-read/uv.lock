@@ -5,31 +5,26 @@ requires-python = ">=3.11"
 [[package]]
 name = "amplifier-bundle-context-intelligence"
 version = "0.1.1"
-source = { editable = "../../" }
-
-[package.metadata]
-
-[package.metadata.requires-dev]
-dev = [
-    { name = "httpx", specifier = ">=0.25" },
-    { name = "idna", specifier = ">=3.15" },
-    { name = "pyright", specifier = ">=1.1" },
-    { name = "pytest", specifier = ">=9.0.3" },
-    { name = "pytest-asyncio", specifier = ">=0.24" },
-    { name = "pyyaml", specifier = ">=6.0" },
-    { name = "ruff", specifier = ">=0.4" },
-]
+source = { git = "https://github.com/microsoft/amplifier-bundle-context-intelligence?rev=main#5509b397eb61054039ba2e62a1e898be4b1d5519" }
 
 [[package]]
 name = "amplifier-core"
-version = "1.2.5"
-source = { git = "https://github.com/microsoft/amplifier-core?branch=main#308b2455728378be896266cf620c00da2a408b65" }
+version = "1.6.0"
+source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "click" },
     { name = "pydantic" },
     { name = "pyyaml" },
     { name = "tomli" },
     { name = "typing-extensions" },
+]
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/32/90/d520390cd91aae3d02db53653f828046089c79203dbb142e9bda346fa1d6/amplifier_core-1.6.0-cp311-abi3-macosx_10_12_x86_64.whl", hash = "sha256:d35130e4262cf0db2d6c5f7e65e244a9ef2c7397bfe2a9853bc9b0d9fd05be64", size = 8113151, upload-time = "2026-05-18T16:13:46.825Z" },
+    { url = "https://files.pythonhosted.org/packages/94/75/3ab3126ba5a6f2fc6051a4d08e42364899e4c9ac4daa9d0a60947bf8acd1/amplifier_core-1.6.0-cp311-abi3-macosx_11_0_arm64.whl", hash = "sha256:387a2c58fcf4caefdb45c52ec228307bc225e73606897f242154782bc3e123da", size = 7268223, upload-time = "2026-05-18T16:13:48.749Z" },
+    { url = "https://files.pythonhosted.org/packages/21/22/5a36160b3487170bcba0cbc61535101ff624e8314ed38fd35e561cb711a1/amplifier_core-1.6.0-cp311-abi3-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:8344fccdedd725a51c018de17867cdf1c35abb571dabc0bbccdb5c1242324a47", size = 7532259, upload-time = "2026-05-18T16:13:50.614Z" },
+    { url = "https://files.pythonhosted.org/packages/bd/d7/3874c2308523209411367cf3b8b690e14e869f5f6bfb64cb1b1971e06a96/amplifier_core-1.6.0-cp311-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:5a8e0103242a2e2a975c880b1de0e5a02501e0421c1e5386dadae3f111e1d2b5", size = 8507642, upload-time = "2026-05-18T16:13:52.977Z" },
+    { url = "https://files.pythonhosted.org/packages/86/59/3646a89537b4556274183519f6db9c354fb3d183f52ef4a2179af12dd386/amplifier_core-1.6.0-cp311-abi3-win_amd64.whl", hash = "sha256:5113aa2d88038776eb257af9e7d9de7af13b3cd9097d2ac67aef5730fa0678e3", size = 8910313, upload-time = "2026-05-18T16:13:55.249Z" },
+    { url = "https://files.pythonhosted.org/packages/9f/9e/58b141115e5eea65703f0b01459eefed36b561e9642ba96d48542345cd8f/amplifier_core-1.6.0-cp311-abi3-win_arm64.whl", hash = "sha256:e1b2731dc09d1cbc668b411007e7f9a2c7edbd75b2525407cae1e6b4a4de0b83", size = 7661416, upload-time = "2026-05-18T16:13:57.513Z" },
 ]
 
 [[package]]
@@ -53,14 +48,14 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "amplifier-bundle-context-intelligence", editable = "../../" },
+    { name = "amplifier-bundle-context-intelligence", git = "https://github.com/microsoft/amplifier-bundle-context-intelligence?rev=main" },
     { name = "httpx", specifier = ">=0.28.1" },
     { name = "idna", specifier = ">=3.15" },
 ]
 
 [package.metadata.requires-dev]
 dev = [
-    { name = "amplifier-core", git = "https://github.com/microsoft/amplifier-core?branch=main" },
+    { name = "amplifier-core", specifier = ">=1.6.0" },
     { name = "pyright", specifier = ">=1.1" },
     { name = "pytest", specifier = ">=9.0.3" },
     { name = "pytest-asyncio", specifier = ">=0.24" },

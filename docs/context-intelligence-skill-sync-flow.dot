@@ -1,0 +1,616 @@
+// context-intelligence-skill-sync-flow.dot
+// Context-Intelligence Skill-Sync Flow (with the skill_sync_enabled opt-out)
+// Owned by tool-graph-query (graph-analyst sub-session).
+// The logging hook is now PURE TELEMETRY — skill-content sync was relocated here.
+//
+// SAFE-DEFAULT INVARIANT (do not delete the vendored body — see cluster 0/2b):
+//   The bundle ships skills/context-intelligence-graph-query/SKILL.md as a
+//   pessimistic "Server Unavailable" STUB. Sync (enabled) overwrites it with the
+//   real body fetched from the server. When sync is DISABLED but a server is
+//   configured, on_session_ready SWAPS the stub for the VENDORED real body in
+//   amplifier_module_tool_graph_query/bundled_skill/ (a local copy, ZERO
+//   network) so a working graph-analyst is never stranded on the stub. That
+//   vendored body is load-bearing; a prior refactor deleted its predecessor
+//   (legacy_content) and crippled this path (issue #283). Do not remove it.
+//
+// Grounded in:
+//   modules/tool-graph-query/amplifier_module_tool_graph_query/skill_sync.py
+//   modules/tool-graph-query/amplifier_module_tool_graph_query/skill_fetcher.py
+//   modules/tool-graph-query/amplifier_module_tool_graph_query/graph_query_tool.py
+//   modules/tool-graph-query/amplifier_module_tool_graph_query/bundled_skill/__init__.py
+//   context_intelligence/tool_resolver.py  (skill_sync_enabled property)
+//   modules/tool-graph-query/amplifier_module_tool_graph_query/__init__.py
+//
+// Generated: 2026-06-21
+// Render: dot -Tpng context-intelligence-skill-sync-flow.dot -o context-intelligence-skill-sync-flow.png
+
+digraph SkillSyncFlow {
+    rankdir=TB;
+    fontname="Helvetica";
+    fontsize=12;
+    compound=true;
+    nodesep=0.65;
+    ranksep=0.9;
+    pad=0.5;
+    label="Context-Intelligence: Skill-Sync-from-Server Flow\ntool-graph-query | graph-analyst sub-session  (logging hook = pure telemetry; skill sync relocated here)";
+    labelloc=t;
+    fontsize=14;
+
+    node [fontname="Helvetica", fontsize=11];
+    edge [fontname="Helvetica", fontsize=10];
+
+    // ═══════════════════════════════════════════════════════════════
+    // CLUSTER 1 — Sub-session mount
+    // ═══════════════════════════════════════════════════════════════
+
+    subgraph cluster_mount {
+        label="1. graph-analyst Sub-Session: tool-graph-query mounts";
+        style=filled;
+        fillcolor="#FAFAFA";
+        color="#B0BEC5";
+        fontsize=12;
+        fontname="Helvetica Bold";
+
+        node [shape=box, style="rounded,filled", penwidth=1.5];
+
+        mount_call [
+            label="mount(coordinator, config)\n────────────────────────\nGraphQueryTool(coordinator, config)\n  + ToolConfigResolver(config, coordinator)",
+            fillcolor="#E3F2FD",
+            color="#1565C0"
+        ];
+
+        mount_tool [
+            label="coordinator.mount(\"tools\", tool, name=\"graph_query\")\ncoordinator.register_capability(\n  \"context_intelligence._graph_query_tool\", tool\n)",
+            fillcolor="#E8F5E9",
+            color="#2E7D32"
+        ];
+
+        mount_osr [
+            label="Kernel: on_session_ready(coordinator)\ncalled after ALL modules mount",
+            fillcolor="#FFF8E1",
+            color="#F57F17"
+        ];
+
+        mount_call -> mount_tool;
+        mount_tool -> mount_osr;
+    }
+
+    // ════════════════════════════════════════════════════════════════════════
+    // CLUSTER 0 — skill_sync_enabled gate  (on_session_ready entry)
+    // ════════════════════════════════════════════════════════════════════════
+
+    subgraph cluster_gate {
+        label="0. on_session_ready — skill_sync_enabled gate";
+        style=filled;
+        fillcolor="#FAFAFA";
+        color="#B0BEC5";
+        fontsize=12;
+        fontname="Helvetica Bold";
+
+        node [shape=diamond, style=filled, penwidth=2];
+
+        gate_enabled [
+            label="tool.skill_sync_enabled?\n(config / coordinator /\nAMPLIFIER_CONTEXT_INTELLIGENCE_\nSKILL_SYNC_ENABLED env — default TRUE)",
+            fillcolor="#FFEBEE",
+            color="#C62828",
+            fontcolor="#C62828"
+        ];
+    }
+
+    // ════════════════════════════════════════════════════════════════════════
+    // CLUSTER 2b — DISABLED path: zero-network offline-body swap
+    // (the opt-out for headless / single-command-series workflows — issue #283)
+    // ════════════════════════════════════════════════════════════════════════
+
+    subgraph cluster_disabled {
+        label="2b. skill_sync_enabled=FALSE → _apply_offline_skill_bodies  (ZERO network)";
+        style=filled;
+        fillcolor="#ECEFF1";
+        color="#37474F";
+        fontsize=12;
+        fontname="Helvetica Bold";
+
+        node [shape=diamond, style=filled, penwidth=2];
+
+        dis_server_check [
+            label="server_url configured?\n(read from config only —\nNO reachability ping)",
+            fillcolor="#FFF8E1",
+            color="#F57F17",
+            fontcolor="#F57F17"
+        ];
+
+        node [shape=box, style="rounded,filled", penwidth=1.5];
+
+        dis_keep_stub [
+            label="no server → RETAIN shipped stub\n'Server Unavailable' SKILL.md\n(graph genuinely absent — correct)",
+            fillcolor="#EEEEEE",
+            color="#757575"
+        ];
+
+        dis_swap [
+            label="server configured → SWAP in vendored body\n────────────────────────────\n_install_vendored_body() — bundled_skill/\ncontext-intelligence-graph-query.md (pinned sha256)\n• fail loud if vendored body missing from wheel\n• idempotent by sha256 (write only if different)\n• crash-atomic: remove .etag FIRST, then\n  temp-write + os.replace, then write .content_hash\n• ZERO network: no GET /version, no GET /skills/\n• NO skill:unloaded handler registered",
+            fillcolor="#E8F5E9",
+            color="#2E7D32"
+        ];
+
+        dis_server_check -> dis_keep_stub [
+            label="  NO  ", color="#757575", fontcolor="#757575", penwidth=1.5
+        ];
+        dis_server_check -> dis_swap [
+            label="  YES  ", color="#2E7D32", fontcolor="#2E7D32", penwidth=2
+        ];
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // CLUSTER 2 — on_session_ready / _resync_all_watched
+    // ═══════════════════════════════════════════════════════════════
+
+    subgraph cluster_osr {
+        label="2. on_session_ready → _resync_all_watched(coordinator)";
+        style=filled;
+        fillcolor="#FAFAFA";
+        color="#B0BEC5";
+        fontsize=12;
+        fontname="Helvetica Bold";
+
+        node [shape=diamond, style=filled, penwidth=2];
+
+        osr_cap_check [
+            label="skills_discovery\ncapability\navailable?",
+            fillcolor="#FFEBEE",
+            color="#C62828",
+            fontcolor="#C62828"
+        ];
+
+        node [shape=box, style="rounded,filled", penwidth=1.5];
+
+        osr_warn_cap [
+            label="WARN + return\nskill_sync_skipped:\nskills_discovery not available",
+            fillcolor="#EEEEEE",
+            color="#757575"
+        ];
+
+        osr_get_tool [
+            label="get_capability(\n  \"context_intelligence._graph_query_tool\"\n)\n[tool instance, for config resolution]",
+            fillcolor="#E8F5E9",
+            color="#2E7D32"
+        ];
+
+        osr_for_each [
+            label="for each name in WATCHED_SKILLS\n{\"context-intelligence-graph-query\"}",
+            fillcolor="#E3F2FD",
+            color="#1565C0"
+        ];
+
+        node [shape=diamond, style=filled, penwidth=2];
+
+        osr_find_check [
+            label="discovery.find(name)\nreturned meta?",
+            fillcolor="#FFEBEE",
+            color="#C62828",
+            fontcolor="#C62828"
+        ];
+
+        node [shape=box, style="rounded,filled", penwidth=1.5];
+
+        osr_warn_find [
+            label="WARN + skip\nskill_sync_skipped:\ndiscovery.find() returned None\n\nNote: tool-skills drops SKILL.md\nlacking leading \"---\" frontmatter",
+            fillcolor="#EEEEEE",
+            color="#757575"
+        ];
+
+        osr_skill_path [
+            label="skill_path = Path(meta.path)\n[SKILL.md location on disk]",
+            fillcolor="#E8EAF6",
+            color="#283593"
+        ];
+
+        osr_cap_check -> osr_warn_cap [
+            label="  NO  ", color="#757575", fontcolor="#757575", penwidth=1.5
+        ];
+        osr_cap_check -> osr_get_tool [
+            label="  YES  ", color="#2E7D32", fontcolor="#2E7D32", penwidth=2
+        ];
+        osr_get_tool -> osr_for_each [penwidth=1.5];
+        osr_for_each -> osr_find_check [penwidth=1.5];
+        osr_find_check -> osr_warn_find [
+            label="  None  ", color="#757575", fontcolor="#757575", penwidth=1.5
+        ];
+        osr_find_check -> osr_skill_path [
+            label="  found  ", color="#2E7D32", fontcolor="#2E7D32", penwidth=2
+        ];
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // CLUSTER 3 — Config resolution
+    // ═══════════════════════════════════════════════════════════════
+
+    subgraph cluster_config {
+        label="3. Config Resolution: tool._resolve_server_config(coordinator)";
+        style=filled;
+        fillcolor="#FAFAFA";
+        color="#B0BEC5";
+        fontsize=12;
+        fontname="Helvetica Bold";
+
+        node [shape=diamond, style=filled, penwidth=2];
+
+        cfg_hook_check [
+            label="hook_config_resolver\ncapability present?\n(context_intelligence.\nhook_config_resolver)",
+            fillcolor="#FFF8E1",
+            color="#F57F17",
+            fontcolor="#F57F17"
+        ];
+
+        node [shape=box, style="rounded,filled", penwidth=1.5];
+
+        cfg_hook [
+            label="HookConfigResolver\n(logging hook is mounted — full behavior)\n────────────────────────\nserver_url, api_key,\nworkspace (project_slug from\n  session.working_dir)",
+            fillcolor="#F3E5F5",
+            color="#6A1B9A"
+        ];
+
+        cfg_tool [
+            label="ToolConfigResolver  (analytics-only — no hook)\n────────────────────────\nPriority chain (each level expands\n${VAR:default} shell placeholders):\n  1. mount() config dict\n  2. coordinator.config\n  3. AMPLIFIER_CONTEXT_INTELLIGENCE_* env\n  4. ~/.amplifier/settings.yaml\n  5. built-in default",
+            fillcolor="#E8F5E9",
+            color="#2E7D32"
+        ];
+
+        cfg_result [
+            label="→ (server_url, api_key, workspace)",
+            fillcolor="#E8EAF6",
+            color="#283593",
+            shape=box,
+            style="rounded,filled"
+        ];
+
+        cfg_hook_check -> cfg_hook [
+            label="  YES (full)  ", color="#6A1B9A", fontcolor="#6A1B9A", penwidth=2
+        ];
+        cfg_hook_check -> cfg_tool [
+            label="  NO (analytics-only)  ", color="#2E7D32", fontcolor="#2E7D32", penwidth=1.5
+        ];
+        cfg_hook -> cfg_result [penwidth=1.5];
+        cfg_tool -> cfg_result [penwidth=1.5];
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // CLUSTER 4 — _sync_skill: reachability gate
+    // ═══════════════════════════════════════════════════════════════
+
+    subgraph cluster_dispatch {
+        label="4. _sync_skill — Server Reachability Gate";
+        style=filled;
+        fillcolor="#FAFAFA";
+        color="#B0BEC5";
+        fontsize=12;
+        fontname="Helvetica Bold";
+
+        node [shape=diamond, style=filled, penwidth=2];
+
+        dispatch_url_check [
+            label="server_url\nconfigured?",
+            fillcolor="#FFEBEE",
+            color="#C62828",
+            fontcolor="#C62828"
+        ];
+
+        node [shape=box, style="rounded,filled", penwidth=1.5];
+
+        dispatch_version [
+            label="SkillFetcher(server_url, api_key)\ncheck_server_version()\nGET {server_url}/version",
+            fillcolor="#E0F7FA",
+            color="#00838F"
+        ];
+
+        node [shape=diamond, style=filled, penwidth=2];
+
+        dispatch_reach_check [
+            label="server\nreachable?\n(HTTP response\nor connect error)",
+            fillcolor="#FFEBEE",
+            color="#C62828",
+            fontcolor="#C62828"
+        ];
+
+        dispatch_url_check -> dispatch_version [
+            label="  YES  ", color="#00838F", fontcolor="#00838F", penwidth=2
+        ];
+        dispatch_version -> dispatch_reach_check [penwidth=1.5];
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // CLUSTER 5 — OFFLINE path: _invalidate_if_drift
+    // ═══════════════════════════════════════════════════════════════
+
+    subgraph cluster_offline {
+        label="OFFLINE — _invalidate_if_drift";
+        style=filled;
+        fillcolor="#FFF3E0";
+        color="#E65100";
+        fontsize=12;
+        fontname="Helvetica Bold";
+
+        node [shape=diamond, style=filled, penwidth=2];
+
+        off_exists [
+            label="SKILL.md AND\n.content_hash\nexist?",
+            fillcolor="#FFF8E1",
+            color="#F57F17",
+            fontcolor="#F57F17"
+        ];
+
+        off_match [
+            label="sha256(SKILL.md)\n==\nstored .content_hash?",
+            fillcolor="#FFF8E1",
+            color="#F57F17",
+            fontcolor="#F57F17"
+        ];
+
+        node [shape=box, style="rounded,filled", penwidth=1.5];
+
+        off_noop [
+            label="noop\n(no baseline to compare)",
+            fillcolor="#EEEEEE",
+            color="#757575"
+        ];
+
+        off_insync [
+            label="in sync\n(no-op — leave sidecars)",
+            fillcolor="#E8F5E9",
+            color="#2E7D32"
+        ];
+
+        off_invalidate [
+            label="DRIFT DETECTED\n────────────────────────\ndelete .etag\ndelete .content_hash\nRETAIN SKILL.md content\n\nWARN: skill_offline_drift_invalidated\n→ next online GET is unconditional",
+            fillcolor="#FFEBEE",
+            color="#C62828"
+        ];
+
+        off_exists -> off_noop [
+            label="  NO  ", color="#757575", fontcolor="#757575", penwidth=1.5
+        ];
+        off_exists -> off_match [
+            label="  YES  ", color="#F57F17", fontcolor="#F57F17", penwidth=1.5
+        ];
+        off_match -> off_insync [
+            label="  match  ", color="#2E7D32", fontcolor="#2E7D32", penwidth=1.5
+        ];
+        off_match -> off_invalidate [
+            label="  drift  ", color="#C62828", fontcolor="#C62828", penwidth=2
+        ];
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // CLUSTER 6 — ONLINE path: SkillFetcher.fetch
+    // ═══════════════════════════════════════════════════════════════
+
+    subgraph cluster_online {
+        label="ONLINE — SkillFetcher.fetch";
+        style=filled;
+        fillcolor="#E0F7FA";
+        color="#006064";
+        fontsize=12;
+        fontname="Helvetica Bold";
+
+        node [shape=diamond, style=filled, penwidth=2];
+
+        on_etag_check [
+            label=".etag exists\n& non-empty?",
+            fillcolor="#FFF8E1",
+            color="#F57F17",
+            fontcolor="#F57F17"
+        ];
+
+        on_drift_check [
+            label="sha256(SKILL.md)\n==\nstored .content_hash?",
+            fillcolor="#FFF8E1",
+            color="#F57F17",
+            fontcolor="#F57F17"
+        ];
+
+        node [shape=box, style="rounded,filled", penwidth=1.5];
+
+        on_cond_get [
+            label="Conditional GET\n────────────────────────\nHeaders:\n  If-None-Match: {stored_etag}\n  Authorization: Bearer {api_key}",
+            fillcolor="#E0F7FA",
+            color="#00838F"
+        ];
+
+        on_uncond_get [
+            label="Unconditional GET\n────────────────────────\n(local drift or no .content_hash)\nHeaders:\n  Authorization: Bearer {api_key}",
+            fillcolor="#E0F7FA",
+            color="#00838F"
+        ];
+
+        on_request [
+            label="GET {server_url}/skills/{skill_name}",
+            fillcolor="#B2EBF2",
+            color="#006064"
+        ];
+
+        node [shape=diamond, style=filled, penwidth=2];
+
+        on_status [
+            label="HTTP\nstatus?",
+            fillcolor="#FFF8E1",
+            color="#F57F17",
+            fontcolor="#F57F17"
+        ];
+
+        node [shape=box, style="rounded,filled", penwidth=1.5];
+
+        on_304 [
+            label="304 Not Modified\n→ skill unchanged\n→ no write",
+            fillcolor="#E8F5E9",
+            color="#2E7D32"
+        ];
+
+        on_200 [
+            label="200 OK — write to disk\n────────────────────────\nSKILL.md  ← response body\n.etag     ← ETag response header\n.content_hash ← sha256(new content)",
+            fillcolor="#E8F5E9",
+            color="#2E7D32"
+        ];
+
+        on_error [
+            label="Error / unexpected status\n────────────────────────\nlog WARNING: skill_fetch_failed\ncontinue (session not broken)\none bad skill never breaks session",
+            fillcolor="#FFEBEE",
+            color="#C62828"
+        ];
+
+        on_etag_check -> on_drift_check [
+            label="  YES  ", color="#F57F17", fontcolor="#F57F17", penwidth=1.5
+        ];
+        on_etag_check -> on_uncond_get [
+            label="  NO .etag  ", color="#757575", fontcolor="#757575", penwidth=1.5
+        ];
+        on_drift_check -> on_cond_get [
+            label="  in sync  ", color="#00838F", fontcolor="#00838F", penwidth=2
+        ];
+        on_drift_check -> on_uncond_get [
+            label="  local drift  ", color="#C62828", fontcolor="#C62828", penwidth=1.5
+        ];
+        on_cond_get -> on_request [penwidth=1.5];
+        on_uncond_get -> on_request [penwidth=1.5];
+        on_request -> on_status [penwidth=2];
+        on_status -> on_304 [
+            label="  304  ", color="#2E7D32", fontcolor="#2E7D32", penwidth=1.5
+        ];
+        on_status -> on_200 [
+            label="  200  ", color="#2E7D32", fontcolor="#2E7D32", penwidth=2
+        ];
+        on_status -> on_error [
+            label="  other/error  ", color="#C62828", fontcolor="#C62828", penwidth=1.5
+        ];
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // CLUSTER 7 — Mid-session reload (skill:unloaded hook)
+    // ═══════════════════════════════════════════════════════════════
+
+    subgraph cluster_reload {
+        label="5. Mid-Session Reload  (after initial sync)";
+        style=filled;
+        fillcolor="#F3E5F5";
+        color="#6A1B9A";
+        fontsize=12;
+        fontname="Helvetica Bold";
+
+        node [shape=box, style="rounded,filled", penwidth=1.5];
+
+        reload_register [
+            label="coordinator.hooks.register(\n  \"skill:unloaded\",\n  _on_skill_unloaded, priority=100\n)\n[registered once after initial _resync_all_watched]",
+            fillcolor="#F3E5F5",
+            color="#6A1B9A"
+        ];
+
+        reload_fire [
+            label="skill:unloaded event fires\n(mid-session skill reload)",
+            fillcolor="#EDE7F6",
+            color="#4527A0"
+        ];
+
+        node [shape=diamond, style=filled, penwidth=2];
+
+        reload_check [
+            label="skill_name in\nWATCHED_SKILLS?",
+            fillcolor="#FFF8E1",
+            color="#F57F17",
+            fontcolor="#F57F17"
+        ];
+
+        node [shape=box, style="rounded,filled", penwidth=1.5];
+
+        reload_skip [
+            label="skip\n(other skill reloaded)",
+            fillcolor="#EEEEEE",
+            color="#757575"
+        ];
+
+        reload_resync [
+            label="re-run\n_resync_all_watched(coordinator)\n[full re-sync of watched skills]",
+            fillcolor="#EDE7F6",
+            color="#4527A0"
+        ];
+
+        reload_register -> reload_fire [style=dashed, color="#9C27B0", penwidth=1.5, label="  event fires later  "];
+        reload_fire -> reload_check [penwidth=1.5];
+        reload_check -> reload_skip [
+            label="  NO  ", color="#757575", fontcolor="#757575", penwidth=1.5
+        ];
+        reload_check -> reload_resync [
+            label="  YES  ", color="#6A1B9A", fontcolor="#6A1B9A", penwidth=2
+        ];
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // Cross-cluster edges
+    // ═══════════════════════════════════════════════════════════════
+
+    // Mount → on_session_ready → skill_sync_enabled gate
+    mount_osr -> gate_enabled [
+        penwidth=2, color="#F57F17",
+        ltail=cluster_mount, lhead=cluster_gate,
+        label="  kernel triggers  "
+    ];
+
+    // Gate: ENABLED (default) → existing resync flow
+    gate_enabled -> osr_cap_check [
+        label="  TRUE (default) — sync from server  ",
+        color="#2E7D32", fontcolor="#2E7D32", penwidth=2,
+        ltail=cluster_gate, lhead=cluster_osr
+    ];
+
+    // Gate: DISABLED → zero-network offline-body swap (issue #283 opt-out)
+    gate_enabled -> dis_server_check [
+        label="  FALSE — zero per-turn network  ",
+        color="#37474F", fontcolor="#37474F", penwidth=2,
+        ltail=cluster_gate, lhead=cluster_disabled
+    ];
+
+    // on_session_ready → config resolution
+    osr_skill_path -> cfg_hook_check [
+        penwidth=1.5,
+        ltail=cluster_osr, lhead=cluster_config
+    ];
+
+    // Config resolution → _sync_skill dispatch
+    cfg_result -> dispatch_url_check [
+        penwidth=1.5,
+        ltail=cluster_config, lhead=cluster_dispatch
+    ];
+
+    // Dispatch: NO server_url → OFFLINE
+    dispatch_url_check -> off_exists [
+        label="  NO — offline  ", color="#E65100", fontcolor="#E65100",
+        penwidth=2, ltail=cluster_dispatch, lhead=cluster_offline
+    ];
+
+    // Dispatch: server unreachable → OFFLINE
+    dispatch_reach_check -> off_exists [
+        label="  unreachable  ", color="#E65100", fontcolor="#E65100",
+        penwidth=2, ltail=cluster_dispatch, lhead=cluster_offline
+    ];
+
+    // Dispatch: server reachable → ONLINE
+    dispatch_reach_check -> on_etag_check [
+        label="  reachable  ", color="#00838F", fontcolor="#00838F",
+        penwidth=2, ltail=cluster_dispatch, lhead=cluster_online
+    ];
+
+    // on_session_ready → mid-session reload register
+    osr_warn_find -> reload_register [
+        style=invis
+    ];
+    osr_skill_path -> reload_register [
+        style=dashed, color="#9C27B0", penwidth=1.5,
+        label="  after initial sync  ",
+        constraint=false
+    ];
+
+    // Mid-session reload re-runs config path
+    reload_resync -> osr_cap_check [
+        style=dashed, color="#9C27B0", penwidth=1.5,
+        label="  re-runs full sync  ",
+        constraint=false
+    ];
+}
