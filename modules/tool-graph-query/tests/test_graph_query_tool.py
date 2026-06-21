@@ -110,10 +110,18 @@ class TestGraphQueryToolProtocol:
 class TestLazyCapabilityResolution:
     """Lazy resolver lookup and caching behaviour."""
 
-    async def test_capability_not_found_returns_configuration_error(self) -> None:
+    async def test_capability_not_found_returns_configuration_error(self, monkeypatch) -> None:
         from amplifier_module_tool_graph_query.graph_query_tool import GraphQueryTool
 
+        # Isolate from live AMPLIFIER_CONTEXT_INTELLIGENCE_* env vars so that
+        # ToolConfigResolver cannot find a server URL anywhere and the guard
+        # in execute() returns configuration_error.
+        monkeypatch.delenv("AMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_URL", raising=False)
+        monkeypatch.delenv("AMPLIFIER_CONTEXT_INTELLIGENCE_API_KEY", raising=False)
+        monkeypatch.delenv("AMPLIFIER_CONTEXT_INTELLIGENCE_WORKSPACE", raising=False)
+
         coordinator = _make_coordinator(resolver=None)
+        coordinator.config = {}
         tool = GraphQueryTool(coordinator=coordinator)
         result = await tool.execute({"query": "MATCH (n) RETURN n"})
 
@@ -146,7 +154,9 @@ class TestLazyCapabilityResolution:
             await tool.execute({"query": "MATCH (n) RETURN n LIMIT 2"})
 
         # get_capability should only be called once (on first execute)
-        coordinator.get_capability.assert_called_once_with("context_intelligence.config_resolver")
+        coordinator.get_capability.assert_called_once_with(
+            "context_intelligence.hook_config_resolver"
+        )
 
     async def test_configured_resolver_succeeds(self) -> None:
         from amplifier_module_tool_graph_query.graph_query_tool import GraphQueryTool
@@ -376,3 +386,409 @@ class TestGraphQueryParamsForwarding:
         assert result.success is False
         assert result.error is not None
         assert result.error["type"] == "validation_error"
+
+
+# ---------------------------------------------------------------------------
+# TestAnalyticsOnlyMode
+# ---------------------------------------------------------------------------
+
+
+class TestAnalyticsOnlyMode:
+    """Analytics-only mode: config dict is used when the hook capability is absent."""
+
+    async def test_analytics_only_success(self) -> None:
+        """Tool succeeds using config values when no hook capability is registered."""
+        from amplifier_module_tool_graph_query.graph_query_tool import GraphQueryTool
+
+        coordinator = _make_coordinator(resolver=None)
+        config = {
+            "context_intelligence_server_url": "http://ci:4200",
+            "context_intelligence_api_key": "key123",
+            "workspace": "my-ws",
+        }
+        tool = GraphQueryTool(coordinator=coordinator, config=config)
+
+        mock_instance, mock_cls = _make_mock_async_ci_client()
+        with patch("amplifier_module_tool_graph_query.graph_query_tool.AsyncCIClient", mock_cls):
+            result = await tool.execute({"query": "MATCH (n) RETURN n"})
+
+        assert result.success is True
+        mock_cls.assert_called_once()
+        call_kwargs = mock_cls.call_args.kwargs
+        assert call_kwargs.get("server_url") == "http://ci:4200"
+        assert call_kwargs.get("api_key") == "key123"
+        # workspace must be forwarded as the 2nd positional arg to cypher()
+        cypher_args = mock_instance.cypher.call_args
+        all_args = list(cypher_args.args) + list(cypher_args.kwargs.values())
+        assert "my-ws" in all_args
+
+    async def test_analytics_only_workspace_defaults_to_default(self) -> None:
+        """When config has no 'workspace' key the cypher call receives 'default'."""
+        from amplifier_module_tool_graph_query.graph_query_tool import GraphQueryTool
+
+        coordinator = _make_coordinator(resolver=None)
+        config = {
+            "context_intelligence_server_url": "http://ci:4200",
+            "context_intelligence_api_key": "key123",
+            # no "workspace" key
+        }
+        tool = GraphQueryTool(coordinator=coordinator, config=config)
+
+        mock_instance, mock_cls = _make_mock_async_ci_client()
+        with patch("amplifier_module_tool_graph_query.graph_query_tool.AsyncCIClient", mock_cls):
+            await tool.execute({"query": "MATCH (n) RETURN n"})
+
+        cypher_args = mock_instance.cypher.call_args
+        # workspace is the 2nd positional arg: cypher(query, workspace, params=...)
+        assert cypher_args.args[1] == "default"
+
+    async def test_analytics_only_no_server_url_returns_error(self, monkeypatch) -> None:
+        """Missing server URL in config returns a configuration_error — not 'hook not configured'."""
+        from amplifier_module_tool_graph_query.graph_query_tool import GraphQueryTool
+
+        # Isolate from live AMPLIFIER_CONTEXT_INTELLIGENCE_* env vars so
+        # ToolConfigResolver has nowhere to find a server URL.
+        monkeypatch.delenv("AMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_URL", raising=False)
+        monkeypatch.delenv("AMPLIFIER_CONTEXT_INTELLIGENCE_API_KEY", raising=False)
+        monkeypatch.delenv("AMPLIFIER_CONTEXT_INTELLIGENCE_WORKSPACE", raising=False)
+
+        coordinator = _make_coordinator(resolver=None)
+        coordinator.config = {}
+        config = {
+            "context_intelligence_api_key": "key123",
+            # no "context_intelligence_server_url"
+        }
+        tool = GraphQueryTool(coordinator=coordinator, config=config)
+
+        result = await tool.execute({"query": "MATCH (n) RETURN n"})
+
+        assert result.success is False
+        assert result.error is not None
+        assert result.error["type"] == "configuration_error"
+        assert "server URL not configured" in result.error["message"]
+
+    async def test_analytics_only_env_var_fallback_resolves_server_url(self, monkeypatch) -> None:
+        """ToolConfigResolver env-var fallback must be used when config has no server_url.
+
+        Regression: commits 584efb9/be6451e removed ToolConfigResolver, dropping the
+        AMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_URL env-var fallback path in analytics-only
+        mode.  This test ensures the fallback is restored.
+        """
+        from amplifier_module_tool_graph_query.graph_query_tool import GraphQueryTool
+
+        # Stamp a specific URL into the env var (overrides whatever live value exists)
+        monkeypatch.setenv("AMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_URL", "http://env-server:8000")
+
+        coordinator = _make_coordinator(resolver=None)
+        coordinator.config = {}  # prevent coordinator.config from providing a URL
+        config = {
+            "context_intelligence_api_key": "key123",
+            # deliberately NO "context_intelligence_server_url" in config
+        }
+        tool = GraphQueryTool(coordinator=coordinator, config=config)
+
+        mock_instance, mock_cls = _make_mock_async_ci_client()
+        with patch("amplifier_module_tool_graph_query.graph_query_tool.AsyncCIClient", mock_cls):
+            result = await tool.execute({"query": "MATCH (n) RETURN n"})
+
+        # ToolConfigResolver must have resolved the URL from the env var
+        assert result.success is True, f"Expected success=True (env-var fallback), got: {result}"
+        call_kwargs = mock_cls.call_args.kwargs
+        assert call_kwargs.get("server_url") == "http://env-server:8000"
+
+
+# ---------------------------------------------------------------------------
+# TestLateMountUpgrade
+# ---------------------------------------------------------------------------
+
+
+class TestLateMountUpgrade:
+    """Late-mount upgrade path: hook resolver supersedes ToolConfigResolver after mount.
+
+    The lazy re-check design: while ``_resolver`` is ``None``,
+    ``get_capability`` is called on every ``execute()``.  A coordinator that
+    mounts the hook between two calls therefore causes the tool to switch from
+    the ToolConfigResolver fallback to the hook resolver — changing
+    ``server_url`` — on the very next call.
+    """
+
+    async def test_late_mount_switches_from_tool_resolver_to_hook_resolver(
+        self,
+    ) -> None:
+        """First execute() uses ToolConfigResolver (hook absent); second uses hook resolver.
+
+        Asserts that ``AsyncCIClient`` is constructed with the tool-config
+        ``server_url`` on call 1 and the hook ``server_url`` on call 2.
+        """
+        from amplifier_module_tool_graph_query.graph_query_tool import GraphQueryTool
+
+        hook_resolver = _make_resolver(
+            server_url="http://hook-server:9000",
+            workspace="hook-workspace",
+            api_key="hook-key",
+        )
+        # First get_capability call returns None (hook not yet mounted).
+        # Second get_capability call returns hook_resolver (hook mounted between calls).
+        coordinator = MagicMock()
+        coordinator.get_capability = MagicMock(side_effect=[None, hook_resolver])
+        coordinator.config = {}
+
+        config = {
+            "context_intelligence_server_url": "http://tool-config-server:8000",
+            "context_intelligence_api_key": "tool-key",
+            "workspace": "tool-workspace",
+        }
+        tool = GraphQueryTool(coordinator=coordinator, config=config)
+
+        mock_instance, mock_cls = _make_mock_async_ci_client()
+        with patch("amplifier_module_tool_graph_query.graph_query_tool.AsyncCIClient", mock_cls):
+            result1 = await tool.execute({"query": "MATCH (n) RETURN n LIMIT 1"})
+            result2 = await tool.execute({"query": "MATCH (n) RETURN n LIMIT 2"})
+
+        # Both calls must succeed
+        assert result1.success is True
+        assert result2.success is True
+
+        # AsyncCIClient must have been constructed once per execute() call
+        assert mock_cls.call_count == 2
+
+        first_url = mock_cls.call_args_list[0].kwargs.get("server_url")
+        second_url = mock_cls.call_args_list[1].kwargs.get("server_url")
+
+        # Call 1: hook absent → ToolConfigResolver drives server_url from config dict
+        assert first_url == "http://tool-config-server:8000", (
+            f"Expected tool-config URL on first call, got {first_url!r}"
+        )
+        # Call 2: hook now present → hook resolver drives server_url
+        assert second_url == "http://hook-server:9000", (
+            f"Expected hook URL on second call, got {second_url!r}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# TestResolveServerConfigHelper
+# ---------------------------------------------------------------------------
+
+
+class TestResolveServerConfigHelper:
+    """Tests for the _resolve_server_config(coordinator) helper method."""
+
+    def test_uses_hook_resolver_when_present(self) -> None:
+        """When a hook resolver is registered, it drives server_url/api_key/workspace."""
+        from amplifier_module_tool_graph_query.graph_query_tool import GraphQueryTool
+
+        hook = _make_resolver(
+            server_url="http://hook:9000",
+            api_key="hook-key",
+            workspace="hook-ws",
+        )
+        coordinator = _make_coordinator(resolver=hook)
+        tool = GraphQueryTool(coordinator=coordinator)
+
+        server_url, api_key, workspace = tool._resolve_server_config(coordinator)
+
+        assert server_url == "http://hook:9000"
+        assert api_key == "hook-key"
+        assert workspace == "hook-ws"
+
+    def test_falls_back_to_config_dict_when_hook_absent(self) -> None:
+        """When no hook resolver is registered, config dict values are returned."""
+        from amplifier_module_tool_graph_query.graph_query_tool import GraphQueryTool
+
+        coordinator = _make_coordinator(resolver=None)
+        coordinator.config = {}
+        config = {
+            "context_intelligence_server_url": "http://tool:8000",
+            "context_intelligence_api_key": "tool-key",
+            "workspace": "tool-ws",
+        }
+        tool = GraphQueryTool(coordinator=coordinator, config=config)
+
+        server_url, api_key, workspace = tool._resolve_server_config(coordinator)
+
+        assert server_url == "http://tool:8000"
+        assert api_key == "tool-key"
+        assert workspace == "tool-ws"
+
+    def test_caches_hook_resolver_on_attribute(self) -> None:
+        """After resolution, _hook_resolver is set to the hook resolver object."""
+        from amplifier_module_tool_graph_query.graph_query_tool import GraphQueryTool
+
+        hook = _make_resolver(
+            server_url="http://hook:9000",
+            api_key="hook-key",
+            workspace="hook-ws",
+        )
+        coordinator = _make_coordinator(resolver=hook)
+        tool = GraphQueryTool(coordinator=coordinator)
+
+        tool._resolve_server_config(coordinator)
+
+        assert tool._hook_resolver is hook
+
+
+# ---------------------------------------------------------------------------
+# TestExpandEnvPlaceholders — unit tests for the helper (Case 4)
+# ---------------------------------------------------------------------------
+
+
+class TestExpandEnvPlaceholders:
+    """Unit tests for _expand_env_placeholders in context_intelligence.config."""
+
+    def test_var_syntax_env_set(self, monkeypatch) -> None:
+        """${VAR} with env set → env var value."""
+        from context_intelligence.config import _expand_env_placeholders
+
+        monkeypatch.setenv("_CI_TEST_PLACEHOLDER_VAR", "hello")
+        assert _expand_env_placeholders("${_CI_TEST_PLACEHOLDER_VAR}") == "hello"
+
+    def test_var_syntax_env_unset(self, monkeypatch) -> None:
+        """${VAR} with env unset → empty string."""
+        from context_intelligence.config import _expand_env_placeholders
+
+        monkeypatch.delenv("_CI_TEST_PLACEHOLDER_VAR", raising=False)
+        assert _expand_env_placeholders("${_CI_TEST_PLACEHOLDER_VAR}") == ""
+
+    def test_var_colon_empty_default_env_set(self, monkeypatch) -> None:
+        """${VAR:} with env set → env var value."""
+        from context_intelligence.config import _expand_env_placeholders
+
+        monkeypatch.setenv("_CI_TEST_PLACEHOLDER_VAR", "world")
+        assert _expand_env_placeholders("${_CI_TEST_PLACEHOLDER_VAR:}") == "world"
+
+    def test_var_colon_empty_default_env_unset(self, monkeypatch) -> None:
+        """${VAR:} with env unset → empty string."""
+        from context_intelligence.config import _expand_env_placeholders
+
+        monkeypatch.delenv("_CI_TEST_PLACEHOLDER_VAR", raising=False)
+        assert _expand_env_placeholders("${_CI_TEST_PLACEHOLDER_VAR:}") == ""
+
+    def test_var_with_default_env_unset(self, monkeypatch) -> None:
+        """${VAR:default} with env unset → 'default'."""
+        from context_intelligence.config import _expand_env_placeholders
+
+        monkeypatch.delenv("_CI_TEST_PLACEHOLDER_VAR", raising=False)
+        assert _expand_env_placeholders("${_CI_TEST_PLACEHOLDER_VAR:my_default}") == "my_default"
+
+    def test_var_with_default_env_set(self, monkeypatch) -> None:
+        """${VAR:default} with env set → env var value (default is ignored)."""
+        from context_intelligence.config import _expand_env_placeholders
+
+        monkeypatch.setenv("_CI_TEST_PLACEHOLDER_VAR", "from_env")
+        assert _expand_env_placeholders("${_CI_TEST_PLACEHOLDER_VAR:my_default}") == "from_env"
+
+    def test_plain_string_passes_through_unchanged(self) -> None:
+        """A non-placeholder string passes through unchanged."""
+        from context_intelligence.config import _expand_env_placeholders
+
+        assert _expand_env_placeholders("http://plain:8000") == "http://plain:8000"
+
+    def test_multiple_placeholders_in_one_string(self, monkeypatch) -> None:
+        """Multiple ${VAR} placeholders in a single string — one re.sub pass expands all."""
+        from context_intelligence.config import _expand_env_placeholders
+
+        monkeypatch.setenv("_CI_TEST_PLACEHOLDER_VAR_A", "valA")
+        monkeypatch.setenv("_CI_TEST_PLACEHOLDER_VAR_B", "valB")
+        assert (
+            _expand_env_placeholders("${_CI_TEST_PLACEHOLDER_VAR_A}:${_CI_TEST_PLACEHOLDER_VAR_B}")
+            == "valA:valB"
+        )
+
+
+# ---------------------------------------------------------------------------
+# TestToolConfigResolverPlaceholderExpansion — Cases 1-3
+# ---------------------------------------------------------------------------
+
+
+class TestToolConfigResolverPlaceholderExpansion:
+    """ToolConfigResolver must expand ${VAR} placeholders from the config dict.
+
+    In analytics-only mode, agent behaviors ship config values like:
+        context_intelligence_server_url: "${AMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_URL:}"
+    These arrive as literal strings in the mount() config dict.  Without
+    expansion they are truthy and short-circuit the env-var fallback chain.
+    """
+
+    def test_server_url_placeholder_with_env_set(self, monkeypatch) -> None:
+        """Case 1: placeholder config + env set → real URL and api_key are both returned."""
+        from context_intelligence.tool_resolver import ToolConfigResolver
+
+        monkeypatch.setenv("AMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_URL", "http://real:8000")
+        monkeypatch.setenv("AMPLIFIER_CONTEXT_INTELLIGENCE_API_KEY", "real-key")
+        # Isolate the settings.yaml fallback so only env var or placeholder matters.
+        import context_intelligence.tool_resolver as _tr
+
+        monkeypatch.setattr(_tr, "_parse_settings_yaml", lambda _: {})
+
+        config = {
+            "context_intelligence_server_url": "${AMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_URL:}",
+            "context_intelligence_api_key": "${AMPLIFIER_CONTEXT_INTELLIGENCE_API_KEY:}",
+        }
+        resolver = ToolConfigResolver(config=config, coordinator=MagicMock())
+
+        assert resolver.context_intelligence_server_url == "http://real:8000"
+        assert resolver.context_intelligence_api_key == "real-key"
+
+    def test_server_url_placeholder_with_env_unset_returns_none(self, monkeypatch) -> None:
+        """Case 2: placeholder config + env unset → None (falls through entire chain)."""
+        from context_intelligence.tool_resolver import ToolConfigResolver
+
+        monkeypatch.delenv("AMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_URL", raising=False)
+        import context_intelligence.tool_resolver as _tr
+
+        monkeypatch.setattr(_tr, "_parse_settings_yaml", lambda _: {})
+
+        config = {
+            "context_intelligence_server_url": "${AMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_URL:}"
+        }
+        coordinator = MagicMock()
+        coordinator.config = {}  # ensure _coordinator_config_get returns None
+        resolver = ToolConfigResolver(config=config, coordinator=coordinator)
+
+        assert resolver.context_intelligence_server_url is None
+
+    def test_api_key_placeholder_with_env_set(self, monkeypatch) -> None:
+        """Case 3: api_key placeholder config + env set → 'secret' is returned."""
+        from context_intelligence.tool_resolver import ToolConfigResolver
+
+        monkeypatch.setenv("AMPLIFIER_CONTEXT_INTELLIGENCE_API_KEY", "secret")
+        import context_intelligence.tool_resolver as _tr
+
+        monkeypatch.setattr(_tr, "_parse_settings_yaml", lambda _: {})
+
+        config = {"context_intelligence_api_key": "${AMPLIFIER_CONTEXT_INTELLIGENCE_API_KEY:}"}
+        resolver = ToolConfigResolver(config=config, coordinator=MagicMock())
+
+        assert resolver.context_intelligence_api_key == "secret"
+
+    def test_workspace_placeholder_with_env_set(self, monkeypatch) -> None:
+        """workspace placeholder config + env set → env value is returned."""
+        from context_intelligence.tool_resolver import ToolConfigResolver
+
+        monkeypatch.setenv("AMPLIFIER_CONTEXT_INTELLIGENCE_WORKSPACE", "_CI_TEST_my-ws")
+
+        config = {"workspace": "${AMPLIFIER_CONTEXT_INTELLIGENCE_WORKSPACE:}"}
+        resolver = ToolConfigResolver(config=config, coordinator=MagicMock())
+
+        assert resolver.workspace == "_CI_TEST_my-ws"
+
+    def test_server_url_placeholder_via_coordinator_config(self, monkeypatch) -> None:
+        """coordinator.config placeholder + env set → env URL returned (step 2 of chain)."""
+        from context_intelligence.tool_resolver import ToolConfigResolver
+
+        monkeypatch.setenv(
+            "AMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_URL", "http://_ci_test_coord:7000"
+        )
+        import context_intelligence.tool_resolver as _tr
+
+        monkeypatch.setattr(_tr, "_parse_settings_yaml", lambda _: {})
+
+        # No key in mount config dict (step 1 absent) — placeholder lives in coordinator.config
+        config: dict = {}
+        coordinator = MagicMock()
+        coordinator.config = {
+            "context_intelligence_server_url": ("${AMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_URL:}")
+        }
+        resolver = ToolConfigResolver(config=config, coordinator=coordinator)
+
+        assert resolver.context_intelligence_server_url == "http://_ci_test_coord:7000"

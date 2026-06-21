@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 from pathlib import Path
 
 log = logging.getLogger("context_intelligence.config")
@@ -85,6 +86,57 @@ def _parse_settings_yaml(path: Path) -> dict:
     except Exception as exc:
         log.debug("Could not parse %s: %s", path, exc)
     return result
+
+
+# ---------------------------------------------------------------------------
+# Shared env-var helpers (used by HookConfigResolver and ToolConfigResolver)
+# ---------------------------------------------------------------------------
+
+#: Environment variable prefix shared by all CI configuration.
+#: ``AMPLIFIER_CONTEXT_INTELLIGENCE_WORKSPACE``  → workspace
+#: ``AMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_URL`` → context_intelligence_server_url
+#: etc.
+_ENV_PREFIX = "AMPLIFIER_CONTEXT_INTELLIGENCE_"
+
+
+def _env(suffix: str) -> str | None:
+    """Read ``AMPLIFIER_CONTEXT_INTELLIGENCE_<SUFFIX>`` from the environment.
+
+    Returns the value as a string if set and non-empty, otherwise ``None``.
+    """
+    value = os.environ.get(_ENV_PREFIX + suffix)
+    return value if value else None
+
+
+# ---------------------------------------------------------------------------
+# Shell-style placeholder expander (used by ToolConfigResolver)
+# ---------------------------------------------------------------------------
+
+_PLACEHOLDER_RE = re.compile(r"\$\{([^}:]+)(?::([^}]*))?\}")
+
+
+def _expand_env_placeholders(value: str) -> str:
+    """Expand shell-style ``${VAR}``, ``${VAR:}``, ``${VAR:default}`` placeholders.
+
+    - ``${VAR}`` — replaced with ``os.environ[VAR]`` if set, else ``""``.
+    - ``${VAR:}`` — same as ``${VAR}`` (empty default when var is unset).
+    - ``${VAR:default}`` — replaced with ``os.environ[VAR]`` if set, else ``"default"``.
+    - Non-placeholder strings pass through unchanged.
+
+    Note: ``os.path.expandvars`` does **not** support the ``${VAR:default}``
+    colon syntax used by the agent behavior YAML files shipped with this bundle,
+    hence this small regex-based helper.
+
+    Note: every ``${...}`` token is treated as an expandable placeholder.
+    There is NO escape syntax — literal ``${...}`` sequences are not preserved.
+    """
+
+    def _replace(m: re.Match[str]) -> str:
+        var_name = m.group(1)
+        default = m.group(2) if m.group(2) is not None else ""
+        return os.environ.get(var_name, default)
+
+    return _PLACEHOLDER_RE.sub(_replace, value)
 
 
 # ---------------------------------------------------------------------------

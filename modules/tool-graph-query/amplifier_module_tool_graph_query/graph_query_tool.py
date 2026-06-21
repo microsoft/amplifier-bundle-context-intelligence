@@ -1,8 +1,10 @@
 """GraphQueryTool — agent-facing tool for executing Cypher queries.
 
-Implements the Amplifier Tool protocol.  Resolves configuration lazily
-via the ``context_intelligence.config_resolver`` coordinator capability
-registered by the hook-context-intelligence module.
+Implements the Amplifier Tool protocol.  Configuration is resolved lazily at
+execute() time, preferring the ``context_intelligence.hook_config_resolver``
+coordinator capability registered by hook-context-intelligence.  When the hook
+is not mounted (analytics-only mode) the tool falls back to the ``config`` dict
+passed via mount() — the standard Amplifier tool configuration mechanism.
 """
 
 from __future__ import annotations
@@ -10,6 +12,7 @@ from __future__ import annotations
 from typing import Any
 
 from context_intelligence.client import AsyncCIClient
+from context_intelligence.tool_resolver import ToolConfigResolver
 
 from amplifier_core.models import ToolResult
 
@@ -18,13 +21,19 @@ class GraphQueryTool:
     """Execute Cypher queries against the context-intelligence server.
 
     Implements the Amplifier Tool protocol (name, description, input_schema,
-    execute).  Configuration is resolved lazily at execute() time via the
-    coordinator's ``context_intelligence.config_resolver`` capability.
+    execute).  Configuration priority at execute() time:
+
+    1. ``context_intelligence.hook_config_resolver`` coordinator capability
+       (registered by hook-context-intelligence when the full behavior is used).
+    2. ``config`` dict passed to mount() — used when the analytics-only behavior
+       is composed without the hook.
     """
 
-    def __init__(self, coordinator: Any) -> None:
+    def __init__(self, coordinator: Any, config: dict[str, Any] | None = None) -> None:
         self._coordinator = coordinator
-        self._resolver: Any | None = None
+        self._config: dict[str, Any] = config or {}
+        self._hook_resolver: Any | None = None
+        self._tool_resolver = ToolConfigResolver(self._config, coordinator)
 
     @property
     def name(self) -> str:
@@ -74,22 +83,57 @@ class GraphQueryTool:
             "required": ["query"],
         }
 
+    @property
+    def skill_sync_enabled(self) -> bool:
+        """Whether the analytics-path skill sync runs on session start.
+
+        Defaults to ``True`` (existing behaviour preserved).  Resolved via the
+        tool's ``ToolConfigResolver`` from the ``skill_sync_enabled`` key
+        (mount config dict -> coordinator.config ->
+        ``AMPLIFIER_CONTEXT_INTELLIGENCE_SKILL_SYNC_ENABLED`` env var ->
+        default).  When ``False``, ``skill_sync.on_session_ready`` is a complete
+        no-op, so headless / pipeline / single-command-series workflows pay zero
+        skill traffic per turn.  Read by ``skill_sync.on_session_ready`` via the
+        ``context_intelligence._graph_query_tool`` coordinator capability.
+        """
+        return self._tool_resolver.skill_sync_enabled
+
+    def _resolve_server_config(self, coordinator: Any) -> tuple[str | None, str | None, str]:
+        """Return (server_url, api_key, workspace) from hook resolver or ToolConfigResolver.
+
+        While ``_hook_resolver`` is ``None``, calls ``get_capability`` on every
+        invocation so that a hook mounted after tool construction is picked up on
+        the very next ``execute()`` call (late-mount upgrade path).  Once set,
+        ``_hook_resolver`` is cached and ``get_capability`` is no longer called.
+
+        In analytics-only mode (no hook), ``_tool_resolver`` (a
+        ``ToolConfigResolver``) is used.  It applies the full four-level
+        priority chain: config dict → coordinator.config →
+        AMPLIFIER_CONTEXT_INTELLIGENCE_* env vars → ~/.amplifier/settings.yaml.
+        If no source provides a server URL, ``server_url`` is ``None`` and
+        ``execute()`` will return a ``configuration_error``.
+        """
+        if self._hook_resolver is None:
+            self._hook_resolver = coordinator.get_capability(
+                "context_intelligence.hook_config_resolver"
+            )
+        if self._hook_resolver is not None:
+            return (
+                self._hook_resolver.context_intelligence_server_url,
+                self._hook_resolver.context_intelligence_api_key,
+                self._hook_resolver.workspace,
+            )
+        # Analytics-only mode: delegate to ToolConfigResolver for full
+        # env-var / settings.yaml fallback chain.
+        return (
+            self._tool_resolver.context_intelligence_server_url,
+            self._tool_resolver.context_intelligence_api_key,
+            self._tool_resolver.workspace,
+        )
+
     async def execute(self, input: dict[str, Any]) -> ToolResult:  # noqa: A002
-        if self._resolver is None:
-            self._resolver = self._coordinator.get_capability(
-                "context_intelligence.config_resolver"
-            )
+        server_url, api_key, workspace = self._resolve_server_config(self._coordinator)
 
-        if self._resolver is None:
-            return ToolResult(
-                success=False,
-                error={
-                    "message": "context-intelligence hook not configured",
-                    "type": "configuration_error",
-                },
-            )
-
-        server_url = self._resolver.context_intelligence_server_url
         if not server_url:
             return ToolResult(
                 success=False,
@@ -99,7 +143,6 @@ class GraphQueryTool:
                 },
             )
 
-        workspace = self._resolver.workspace
         query: str = input["query"]
         ws_override = input.get("workspace")
         effective_workspace = ws_override if ws_override is not None else workspace
@@ -118,7 +161,6 @@ class GraphQueryTool:
         else:
             params = raw_params
 
-        api_key = self._resolver.context_intelligence_api_key
         async_client = AsyncCIClient(server_url=server_url, api_key=api_key or "")
         result = await async_client.cypher(query, effective_workspace, params=params)
         return ToolResult(success=True, output=result)
