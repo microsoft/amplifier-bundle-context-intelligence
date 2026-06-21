@@ -62,7 +62,9 @@ class TestModuleTypeClassification:
 
 class TestBundleYamlEntryPointConsistency:
     def _load_behavior_yaml(self) -> dict:
-        path = REPO_ROOT / "behaviors" / "context-intelligence.yaml"
+        # The hook now lives in the dedicated logging behavior (composed by the
+        # full context-intelligence behavior). Hook-shape assertions read it here.
+        path = REPO_ROOT / "behaviors" / "context-intelligence-logging.yaml"
         return yaml.safe_load(path.read_text())
 
     def test_behavior_yaml_module_matches_entry_point(self):
@@ -134,7 +136,9 @@ class TestBehaviorYamlConfigShape:
     """Validate the behavior YAML has the expected thin-forwarder config shape."""
 
     def _load_behavior_yaml(self) -> dict:
-        path = REPO_ROOT / "behaviors" / "context-intelligence.yaml"
+        # The hook now lives in the dedicated logging behavior (composed by the
+        # full context-intelligence behavior). Hook-shape assertions read it here.
+        path = REPO_ROOT / "behaviors" / "context-intelligence-logging.yaml"
         return yaml.safe_load(path.read_text())
 
     def _ci_hook(self, data: dict) -> dict:

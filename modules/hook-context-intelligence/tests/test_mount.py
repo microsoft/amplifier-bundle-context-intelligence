@@ -56,17 +56,28 @@ async def test_mount_returns_cleanup_callable():
 
 async def test_mount_registers_hook_state_capability():
     """mount() must register _hook_state containing logging_handler, unregister_fns, resolver."""
+    import os
     from unittest.mock import patch
 
     from amplifier_module_hook_context_intelligence import mount
     from amplifier_module_hook_context_intelligence.handlers.logging_handler import LoggingHandler
 
     coordinator = _make_coordinator()
-    # Isolate from local ~/.amplifier/settings.yaml — prevents live server detection from
-    # populating unregister_fns with skill-fetcher handlers before on_session_ready().
-    with patch(
-        "amplifier_module_hook_context_intelligence.config_resolver._parse_settings_yaml",
-        return_value={},
+    # Isolate from local ~/.amplifier/settings.yaml AND from CI env vars — both prevent live
+    # server detection from populating unregister_fns with skill-fetcher handlers before
+    # on_session_ready().
+    with (
+        patch(
+            "amplifier_module_hook_context_intelligence.config_resolver._parse_settings_yaml",
+            return_value={},
+        ),
+        patch.dict(
+            os.environ,
+            {
+                "AMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_URL": "",
+                "AMPLIFIER_CONTEXT_INTELLIGENCE_API_KEY": "",
+            },
+        ),
     ):
         await mount(coordinator, config={})
 

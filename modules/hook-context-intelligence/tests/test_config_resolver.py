@@ -1,11 +1,12 @@
-"""Tests for ConfigResolver resolution chains."""
+"""Tests for HookConfigResolver resolution chains."""
 
+import fnmatch
 from pathlib import Path
 from unittest.mock import MagicMock
 
-import fnmatch
-
-from amplifier_module_hook_context_intelligence.config_resolver import ConfigResolver
+from amplifier_module_hook_context_intelligence.config_resolver import (  # type: ignore[attr-defined]
+    HookConfigResolver,
+)
 from amplifier_module_hook_context_intelligence.config_resolver import _slugify_path
 
 
@@ -35,35 +36,39 @@ class TestBasePathResolution:
     def test_config_value_wins(self) -> None:
         """Explicit hook config base_path wins over coordinator config."""
         coordinator = _make_coordinator(config={"base_path": "/coordinator/path"})
-        resolver = ConfigResolver(config={"base_path": "/explicit/path"}, coordinator=coordinator)
+        resolver = HookConfigResolver(
+            config={"base_path": "/explicit/path"}, coordinator=coordinator
+        )
 
         assert resolver.base_path == Path("/explicit/path")
 
     def test_coordinator_fallback_when_config_absent(self) -> None:
         """When config has no base_path, falls back to coordinator.config."""
         coordinator = _make_coordinator(config={"base_path": "/coordinator/path"})
-        resolver = ConfigResolver(config={}, coordinator=coordinator)
+        resolver = HookConfigResolver(config={}, coordinator=coordinator)
 
         assert resolver.base_path == Path("/coordinator/path")
 
     def test_default_when_both_absent(self) -> None:
         """When both config and coordinator lack base_path, uses default."""
         coordinator = _make_coordinator(config={})
-        resolver = ConfigResolver(config={}, coordinator=coordinator)
+        resolver = HookConfigResolver(config={}, coordinator=coordinator)
 
         assert resolver.base_path == Path("~/.amplifier/projects").expanduser()
 
     def test_tilde_expanded(self) -> None:
         """Tilde in base_path is expanded (no '~' in string result)."""
         coordinator = _make_coordinator(config={})
-        resolver = ConfigResolver(config={"base_path": "~/custom/path"}, coordinator=coordinator)
+        resolver = HookConfigResolver(
+            config={"base_path": "~/custom/path"}, coordinator=coordinator
+        )
 
         assert "~" not in str(resolver.base_path)
 
     def test_cached_after_first_access(self) -> None:
         """base_path returns the same object on repeated access (cached)."""
         coordinator = _make_coordinator(config={})
-        resolver = ConfigResolver(config={}, coordinator=coordinator)
+        resolver = HookConfigResolver(config={}, coordinator=coordinator)
 
         first = resolver.base_path
         second = resolver.base_path
@@ -73,44 +78,73 @@ class TestBasePathResolution:
     def test_coordinator_without_config_attr_falls_back_to_default(self) -> None:
         """Coordinator without .config attribute safely falls back to default."""
         bare = _make_bare_coordinator()
-        resolver = ConfigResolver(config={}, coordinator=bare)
+        resolver = HookConfigResolver(config={}, coordinator=bare)
 
         assert resolver.base_path == Path("~/.amplifier/projects").expanduser()
 
     def test_returns_path_type(self) -> None:
         """base_path always returns a Path instance."""
         coordinator = _make_coordinator(config={})
-        resolver = ConfigResolver(config={"base_path": "/some/path"}, coordinator=coordinator)
+        resolver = HookConfigResolver(config={"base_path": "/some/path"}, coordinator=coordinator)
 
         assert isinstance(resolver.base_path, Path)
+
+    def test_env_var_used_when_config_and_coordinator_absent(self, monkeypatch) -> None:
+        """AMPLIFIER_CONTEXT_INTELLIGENCE_BASE_PATH env var is used when config and coordinator both lack base_path."""
+        monkeypatch.setenv("AMPLIFIER_CONTEXT_INTELLIGENCE_BASE_PATH", "/from/env")
+        resolver = HookConfigResolver(config={}, coordinator=_make_coordinator(config={}))
+
+        assert resolver.base_path == Path("/from/env")
+
+    def test_env_var_does_not_override_config_dict(self, monkeypatch) -> None:
+        """Config dict base_path wins over AMPLIFIER_CONTEXT_INTELLIGENCE_BASE_PATH env var."""
+        monkeypatch.setenv("AMPLIFIER_CONTEXT_INTELLIGENCE_BASE_PATH", "/from/env")
+        resolver = HookConfigResolver(
+            config={"base_path": "/from/config"},
+            coordinator=_make_coordinator(config={}),
+        )
+
+        assert resolver.base_path == Path("/from/config")
+
+    def test_env_var_does_not_override_coordinator_config(self, monkeypatch) -> None:
+        """Coordinator config base_path wins over AMPLIFIER_CONTEXT_INTELLIGENCE_BASE_PATH env var."""
+        monkeypatch.setenv("AMPLIFIER_CONTEXT_INTELLIGENCE_BASE_PATH", "/from/env")
+        resolver = HookConfigResolver(
+            config={},
+            coordinator=_make_coordinator(config={"base_path": "/from/coordinator"}),
+        )
+
+        assert resolver.base_path == Path("/from/coordinator")
 
 
 class TestProjectSlugResolution:
     def test_config_value_wins(self) -> None:
         """Explicit hook config project_slug wins over coordinator config."""
         coordinator = _make_coordinator(config={"project_slug": "from-coordinator"})
-        resolver = ConfigResolver(config={"project_slug": "from-config"}, coordinator=coordinator)
+        resolver = HookConfigResolver(
+            config={"project_slug": "from-config"}, coordinator=coordinator
+        )
 
         assert resolver.project_slug == "from-config"
 
     def test_coordinator_fallback_when_config_absent(self) -> None:
         """When config has no project_slug, falls back to coordinator.config."""
         coordinator = _make_coordinator(config={"project_slug": "from-coordinator"})
-        resolver = ConfigResolver(config={}, coordinator=coordinator)
+        resolver = HookConfigResolver(config={}, coordinator=coordinator)
 
         assert resolver.project_slug == "from-coordinator"
 
     def test_default_when_both_absent(self) -> None:
         """When both config and coordinator lack project_slug, uses 'default'."""
         coordinator = _make_coordinator(config={})
-        resolver = ConfigResolver(config={}, coordinator=coordinator)
+        resolver = HookConfigResolver(config={}, coordinator=coordinator)
 
         assert resolver.project_slug == "default"
 
     def test_cached_after_first_access(self) -> None:
         """project_slug returns the same object on repeated access (cached)."""
         coordinator = _make_coordinator(config={})
-        resolver = ConfigResolver(config={}, coordinator=coordinator)
+        resolver = HookConfigResolver(config={}, coordinator=coordinator)
 
         first = resolver.project_slug
         second = resolver.project_slug
@@ -120,14 +154,16 @@ class TestProjectSlugResolution:
     def test_coordinator_without_config_attr_falls_back_to_default(self) -> None:
         """Coordinator without .config attribute safely falls back to 'default'."""
         bare = _make_bare_coordinator()
-        resolver = ConfigResolver(config={}, coordinator=bare)
+        resolver = HookConfigResolver(config={}, coordinator=bare)
 
         assert resolver.project_slug == "default"
 
     def test_returns_str_type(self) -> None:
         """project_slug always returns a str instance."""
         coordinator = _make_coordinator(config={})
-        resolver = ConfigResolver(config={"project_slug": "my-project"}, coordinator=coordinator)
+        resolver = HookConfigResolver(
+            config={"project_slug": "my-project"}, coordinator=coordinator
+        )
 
         assert isinstance(resolver.project_slug, str)
 
@@ -143,48 +179,48 @@ class TestWorkspaceResolution:
     def test_hook_config_wins_over_coordinator_config(self) -> None:
         """config['workspace'] has highest priority — overrides coordinator.config."""
         coordinator = _make_coordinator(config={"workspace": "from-coordinator"})
-        resolver = ConfigResolver(config={"workspace": "from-hook"}, coordinator=coordinator)
+        resolver = HookConfigResolver(config={"workspace": "from-hook"}, coordinator=coordinator)
 
         assert resolver.workspace == "from-hook"
 
     def test_coordinator_config_fallback_when_hook_config_absent(self) -> None:
         """coordinator.config['workspace'] is used when config has no workspace."""
         coordinator = _make_coordinator(config={"workspace": "from-coordinator"})
-        resolver = ConfigResolver(config={}, coordinator=coordinator)
+        resolver = HookConfigResolver(config={}, coordinator=coordinator)
 
         assert resolver.workspace == "from-coordinator"
 
     def test_hook_config_wins_over_project_slug(self) -> None:
         """config['workspace'] wins when coordinator has no workspace."""
         coordinator = _make_coordinator(config={"project_slug": "proj-slug"})
-        resolver = ConfigResolver(config={"workspace": "from-hook"}, coordinator=coordinator)
+        resolver = HookConfigResolver(config={"workspace": "from-hook"}, coordinator=coordinator)
 
         assert resolver.workspace == "from-hook"
 
     def test_falls_back_to_project_slug(self) -> None:
         """When both coordinator.config and config lack workspace, falls back to project_slug."""
         coordinator = _make_coordinator(config={"project_slug": "slug-fallback"})
-        resolver = ConfigResolver(config={}, coordinator=coordinator)
+        resolver = HookConfigResolver(config={}, coordinator=coordinator)
 
         assert resolver.workspace == "slug-fallback"
 
     def test_defaults_to_default_when_all_absent(self) -> None:
         """When all workspace sources are absent, resolves to 'default'."""
         coordinator = _make_coordinator(config={})
-        resolver = ConfigResolver(config={}, coordinator=coordinator)
+        resolver = HookConfigResolver(config={}, coordinator=coordinator)
 
         assert resolver.workspace == "default"
 
     def test_returns_str_type(self) -> None:
         """workspace always returns a str."""
         coordinator = _make_coordinator(config={"workspace": "my-ws"})
-        resolver = ConfigResolver(config={}, coordinator=coordinator)
+        resolver = HookConfigResolver(config={}, coordinator=coordinator)
 
         assert isinstance(resolver.workspace, str)
 
     def test_coordinator_none_falls_back_to_config(self) -> None:
         """When coordinator is None, falls back to config['workspace']."""
-        resolver = ConfigResolver(config={"workspace": "from-config"}, coordinator=None)
+        resolver = HookConfigResolver(config={"workspace": "from-config"}, coordinator=None)
 
         assert resolver.workspace == "from-config"
 
@@ -194,19 +230,20 @@ class TestContextIntelligenceServerUrl:
 
     def test_returns_none_when_absent(self, monkeypatch, tmp_path) -> None:
         """Returns None when context_intelligence_server_url not in config."""
+        monkeypatch.delenv("AMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_URL", raising=False)
         monkeypatch.setattr(
             "amplifier_module_hook_context_intelligence.config_resolver.SETTINGS_PATH",
             tmp_path / "nonexistent.yaml",
         )
         coordinator = _make_coordinator(config={})
-        resolver = ConfigResolver(config={}, coordinator=coordinator)
+        resolver = HookConfigResolver(config={}, coordinator=coordinator)
 
         assert resolver.context_intelligence_server_url is None
 
     def test_returns_string_when_set(self) -> None:
         """Returns the URL string when configured."""
         coordinator = _make_coordinator(config={})
-        resolver = ConfigResolver(
+        resolver = HookConfigResolver(
             config={"context_intelligence_server_url": "http://localhost:8000"},
             coordinator=coordinator,
         )
@@ -215,12 +252,13 @@ class TestContextIntelligenceServerUrl:
 
     def test_returns_none_for_empty_string(self, monkeypatch, tmp_path) -> None:
         """Returns None when value is an empty string (falsy)."""
+        monkeypatch.delenv("AMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_URL", raising=False)
         monkeypatch.setattr(
             "amplifier_module_hook_context_intelligence.config_resolver.SETTINGS_PATH",
             tmp_path / "nonexistent.yaml",
         )
         coordinator = _make_coordinator(config={})
-        resolver = ConfigResolver(
+        resolver = HookConfigResolver(
             config={"context_intelligence_server_url": ""},
             coordinator=coordinator,
         )
@@ -238,7 +276,7 @@ class TestExcludeEvents:
         by shared code or import — the two hooks must remain decoupled.
         """
         coordinator = _make_coordinator(config={})
-        resolver = ConfigResolver(config={}, coordinator=coordinator)
+        resolver = HookConfigResolver(config={}, coordinator=coordinator)
 
         assert resolver.exclude_events == {"llm:stream_*delta"}
 
@@ -250,7 +288,7 @@ class TestExcludeEvents:
         is intentional: unset uses the default; [] means the operator wants everything.
         """
         coordinator = _make_coordinator(config={})
-        resolver = ConfigResolver(
+        resolver = HookConfigResolver(
             config={"exclude_events": []},
             coordinator=coordinator,
         )
@@ -260,14 +298,14 @@ class TestExcludeEvents:
     def test_stream_block_delta_excluded_by_default(self) -> None:
         """llm:stream_block_delta is matched by the default glob — treated as excluded."""
         coordinator = _make_coordinator(config={})
-        resolver = ConfigResolver(config={}, coordinator=coordinator)
+        resolver = HookConfigResolver(config={}, coordinator=coordinator)
 
         assert any(fnmatch.fnmatch("llm:stream_block_delta", p) for p in resolver.exclude_events)
 
     def test_stream_block_start_not_excluded_by_default(self) -> None:
         """llm:stream_block_start is NOT matched by the default glob — structural event spared."""
         coordinator = _make_coordinator(config={})
-        resolver = ConfigResolver(config={}, coordinator=coordinator)
+        resolver = HookConfigResolver(config={}, coordinator=coordinator)
 
         assert not any(
             fnmatch.fnmatch("llm:stream_block_start", p) for p in resolver.exclude_events
@@ -276,21 +314,21 @@ class TestExcludeEvents:
     def test_stream_block_end_not_excluded_by_default(self) -> None:
         """llm:stream_block_end is NOT matched by the default glob — structural event spared."""
         coordinator = _make_coordinator(config={})
-        resolver = ConfigResolver(config={}, coordinator=coordinator)
+        resolver = HookConfigResolver(config={}, coordinator=coordinator)
 
         assert not any(fnmatch.fnmatch("llm:stream_block_end", p) for p in resolver.exclude_events)
 
     def test_stream_aborted_not_excluded_by_default(self) -> None:
         """llm:stream_aborted is NOT matched by the default glob — structural event spared."""
         coordinator = _make_coordinator(config={})
-        resolver = ConfigResolver(config={}, coordinator=coordinator)
+        resolver = HookConfigResolver(config={}, coordinator=coordinator)
 
         assert not any(fnmatch.fnmatch("llm:stream_aborted", p) for p in resolver.exclude_events)
 
     def test_ordinary_event_not_excluded_by_default(self) -> None:
         """Ordinary events like llm:response are NOT matched by the default glob."""
         coordinator = _make_coordinator(config={})
-        resolver = ConfigResolver(config={}, coordinator=coordinator)
+        resolver = HookConfigResolver(config={}, coordinator=coordinator)
 
         assert not any(fnmatch.fnmatch("llm:response", p) for p in resolver.exclude_events)
 
@@ -303,7 +341,7 @@ class TestExcludeEvents:
         llm:stream_aborted      -> no match (passes through)
         """
         coordinator = _make_coordinator(config={})
-        resolver = ConfigResolver(config={}, coordinator=coordinator)
+        resolver = HookConfigResolver(config={}, coordinator=coordinator)
         patterns = resolver.exclude_events
 
         def is_excluded(event: str) -> bool:
@@ -317,7 +355,7 @@ class TestExcludeEvents:
     def test_returns_set_from_list(self) -> None:
         """exclude_events converts a list from config to a set."""
         coordinator = _make_coordinator(config={})
-        resolver = ConfigResolver(
+        resolver = HookConfigResolver(
             config={"exclude_events": ["event_a", "event_b"]},
             coordinator=coordinator,
         )
@@ -327,7 +365,7 @@ class TestExcludeEvents:
     def test_returns_frozenset_type(self) -> None:
         """exclude_events always returns a frozenset instance (cached, immutable)."""
         coordinator = _make_coordinator(config={})
-        resolver = ConfigResolver(
+        resolver = HookConfigResolver(
             config={"exclude_events": ["event_a"]},
             coordinator=coordinator,
         )
@@ -337,7 +375,7 @@ class TestExcludeEvents:
     def test_cached_after_first_access(self) -> None:
         """exclude_events returns the same object on repeated access (cached)."""
         coordinator = _make_coordinator(config={})
-        resolver = ConfigResolver(
+        resolver = HookConfigResolver(
             config={"exclude_events": ["event_a", "event_b"]},
             coordinator=coordinator,
         )
@@ -352,14 +390,14 @@ class TestLogLevel:
     def test_defaults_to_warning(self) -> None:
         """log_level returns 'WARNING' when not set in config."""
         coordinator = _make_coordinator(config={})
-        resolver = ConfigResolver(config={}, coordinator=coordinator)
+        resolver = HookConfigResolver(config={}, coordinator=coordinator)
 
         assert resolver.log_level == "WARNING"
 
     def test_explicit_value_works(self) -> None:
         """log_level returns the explicitly configured value."""
         coordinator = _make_coordinator(config={})
-        resolver = ConfigResolver(config={"log_level": "DEBUG"}, coordinator=coordinator)
+        resolver = HookConfigResolver(config={"log_level": "DEBUG"}, coordinator=coordinator)
 
         assert resolver.log_level == "DEBUG"
 
@@ -368,7 +406,7 @@ class TestSessionDir:
     def test_composes_correct_path_from_explicit_values(self) -> None:
         """session_dir composes base_path / project_slug / sessions / session_id / context-intelligence."""
         coordinator = _make_coordinator(config={})
-        resolver = ConfigResolver(
+        resolver = HookConfigResolver(
             config={"base_path": "/my/base", "project_slug": "my-project"},
             coordinator=coordinator,
         )
@@ -380,7 +418,7 @@ class TestSessionDir:
     def test_uses_resolved_defaults(self) -> None:
         """session_dir uses default base_path and project_slug when not configured."""
         coordinator = _make_coordinator(config={})
-        resolver = ConfigResolver(config={}, coordinator=coordinator)
+        resolver = HookConfigResolver(config={}, coordinator=coordinator)
 
         result = resolver.session_dir("xyz")
         expected = (
@@ -396,7 +434,7 @@ class TestSessionDir:
     def test_returns_path_type(self) -> None:
         """session_dir returns a Path instance."""
         coordinator = _make_coordinator(config={})
-        resolver = ConfigResolver(
+        resolver = HookConfigResolver(
             config={"base_path": "/base", "project_slug": "proj"},
             coordinator=coordinator,
         )
@@ -408,7 +446,7 @@ class TestSessionDir:
         coordinator = _make_coordinator(
             config={"base_path": "/coord/base", "project_slug": "coord-project"}
         )
-        resolver = ConfigResolver(config={}, coordinator=coordinator)
+        resolver = HookConfigResolver(config={}, coordinator=coordinator)
 
         result = resolver.session_dir("sess-42")
 
@@ -421,7 +459,7 @@ class TestBlobStoreRoot:
     def test_blob_store_root_returns_path(self) -> None:
         """blob_store_root is base_path / project_slug / 'sessions'."""
         coordinator = _make_coordinator(config={})
-        resolver = ConfigResolver(
+        resolver = HookConfigResolver(
             config={"base_path": "/tmp/test-projects", "project_slug": "my-project"},
             coordinator=coordinator,
         )
@@ -431,7 +469,7 @@ class TestBlobStoreRoot:
     def test_blob_store_root_uses_default_base_path(self) -> None:
         """blob_store_root works with default base_path."""
         coordinator = _make_coordinator(config={})
-        resolver = ConfigResolver(config={"project_slug": "default"}, coordinator=coordinator)
+        resolver = HookConfigResolver(config={"project_slug": "default"}, coordinator=coordinator)
         result = resolver.blob_store_root
         expected = Path("~/.amplifier/projects").expanduser() / "default" / "sessions"
         assert result == expected
@@ -442,17 +480,18 @@ class TestContextIntelligenceApiKey:
 
     def test_returns_none_when_not_configured(self, monkeypatch, tmp_path) -> None:
         """Returns None when context_intelligence_api_key not in config."""
+        monkeypatch.delenv("AMPLIFIER_CONTEXT_INTELLIGENCE_API_KEY", raising=False)
         monkeypatch.setattr(
             "amplifier_module_hook_context_intelligence.config_resolver.SETTINGS_PATH",
             tmp_path / "nonexistent.yaml",
         )
-        resolver = ConfigResolver(config={}, coordinator=_make_coordinator(config={}))
+        resolver = HookConfigResolver(config={}, coordinator=_make_coordinator(config={}))
 
         assert resolver.context_intelligence_api_key is None
 
     def test_returns_string_when_configured(self) -> None:
         """Returns the API key string when configured."""
-        resolver = ConfigResolver(
+        resolver = HookConfigResolver(
             config={"context_intelligence_api_key": "my-secret-key"},
             coordinator=_make_coordinator(config={}),
         )
@@ -461,11 +500,12 @@ class TestContextIntelligenceApiKey:
 
     def test_returns_none_for_empty_string(self, monkeypatch, tmp_path) -> None:
         """Returns None when value is an empty string (falsy)."""
+        monkeypatch.delenv("AMPLIFIER_CONTEXT_INTELLIGENCE_API_KEY", raising=False)
         monkeypatch.setattr(
             "amplifier_module_hook_context_intelligence.config_resolver.SETTINGS_PATH",
             tmp_path / "nonexistent.yaml",
         )
-        resolver = ConfigResolver(
+        resolver = HookConfigResolver(
             config={"context_intelligence_api_key": ""},
             coordinator=_make_coordinator(config={}),
         )
@@ -474,7 +514,7 @@ class TestContextIntelligenceApiKey:
 
     def test_coerces_non_string_to_string(self) -> None:
         """Coerces non-string values to str."""
-        resolver = ConfigResolver(
+        resolver = HookConfigResolver(
             config={"context_intelligence_api_key": 12345},
             coordinator=_make_coordinator(config={}),
         )
@@ -487,21 +527,21 @@ class TestDispatchTimeout:
     def test_defaults_to_10(self) -> None:
         """dispatch_timeout returns 10.0 when not configured."""
         coordinator = _make_coordinator(config={})
-        resolver = ConfigResolver(config={}, coordinator=coordinator)
+        resolver = HookConfigResolver(config={}, coordinator=coordinator)
 
         assert resolver.dispatch_timeout == 10.0
 
     def test_reads_from_config(self) -> None:
         """dispatch_timeout returns the configured value as a float."""
         coordinator = _make_coordinator(config={})
-        resolver = ConfigResolver(config={"dispatch_timeout": 10}, coordinator=coordinator)
+        resolver = HookConfigResolver(config={"dispatch_timeout": 10}, coordinator=coordinator)
 
         assert resolver.dispatch_timeout == 10.0
 
     def test_returns_float_type(self) -> None:
         """dispatch_timeout always returns a float even when config value is a string."""
         coordinator = _make_coordinator(config={})
-        resolver = ConfigResolver(config={"dispatch_timeout": "45"}, coordinator=coordinator)
+        resolver = HookConfigResolver(config={"dispatch_timeout": "45"}, coordinator=coordinator)
 
         assert isinstance(resolver.dispatch_timeout, float)
         assert resolver.dispatch_timeout == 45.0
@@ -511,21 +551,23 @@ class TestDispatchFailureThreshold:
     def test_defaults_to_3(self) -> None:
         """dispatch_failure_threshold returns 3 when not configured."""
         coordinator = _make_coordinator(config={})
-        resolver = ConfigResolver(config={}, coordinator=coordinator)
+        resolver = HookConfigResolver(config={}, coordinator=coordinator)
 
         assert resolver.dispatch_failure_threshold == 3
 
     def test_reads_from_config(self) -> None:
         """dispatch_failure_threshold returns the configured value as an int."""
         coordinator = _make_coordinator(config={})
-        resolver = ConfigResolver(config={"dispatch_failure_threshold": 5}, coordinator=coordinator)
+        resolver = HookConfigResolver(
+            config={"dispatch_failure_threshold": 5}, coordinator=coordinator
+        )
 
         assert resolver.dispatch_failure_threshold == 5
 
     def test_returns_int_type(self) -> None:
         """dispatch_failure_threshold always returns an int even when config value is a string."""
         coordinator = _make_coordinator(config={})
-        resolver = ConfigResolver(
+        resolver = HookConfigResolver(
             config={"dispatch_failure_threshold": "7"}, coordinator=coordinator
         )
 
@@ -537,14 +579,16 @@ class TestDispatchQueueCapacity:
     def test_defaults_to_256(self) -> None:
         """dispatch_queue_capacity returns 256 when not configured."""
         coordinator = _make_coordinator(config={})
-        resolver = ConfigResolver(config={}, coordinator=coordinator)
+        resolver = HookConfigResolver(config={}, coordinator=coordinator)
 
         assert resolver.dispatch_queue_capacity == 256
 
     def test_reads_from_config(self) -> None:
         """dispatch_queue_capacity returns the configured value as an int."""
         coordinator = _make_coordinator(config={})
-        resolver = ConfigResolver(config={"dispatch_queue_capacity": 64}, coordinator=coordinator)
+        resolver = HookConfigResolver(
+            config={"dispatch_queue_capacity": 64}, coordinator=coordinator
+        )
 
         assert resolver.dispatch_queue_capacity == 64
 
@@ -553,14 +597,16 @@ class TestCloseDrainTimeout:
     def test_defaults_to_half_second(self) -> None:
         """close_drain_timeout returns 0.5 when not configured."""
         coordinator = _make_coordinator(config={})
-        resolver = ConfigResolver(config={}, coordinator=coordinator)
+        resolver = HookConfigResolver(config={}, coordinator=coordinator)
 
         assert resolver.close_drain_timeout == 0.5
 
     def test_reads_from_config(self) -> None:
         """close_drain_timeout returns the configured value as a float."""
         coordinator = _make_coordinator(config={})
-        resolver = ConfigResolver(config={"close_drain_timeout": "1.25"}, coordinator=coordinator)
+        resolver = HookConfigResolver(
+            config={"close_drain_timeout": "1.25"}, coordinator=coordinator
+        )
 
         assert resolver.close_drain_timeout == 1.25
 
@@ -569,14 +615,14 @@ class TestAdditionalEvents:
     def test_defaults_to_empty_set(self) -> None:
         """additional_events returns an empty frozenset when not set in config."""
         coordinator = _make_coordinator(config={})
-        resolver = ConfigResolver(config={}, coordinator=coordinator)
+        resolver = HookConfigResolver(config={}, coordinator=coordinator)
 
         assert resolver.additional_events == frozenset()
 
     def test_returns_frozenset_from_list(self) -> None:
         """additional_events converts a list from config to a frozenset."""
         coordinator = _make_coordinator(config={})
-        resolver = ConfigResolver(
+        resolver = HookConfigResolver(
             config={"additional_events": ["delegate:agent_spawned", "delegate:agent_completed"]},
             coordinator=coordinator,
         )
@@ -589,7 +635,7 @@ class TestAdditionalEvents:
     def test_cached_after_first_access(self) -> None:
         """additional_events returns the same object on repeated access (cached)."""
         coordinator = _make_coordinator(config={})
-        resolver = ConfigResolver(
+        resolver = HookConfigResolver(
             config={"additional_events": ["delegate:agent_spawned"]},
             coordinator=coordinator,
         )
@@ -619,7 +665,7 @@ class TestSettingsYamlFallback:
             settings_file,
         )
 
-        resolver = ConfigResolver(config={}, coordinator=_make_coordinator(config={}))
+        resolver = HookConfigResolver(config={}, coordinator=_make_coordinator(config={}))
 
         assert resolver.context_intelligence_server_url == "http://from-settings-yaml"
 
@@ -640,7 +686,7 @@ class TestSettingsYamlFallback:
             settings_file,
         )
 
-        resolver = ConfigResolver(config={}, coordinator=_make_coordinator(config={}))
+        resolver = HookConfigResolver(config={}, coordinator=_make_coordinator(config={}))
 
         assert resolver.context_intelligence_server_url == "http://from-env"
 
@@ -661,7 +707,7 @@ class TestSettingsYamlFallback:
             settings_file,
         )
 
-        resolver = ConfigResolver(config={}, coordinator=_make_coordinator(config={}))
+        resolver = HookConfigResolver(config={}, coordinator=_make_coordinator(config={}))
 
         assert resolver.context_intelligence_api_key == "sk-from-settings-yaml"
 
@@ -672,7 +718,7 @@ class TestSettingsYamlFallback:
             "amplifier_module_hook_context_intelligence.config_resolver.SETTINGS_PATH",
             tmp_path / "nonexistent.yaml",
         )
-        resolver = ConfigResolver(config={}, coordinator=_make_coordinator(config={}))
+        resolver = HookConfigResolver(config={}, coordinator=_make_coordinator(config={}))
 
         assert resolver.context_intelligence_server_url is None
 
@@ -686,33 +732,33 @@ class TestParentId:
     """
 
     def test_parent_id_from_config(self) -> None:
-        """ConfigResolver.parent_id reads from hook config['parent_id']."""
-        cr = ConfigResolver({"parent_id": "parent-abc-123"}, _make_coordinator())
+        """HookConfigResolver.parent_id reads from hook config['parent_id']."""
+        cr = HookConfigResolver({"parent_id": "parent-abc-123"}, _make_coordinator())
         assert cr.parent_id == "parent-abc-123"
 
     def test_parent_id_empty_when_absent(self) -> None:
-        """ConfigResolver.parent_id returns empty string when config has no parent_id key."""
-        cr = ConfigResolver({}, _make_coordinator())
+        """HookConfigResolver.parent_id returns empty string when config has no parent_id key."""
+        cr = HookConfigResolver({}, _make_coordinator())
         assert cr.parent_id == ""
 
     def test_parent_id_empty_when_none(self) -> None:
-        """ConfigResolver.parent_id returns empty string when config has parent_id=None."""
-        cr = ConfigResolver({"parent_id": None}, _make_coordinator())
+        """HookConfigResolver.parent_id returns empty string when config has parent_id=None."""
+        cr = HookConfigResolver({"parent_id": None}, _make_coordinator())
         assert cr.parent_id == ""
 
     def test_parent_id_returns_str_type(self) -> None:
-        """ConfigResolver.parent_id always returns a str."""
-        cr = ConfigResolver({"parent_id": "abc"}, _make_coordinator())
+        """HookConfigResolver.parent_id always returns a str."""
+        cr = HookConfigResolver({"parent_id": "abc"}, _make_coordinator())
         assert isinstance(cr.parent_id, str)
 
     def test_no_coordinator_fallback(self) -> None:
-        """ConfigResolver.parent_id does NOT fall back to coordinator.config.
+        """HookConfigResolver.parent_id does NOT fall back to coordinator.config.
 
         parent_id is a per-session value stamped by the resolver; it must not
         bleed from a coordinator-level config that spans multiple sessions.
         """
         coordinator = _make_coordinator(config={"parent_id": "from-coordinator"})
-        cr = ConfigResolver({}, coordinator)
+        cr = HookConfigResolver({}, coordinator)
         assert cr.parent_id == ""
 
 
@@ -723,23 +769,23 @@ class TestResolveInstanceId:
     """
 
     def test_resolve_instance_id_from_config(self) -> None:
-        """ConfigResolver.resolve_instance_id reads from hook config['resolve_instance_id']."""
-        cr = ConfigResolver({"resolve_instance_id": "abc-def-123"}, _make_coordinator())
+        """HookConfigResolver.resolve_instance_id reads from hook config['resolve_instance_id']."""
+        cr = HookConfigResolver({"resolve_instance_id": "abc-def-123"}, _make_coordinator())
         assert cr.resolve_instance_id == "abc-def-123"
 
     def test_resolve_instance_id_empty_when_absent(self) -> None:
-        """ConfigResolver.resolve_instance_id returns empty string when absent."""
-        cr = ConfigResolver({}, _make_coordinator())
+        """HookConfigResolver.resolve_instance_id returns empty string when absent."""
+        cr = HookConfigResolver({}, _make_coordinator())
         assert cr.resolve_instance_id == ""
 
     def test_resolve_instance_id_empty_when_none(self) -> None:
-        """ConfigResolver.resolve_instance_id returns empty string when config has None."""
-        cr = ConfigResolver({"resolve_instance_id": None}, _make_coordinator())
+        """HookConfigResolver.resolve_instance_id returns empty string when config has None."""
+        cr = HookConfigResolver({"resolve_instance_id": None}, _make_coordinator())
         assert cr.resolve_instance_id == ""
 
     def test_resolve_instance_id_returns_str_type(self) -> None:
-        """ConfigResolver.resolve_instance_id always returns a str."""
-        cr = ConfigResolver({"resolve_instance_id": "xyz"}, _make_coordinator())
+        """HookConfigResolver.resolve_instance_id always returns a str."""
+        cr = HookConfigResolver({"resolve_instance_id": "xyz"}, _make_coordinator())
         assert isinstance(cr.resolve_instance_id, str)
 
 
