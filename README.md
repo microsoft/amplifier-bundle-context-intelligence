@@ -43,6 +43,44 @@ context-intelligence                         ← FULL umbrella: design + logging
 
 > The design mode ships `advertised: false` — it never clutters `/modes`; users activate it explicitly with `/mode context-intelligence` when they want the design workspace.
 
+### Skill sync and per-session overhead
+
+The `graph-analyst` agent relies on the `context-intelligence-graph-query` skill, whose content is kept current by `tool-graph-query`. On every session start — when a server URL is configured — the analytics path performs a lightweight sync: a `GET /version` reachability ping plus a conditional, ETag-cached `GET` of the skill. For one long-lived interactive session this is negligible. But workflows that drive Amplifier as a **series of one-shot commands** run the session-start lifecycle on *every* invocation, so the sync fires **per turn** and compounds over a long run.
+
+**Pick the layer that matches your traffic profile** — only the analysis/full layers carry any skill-sync cost at all:
+
+| If you… | Use | Skill-sync cost |
+|---------|-----|-----------------|
+| Forward telemetry only (headless / pipeline / event-forwarding) | `context-intelligence-logging` | **Zero** — no `tool-graph-query`, no version ping |
+| Navigate local JSONL only | `context-intelligence-navigation` | **Zero** |
+| Need graph-powered analysis | `context-intelligence-analysis` / `context-intelligence` (full) | Per-session sync (ETag-conditioned) |
+
+**Already on the full behavior but running a single-command series?** Set `skill_sync_enabled: false` on `tool-graph-query` to eliminate the per-turn skill traffic — **no `GET /version`, no `GET /skills/`, no `skill:unloaded` reload handler** — *without* downgrading your behavior.
+
+Disabling sync does **not** strand the graph-analyst, though. The bundle ships `context-intelligence-graph-query`'s `SKILL.md` as a pessimistic *"Server Unavailable"* stub (so a fresh install with no server never invites Cypher queries against a graph that isn't there). On the disabled path:
+
+| Disabled + … | What happens on disk | Network |
+|--------------|----------------------|---------|
+| **a server URL is configured** | The stub is **swapped** for the real graph-query body **vendored in the `tool-graph-query` package** (a byte-for-byte copy of the canonical server skill), so the graph-analyst stays fully usable | **Zero** — local file copy only |
+| **no server configured** | The *"Server Unavailable"* stub is **retained** (the graph genuinely isn't there) | **Zero** |
+
+The swap is idempotent (rewrites only on content change) and crash-safe. The trade-off to understand: with sync disabled you get the **bundled** body, which is refreshed from the canonical [`microsoft/amplifier-context-intelligence`](https://github.com/microsoft/amplifier-context-intelligence) skill at bundle-authoring time — it will not auto-refresh from your live server until you re-enable sync. And if the server is configured but actually **down** while sync is disabled, the agent receives the optimistic "graph available" body; its `graph_query` calls then error and the graph-analyst's built-in fallback delegates to `session-navigator` (local JSONL) — degraded but never broken.
+
+| Key | Env var | Default | Effect when `false` |
+|-----|---------|---------|---------------------|
+| `skill_sync_enabled` | `AMPLIFIER_CONTEXT_INTELLIGENCE_SKILL_SYNC_ENABLED` | `true` | Zero per-turn skill traffic; server-configured sessions get the vendored offline body, no-server sessions keep the stub |
+
+Configure it through the `tool-graph-query` module config (agent frontmatter or a `settings.yaml` override), or set the env var to disable per-turn sync host-wide:
+
+```bash
+# ~/.amplifier/keys.env or your shell — disable per-turn skill sync host-wide
+AMPLIFIER_CONTEXT_INTELLIGENCE_SKILL_SYNC_ENABLED=false
+```
+
+Accepted values are case-insensitive: `true`/`1`/`yes`/`on` and `false`/`0`/`no`/`off`. An empty or unset value resolves to the default (`true`) — an unexpanded `${VAR:}` placeholder can never silently disable sync.
+
+> **Want cheaper sync rather than no sync?** A per-process version-check cache with a short TTL (skip `GET /version` while a recent check is still fresh) is a tracked follow-up that would reduce per-turn cost for users who still want sync. `skill_sync_enabled` is the opt-out available today; the TTL cache is a separate, deferred enhancement.
+
 ---
 
 ## Understanding workspace
@@ -498,9 +536,9 @@ cd modules/tool-blob-read             && uv sync
 cd modules/hook-context-intelligence  && uv sync
 
 # Tests (run from the respective module directory)
-cd modules/tool-graph-query           && uv run pytest -q   # 87 tests
+cd modules/tool-graph-query           && uv run pytest -q   # 97 tests
 cd modules/tool-blob-read             && uv run pytest -q   # 35 tests
-cd modules/hook-context-intelligence  && uv run pytest -q   # 299 tests
+cd modules/hook-context-intelligence  && uv run pytest -q   # 312 tests
 
 # Lint + types (run from the respective module directory)
 uv run ruff check . && uv run ruff format --check . && uv run pyright

@@ -109,3 +109,36 @@ class TestOnSessionReadyWiring:
         await mount(coordinator, config={})
         names = [c.args[0] for c in coordinator.register_capability.call_args_list]
         assert "context_intelligence._graph_query_tool" in names
+
+
+class TestSkillSyncEnabledConfig:
+    """The skill_sync_enabled knob is forwarded to the tool and resolves."""
+
+    async def test_config_skill_sync_enabled_false_forwarded_and_resolves(
+        self, monkeypatch
+    ) -> None:
+        from amplifier_module_tool_graph_query import mount
+
+        monkeypatch.delenv("AMPLIFIER_CONTEXT_INTELLIGENCE_SKILL_SYNC_ENABLED", raising=False)
+        coordinator = MagicMock()
+        coordinator.config = {}  # real dict so the resolver coordinator-level read is clean
+        coordinator.mount = AsyncMock()
+
+        await mount(coordinator, config={"skill_sync_enabled": False})
+
+        tool = coordinator.mount.call_args.args[1]
+        assert tool._config["skill_sync_enabled"] is False
+        assert tool.skill_sync_enabled is False
+
+    async def test_default_skill_sync_enabled_is_true(self, monkeypatch) -> None:
+        from amplifier_module_tool_graph_query import mount
+
+        monkeypatch.delenv("AMPLIFIER_CONTEXT_INTELLIGENCE_SKILL_SYNC_ENABLED", raising=False)
+        coordinator = MagicMock()
+        coordinator.config = {}
+        coordinator.mount = AsyncMock()
+
+        await mount(coordinator, config={})
+
+        tool = coordinator.mount.call_args.args[1]
+        assert tool.skill_sync_enabled is True

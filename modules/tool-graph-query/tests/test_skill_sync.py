@@ -137,7 +137,7 @@ def _make_tool(server_url: str, api_key: str = "k", workspace: str = "ws") -> Ma
 
 def _make_ready_coordinator(
     skill_path: Path,
-    tool: MagicMock,
+    tool: MagicMock | None,
     *,
     discovery_present: bool = True,
     find_returns_meta: bool = True,
@@ -227,3 +227,216 @@ class TestOnSessionReadyOrchestration:
             await on_session_ready(coord)
 
         assert "skill:unloaded" in [c.args[0] for c in coord.hooks.register.call_args_list]
+
+
+_STUB_BODY = (
+    "---\nname: context-intelligence-graph-query\nversion: 2.0.0\n---\n\n"
+    "# Context Intelligence Graph Query — Server Unavailable\n\n"
+    "The context intelligence server is not reachable.\n"
+    "Delegate immediately to `session-navigator`. Do not attempt Cypher queries.\n"
+)
+_ETAG = ".etag"
+_CHASH = ".content_hash"
+
+
+def _write_stub(skill_path: Path) -> str:
+    skill_path.write_text(_STUB_BODY)
+    return hashlib.sha256(skill_path.read_bytes()).hexdigest()
+
+
+class TestOnSessionReadySkillSyncDisabled:
+    """skill_sync_enabled=false gate at the top of on_session_ready.
+
+    Disabled performs ZERO per-turn network and does NOT register the
+    skill:unloaded handler. But it must NOT strand a working graph-analyst on the
+    pessimistic "Server Unavailable" stub:
+      - server configured -> swap stub for the vendored real body (local copy)
+      - no server         -> retain the stub (graph genuinely absent)
+    """
+
+    async def test_disabled_server_configured_swaps_in_vendored_body(self, tmp_path: Path) -> None:
+        from amplifier_module_tool_graph_query.bundled_skill import EXPECTED_BUNDLED_SKILL_SHA256
+        from amplifier_module_tool_graph_query.skill_sync import on_session_ready
+
+        skill_path = tmp_path / "SKILL.md"
+        _write_stub(skill_path)
+        tool = _make_tool("http://up:9000")
+        tool.skill_sync_enabled = False
+        coord = _make_ready_coordinator(skill_path, tool)
+
+        # ZERO network: SkillFetcher must never be constructed, _sync_skill never awaited.
+        with (
+            patch("amplifier_module_tool_graph_query.skill_sync.SkillFetcher") as mock_fetcher,
+            patch(
+                "amplifier_module_tool_graph_query.skill_sync._sync_skill",
+                new_callable=AsyncMock,
+            ) as mock_sync,
+        ):
+            await on_session_ready(coord)
+
+        mock_fetcher.assert_not_called()
+        mock_sync.assert_not_awaited()
+        # The pessimistic stub has been replaced by the vendored real body.
+        got = hashlib.sha256(skill_path.read_bytes()).hexdigest()
+        assert got == EXPECTED_BUNDLED_SKILL_SHA256
+        assert "Server Unavailable" not in skill_path.read_text()
+        # No per-turn reload handler.
+        assert "skill:unloaded" not in [c.args[0] for c in coord.hooks.register.call_args_list]
+
+    async def test_disabled_server_configured_removes_stale_etag_and_sets_hash(
+        self, tmp_path: Path
+    ) -> None:
+        from amplifier_module_tool_graph_query.bundled_skill import EXPECTED_BUNDLED_SKILL_SHA256
+        from amplifier_module_tool_graph_query.skill_sync import on_session_ready
+
+        skill_path = tmp_path / "SKILL.md"
+        _write_stub(skill_path)
+        # Seed a STALE etag + content_hash (left over from a prior server fetch).
+        (tmp_path / _ETAG).write_text('W/"stale-etag"')
+        (tmp_path / _CHASH).write_text("0" * 64)
+        tool = _make_tool("http://up:9000")
+        tool.skill_sync_enabled = False
+        coord = _make_ready_coordinator(skill_path, tool)
+
+        await on_session_ready(coord)
+
+        # Stale etag removed (so a later re-enabled sync does a clean unconditional GET).
+        assert not (tmp_path / _ETAG).exists(), "stale .etag must be removed on vendored swap"
+        # content_hash now matches the vendored body.
+        assert (tmp_path / _CHASH).read_text().strip() == EXPECTED_BUNDLED_SKILL_SHA256
+
+    async def test_disabled_server_configured_idempotent_second_turn_no_rewrite(
+        self, tmp_path: Path
+    ) -> None:
+        from amplifier_module_tool_graph_query.skill_sync import on_session_ready
+
+        skill_path = tmp_path / "SKILL.md"
+        _write_stub(skill_path)
+        tool = _make_tool("http://up:9000")
+        tool.skill_sync_enabled = False
+        coord = _make_ready_coordinator(skill_path, tool)
+
+        await on_session_ready(coord)  # turn 1 — writes vendored body
+        first_mtime = skill_path.stat().st_mtime_ns
+        await on_session_ready(coord)  # turn 2 — content already correct
+        second_mtime = skill_path.stat().st_mtime_ns
+
+        assert first_mtime == second_mtime, "idempotent: SKILL.md must not be rewritten on turn 2"
+
+    async def test_disabled_rewrites_when_content_differs_by_trailing_newline(
+        self, tmp_path: Path
+    ) -> None:
+        # tester-breaker: idempotency must compare by sha256, not eyeballing. A
+        # one-byte difference (extra trailing newline) is NOT the vendored body
+        # and must be normalized back to it.
+        from amplifier_module_tool_graph_query.bundled_skill import EXPECTED_BUNDLED_SKILL_SHA256
+        from amplifier_module_tool_graph_query.skill_sync import _vendored_body, on_session_ready
+
+        skill_path = tmp_path / "SKILL.md"
+        body = _vendored_body("context-intelligence-graph-query")
+        assert body is not None
+        skill_path.write_text(body + "\n")  # differs by one trailing newline
+        tool = _make_tool("http://up:9000")
+        tool.skill_sync_enabled = False
+        coord = _make_ready_coordinator(skill_path, tool)
+
+        await on_session_ready(coord)
+
+        got = hashlib.sha256(skill_path.read_bytes()).hexdigest()
+        assert got == EXPECTED_BUNDLED_SKILL_SHA256
+
+    async def test_disabled_no_server_retains_stub(self, tmp_path: Path) -> None:
+        from amplifier_module_tool_graph_query.skill_sync import on_session_ready
+
+        skill_path = tmp_path / "SKILL.md"
+        stub_hash = _write_stub(skill_path)
+        tool = _make_tool("")  # no server configured
+        tool.skill_sync_enabled = False
+        coord = _make_ready_coordinator(skill_path, tool)
+
+        with patch("amplifier_module_tool_graph_query.skill_sync.SkillFetcher") as mock_fetcher:
+            await on_session_ready(coord)
+
+        mock_fetcher.assert_not_called()
+        assert hashlib.sha256(skill_path.read_bytes()).hexdigest() == stub_hash, (
+            "no server -> the 'Server Unavailable' stub must be retained untouched"
+        )
+        assert "skill:unloaded" not in [c.args[0] for c in coord.hooks.register.call_args_list]
+
+    async def test_disabled_missing_vendored_body_fails_loud_and_leaves_file(
+        self, tmp_path: Path, caplog
+    ) -> None:
+        from amplifier_module_tool_graph_query.skill_sync import on_session_ready
+
+        skill_path = tmp_path / "SKILL.md"
+        stub_hash = _write_stub(skill_path)
+        tool = _make_tool("http://up:9000")
+        tool.skill_sync_enabled = False
+        coord = _make_ready_coordinator(skill_path, tool)
+
+        with patch(
+            "amplifier_module_tool_graph_query.skill_sync._vendored_body",
+            return_value=None,
+        ):
+            with caplog.at_level(logging.ERROR):
+                await on_session_ready(coord)
+
+        # Fail loud + leave the on-disk file untouched (never a silent wrong result).
+        assert any("skill_swap_unavailable" in r.message for r in caplog.records)
+        assert hashlib.sha256(skill_path.read_bytes()).hexdigest() == stub_hash
+
+    async def test_disabled_emits_legible_info_signal(self, tmp_path: Path, caplog) -> None:
+        from amplifier_module_tool_graph_query.skill_sync import on_session_ready
+
+        skill_path = tmp_path / "SKILL.md"
+        _write_stub(skill_path)
+        tool = _make_tool("http://up:9000")
+        tool.skill_sync_enabled = False
+        coord = _make_ready_coordinator(skill_path, tool)
+
+        with caplog.at_level(logging.INFO):
+            await on_session_ready(coord)
+
+        assert any("skill_sync_disabled" in record.message for record in caplog.records), (
+            "disabled gate must log a legible INFO signal"
+        )
+
+    async def test_enabled_explicit_true_still_syncs(self, tmp_path: Path) -> None:
+        from amplifier_module_tool_graph_query.skill_sync import on_session_ready
+
+        skill_path = tmp_path / "SKILL.md"
+        tool = _make_tool("http://up:9000", api_key="key-1", workspace="ws-1")
+        tool.skill_sync_enabled = True
+        coord = _make_ready_coordinator(skill_path, tool)
+
+        with patch(
+            "amplifier_module_tool_graph_query.skill_sync._sync_skill",
+            new_callable=AsyncMock,
+        ) as mock_sync:
+            await on_session_ready(coord)
+
+        mock_sync.assert_awaited_once_with(
+            "context-intelligence-graph-query", skill_path, "http://up:9000", "key-1"
+        )
+        # Enabled path registers the reload handler.
+        assert "skill:unloaded" in [c.args[0] for c in coord.hooks.register.call_args_list]
+
+    async def test_tool_absent_falls_through_to_offline_path(self, tmp_path: Path) -> None:
+        # Gate only fires when tool is present AND disabled.  With no tool the
+        # existing offline-integrity path must run unchanged (server_url None).
+        from amplifier_module_tool_graph_query.skill_sync import on_session_ready
+
+        skill_path = tmp_path / "SKILL.md"
+        coord = _make_ready_coordinator(skill_path, tool=None)
+
+        with patch(
+            "amplifier_module_tool_graph_query.skill_sync._sync_skill",
+            new_callable=AsyncMock,
+        ) as mock_sync:
+            await on_session_ready(coord)
+
+        mock_sync.assert_awaited_once_with(
+            "context-intelligence-graph-query", skill_path, None, None
+        )
+        registered_events = [c.args[0] for c in coord.hooks.register.call_args_list]
+        assert "skill:unloaded" in registered_events

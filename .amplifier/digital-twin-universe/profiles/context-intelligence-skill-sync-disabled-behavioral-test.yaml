@@ -1,0 +1,246 @@
+# ============================================================================
+# SKILL-SYNC OPT-OUT (skill_sync_enabled) BEHAVIORAL TEST PROFILE
+# ============================================================================
+# GOAL
+#   End-to-end, evidence-based proof of the `skill_sync_enabled` opt-out added
+#   for issue #283, INCLUDING the corrected vendored-body swap. Installs
+#   tool-graph-query STANDALONE from the local-branch Gitea mirror and drives
+#   the REAL on_session_ready() against a live local HTTP capture server that
+#   records every request, proving the full 4-cell matrix:
+#
+#     Cell 1  disabled + server configured  -> stub is SWAPPED for the vendored
+#             real body; ZERO network (capture server saw no request); NO
+#             skill:unloaded handler registered.
+#     Cell 2  disabled + NO server           -> "Server Unavailable" stub is
+#             RETAINED untouched; ZERO network.
+#     Cell 3  enabled  + server up           -> GET /version AND
+#             GET /skills/context-intelligence-graph-query DID fire; SKILL.md
+#             updated from the server body; skill:unloaded handler registered.
+#     Cell 4  enabled  + server DOWN         -> graceful offline path, no crash,
+#             stub retained.
+#
+#   This is deterministic (no LLM, no provider key): it imports and runs the
+#   shipped module code, so it also proves the vendored body actually ships in
+#   the wheel (a missing file would fail Cell 1).
+#
+# LOCAL-BRANCH UNDER TEST
+#   tool-graph-query's bundle self-dependency points at
+#   github.com/microsoft/amplifier-bundle-context-intelligence@main. The
+#   url_rewrites block redirects that to the Gitea mirror of the LOCAL working
+#   branch, so the install resolves local code (incl. bundled_skill/), not
+#   GitHub @main.
+#
+# USAGE
+#   amplifier-digital-twin launch \
+#     .amplifier/digital-twin-universe/profiles/context-intelligence-skill-sync-disabled-behavioral-test.yaml \
+#     --var GITEA_URL=http://<host-ip>:<port> \
+#     --var GITEA_TOKEN=<token> \
+#     --name context-intelligence-skill-sync-disabled-behavioral-test
+# ============================================================================
+
+name: context-intelligence-skill-sync-disabled-behavioral-test
+description: >
+  End-to-end proof of the skill_sync_enabled opt-out + vendored-body swap
+  (issue #283) for the context-intelligence bundle (local branch via Gitea).
+  Installs tool-graph-query standalone and drives the real on_session_ready
+  against a live HTTP capture server, asserting the full 4-cell matrix:
+  disabled+server -> vendored swap + zero network; disabled+no-server -> stub
+  retained; enabled+up -> server fetch fires; enabled+down -> graceful offline.
+
+base:
+  image: ubuntu:24.04
+
+# MANDATORY: redirect every github.com/microsoft/amplifier-bundle-context-intelligence
+# reference (the module's @main bundle self-dependency, which carries the shared
+# context_intelligence package AND the vendored bundled_skill) to the Gitea mirror
+# whose `main` branch holds the local working-tree snapshot.
+url_rewrites:
+  auth:
+    username: admin
+    token_var: GITEA_TOKEN
+  default_match_mode: boundary
+  rules:
+    - match: github.com/microsoft/amplifier-bundle-context-intelligence
+      target: ${GITEA_URL}/admin/amplifier-bundle-context-intelligence
+
+passthrough:
+  allow_external: true
+  services:
+    - name: github
+      key_env: GH_TOKEN
+
+provision:
+  setup_cmds:
+    - apt-get update && apt-get install -y git curl python3
+    - curl -LsSf https://astral.sh/uv/install.sh | sh
+    - |
+      if [ -n "$GH_TOKEN" ]; then
+        echo "machine github.com login x-token-auth password $GH_TOKEN" > /root/.netrc
+        chmod 600 /root/.netrc
+        git config --global credential.helper 'store'
+      fi
+    # Standalone install of tool-graph-query from the local-branch mirror.
+    # --no-sources reproduces foundation's module-activation policy; the bundle
+    # self-dependency (@main, github) is rewritten to the Gitea mirror.
+    - |
+      export PATH="$HOME/.local/bin:$PATH"
+      uv venv /tmp/ss-venv
+      VIRTUAL_ENV=/tmp/ss-venv uv pip install --no-sources \
+        "git+https://github.com/microsoft/amplifier-bundle-context-intelligence@main#subdirectory=modules/tool-graph-query"
+      # graph_query_tool.py imports amplifier_core.models at top level. The kernel
+      # is always present in a real deployment, so the module declares it dev-only,
+      # not as a hard runtime dep — install it explicitly for this standalone harness.
+      VIRTUAL_ENV=/tmp/ss-venv uv pip install "amplifier-core>=1.6.0"
+
+readiness:
+  - name: module-imports
+    command: /tmp/ss-venv/bin/python -c "import amplifier_module_tool_graph_query, context_intelligence; print('ok')"
+
+validation_cmds:
+  # --------------------------------------------------------------------------
+  # SS1: Full 4-cell matrix against a live HTTP capture server.
+  #      Deterministic — drives the real on_session_ready(), no LLM involved.
+  # --------------------------------------------------------------------------
+  - name: SS1-skill-sync-matrix-end-to-end
+    command: |
+      set -e
+      /tmp/ss-venv/bin/python - << 'PY'
+      import asyncio, hashlib, json, os, threading
+      from http.server import BaseHTTPRequestHandler, HTTPServer
+      from pathlib import Path
+      import tempfile
+
+      # Neutralize ambient CI config so each cell's server posture is exactly
+      # what its config dict declares (a developer host may export these — the
+      # clean DTU container does not). Without this, the "no server" cell could
+      # silently inherit a real server_url and stop testing what it claims to.
+      for _v in (
+          "AMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_URL",
+          "AMPLIFIER_CONTEXT_INTELLIGENCE_API_KEY",
+          "AMPLIFIER_CONTEXT_INTELLIGENCE_SKILL_SYNC_ENABLED",
+      ):
+          os.environ.pop(_v, None)
+
+      from amplifier_module_tool_graph_query.graph_query_tool import GraphQueryTool
+      from amplifier_module_tool_graph_query.skill_sync import (
+          on_session_ready,
+          _GRAPH_QUERY_TOOL_CAPABILITY,
+          TOOL_SKILLS_DISCOVERY_CAPABILITY,
+      )
+      from amplifier_module_tool_graph_query.bundled_skill import EXPECTED_BUNDLED_SKILL_SHA256
+
+      SKILL = "context-intelligence-graph-query"
+      STUB = (
+          "---\nname: context-intelligence-graph-query\nversion: 2.0.0\n---\n\n"
+          "# Context Intelligence Graph Query \u2014 Server Unavailable\n\n"
+          "The context intelligence server is not reachable. Do not attempt Cypher queries.\n"
+      )
+      SERVER_BODY = (
+          "---\nname: context-intelligence-graph-query\nversion: 2.0.0\n---\n\n"
+          "# Context Intelligence Graph Query\n\nFRESH-FROM-SERVER-MARKER\n"
+      )
+      SERVER_ETAG = '"server-etag-v2"'
+
+      def _sha(p): return hashlib.sha256(Path(p).read_bytes()).hexdigest()
+      def _sha_text(s): return hashlib.sha256(s.encode()).hexdigest()
+
+      # ---- live HTTP capture server -----------------------------------------
+      class Handler(BaseHTTPRequestHandler):
+          requests = []
+          def log_message(self, *a): pass
+          def do_GET(self):
+              Handler.requests.append(self.path)
+              if self.path == "/version":
+                  body = json.dumps({"version": "2.0.0"}).encode()
+                  self.send_response(200); self.send_header("Content-Type","application/json")
+                  self.send_header("Content-Length", str(len(body))); self.end_headers()
+                  self.wfile.write(body); return
+              if self.path == f"/skills/{SKILL}":
+                  body = SERVER_BODY.encode()
+                  self.send_response(200); self.send_header("Content-Type","text/markdown")
+                  self.send_header("ETag", SERVER_ETAG)
+                  self.send_header("Content-Length", str(len(body))); self.end_headers()
+                  self.wfile.write(body); return
+              self.send_response(404); self.end_headers()
+
+      srv = HTTPServer(("127.0.0.1", 0), Handler)
+      port = srv.server_address[1]
+      threading.Thread(target=srv.serve_forever, daemon=True).start()
+      UP = f"http://127.0.0.1:{port}"
+      DOWN = "http://127.0.0.1:1"  # nothing listening
+
+      # ---- fakes -------------------------------------------------------------
+      class Meta:
+          def __init__(self, path): self.path = str(path)
+      class Discovery:
+          def __init__(self, path): self._m = Meta(path)
+          def find(self, name): return self._m if name == SKILL else None
+      class Hooks:
+          def __init__(self): self.events = []
+          def register(self, event, *a, **k): self.events.append(event)
+      class Coord:
+          def __init__(self, skill_path):
+              self.config = {}
+              self.hooks = Hooks()
+              self._caps = {TOOL_SKILLS_DISCOVERY_CAPABILITY: Discovery(skill_path)}
+          def get_capability(self, name): return self._caps.get(name)
+
+      def make(cell_dir, config, seed=STUB):
+          d = Path(cell_dir); d.mkdir(parents=True, exist_ok=True)
+          skill_path = d / "SKILL.md"; skill_path.write_text(seed)
+          coord = Coord(skill_path)
+          tool = GraphQueryTool(coordinator=coord, config=config)
+          coord._caps[_GRAPH_QUERY_TOOL_CAPABILITY] = tool
+          return coord, skill_path
+
+      tmp = Path(tempfile.mkdtemp())
+      failures = []
+      def check(cond, msg):
+          print(("PASS: " if cond else "FAIL: ") + msg)
+          if not cond: failures.append(msg)
+
+      # ---- Cell 1: disabled + server configured -> vendored swap, zero net ---
+      Handler.requests.clear()
+      coord, sp = make(tmp/"c1", {"context_intelligence_server_url": UP, "skill_sync_enabled": False})
+      asyncio.run(on_session_ready(coord))
+      check(Handler.requests == [], "Cell1 disabled+server: ZERO network (no requests) -> %r" % Handler.requests)
+      check(_sha(sp) == EXPECTED_BUNDLED_SKILL_SHA256, "Cell1 disabled+server: stub SWAPPED for vendored real body")
+      check("Server Unavailable" not in sp.read_text(), "Cell1 disabled+server: 'Server Unavailable' stub is gone")
+      check("skill:unloaded" not in coord.hooks.events, "Cell1 disabled+server: NO skill:unloaded handler registered")
+
+      # ---- Cell 2: disabled + no server -> stub retained, zero net -----------
+      Handler.requests.clear()
+      coord, sp = make(tmp/"c2", {"skill_sync_enabled": False})
+      asyncio.run(on_session_ready(coord))
+      check(Handler.requests == [], "Cell2 disabled+no-server: ZERO network")
+      check(_sha(sp) == _sha_text(STUB), "Cell2 disabled+no-server: 'Server Unavailable' stub RETAINED untouched")
+      check("skill:unloaded" not in coord.hooks.events, "Cell2 disabled+no-server: NO skill:unloaded handler")
+
+      # ---- Cell 3: enabled + server up -> fetch fires, body updated ----------
+      Handler.requests.clear()
+      coord, sp = make(tmp/"c3", {"context_intelligence_server_url": UP})  # default skill_sync_enabled=True
+      asyncio.run(on_session_ready(coord))
+      check("/version" in Handler.requests, "Cell3 enabled+up: GET /version fired -> %r" % Handler.requests)
+      check(f"/skills/{SKILL}" in Handler.requests, "Cell3 enabled+up: GET /skills/%s fired" % SKILL)
+      check(_sha(sp) == _sha_text(SERVER_BODY), "Cell3 enabled+up: SKILL.md updated from SERVER body")
+      check("skill:unloaded" in coord.hooks.events, "Cell3 enabled+up: skill:unloaded handler registered")
+
+      # ---- Cell 4: enabled + server down -> graceful offline, no crash -------
+      Handler.requests.clear()
+      coord, sp = make(tmp/"c4", {"context_intelligence_server_url": DOWN})
+      try:
+          asyncio.run(on_session_ready(coord))
+          crashed = False
+      except Exception as e:  # noqa: BLE001
+          crashed = True; print("unexpected exception:", e)
+      check(not crashed, "Cell4 enabled+down: graceful offline path, no crash")
+      check(_sha(sp) == _sha_text(STUB), "Cell4 enabled+down: stub retained (offline, content preserved)")
+
+      srv.shutdown()
+      if failures:
+          print("\nFAIL[SS1]: %d assertion(s) failed" % len(failures))
+          for f in failures: print("  - " + f)
+          raise SystemExit(1)
+      print("\nPASS[SS1]: all 4 cells proven end-to-end (vendored body shipped in wheel; "
+            "disabled=zero network + correct body; enabled=server fetch).")
+      PY

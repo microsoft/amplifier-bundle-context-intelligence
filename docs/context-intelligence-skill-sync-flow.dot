@@ -1,16 +1,27 @@
 // context-intelligence-skill-sync-flow.dot
-// Context-Intelligence Skill-Sync-from-Server Flow
+// Context-Intelligence Skill-Sync Flow (with the skill_sync_enabled opt-out)
 // Owned by tool-graph-query (graph-analyst sub-session).
 // The logging hook is now PURE TELEMETRY — skill-content sync was relocated here.
+//
+// SAFE-DEFAULT INVARIANT (do not delete the vendored body — see cluster 0/2b):
+//   The bundle ships skills/context-intelligence-graph-query/SKILL.md as a
+//   pessimistic "Server Unavailable" STUB. Sync (enabled) overwrites it with the
+//   real body fetched from the server. When sync is DISABLED but a server is
+//   configured, on_session_ready SWAPS the stub for the VENDORED real body in
+//   amplifier_module_tool_graph_query/bundled_skill/ (a local copy, ZERO
+//   network) so a working graph-analyst is never stranded on the stub. That
+//   vendored body is load-bearing; a prior refactor deleted its predecessor
+//   (legacy_content) and crippled this path (issue #283). Do not remove it.
 //
 // Grounded in:
 //   modules/tool-graph-query/amplifier_module_tool_graph_query/skill_sync.py
 //   modules/tool-graph-query/amplifier_module_tool_graph_query/skill_fetcher.py
 //   modules/tool-graph-query/amplifier_module_tool_graph_query/graph_query_tool.py
-//   context_intelligence/tool_resolver.py
+//   modules/tool-graph-query/amplifier_module_tool_graph_query/bundled_skill/__init__.py
+//   context_intelligence/tool_resolver.py  (skill_sync_enabled property)
 //   modules/tool-graph-query/amplifier_module_tool_graph_query/__init__.py
 //
-// Generated: 2026-06-02
+// Generated: 2026-06-21
 // Render: dot -Tpng context-intelligence-skill-sync-flow.dot -o context-intelligence-skill-sync-flow.png
 
 digraph SkillSyncFlow {
@@ -62,6 +73,72 @@ digraph SkillSyncFlow {
 
         mount_call -> mount_tool;
         mount_tool -> mount_osr;
+    }
+
+    // ════════════════════════════════════════════════════════════════════════
+    // CLUSTER 0 — skill_sync_enabled gate  (on_session_ready entry)
+    // ════════════════════════════════════════════════════════════════════════
+
+    subgraph cluster_gate {
+        label="0. on_session_ready — skill_sync_enabled gate";
+        style=filled;
+        fillcolor="#FAFAFA";
+        color="#B0BEC5";
+        fontsize=12;
+        fontname="Helvetica Bold";
+
+        node [shape=diamond, style=filled, penwidth=2];
+
+        gate_enabled [
+            label="tool.skill_sync_enabled?\n(config / coordinator /\nAMPLIFIER_CONTEXT_INTELLIGENCE_\nSKILL_SYNC_ENABLED env — default TRUE)",
+            fillcolor="#FFEBEE",
+            color="#C62828",
+            fontcolor="#C62828"
+        ];
+    }
+
+    // ════════════════════════════════════════════════════════════════════════
+    // CLUSTER 2b — DISABLED path: zero-network offline-body swap
+    // (the opt-out for headless / single-command-series workflows — issue #283)
+    // ════════════════════════════════════════════════════════════════════════
+
+    subgraph cluster_disabled {
+        label="2b. skill_sync_enabled=FALSE → _apply_offline_skill_bodies  (ZERO network)";
+        style=filled;
+        fillcolor="#ECEFF1";
+        color="#37474F";
+        fontsize=12;
+        fontname="Helvetica Bold";
+
+        node [shape=diamond, style=filled, penwidth=2];
+
+        dis_server_check [
+            label="server_url configured?\n(read from config only —\nNO reachability ping)",
+            fillcolor="#FFF8E1",
+            color="#F57F17",
+            fontcolor="#F57F17"
+        ];
+
+        node [shape=box, style="rounded,filled", penwidth=1.5];
+
+        dis_keep_stub [
+            label="no server → RETAIN shipped stub\n'Server Unavailable' SKILL.md\n(graph genuinely absent — correct)",
+            fillcolor="#EEEEEE",
+            color="#757575"
+        ];
+
+        dis_swap [
+            label="server configured → SWAP in vendored body\n────────────────────────────\n_install_vendored_body() — bundled_skill/\ncontext-intelligence-graph-query.md (pinned sha256)\n• fail loud if vendored body missing from wheel\n• idempotent by sha256 (write only if different)\n• crash-atomic: remove .etag FIRST, then\n  temp-write + os.replace, then write .content_hash\n• ZERO network: no GET /version, no GET /skills/\n• NO skill:unloaded handler registered",
+            fillcolor="#E8F5E9",
+            color="#2E7D32"
+        ];
+
+        dis_server_check -> dis_keep_stub [
+            label="  NO  ", color="#757575", fontcolor="#757575", penwidth=1.5
+        ];
+        dis_server_check -> dis_swap [
+            label="  YES  ", color="#2E7D32", fontcolor="#2E7D32", penwidth=2
+        ];
     }
 
     // ═══════════════════════════════════════════════════════════════
@@ -469,11 +546,25 @@ digraph SkillSyncFlow {
     // Cross-cluster edges
     // ═══════════════════════════════════════════════════════════════
 
-    // Mount → on_session_ready orchestration
-    mount_osr -> osr_cap_check [
+    // Mount → on_session_ready → skill_sync_enabled gate
+    mount_osr -> gate_enabled [
         penwidth=2, color="#F57F17",
-        ltail=cluster_mount, lhead=cluster_osr,
+        ltail=cluster_mount, lhead=cluster_gate,
         label="  kernel triggers  "
+    ];
+
+    // Gate: ENABLED (default) → existing resync flow
+    gate_enabled -> osr_cap_check [
+        label="  TRUE (default) — sync from server  ",
+        color="#2E7D32", fontcolor="#2E7D32", penwidth=2,
+        ltail=cluster_gate, lhead=cluster_osr
+    ];
+
+    // Gate: DISABLED → zero-network offline-body swap (issue #283 opt-out)
+    gate_enabled -> dis_server_check [
+        label="  FALSE — zero per-turn network  ",
+        color="#37474F", fontcolor="#37474F", penwidth=2,
+        ltail=cluster_gate, lhead=cluster_disabled
     ];
 
     // on_session_ready → config resolution

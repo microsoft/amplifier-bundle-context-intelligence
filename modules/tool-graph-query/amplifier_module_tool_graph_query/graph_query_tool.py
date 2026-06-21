@@ -83,6 +83,21 @@ class GraphQueryTool:
             "required": ["query"],
         }
 
+    @property
+    def skill_sync_enabled(self) -> bool:
+        """Whether the analytics-path skill sync runs on session start.
+
+        Defaults to ``True`` (existing behaviour preserved).  Resolved via the
+        tool's ``ToolConfigResolver`` from the ``skill_sync_enabled`` key
+        (mount config dict -> coordinator.config ->
+        ``AMPLIFIER_CONTEXT_INTELLIGENCE_SKILL_SYNC_ENABLED`` env var ->
+        default).  When ``False``, ``skill_sync.on_session_ready`` is a complete
+        no-op, so headless / pipeline / single-command-series workflows pay zero
+        skill traffic per turn.  Read by ``skill_sync.on_session_ready`` via the
+        ``context_intelligence._graph_query_tool`` coordinator capability.
+        """
+        return self._tool_resolver.skill_sync_enabled
+
     def _resolve_server_config(self, coordinator: Any) -> tuple[str | None, str | None, str]:
         """Return (server_url, api_key, workspace) from hook resolver or ToolConfigResolver.
 

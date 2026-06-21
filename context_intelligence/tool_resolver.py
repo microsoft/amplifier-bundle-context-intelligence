@@ -45,6 +45,10 @@ from context_intelligence.config import (  # type: ignore[attr-defined]
 
 _DEFAULT_WORKSPACE = "default"
 
+#: Case-insensitive string tokens accepted for boolean config knobs.
+_TRUE_TOKENS = frozenset({"true", "1", "yes", "on"})
+_FALSE_TOKENS = frozenset({"false", "0", "no", "off"})
+
 
 def _expand(value: Any) -> Any:
     """Expand shell-style ``${VAR}`` placeholders in *value* if it is a string.
@@ -54,6 +58,34 @@ def _expand(value: Any) -> Any:
     (falsy), letting the caller's ``or``-chain continue to the next source.
     """
     return _expand_env_placeholders(value) if isinstance(value, str) else value
+
+
+def _coerce_bool(value: Any) -> bool | None:
+    """Three-state boolean coercion for config knobs.
+
+    Returns ``True`` / ``False`` only when *value* is a definite, recognized
+    boolean; returns ``None`` (meaning "absent — fall through to the next
+    source / the default") for every other case.
+
+    Critically, an **empty / whitespace-only string** resolves to ``None``,
+    **never** ``False``.  This is what makes an unexpanded YAML placeholder
+    (``"${AMPLIFIER_CONTEXT_INTELLIGENCE_SKILL_SYNC_ENABLED:}"`` with the env
+    var unset, which expands to ``""``) behave as *absent* rather than silently
+    disabling the knob for every user.  An unrecognized string is likewise
+    treated as absent (safe fall-through) rather than guessed.
+    """
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return value
+    text = str(value).strip().lower()
+    if not text:
+        return None  # empty / placeholder / whitespace → absent
+    if text in _TRUE_TOKENS:
+        return True
+    if text in _FALSE_TOKENS:
+        return False
+    return None  # unrecognized → absent (fall through to default)
 
 
 class ToolConfigResolver:
@@ -165,3 +197,38 @@ class ToolConfigResolver:
                 or _DEFAULT_WORKSPACE
             )
         return self._workspace
+
+    @property
+    def skill_sync_enabled(self) -> bool:
+        """Whether the analytics path syncs watched skills on session start.
+
+        Default ``True`` — preserves the existing behaviour for every consumer
+        who does not set the knob.  Set to ``false`` for headless / pipeline /
+        single-command-series workflows that compose the full behaviour but
+        never invoke the graph-analyst sub-session: when disabled,
+        ``skill_sync.on_session_ready`` becomes a complete no-op (no
+        ``GET /version`` ping, no skill fetch, no ``skill:unloaded`` reload
+        handler registration), so those workflows pay **zero** skill traffic
+        per turn.
+
+        Resolution order (first *definite* value wins; empty / placeholder /
+        unrecognized values are treated as *absent* and fall through):
+        1. config['skill_sync_enabled']                       — mount() config dict
+        2. coordinator.config['skill_sync_enabled']           — app-level override
+        3. AMPLIFIER_CONTEXT_INTELLIGENCE_SKILL_SYNC_ENABLED   — env var
+        4. True                                               — default
+
+        Accepted string forms (case-insensitive): true/1/yes/on and
+        false/0/no/off.  An unexpanded YAML placeholder that resolves to an
+        empty string resolves to the default (``True``), never ``False`` — it
+        cannot silently disable sync for everyone.
+        """
+        for raw in (
+            _expand(self._config.get("skill_sync_enabled")),
+            _expand(self._coordinator_config_get("skill_sync_enabled")),
+            _env("SKILL_SYNC_ENABLED"),
+        ):
+            resolved = _coerce_bool(raw)
+            if resolved is not None:
+                return resolved
+        return True

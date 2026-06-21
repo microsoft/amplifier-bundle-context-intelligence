@@ -417,3 +417,105 @@ class TestToolConfigResolverDuckTyping:
             assert hasattr(resolver, "context_intelligence_server_url")
             assert hasattr(resolver, "context_intelligence_api_key")
             assert hasattr(resolver, "workspace")
+
+
+# ---------------------------------------------------------------------------
+# TestToolConfigResolverSkillSyncEnabled
+# ---------------------------------------------------------------------------
+
+_SKILL_SYNC_ENV = "AMPLIFIER_CONTEXT_INTELLIGENCE_SKILL_SYNC_ENABLED"
+
+
+class TestToolConfigResolverSkillSyncEnabled:
+    """skill_sync_enabled: three-state resolution, default True.
+
+    Resolution order (first DEFINITE value wins; empty / placeholder /
+    unrecognized => absent => fall through): config dict -> coordinator.config
+    -> AMPLIFIER_CONTEXT_INTELLIGENCE_SKILL_SYNC_ENABLED env -> True.
+    """
+
+    def test_default_is_true_when_nothing_set(self, monkeypatch) -> None:
+        monkeypatch.delenv(_SKILL_SYNC_ENV, raising=False)
+        resolver = ToolConfigResolver(config={}, coordinator=_make_coordinator())
+        assert resolver.skill_sync_enabled is True
+
+    def test_config_real_bool_false_is_not_eaten(self, monkeypatch) -> None:
+        # Regression guard: a truthy ``or``-chain would silently drop False.
+        monkeypatch.delenv(_SKILL_SYNC_ENV, raising=False)
+        resolver = ToolConfigResolver(
+            config={"skill_sync_enabled": False}, coordinator=_make_coordinator()
+        )
+        assert resolver.skill_sync_enabled is False
+
+    def test_config_real_bool_true(self, monkeypatch) -> None:
+        monkeypatch.delenv(_SKILL_SYNC_ENV, raising=False)
+        resolver = ToolConfigResolver(
+            config={"skill_sync_enabled": True}, coordinator=_make_coordinator()
+        )
+        assert resolver.skill_sync_enabled is True
+
+    def test_config_string_false_forms(self, monkeypatch) -> None:
+        monkeypatch.delenv(_SKILL_SYNC_ENV, raising=False)
+        for token in ("false", "False", "FALSE", "0", "no", "off", " off "):
+            resolver = ToolConfigResolver(
+                config={"skill_sync_enabled": token}, coordinator=_make_coordinator()
+            )
+            assert resolver.skill_sync_enabled is False, token
+
+    def test_config_string_true_forms(self, monkeypatch) -> None:
+        monkeypatch.delenv(_SKILL_SYNC_ENV, raising=False)
+        for token in ("true", "True", "1", "yes", "on", " ON "):
+            resolver = ToolConfigResolver(
+                config={"skill_sync_enabled": token}, coordinator=_make_coordinator()
+            )
+            assert resolver.skill_sync_enabled is True, token
+
+    def test_empty_string_resolves_to_default_true_not_false(self, monkeypatch) -> None:
+        # The critical trap: an unexpanded YAML placeholder that resolves to ""
+        # must be treated as ABSENT (default True), never as False.
+        monkeypatch.delenv(_SKILL_SYNC_ENV, raising=False)
+        for blank in ("", "   ", "\t"):
+            resolver = ToolConfigResolver(
+                config={"skill_sync_enabled": blank}, coordinator=_make_coordinator()
+            )
+            assert resolver.skill_sync_enabled is True, repr(blank)
+
+    def test_unexpanded_placeholder_with_unset_env_is_default_true(self, monkeypatch) -> None:
+        monkeypatch.delenv(_SKILL_SYNC_ENV, raising=False)
+        resolver = ToolConfigResolver(
+            config={"skill_sync_enabled": "${" + _SKILL_SYNC_ENV + ":}"},
+            coordinator=_make_coordinator(),
+        )
+        assert resolver.skill_sync_enabled is True
+
+    def test_placeholder_expands_from_env_to_false(self, monkeypatch) -> None:
+        monkeypatch.setenv(_SKILL_SYNC_ENV, "false")
+        resolver = ToolConfigResolver(
+            config={"skill_sync_enabled": "${" + _SKILL_SYNC_ENV + ":}"},
+            coordinator=_make_coordinator(),
+        )
+        assert resolver.skill_sync_enabled is False
+
+    def test_coordinator_fallback_when_config_absent(self, monkeypatch) -> None:
+        monkeypatch.delenv(_SKILL_SYNC_ENV, raising=False)
+        coordinator = _make_coordinator(config={"skill_sync_enabled": False})
+        resolver = ToolConfigResolver(config={}, coordinator=coordinator)
+        assert resolver.skill_sync_enabled is False
+
+    def test_env_fallback_when_config_and_coordinator_absent(self, monkeypatch) -> None:
+        monkeypatch.setenv(_SKILL_SYNC_ENV, "off")
+        resolver = ToolConfigResolver(config={}, coordinator=_make_coordinator())
+        assert resolver.skill_sync_enabled is False
+
+    def test_config_dict_wins_over_coordinator_and_env(self, monkeypatch) -> None:
+        monkeypatch.setenv(_SKILL_SYNC_ENV, "true")
+        coordinator = _make_coordinator(config={"skill_sync_enabled": True})
+        resolver = ToolConfigResolver(config={"skill_sync_enabled": False}, coordinator=coordinator)
+        assert resolver.skill_sync_enabled is False
+
+    def test_unrecognized_string_falls_through_to_default_true(self, monkeypatch) -> None:
+        monkeypatch.delenv(_SKILL_SYNC_ENV, raising=False)
+        resolver = ToolConfigResolver(
+            config={"skill_sync_enabled": "maybe"}, coordinator=_make_coordinator()
+        )
+        assert resolver.skill_sync_enabled is True
