@@ -1,0 +1,96 @@
+"""Test that the blob-read tool pyproject.toml declares the bundle dependency in a
+form that installs standalone (outside the monorepo).
+
+The tool imports from the `context_intelligence` package shipped by the parent
+bundle. For the tool to install standalone under the Amplifier agent's
+`uv pip install --no-sources` policy, the bundle MUST be referenced as a PEP 508
+direct git reference inside [project.dependencies] (which survives --no-sources),
+NOT via a [tool.uv.sources] `path = "../.."` entry (which --no-sources strips).
+
+This guard mirrors hook-context-intelligence/tests/test_hook_dependencies.py so
+that every module references the parent bundle uniformly and cannot regress to a
+uv path source (the original cause of the uv conflicting-URLs co-install failure).
+"""
+
+from __future__ import annotations
+
+import tomllib
+from pathlib import Path
+
+MODULE_ROOT = Path(__file__).parent.parent
+PYPROJECT = MODULE_ROOT / "pyproject.toml"
+
+BUNDLE = "amplifier-bundle-context-intelligence"
+
+
+def _load_pyproject() -> dict:
+    return tomllib.loads(PYPROJECT.read_text())
+
+
+def _dep_name(dep: str) -> str:
+    """Extract the bare package name from a requirement string.
+
+    Handles version specifiers (>=, ==) and PEP 508 direct references
+    (`name @ git+https://...`).
+    """
+    return dep.split("@")[0].split(">=")[0].split("==")[0].strip()
+
+
+class TestToolDependencies:
+    """Verify the tool declares the bundle as a standalone-installable dependency."""
+
+    def test_bundle_declared_as_direct_git_reference(self) -> None:
+        """The bundle must be a PEP 508 direct git reference in [project.dependencies].
+
+        A direct `name @ git+https://...` reference survives `--no-sources`,
+        unlike a bare name (only resolvable from PyPI) or a [tool.uv.sources] entry.
+        """
+        data = _load_pyproject()
+        deps: list[str] = data["project"]["dependencies"]
+        bundle_deps = [d for d in deps if _dep_name(d) == BUNDLE]
+        assert bundle_deps, f"Expected '{BUNDLE}' in dependencies, got: {deps}"
+        assert "git+https://" in bundle_deps[0], (
+            f"Bundle dependency must be a direct git+https reference so it survives "
+            f"`uv pip install --no-sources`, got: {bundle_deps[0]!r}"
+        )
+
+    def test_bundle_is_not_a_uv_path_source(self) -> None:
+        """The bundle must NOT be a [tool.uv.sources] path entry.
+
+        The `path = '../..'` assumption is exactly what breaks standalone install:
+        --no-sources strips [tool.uv.sources], leaving an unresolvable reference.
+        Two modules referencing the bundle via path while others use a git URL is
+        what produced uv's "conflicting URLs" abort on a single co-install command.
+        """
+        data = _load_pyproject()
+        sources: dict = data.get("tool", {}).get("uv", {}).get("sources", {})
+        assert BUNDLE not in sources, (
+            f"'{BUNDLE}' must not be a [tool.uv.sources] entry (breaks standalone "
+            f"install under --no-sources); declare it as a direct git reference in "
+            f"[project.dependencies] instead. Got sources: {sources}"
+        )
+
+    def test_dependencies_list_has_httpx_and_bundle(self) -> None:
+        """Production deps must include httpx and the bundle.
+
+        amplifier-core is NOT a production dep — it is runtime-provided by the
+        Amplifier CLI.
+        """
+        data = _load_pyproject()
+        deps: list[str] = data["project"]["dependencies"]
+        assert any("httpx" in d for d in deps), f"httpx not found in {deps}"
+        assert any(_dep_name(d) == BUNDLE for d in deps), f"{BUNDLE} not found in {deps}"
+        assert not any(_dep_name(d) == "amplifier-core" for d in deps), (
+            f"amplifier-core must not be a production dep (runtime-provided): {deps}"
+        )
+
+    def test_allow_direct_references_enabled(self) -> None:
+        """Building a wheel that carries a direct reference requires this hatch flag."""
+        data = _load_pyproject()
+        allow = (
+            data.get("tool", {}).get("hatch", {}).get("metadata", {}).get("allow-direct-references")
+        )
+        assert allow is True, (
+            "tool.hatch.metadata.allow-direct-references must be true to build a wheel "
+            f"carrying the direct git reference, got: {allow!r}"
+        )
