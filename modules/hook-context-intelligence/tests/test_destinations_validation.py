@@ -34,16 +34,24 @@ class TestValidateDestinations:
         assert "missing url" in msg
         assert "missing api_key" in msg
 
-    def test_legacy_url_missing_api_key_raises(self) -> None:
-        """Legacy synthesis with missing api_key → fail-fast at validate_destinations."""
+    def test_legacy_url_missing_api_key_degrades_gracefully(self) -> None:
+        """Legacy url without api_key → graceful degradation (local-only), no ValueError.
+
+        The legacy synthesis path now only creates a destination when BOTH url AND
+        api_key are present.  url-without-key returns {} (local-only) so validate_
+        destinations() has nothing to raise about.  This is intentionally different
+        from an explicit destinations.<name> entry with an empty api_key, which still
+        fails fast.
+        """
         r = _resolver(
             {
                 "context_intelligence_server_url": "http://x:8000",
-                # no api_key → synthesized with empty api_key
+                # no api_key → graceful degradation (no synthesis, no raise)
             }
         )
-        with pytest.raises(ValueError, match="missing api_key"):
-            r.validate_destinations()
+        # Must NOT raise — empty destinations dict is local-only, valid.
+        result = r.validate_destinations()
+        assert result == {}, "legacy url without api_key should yield empty destinations"
 
     def test_valid_destinations_returns_dict(self) -> None:
         r = _resolver(

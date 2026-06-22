@@ -114,7 +114,7 @@ class _DestinationDispatcher:
             self._queue.put_nowait((event, data))
         except asyncio.QueueFull:
             self._enabled = False
-            logger.debug(
+            logger.warning(
                 "server_dispatch_queue_full: dest=%s url=%s capacity=%d event=%s"
                 " dispatch disabled; local JSONL capture continues.",
                 self._name,
@@ -174,7 +174,7 @@ class _DestinationDispatcher:
             )
             if self._consecutive_failures >= self._failure_threshold:
                 self._enabled = False
-                logger.debug(
+                logger.warning(
                     "Context intelligence server unreachable after %d attempts"
                     " — dispatch disabled for this destination (dest=%s url=%s)."
                     " Local JSONL capture continues.",

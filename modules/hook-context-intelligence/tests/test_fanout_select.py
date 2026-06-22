@@ -88,6 +88,52 @@ class TestPathspecMatching:
         dest = Destination(name="x", url="http://x:8000", api_key="k", include=())
         assert not destination_is_active(dest, "/home/user/repos/app")
 
+    def test_star_star_name_slash_star_star_misses_directory_itself(self) -> None:
+        """Gotcha: **/name/** matches only INSIDE the dir, not the dir itself.
+
+        When the user runs `cd client-x && amplifier`, working_dir = .../client-x.
+        The pattern **/client-x/** does NOT match that path — the dir is not inside itself.
+        Documented in behaviors/context-intelligence.yaml and the design docs.
+        """
+        dest = Destination(
+            name="team",
+            url="http://x:8000",
+            api_key="k",
+            include=("**/client-x/**",),
+        )
+        # Inside the dir — should match
+        assert destination_is_active(dest, "/home/user/client-x/app"), (
+            "**/client-x/** must match /home/user/client-x/app (inside the dir)"
+        )
+        # The dir itself — must NOT match with just **/client-x/**
+        assert not destination_is_active(dest, "/home/user/client-x"), (
+            "**/client-x/** must NOT match /home/user/client-x (the dir itself)"
+        )
+
+    def test_dir_and_contents_idiom_matches_both(self) -> None:
+        """Fix: include both **/name and **/name/** to match the dir itself AND its contents.
+
+        This is the recommended pattern in the configuration examples.
+        """
+        dest = Destination(
+            name="team",
+            url="http://x:8000",
+            api_key="k",
+            include=("**/client-x", "**/client-x/**"),
+        )
+        # The dir itself — must match
+        assert destination_is_active(dest, "/home/user/client-x"), (
+            "**/client-x must match /home/user/client-x (the dir itself)"
+        )
+        # Inside the dir — must also match
+        assert destination_is_active(dest, "/home/user/client-x/app"), (
+            "**/client-x/** must match /home/user/client-x/app (inside the dir)"
+        )
+        # Different dir — must not match
+        assert not destination_is_active(dest, "/home/user/client-y"), (
+            "neither pattern should match client-y"
+        )
+
 
 # ---------------------------------------------------------------------------
 # Fan-out: select_active

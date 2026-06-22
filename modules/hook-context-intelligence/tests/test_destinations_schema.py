@@ -148,10 +148,11 @@ class TestLegacySynthesis:
         r = _resolver({})
         assert r.destinations == {}
 
-    def test_legacy_missing_key_synthesizes_with_empty_key(self) -> None:
-        """Legacy url without api_key synthesizes with empty api_key (C3 will catch it)."""
+    def test_legacy_missing_key_no_synthesis(self) -> None:
+        """Legacy url without api_key → no destinations (graceful degradation, not fail-fast)."""
         r = _resolver({"context_intelligence_server_url": "http://x:8000"})
         dests = r.destinations
-        assert "default" in dests
-        # api_key may be empty/None; C3 (validate_destinations) will fail-fast
-        assert dests["default"].url == "http://x:8000"
+        # url-without-api_key: degrade to local-only, no default destination synthesized.
+        assert dests == {}, (
+            "legacy url without api_key should return empty destinations (local-only mode)"
+        )

@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from context_intelligence.reconstruct.discover import workspace_slug
+
+log = logging.getLogger(__name__)
 
 _DEFAULT_BASE_PATH = "~/.amplifier/projects"
 _DEFAULT_PROJECT_SLUG = "default"
@@ -359,10 +362,20 @@ class ConfigResolver:
             self._destinations = result
             return self._destinations
 
-        # Key is absent: back-compat synthesis from legacy scalar if legacy url present.
+        # Key is absent: back-compat synthesis from legacy scalar.
+        # Only synthesize "default" when BOTH url AND api_key are present.
+        # url-without-api_key degrades gracefully to local-only with a one-time warning
+        # (cached after first access, so the warning emits exactly once per mount).
         legacy_url = self.context_intelligence_server_url
         if legacy_url:
-            legacy_key = self.context_intelligence_api_key or ""
+            legacy_key = self.context_intelligence_api_key
+            if not legacy_key:
+                log.warning(
+                    "context-intelligence: server URL configured but api_key missing — "
+                    "HTTP dispatch disabled; local JSONL capture continues."
+                )
+                self._destinations = {}
+                return self._destinations
             self._destinations = {
                 "default": Destination(
                     name="default",

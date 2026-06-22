@@ -85,4 +85,7 @@ hooks:
       #   team:
       #     url: "${TEAM_CI_URL:}"
       #     api_key: "${TEAM_CI_KEY:}"
-      #     include: ["**/client-x/**"]
+      #     include: ["**/client-x", "**/client-x/**"]
+      #                 # Gotcha: "**/name/**" matches only INSIDE the directory,
+      #                 # not the directory itself. Include both "**/name" and
+      #                 # "**/name/**" to match the dir itself and its contents.
