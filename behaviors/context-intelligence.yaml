@@ -49,7 +49,11 @@ hooks:
       # DEPRECATED: use `destinations` below for multi-server fan-out.
       # When set (and no `destinations` is given), these synthesize a single "default"
       # destination that matches all sessions (include: ["**"]).
-      # When env vars are unset, they expand to empty strings → no destination → local-only.
+      # Legacy-scalar behavior when unset:
+      #   - both unset            → no destination → local-only.
+      #   - url set, api_key unset → dispatch disabled, local-only (a WARNING is logged).
+      #     (NOTE: a `destinations` entry with an empty url/api_key is instead a hard
+      #      mount error — the two paths differ. See validate_destinations.)
       context_intelligence_server_url: "${AMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_URL:}"
       context_intelligence_api_key: "${AMPLIFIER_CONTEXT_INTELLIGENCE_API_KEY:}"
       # workspace: auto-resolved from coordinator project_slug → config
@@ -76,13 +80,24 @@ hooks:
       # Destination names are stable identifiers — renaming a destination silently
       # drops any project-scope override that referenced the old name.
       #
+      # Matching rules (include / exclude): patterns are matched against the
+      # session's working directory using .gitignore semantics (pathspec
+      # "gitignore"). A destination is active iff the working dir matches an
+      # `include` AND does not match an `exclude` (exclude wins, per destination).
+      #   - "foo/" or "foo" or "**/foo/" → the directory foo AND everything beneath it
+      #   - "foo/**"                      → the CONTENTS of foo only (not foo itself)
+      #   - "**"                          → every session
+      # Prefer the trailing-slash directory form (e.g. "**/client-x/") to mean
+      # "this project and all its sessions" — it matches whether you launch from
+      # the project root or a subdirectory.
+      #
       # destinations:
       #   personal:
       #     url: "${PERSONAL_CI_URL:}"
       #     api_key: "${PERSONAL_CI_KEY:}"
-      #     include: ["**"]
-      #     exclude: ["**/client-*/**"]
+      #     include: ["**"]                 # all sessions...
+      #     exclude: ["**/client-*/"]       # ...except any client-* project dir and everything under it
       #   team:
       #     url: "${TEAM_CI_URL:}"
       #     api_key: "${TEAM_CI_KEY:}"
-      #     include: ["**/client-x/**"]
+      #     include: ["**/client-x/"]        # the client-x project dir and everything under it

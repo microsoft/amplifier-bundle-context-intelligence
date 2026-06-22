@@ -114,15 +114,30 @@ class TestDestinationSelection:
 
 
 class TestWorkingDirRequirement:
-    async def test_absent_working_dir_raises_when_destinations_configured(self) -> None:
-        """session.working_dir absent + destinations configured → RuntimeError (C2)."""
+    async def test_absent_working_dir_degrades_to_local_only(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """session.working_dir absent + destinations configured → local-only, NOT a raise.
+
+        The kernel catches on_session_ready exceptions (Phase 6, _session_init.py),
+        so a raise here is swallowed AND aborts the rest of the callback — silently
+        disabling ALL capture, including local JSONL. Instead we degrade to
+        local-only (zero dispatchers) with a WARNING, and the LoggingHandler is
+        still registered so local JSONL keeps working.
+        """
         from amplifier_module_hook_context_intelligence import mount, on_session_ready
 
         config = {"destinations": {"default": {"url": "http://x:8000", "api_key": "k"}}}
         coordinator = _make_coordinator(working_dir=None)
         cleanup = await mount(coordinator, config=config)
-        with pytest.raises(RuntimeError, match="session.working_dir"):
+        with caplog.at_level(logging.WARNING, logger="amplifier_module_hook_context_intelligence"):
+            # Must NOT raise.
             await on_session_ready(coordinator)
+        handler = coordinator.get_capability("context_intelligence._hook_state")["logging_handler"]
+        assert handler._dispatchers == []  # local-only, no fan-out
+        assert any("working_dir" in r.message for r in caplog.records), (
+            "expected a WARNING naming the missing working_dir capability"
+        )
         await cleanup()
 
     async def test_absent_working_dir_ok_when_no_destinations(self) -> None:
@@ -185,4 +200,32 @@ class TestNoDestinations:
             _, handler, cleanup = await _mount_and_ready(config)
         assert len(handler._dispatchers) == 0
         assert any("no destinations" in r.message.lower() for r in caplog.records)
+        await cleanup()
+
+
+class TestLegacyUrlWithoutKeyMounts:
+    async def test_mount_does_not_raise_with_url_but_no_key(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Regression (#1): legacy url WITHOUT api_key must mount cleanly (local-only).
+
+        Previously this synthesized Destination(api_key="") and
+        validate_destinations() raised at mount -> existing single-server setups
+        went from "works, no dispatch" to "mount fails". Now it degrades to
+        local-only (zero dispatchers) with a discoverable WARNING.
+        """
+        from amplifier_module_hook_context_intelligence import mount, on_session_ready
+
+        config = {"context_intelligence_server_url": "http://x:8000"}  # no api_key
+        coordinator = _make_coordinator()
+        with caplog.at_level(logging.WARNING, logger="amplifier_module_hook_context_intelligence"):
+            cleanup = await mount(coordinator, config=config)  # must NOT raise
+        handler = coordinator._capabilities["context_intelligence._hook_state"]["logging_handler"]
+        await on_session_ready(coordinator)
+        assert handler._dispatchers == [], (
+            "url-without-key must yield zero dispatchers (local-only)"
+        )
+        assert any("api_key" in r.message for r in caplog.records), (
+            "expected a discoverable WARNING naming the missing api_key"
+        )
         await cleanup()

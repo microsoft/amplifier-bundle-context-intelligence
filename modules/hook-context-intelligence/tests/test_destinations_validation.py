@@ -34,16 +34,20 @@ class TestValidateDestinations:
         assert "missing url" in msg
         assert "missing api_key" in msg
 
-    def test_legacy_url_missing_api_key_raises(self) -> None:
-        """Legacy synthesis with missing api_key → fail-fast at validate_destinations."""
+    def test_legacy_url_missing_api_key_degrades_to_local_only(self) -> None:
+        """Legacy url WITHOUT api_key must NOT raise — it degrades to local-only.
+
+        Raising here would regress existing single-server setups from "dispatch
+        disabled, local JSONL continues" to "mount fails". No destination is
+        synthesized, so validate_destinations() returns {} (local-only).
+        """
         r = _resolver(
             {
                 "context_intelligence_server_url": "http://x:8000",
-                # no api_key → synthesized with empty api_key
+                # no api_key → no synthesis → local-only (NOT an error)
             }
         )
-        with pytest.raises(ValueError, match="missing api_key"):
-            r.validate_destinations()
+        assert r.validate_destinations() == {}
 
     def test_valid_destinations_returns_dict(self) -> None:
         r = _resolver(

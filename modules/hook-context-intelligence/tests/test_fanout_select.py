@@ -16,13 +16,19 @@ from amplifier_module_hook_context_intelligence.fanout import (
 # normalize_match_key
 # ---------------------------------------------------------------------------
 class TestNormalizeMatchKey:
-    def test_absolute_path_returned_as_posix(self) -> None:
+    def test_absolute_path_returned_as_posix_with_trailing_slash(self) -> None:
+        # working_dir is always a directory; the key carries a trailing slash so
+        # pathspec applies .gitignore directory semantics (see normalize_match_key).
         result = normalize_match_key("/home/user/repos/app")
-        assert result == "/home/user/repos/app"
+        assert result == "/home/user/repos/app/"
+
+    def test_filesystem_root_not_double_slashed(self) -> None:
+        assert normalize_match_key("/") == "/"
 
     def test_tilde_expanded(self) -> None:
         result = normalize_match_key("~/repos/app")
         assert "~" not in result
+        assert result.endswith("/")
 
     def test_empty_string_raises(self) -> None:
         with pytest.raises(ValueError, match="empty"):
@@ -190,3 +196,62 @@ class TestDeepMergeConsumption:
         assert dests["team"].api_key == "team-key", "team.api_key should be preserved"
         assert "**/client-x/**" in dests["team"].include, "team.include should be overridden"
         assert dests["personal"].url == "http://personal:8000", "personal should be untouched"
+
+
+# ---------------------------------------------------------------------------
+# Gitignore directory semantics at the boundary (regression for the project-root
+# misroute: a session started with `cd client-x && amplifier`).
+# ---------------------------------------------------------------------------
+class TestGitignoreDirectorySemantics:
+    """A directory pattern must match the directory ROOT and its subtree, exactly
+    like .gitignore. The bug: with a bare (no trailing slash) key, ``**/x/`` and
+    ``**/x/**`` missed the directory itself, so a session launched from the project
+    root was misrouted (excluded dest stayed active / included dest stayed inactive).
+    """
+
+    def _dest(self, name, include=("**",), exclude=()):
+        return Destination(
+            name=name, url="http://x:8000", api_key="k", include=include, exclude=exclude
+        )
+
+    def test_directory_pattern_matches_root_and_subtree(self) -> None:
+        # The fixed example: team include ["**/client-x/"] must match BOTH the
+        # project root and any subdirectory session.
+        team = self._dest("team", include=("**/client-x/",))
+        assert destination_is_active(team, normalize_match_key("/home/u/client-x"))
+        assert destination_is_active(team, normalize_match_key("/home/u/client-x/app"))
+        assert not destination_is_active(team, normalize_match_key("/home/u/other"))
+
+    def test_exclude_directory_pattern_wins_at_root(self) -> None:
+        # The fixed example: personal exclude ["**/client-*/"] must suppress the
+        # client project AT ITS ROOT (the cd-into-project case) and below it.
+        personal = self._dest("personal", include=("**",), exclude=("**/client-*/",))
+        assert not destination_is_active(personal, normalize_match_key("/home/u/client-x"))
+        assert not destination_is_active(personal, normalize_match_key("/home/u/client-x/app"))
+        assert destination_is_active(personal, normalize_match_key("/home/u/play"))
+
+    def test_b2_exfiltration_scenario_fixed(self) -> None:
+        # Full scenario from the PR's example, exercising the real key normalization.
+        # `cd client-x && amplifier` MUST go to team (not personal).
+        personal = self._dest("personal", include=("**",), exclude=("**/client-*/",))
+        team = self._dest("team", include=("**/client-x/",))
+        dests = {"personal": personal, "team": team}
+        active_root = select_active(dests, normalize_match_key("/home/u/client-x"))
+        assert set(active_root) == {"team"}, "client-x root must route to team only"
+        active_sub = select_active(dests, normalize_match_key("/home/u/client-x/svc"))
+        assert set(active_sub) == {"team"}, "client-x subdir must route to team only"
+
+    def test_legacy_starstar_pattern_now_matches_root_too(self) -> None:
+        # With the directory key, the PR's ORIGINAL pattern "**/client-x/**" now
+        # matches the project root as well as its contents — i.e. the previously
+        # misrouting pattern is now safe (matches root + subtree). Documents the
+        # actual behavior so nobody re-introduces the bug by "fixing" this.
+        d = self._dest("d", include=("**/client-x/**",))
+        assert destination_is_active(d, normalize_match_key("/home/u/client-x"))
+        assert destination_is_active(d, normalize_match_key("/home/u/client-x/app"))
+        assert not destination_is_active(d, normalize_match_key("/home/u/other"))
+
+    def test_prefix_collision_is_safe(self) -> None:
+        # `client-*` must not match a sibling `client` directory.
+        d = self._dest("d", include=("**/client-*/",))
+        assert not destination_is_active(d, normalize_match_key("/home/u/client"))

@@ -88,26 +88,36 @@ class TestSilentWithoutServerConfig:
         )
 
     @pytest.mark.asyncio
-    async def test_url_without_key_emits_nothing_above_debug(self, tmp_path, caplog):
-        """URL set but no API key → dispatch disabled silently, zero WARNING+ records.
+    async def test_url_without_key_writes_disk_and_no_dispatch_noise(self, tmp_path, caplog):
+        """URL set but no API key → no dispatchers, local JSONL still written, no dispatch noise.
 
-        This test should be GREEN before any code changes.
+        Regression guard: the previous assertion (handler._dispatchers == []) was
+        vacuously true for any freshly-constructed handler regardless of config.
+        This now verifies the real guarantee — with no dispatchers installed the
+        handler still writes events.jsonl to disk and emits zero WARNING+ records
+        on the dispatch path. (The discoverable WARNING for url-without-key is
+        emitted once at resolve/mount time, not on every event — see
+        test_destinations_schema / test_destinations_validation.)
         """
         resolver = _make_resolver(tmp_path, server_url="http://localhost:9999")
         handler = LoggingHandler(resolver)
 
-        assert handler._dispatchers == [], (
-            "_dispatchers should be empty when no destinations have been configured via set_dispatchers"
-        )
+        assert handler._dispatchers == []  # no fan-out installed yet
 
         data = {"session_id": "test-session-003", "timestamp": "2026-01-01T00:00:00"}
 
         with caplog.at_level(logging.DEBUG, logger=_LOGGER_NAME):
             await handler.__call__("tool:pre", data)
 
+        # Real guarantee: local JSONL is written even with a server URL but no key.
+        expected_file = tmp_path / "test-session-003" / "context-intelligence" / "events.jsonl"
+        assert expected_file.exists(), (
+            "events.jsonl must be written (local-only) for url-without-key"
+        )
+
         noisy_records = [r for r in caplog.records if r.levelno >= logging.WARNING]
         assert len(noisy_records) == 0, (
-            f"Expected zero WARNING+ records but got {len(noisy_records)}: "
+            f"Expected zero WARNING+ records on the dispatch path but got {len(noisy_records)}: "
             + ", ".join(f"{r.levelname}: {r.message}" for r in noisy_records)
         )
 

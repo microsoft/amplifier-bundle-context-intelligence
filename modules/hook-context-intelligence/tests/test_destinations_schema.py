@@ -148,10 +148,13 @@ class TestLegacySynthesis:
         r = _resolver({})
         assert r.destinations == {}
 
-    def test_legacy_missing_key_synthesizes_with_empty_key(self) -> None:
-        """Legacy url without api_key synthesizes with empty api_key (C3 will catch it)."""
+    def test_legacy_url_without_key_no_synthesis_local_only(self) -> None:
+        """Legacy url WITHOUT api_key must NOT synthesize a destination.
+
+        Pre-fan-out behavior for url-without-key was "dispatch disabled, local
+        JSONL continues". Synthesizing Destination(api_key="") would make
+        validate_destinations() raise -> mount() fail (a regression). So a url
+        without a key degrades to local-only ({}), with a WARNING logged.
+        """
         r = _resolver({"context_intelligence_server_url": "http://x:8000"})
-        dests = r.destinations
-        assert "default" in dests
-        # api_key may be empty/None; C3 (validate_destinations) will fail-fast
-        assert dests["default"].url == "http://x:8000"
+        assert r.destinations == {}

@@ -329,13 +329,20 @@ async def on_session_ready(coordinator: Any) -> None:
         get_cap = getattr(coordinator, "get_capability", None)
         working_dir = get_cap("session.working_dir") if get_cap else None
         if not working_dir:
-            # C2: never fall back to project_slug/path-pattern guessing — fail loud.
-            raise RuntimeError(
+            # working_dir capability unavailable. Do NOT raise here: the kernel
+            # CATCHES on_session_ready exceptions (Phase 6, _session_init.py) and
+            # continues the session, so a raise is swallowed AND aborts the rest of
+            # this callback — silently disabling ALL capture, including the local
+            # JSONL the design guarantees is always written. Degrade to local-only
+            # (active = {}) with a discoverable WARNING and fall through so the
+            # LoggingHandler is still registered below.
+            log.warning(
                 "context-intelligence: session.working_dir capability is unavailable; "
-                "cannot select fan-out destinations. Refusing to dispatch blind."
+                "fan-out disabled for this session (local JSONL only)."
             )
-        match_key = normalize_match_key(str(working_dir))
-        active = select_active(destinations, match_key)
+        else:
+            match_key = normalize_match_key(str(working_dir))
+            active = select_active(destinations, match_key)
 
     # Build one dispatcher per ACTIVE destination (D9).
     dispatchers = [

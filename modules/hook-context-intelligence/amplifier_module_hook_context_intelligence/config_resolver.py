@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from context_intelligence.reconstruct.discover import workspace_slug
+
+log = logging.getLogger(__name__)
 
 _DEFAULT_BASE_PATH = "~/.amplifier/projects"
 _DEFAULT_PROJECT_SLUG = "default"
@@ -359,10 +362,17 @@ class ConfigResolver:
             self._destinations = result
             return self._destinations
 
-        # Key is absent: back-compat synthesis from legacy scalar if legacy url present.
+        # Key is absent: back-compat synthesis from the legacy scalar.
+        #
+        # Synthesize the "default" destination ONLY when BOTH url and api_key are
+        # present. A url with no api_key must NOT raise at mount: the pre-fan-out
+        # behavior for that config was "dispatch disabled, local JSONL continues",
+        # and synthesizing Destination(api_key="") here would make
+        # validate_destinations() raise -> mount() fail, regressing existing
+        # single-server setups. Degrade to local-only with a discoverable WARNING.
         legacy_url = self.context_intelligence_server_url
-        if legacy_url:
-            legacy_key = self.context_intelligence_api_key or ""
+        legacy_key = self.context_intelligence_api_key
+        if legacy_url and legacy_key:
             self._destinations = {
                 "default": Destination(
                     name="default",
@@ -373,6 +383,13 @@ class ConfigResolver:
                 )
             }
             return self._destinations
+        if legacy_url and not legacy_key:
+            log.warning(
+                "context-intelligence: context_intelligence_server_url is set but "
+                "context_intelligence_api_key is empty after expansion; dispatch "
+                "disabled, local JSONL only. Set context_intelligence_api_key "
+                "(or its expanded ${VAR}) to enable dispatch."
+            )
 
         self._destinations = {}
         return self._destinations
