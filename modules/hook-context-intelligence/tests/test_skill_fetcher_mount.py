@@ -131,7 +131,10 @@ class TestMountSkillFetchHappyPath:
         ):
             await mount(
                 coordinator,
-                config={"context_intelligence_server_url": "http://localhost:8000"},
+                config={
+                    "context_intelligence_server_url": "http://localhost:8000",
+                    "context_intelligence_api_key": "test-key",
+                },
             )
 
         # fetch IS called immediately during mount — skills_discovery was already registered
@@ -173,7 +176,10 @@ class TestMountSkillFetchHappyPath:
         ):
             cleanup = await mount(
                 coordinator,
-                config={"context_intelligence_server_url": "http://localhost:8000"},
+                config={
+                    "context_intelligence_server_url": "http://localhost:8000",
+                    "context_intelligence_api_key": "test-key",
+                },
             )
 
         # Should be awaitable without error
@@ -195,15 +201,9 @@ class TestMountSkillFetchSkipsWhenUnconfigured:
         mock_fetcher_instance.fetch = AsyncMock()
         mock_fetcher_cls = MagicMock(return_value=mock_fetcher_instance)
 
-        with (
-            patch(
-                "amplifier_module_hook_context_intelligence.config_resolver.SETTINGS_PATH",
-                tmp_path / "no-settings.yaml",
-            ),
-            patch(
-                "amplifier_module_hook_context_intelligence.skill_fetcher.SkillFetcher",
-                mock_fetcher_cls,
-            ),
+        with patch(
+            "amplifier_module_hook_context_intelligence.skill_fetcher.SkillFetcher",
+            mock_fetcher_cls,
         ):
             cleanup = await mount(coordinator, config={})
 
@@ -239,7 +239,10 @@ class TestMountSkillFetchSkipsWhenUnconfigured:
         ):
             await mount(
                 coordinator,
-                config={"context_intelligence_server_url": "http://localhost:8000"},
+                config={
+                    "context_intelligence_server_url": "http://localhost:8000",
+                    "context_intelligence_api_key": "test-key",
+                },
             )
 
             # Find and fire the skills:discovered handler — path is unresolvable, fetch must not run.
@@ -261,15 +264,9 @@ class TestMountSkillFetchSkipsWhenUnconfigured:
         mock_fetcher_instance.fetch = AsyncMock()
         mock_fetcher_cls = MagicMock(return_value=mock_fetcher_instance)
 
-        with (
-            patch(
-                "amplifier_module_hook_context_intelligence.config_resolver.SETTINGS_PATH",
-                tmp_path / "no-settings.yaml",
-            ),
-            patch(
-                "amplifier_module_hook_context_intelligence.skill_fetcher.SkillFetcher",
-                mock_fetcher_cls,
-            ),
+        with patch(
+            "amplifier_module_hook_context_intelligence.skill_fetcher.SkillFetcher",
+            mock_fetcher_cls,
         ):
             cleanup = await mount(coordinator, config={})
 
@@ -311,7 +308,10 @@ class TestSkillUnloadedHandler:
         ):
             await mount(
                 coordinator,
-                config={"context_intelligence_server_url": "http://localhost:8000"},
+                config={
+                    "context_intelligence_server_url": "http://localhost:8000",
+                    "context_intelligence_api_key": "test-key",
+                },
             )
 
         # Reset calls from mount-time immediate check (skills_discovery already registered)
@@ -354,7 +354,10 @@ class TestSkillUnloadedHandler:
         ):
             await mount(
                 coordinator,
-                config={"context_intelligence_server_url": "http://localhost:8000"},
+                config={
+                    "context_intelligence_server_url": "http://localhost:8000",
+                    "context_intelligence_api_key": "test-key",
+                },
             )
 
         # Reset calls from mount-time immediate check (skills_discovery already registered)
@@ -397,7 +400,10 @@ class TestSkillUnloadedHandler:
         ):
             await mount(
                 coordinator,
-                config={"context_intelligence_server_url": "http://localhost:8000"},
+                config={
+                    "context_intelligence_server_url": "http://localhost:8000",
+                    "context_intelligence_api_key": "test-key",
+                },
             )
 
             # SKILL.md absent at bundle root — handler must return without calling fetch
@@ -417,11 +423,7 @@ class TestMountNoOpWhenServerUrlAbsent:
         from amplifier_module_hook_context_intelligence import mount
 
         coordinator = _make_coordinator(server_url=None, skill_path=None)
-        with patch(
-            "amplifier_module_hook_context_intelligence.config_resolver.SETTINGS_PATH",
-            tmp_path / "no-settings.yaml",
-        ):
-            await mount(coordinator, config={})
+        await mount(coordinator, config={})
 
         # get_capability should never have been called for skills_discovery
         for call in coordinator.get_capability.call_args_list:
@@ -442,11 +444,7 @@ class TestMountNoOpWhenServerUrlAbsent:
         coordinator = _make_coordinator(server_url=None, skill_path=None)
         coordinator.hooks.register = MagicMock(side_effect=capture)
 
-        with patch(
-            "amplifier_module_hook_context_intelligence.config_resolver.SETTINGS_PATH",
-            tmp_path / "no-settings.yaml",
-        ):
-            await mount(coordinator, config={})
+        await mount(coordinator, config={})
 
         assert "skill:unloaded" not in registered_events, (
             "skill:unloaded handler was registered even though server_url is None"
@@ -484,7 +482,10 @@ class TestMountThreeWayBranch:
         ):
             await mount(
                 coordinator,
-                config={"context_intelligence_server_url": "http://localhost:8000"},
+                config={
+                    "context_intelligence_server_url": "http://localhost:8000",
+                    "context_intelligence_api_key": "test-key",
+                },
             )
 
         assert not skill_path.exists()
@@ -531,7 +532,10 @@ class TestMountThreeWayBranch:
         ):
             await mount(
                 coordinator,
-                config={"context_intelligence_server_url": "http://localhost:8000"},
+                config={
+                    "context_intelligence_server_url": "http://localhost:8000",
+                    "context_intelligence_api_key": "test-key",
+                },
             )
 
         # fetch is NOT called for old server (write_legacy_content is used instead)
@@ -579,7 +583,10 @@ class TestMountThreeWayBranch:
         ):
             await mount(
                 coordinator,
-                config={"context_intelligence_server_url": "http://localhost:8000"},
+                config={
+                    "context_intelligence_server_url": "http://localhost:8000",
+                    "context_intelligence_api_key": "test-key",
+                },
             )
 
         # fetch IS called immediately during mount — skills_discovery was already registered
@@ -632,7 +639,10 @@ class TestSkillsDiscoveredHandler:
         ):
             await mount(
                 coordinator,
-                config={"context_intelligence_server_url": "http://localhost:8000"},
+                config={
+                    "context_intelligence_server_url": "http://localhost:8000",
+                    "context_intelligence_api_key": "test-key",
+                },
             )
 
         # fetch IS called immediately during mount — skills_discovery was already registered
@@ -672,7 +682,10 @@ class TestSkillsDiscoveredHandler:
         ):
             await mount(
                 coordinator,
-                config={"context_intelligence_server_url": "http://localhost:8000"},
+                config={
+                    "context_intelligence_server_url": "http://localhost:8000",
+                    "context_intelligence_api_key": "test-key",
+                },
             )
 
         # No SkillFetcher-trigger handler should be registered for skills:discovered
@@ -728,7 +741,10 @@ class TestSkillUnloadedHandlerRefresh:
         ):
             await mount(
                 coordinator,
-                config={"context_intelligence_server_url": "http://localhost:8000"},
+                config={
+                    "context_intelligence_server_url": "http://localhost:8000",
+                    "context_intelligence_api_key": "test-key",
+                },
             )
 
         # Reset fetch calls after mount (mount should NOT have called fetch directly)
@@ -771,7 +787,10 @@ class TestSkillUnloadedHandlerRefresh:
         ):
             await mount(
                 coordinator,
-                config={"context_intelligence_server_url": "http://localhost:8000"},
+                config={
+                    "context_intelligence_server_url": "http://localhost:8000",
+                    "context_intelligence_api_key": "test-key",
+                },
             )
 
         mock_fetcher_instance.fetch.reset_mock()
