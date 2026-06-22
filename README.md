@@ -159,6 +159,49 @@ overrides:
 
 The `${...}` placeholder is resolved by the app-cli before the value reaches the hook, so `ConfigResolver` receives the secret value through its config dict (highest resolution priority). The custom key name in `keys.env` is invisible to the bundle itself.
 
+### Multi-server fan-out (`destinations`)
+
+The single legacy server above is the simplest setup. To send each session's events to **multiple** servers — choosing per session by the session's **working directory** — configure `destinations` instead. This is the preferred mechanism; the legacy `context_intelligence_server_url`/`api_key` scalars remain supported and synthesize a single `default` destination that matches all sessions.
+
+`destinations` is a dict keyed by name, under the same `overrides.hook-context-intelligence.config` block:
+
+```yaml
+# ~/.amplifier/settings.yaml
+overrides:
+  hook-context-intelligence:
+    config:
+      destinations:
+        personal:
+          url: "${PERSONAL_CI_URL}"
+          api_key: "${PERSONAL_CI_KEY}"     # secret lives in keys.env, referenced here
+          include: ["**"]                   # all sessions...
+          exclude: ["**/client-*/"]         # ...except any client-* project dir and everything under it
+        team:
+          url: "${TEAM_CI_URL}"
+          api_key: "${TEAM_CI_KEY}"
+          include: ["**/work/"]             # only sessions under a "work" directory
+```
+
+**How routing is decided.** For each session the hook derives a match key from the session's working directory (the `session.working_dir` capability) and tests it against every destination. A destination is **active** for a session iff the working dir matches an `include` pattern **and** does not match an `exclude` pattern — **exclude wins, per destination**. The session's events are sent to **every** active destination (true fan-out): a session can match zero, one, or several. **Local JSONL is always written**, regardless of how many destinations match.
+
+**Pattern semantics — `.gitignore` rules.** `include` / `exclude` patterns use `.gitignore` (gitwildmatch) semantics, matched against the session's working **directory**:
+
+| Pattern | Matches |
+|---------|---------|
+| `foo/`, `foo`, `**/foo/`, `**/foo` | the directory `foo` **and everything beneath it** |
+| `**` | every session |
+| empty `include` list | nothing (the destination is inactive) |
+
+Prefer the trailing-slash directory form (e.g. `**/work/`) to mean "this project and all its sessions" — it matches whether the session is launched from the project **root** or any subdirectory. (A pattern that targets only contents, like `**/work/**`, still also matches the directory itself here, because the match key is a directory.)
+
+**Defaults & validation.** Omitted `include` defaults to `["**"]` (match everything); omitted `exclude` defaults to none. After `${VAR}` expansion, a `destinations` entry whose `url` **or** `api_key` is empty is a **mount error** (fail-fast, naming the offending destination). With no `destinations` and no legacy url, the hook is local-JSONL-only.
+
+**Legacy single-server behavior differs on one point.** When only the legacy scalars are set (no `destinations`) and the `url` is present but the `api_key` is empty — e.g. an unset `${AMPLIFIER_CONTEXT_INTELLIGENCE_API_KEY:}` — the hook **degrades to local-only and logs a WARNING; it does not fail to mount**. (A `destinations` entry with an empty url/api_key is a hard error; the legacy scalar path is intentionally lenient for back-compat.)
+
+**Per-project override.** Because `destinations` is keyed by name, a project `.amplifier/settings.yaml` can override a single destination's `include`/`exclude` (e.g. `destinations.team.include`) without restating the others — the app-cli deep-merges user → project settings.
+
+> **Secrets:** keep `api_key` values in `~/.amplifier/keys.env` and reference them via `${VAR}` in `settings.yaml`. Never write a literal key into `settings.yaml`.
+
 ---
 
 ## Embedding in an Amplifier application
@@ -243,7 +286,7 @@ resolver.session_dir("abc-123")     # Path to a session's CI directory
 
 ## Configuration reference
 
-The `config` dict passed to `mount()` uses the same keys as the `overrides.hook-context-intelligence.config` block in `settings.yaml`. The Amplifier framework maps `AMPLIFIER_CONTEXT_INTELLIGENCE_<KEY>` environment variables into the config dict before `mount()` is called, so env vars and `settings.yaml` entries share the same priority level.
+The `config` dict passed to `mount()` uses the same keys as the `overrides.hook-context-intelligence.config` block in `settings.yaml`. The hook is a **pure mount-config consumer**: it reads only this config dict (plus coordinator capabilities) and does **not** read environment variables or `settings.yaml` itself. Environment variables reach the config only because the shipped behavior YAML (and any `settings.yaml` override) reference them through `${VAR}` / `${VAR:default}` placeholders, which the Amplifier app-cli expands before `mount()` is called. There is **no** automatic `AMPLIFIER_CONTEXT_INTELLIGENCE_<KEY>` → config-key mapping — an env var with no corresponding `${VAR}` placeholder in the active config never reaches the hook. The **Env var** column below names the variable each shipped placeholder reads.
 
 | Key | Env var | Default | Description |
 |-----|---------|---------|-------------|
