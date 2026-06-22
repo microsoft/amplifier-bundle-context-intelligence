@@ -358,7 +358,7 @@ async def on_session_ready(coordinator: Any) -> None:
         )
         for d in active.values()
     ]
-    logging_handler.set_dispatchers(dispatchers)
+    await logging_handler.set_dispatchers(dispatchers)
 
     # --- Fan-out log line (S2) ---
     if not destinations:

@@ -91,6 +91,13 @@ hooks:
       # "this project and all its sessions" — it matches whether you launch from
       # the project root or a subdirectory.
       #
+      # IMPORTANT — default include semantics:
+      #   A destination with NO `include` key has an empty pattern set and matches
+      #   NOTHING (receives zero sessions). You must declare `include` explicitly.
+      #   The legacy scalar path (context_intelligence_server_url + api_key, no
+      #   `destinations:` key) still synthesizes include: ["**"] — existing
+      #   single-server users are unaffected.
+      #
       # destinations:
       #   personal:
       #     url: "${PERSONAL_CI_URL:}"

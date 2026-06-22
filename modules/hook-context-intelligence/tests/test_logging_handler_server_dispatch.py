@@ -84,7 +84,7 @@ class TestJSONLAlwaysWritten:
         """JSONL is written even when dispatchers are installed."""
         handler = LoggingHandler(_FakeResolver(tmp_path, "proj"))
         mock_d = MagicMock(spec=_DestinationDispatcher)
-        handler.set_dispatchers([mock_d])
+        await handler.set_dispatchers([mock_d])
 
         await handler(
             "session:start",
@@ -144,7 +144,7 @@ class TestClose:
         handler = LoggingHandler(_FakeResolver(tmp_path, "proj"))
         mock_a = AsyncMock(spec=_DestinationDispatcher)
         mock_b = AsyncMock(spec=_DestinationDispatcher)
-        handler.set_dispatchers([mock_a, mock_b])
+        await handler.set_dispatchers([mock_a, mock_b])
 
         await handler.close()
 
@@ -157,7 +157,7 @@ class TestClose:
         mock_a = AsyncMock(spec=_DestinationDispatcher)
         mock_a.close.side_effect = RuntimeError("boom")
         mock_b = AsyncMock(spec=_DestinationDispatcher)
-        handler.set_dispatchers([mock_a, mock_b])
+        await handler.set_dispatchers([mock_a, mock_b])
 
         await handler.close()  # must not raise
 
@@ -174,7 +174,7 @@ class TestFanOut:
         handler = LoggingHandler(_FakeResolver(tmp_path, "proj"))
         mock_a = MagicMock(spec=_DestinationDispatcher)
         mock_b = MagicMock(spec=_DestinationDispatcher)
-        handler.set_dispatchers([mock_a, mock_b])
+        await handler.set_dispatchers([mock_a, mock_b])
 
         await handler(
             "session:start",

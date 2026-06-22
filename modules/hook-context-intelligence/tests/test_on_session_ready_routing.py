@@ -85,7 +85,7 @@ class TestDestinationSelection:
     async def test_multiple_matching_dispatchers(self) -> None:
         config = {
             "destinations": {
-                "personal": {"url": "http://p:8000", "api_key": "pk"},
+                "personal": {"url": "http://p:8000", "api_key": "pk", "include": ["**"]},
                 "team": {
                     "url": "http://t:8000",
                     "api_key": "tk",
@@ -103,7 +103,9 @@ class TestDestinationSelection:
     async def test_active_destinations_info_logged(self, caplog: pytest.LogCaptureFixture) -> None:
         config = {
             "log_level": "INFO",  # ensure INFO messages are not suppressed by WARNING default
-            "destinations": {"personal": {"url": "http://p:8000", "api_key": "pk"}},
+            "destinations": {
+                "personal": {"url": "http://p:8000", "api_key": "pk", "include": ["**"]}
+            },
         }
         with caplog.at_level(logging.INFO, logger="amplifier_module_hook_context_intelligence"):
             _, handler, cleanup = await _mount_and_ready(config)

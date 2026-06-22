@@ -38,14 +38,16 @@ class Destination:
     name:    dict key in config['destinations']; identifier + merge key.
     url:     base URL (app already expanded ${VAR}). POSTs go to f"{url}/events".
     api_key: bearer token (app already expanded ${VAR}).
-    include: pathspec (gitwildmatch) patterns; default catch-all ["**"] (S4).
+    include: pathspec (gitwildmatch) patterns. No default — a destination without
+             an explicit include has an empty pattern set and matches NOTHING.
+             Declare include explicitly to receive any sessions.
     exclude: pathspec patterns; exclude-wins, per-destination (S3). Default [].
     """
 
     name: str
     url: str
     api_key: str
-    include: tuple[str, ...] = ("**",)
+    include: tuple[str, ...] = ()
     exclude: tuple[str, ...] = ()
 
 
@@ -323,7 +325,7 @@ class ConfigResolver:
         """Resolved fan-out destinations, keyed by name.
 
         Source: config['destinations'] (a dict). Each value is a dict with
-        keys url, api_key, include?, exclude?. Missing include -> ["**"] (S4);
+        keys url, api_key, include?, exclude?. Missing/empty include -> () → matches nothing;
         missing exclude -> []. ${VAR} is already expanded by the app.
 
         Back-compat (D10): if config['destinations'] is absent/empty BUT the
@@ -350,7 +352,7 @@ class ConfigResolver:
                         continue
                     url = str(spec.get("url", "") or "").strip()
                     api_key = str(spec.get("api_key", "") or "").strip()
-                    include = tuple(spec.get("include") or ["**"])
+                    include = tuple(spec.get("include") or [])
                     exclude = tuple(spec.get("exclude") or [])
                     result[name] = Destination(
                         name=name,

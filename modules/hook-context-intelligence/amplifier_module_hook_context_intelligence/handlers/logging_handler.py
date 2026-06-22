@@ -114,7 +114,7 @@ class _DestinationDispatcher:
             self._queue.put_nowait((event, data))
         except asyncio.QueueFull:
             self._enabled = False
-            logger.debug(
+            logger.warning(
                 "server_dispatch_queue_full: dest=%s url=%s capacity=%d event=%s"
                 " dispatch disabled; local JSONL capture continues.",
                 self._name,
@@ -174,7 +174,7 @@ class _DestinationDispatcher:
             )
             if self._consecutive_failures >= self._failure_threshold:
                 self._enabled = False
-                logger.debug(
+                logger.warning(
                     "Context intelligence server unreachable after %d attempts"
                     " — dispatch disabled for this destination (dest=%s url=%s)."
                     " Local JSONL capture continues.",
@@ -231,9 +231,17 @@ class LoggingHandler:
         self._resolve_instance_id: str = getattr(resolver, "resolve_instance_id", "") or ""
         self._dispatchers: list[_DestinationDispatcher] = []
 
-    def set_dispatchers(self, dispatchers: list[_DestinationDispatcher]) -> None:
-        """Install the active per-destination dispatchers (called from on_session_ready)."""
+    async def set_dispatchers(self, dispatchers: list[_DestinationDispatcher]) -> None:
+        """Install the active per-destination dispatchers (called from on_session_ready).
+
+        Closes any previously-installed dispatchers before installing the new list,
+        preventing background worker and httpx client leaks on repeated calls.
+        First call is a no-op close (empty old list).
+        """
+        old = self._dispatchers
         self._dispatchers = dispatchers
+        if old:
+            await asyncio.gather(*(d.close() for d in old), return_exceptions=True)
 
     def _session_dir(self, session_id: str) -> Path:
         return self._resolver.session_dir(session_id)

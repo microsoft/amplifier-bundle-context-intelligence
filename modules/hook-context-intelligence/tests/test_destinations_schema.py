@@ -38,7 +38,7 @@ class TestDestinationsParsing:
         assert d.include == ("**/client-x/**",)
         assert d.exclude == ("**/private/**",)
 
-    def test_missing_include_defaults_to_catchall(self) -> None:
+    def test_missing_include_defaults_to_empty(self) -> None:
         r = _resolver(
             {
                 "destinations": {
@@ -50,9 +50,9 @@ class TestDestinationsParsing:
             }
         )
         d = r.destinations["personal"]
-        assert d.include == ("**",), "missing include must default to ('**',)"
+        assert d.include == (), "missing include must default to () — matches nothing"
 
-    def test_empty_include_list_defaults_to_catchall(self) -> None:
+    def test_empty_include_list_defaults_to_empty(self) -> None:
         r = _resolver(
             {
                 "destinations": {
@@ -65,7 +65,7 @@ class TestDestinationsParsing:
             }
         )
         d = r.destinations["personal"]
-        assert d.include == ("**",), "empty include list must default to ('**',)"
+        assert d.include == (), "empty include list must default to () — matches nothing"
 
     def test_missing_exclude_defaults_to_empty(self) -> None:
         r = _resolver(
@@ -158,3 +158,80 @@ class TestLegacySynthesis:
         """
         r = _resolver({"context_intelligence_server_url": "http://x:8000"})
         assert r.destinations == {}
+
+
+# ---------------------------------------------------------------------------
+# New-default fanout semantics: no-include means nothing, legacy means all
+# ---------------------------------------------------------------------------
+
+
+class TestNoIncludeMatchesNothing:
+    """A destination without an explicit include must receive ZERO sessions (Change C)."""
+
+    def test_no_include_destination_is_inactive(self) -> None:
+        """Destination parsed without include → empty tuple → destination_is_active returns False."""
+        from amplifier_module_hook_context_intelligence.fanout import destination_is_active
+
+        r = _resolver(
+            {
+                "destinations": {
+                    "server": {
+                        "url": "http://server:8000",
+                        "api_key": "sk",
+                        # NO include key
+                    }
+                }
+            }
+        )
+        dest = r.destinations["server"]
+        assert dest.include == (), "no include must yield empty tuple"
+        assert not destination_is_active(dest, "/home/user/any-project/"), (
+            "destination without include must be inactive (matches nothing)"
+        )
+        assert not destination_is_active(dest, "/"), (
+            "destination without include must be inactive even for root path"
+        )
+
+    def test_explicit_include_enables_destination(self) -> None:
+        """Destination WITH an explicit include is active for matching paths."""
+        from amplifier_module_hook_context_intelligence.fanout import destination_is_active
+
+        r = _resolver(
+            {
+                "destinations": {
+                    "server": {
+                        "url": "http://server:8000",
+                        "api_key": "sk",
+                        "include": ["**"],
+                    }
+                }
+            }
+        )
+        dest = r.destinations["server"]
+        assert dest.include == ("**",)
+        assert destination_is_active(dest, "/home/user/any-project/")
+
+
+class TestLegacySingleServerReceivesAll:
+    """Back-compat: legacy scalar url+key still synthesizes include=['**'] (Change C back-compat)."""
+
+    def test_legacy_synthesized_destination_matches_all(self) -> None:
+        """Legacy synthesis always sets include=('**',) so existing users receive everything."""
+        from amplifier_module_hook_context_intelligence.fanout import destination_is_active
+
+        r = _resolver(
+            {
+                "context_intelligence_server_url": "http://legacy:8000",
+                "context_intelligence_api_key": "lk",
+            }
+        )
+        dest = r.destinations["default"]
+        assert dest.include == ("**",), (
+            "legacy synthesis must explicitly set include=('**',) — back-compat invariant"
+        )
+        assert destination_is_active(dest, "/home/user/any-project/"), (
+            "legacy synthesized destination must match all sessions"
+        )
+        assert destination_is_active(dest, "/tmp/scratch/"), (
+            "legacy synthesized destination must match all paths"
+        )

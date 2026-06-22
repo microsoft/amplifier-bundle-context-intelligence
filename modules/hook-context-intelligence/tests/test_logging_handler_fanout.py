@@ -45,7 +45,7 @@ class TestJSONLAlwaysWritten:
         handler = LoggingHandler(_FakeResolver(tmp_path))
         # Install mock dispatchers
         mock_d = MagicMock(spec=_DestinationDispatcher)
-        handler.set_dispatchers([mock_d])
+        await handler.set_dispatchers([mock_d])
         await handler(
             "session:start",
             {"session_id": "s2", "timestamp": "t0", "working_dir": "/w"},
@@ -61,7 +61,7 @@ class TestFanOutToDispatchers:
         handler = LoggingHandler(_FakeResolver(tmp_path))
         mock_a = MagicMock(spec=_DestinationDispatcher)
         mock_b = MagicMock(spec=_DestinationDispatcher)
-        handler.set_dispatchers([mock_a, mock_b])
+        await handler.set_dispatchers([mock_a, mock_b])
 
         await handler(
             "session:start",
@@ -83,12 +83,17 @@ class TestFanOutToDispatchers:
         # No assertion needed — just confirm no AttributeError raised
 
     async def test_set_dispatchers_replaces_list(self, tmp_path: Path) -> None:
+        from unittest.mock import AsyncMock
+
         handler = LoggingHandler(_FakeResolver(tmp_path))
-        mock_a = MagicMock(spec=_DestinationDispatcher)
-        handler.set_dispatchers([mock_a])
+        # Use AsyncMock so close() is awaitable when set_dispatchers closes old dispatchers.
+        mock_a = AsyncMock(spec=_DestinationDispatcher)
+        await handler.set_dispatchers([mock_a])
         assert len(handler._dispatchers) == 1
 
-        mock_b = MagicMock(spec=_DestinationDispatcher)
-        mock_c = MagicMock(spec=_DestinationDispatcher)
-        handler.set_dispatchers([mock_b, mock_c])
+        mock_b = AsyncMock(spec=_DestinationDispatcher)
+        mock_c = AsyncMock(spec=_DestinationDispatcher)
+        await handler.set_dispatchers([mock_b, mock_c])
         assert len(handler._dispatchers) == 2
+        # mock_a.close() must have been called when dispatchers were replaced
+        mock_a.close.assert_awaited_once()

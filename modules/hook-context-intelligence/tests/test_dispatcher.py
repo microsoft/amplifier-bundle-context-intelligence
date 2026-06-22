@@ -166,6 +166,72 @@ class TestDispatcherIsolation:
         mock_client_b.post.assert_awaited_once()
 
 
+class TestSetDispatchersWorkerLeak:
+    """set_dispatchers() must close previously-installed dispatchers (B: latent worker-leak fix)."""
+
+    async def test_second_set_dispatchers_closes_first_batch(self) -> None:
+        """Calling set_dispatchers a second time closes dispatchers from the first call."""
+        import types
+        from amplifier_module_hook_context_intelligence.handlers.logging_handler import (
+            LoggingHandler,
+        )
+
+        # Minimal resolver stub — LoggingHandler uses getattr() for all attrs.
+        resolver = types.SimpleNamespace(
+            workspace="ws",
+            session_dir=lambda sid: __import__("pathlib").Path("/tmp") / sid,
+        )
+
+        handler = LoggingHandler(resolver)
+
+        # First batch: two dispatchers with async close() mocks.
+        d1 = _dispatcher(name="d1")
+        d2 = _dispatcher(name="d2")
+
+        close_calls: list[str] = []
+
+        async def close_d1() -> None:
+            close_calls.append("d1")
+
+        async def close_d2() -> None:
+            close_calls.append("d2")
+
+        d1.close = close_d1  # type: ignore[method-assign]
+        d2.close = close_d2  # type: ignore[method-assign]
+
+        # Install first batch.
+        await handler.set_dispatchers([d1, d2])
+        assert handler._dispatchers == [d1, d2]
+        assert close_calls == [], "first call must not close anything (no old dispatchers)"
+
+        # Install second batch — first batch must be closed.
+        d3 = _dispatcher(name="d3")
+        await handler.set_dispatchers([d3])
+        assert handler._dispatchers == [d3]
+        assert sorted(close_calls) == ["d1", "d2"], (
+            "set_dispatchers must close all dispatchers from the previous call"
+        )
+
+    async def test_first_set_dispatchers_is_noop_close(self) -> None:
+        """First call to set_dispatchers (empty old list) does not try to close anything."""
+        import types
+        from amplifier_module_hook_context_intelligence.handlers.logging_handler import (
+            LoggingHandler,
+        )
+
+        resolver = types.SimpleNamespace(
+            workspace="ws",
+            session_dir=lambda sid: __import__("pathlib").Path("/tmp") / sid,
+        )
+        handler = LoggingHandler(resolver)
+        assert handler._dispatchers == []
+
+        d = _dispatcher(name="only")
+        # Should not raise and should not close d (it was never installed before).
+        await handler.set_dispatchers([d])
+        assert handler._dispatchers == [d]
+
+
 class TestDispatcherClose:
     async def test_close_drains_and_cancels_worker(self) -> None:
         d = _dispatcher(close_drain_timeout=1.0)
