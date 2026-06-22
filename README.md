@@ -2,15 +2,15 @@
 
 An [Amplifier](https://github.com/microsoft/amplifier) bundle that captures session events as structured data for analysis and querying.
 
-The bundle writes every session event to a local JSONL log and — when configured with a server URL — forwards events to the [Context Intelligence Server](https://github.com/microsoft/amplifier-context-intelligence) for graph storage and blob management.
+The bundle writes every session event to a local JSONL log and — when one or more **destinations** are configured — fans those events out to one or more [Context Intelligence Server](https://github.com/microsoft/amplifier-context-intelligence) instances for graph storage and blob management. Each session is routed to every destination whose `.gitignore`-style include/exclude patterns match the session's working directory, so different projects can flow to different servers (or to none) while local capture always happens.
 
 ---
 
 ## What it does
 
-| Always active | When `context_intelligence_server_url` is set |
-|---------------|-----------------------------------------------|
-| Writes `events.jsonl` + `metadata.json` per session, both tagged with `workspace` | POSTs every event to the CI server |
+| Always active | When one or more `destinations` are configured |
+|---------------|------------------------------------------------|
+| Writes `events.jsonl` + `metadata.json` per session, both tagged with `workspace` | Fans each session's events out to every destination whose include/exclude patterns match the session's working directory |
 | | Enables graph-powered Cypher queries via `graph_query` tool |
 | | Enables `blob_read` tool for resolving `ci-blob://` URIs |
 
@@ -77,21 +77,32 @@ amplifier bundle use context-intelligence
 
 Every Amplifier session will now write events to local JSONL files automatically — no server required.
 
-### 2. (Optional) Enable server forwarding
+### 2. (Optional) Forward events to one or more servers
 
 To push events to the [Context Intelligence Server](https://github.com/microsoft/amplifier-context-intelligence) for graph storage and querying, you need a running server instance and its API key. See the [server repository](https://github.com/microsoft/amplifier-context-intelligence) for setup instructions.
 
-Once the server is running, add the URL and API key to `~/.amplifier/keys.env` — the same file that holds LLM provider keys, loaded automatically by Amplifier on startup and never committed to version control:
+Forwarding is configured with **`destinations`** — a named map of servers, each routed by `.gitignore`-style patterns on the session's working directory. Put the secret in `~/.amplifier/keys.env` (loaded automatically, never committed) and reference it from `~/.amplifier/settings.yaml`:
 
 ```bash
-# ~/.amplifier/keys.env
-AMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_URL=http://localhost:8000
-AMPLIFIER_CONTEXT_INTELLIGENCE_API_KEY=<your-api-key>
+# ~/.amplifier/keys.env  — secrets only, never commit
+MAIN_CI_KEY=<your-api-key>
 ```
 
-The behavior YAML already contains `${AMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_URL:}` and `${AMPLIFIER_CONTEXT_INTELLIGENCE_API_KEY:}` placeholders that resolve these automatically — no `settings.yaml` entry is required.
+```yaml
+# ~/.amplifier/settings.yaml
+overrides:
+  hook-context-intelligence:
+    config:
+      destinations:
+        main:
+          url: "http://localhost:8000"
+          api_key: "${MAIN_CI_KEY}"      # resolved from keys.env before it reaches the hook
+          include: ["**"]                # every session (the default)
+```
 
-> **Never write a literal API key into `settings.yaml`.** That file is version-controllable configuration; a secret written there is one accidental commit away from exposure.
+That single-destination block is the common case. To route different projects to different servers — or to exclude some entirely — add more named destinations; see [Multi-server fan-out](#multi-server-fan-out-destinations). For the full routing model and pattern rules, see the [Configuration reference](#configuration-reference).
+
+> **Never write a literal API key into `settings.yaml`.** That file is version-controllable configuration; a secret written there is one accidental commit away from exposure. Always reference it via `${VAR}` from `keys.env`.
 
 ### 3. Verify
 
@@ -121,31 +132,16 @@ When this bundle is loaded through the [Amplifier app-cli](https://github.com/mi
 
 ### The override pattern
 
-`~/.amplifier/settings.yaml` is the app-cli's knob for bundle configuration. It is safe to commit to version control **as long as secrets are referenced via `${VAR_NAME}` interpolation**, never as literal values. The actual secrets stay exclusively in `~/.amplifier/keys.env`.
+`~/.amplifier/settings.yaml` is the app-cli's knob for bundle configuration. It is safe to commit to version control **as long as secrets are referenced via `${VAR_NAME}` interpolation**, never as literal values. The actual secrets stay exclusively in `~/.amplifier/keys.env`. The `${...}` placeholder is resolved by the app-cli **before** the value reaches the hook — the hook reads only its mount config dict and never the environment directly, so the variable name in `keys.env` is entirely your choice (it never has to match any `AMPLIFIER_*` convention).
 
-```yaml
-# ~/.amplifier/settings.yaml
-overrides:
-  hook-context-intelligence:
-    config:
-      context_intelligence_server_url: "${AMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_URL}"
-      context_intelligence_api_key: "${AMPLIFIER_CONTEXT_INTELLIGENCE_API_KEY}"
-      workspace: "my-project"    # optional — auto-resolved if omitted
-```
+### Configuring servers with `destinations` (current shape)
+
+`destinations` is a named map of servers under `overrides.hook-context-intelligence.config`. Each entry has a `url`, an `api_key`, and optional `.gitignore`-style `include`/`exclude` patterns that decide which sessions route to it (by working directory). This is the canonical configuration shape:
 
 ```bash
 # ~/.amplifier/keys.env  — secrets only, never commit this file
-AMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_URL=http://localhost:8000
-AMPLIFIER_CONTEXT_INTELLIGENCE_API_KEY=<your-api-key>
-```
-
-### Using a custom key name
-
-If your team stores the API key under a different name in `keys.env` (for example to match a secrets-rotation convention or to share a key across multiple services), map that name to the config key in the override:
-
-```bash
-# ~/.amplifier/keys.env
-CONTEXT_INTELLIGENCE_TEAM_SERVER_API_KEY=<your-api-key>
+PERSONAL_CI_KEY=<personal-server-key>
+TEAM_CI_KEY=<team-server-key>
 ```
 
 ```yaml
@@ -153,17 +149,26 @@ CONTEXT_INTELLIGENCE_TEAM_SERVER_API_KEY=<your-api-key>
 overrides:
   hook-context-intelligence:
     config:
-      context_intelligence_server_url: "${AMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_URL}"
-      context_intelligence_api_key: "${CONTEXT_INTELLIGENCE_TEAM_SERVER_API_KEY}"
+      workspace: "my-project"          # optional — auto-resolved if omitted
+      destinations:
+        personal:
+          url: "http://localhost:8000"
+          api_key: "${PERSONAL_CI_KEY}"
+          include: ["**"]              # all sessions...
+          exclude: ["**/client-*/"]    # ...except any client-* project dir and below
+        team:
+          url: "https://ci.team.example"
+          api_key: "${TEAM_CI_KEY}"
+          include: ["**/work/"]        # only sessions under a "work" directory
 ```
 
-The `${...}` placeholder is resolved by the app-cli before the value reaches the hook, so `ConfigResolver` receives the secret value through its config dict (highest resolution priority). The custom key name in `keys.env` is invisible to the bundle itself.
+A session's events are sent to **every** destination it matches (true fan-out — zero, one, or several), and **local JSONL is always written** regardless. The per-destination `api_key` becomes the `Authorization: Bearer <key>` header on that server's POSTs; because each destination references its own `${VAR}`, distinct keys never cross between servers. For the full routing model and pattern semantics see [Multi-server fan-out](#multi-server-fan-out-destinations) and the [Configuration reference](#configuration-reference).
 
 ### Multi-server fan-out (`destinations`)
 
-The single legacy server above is the simplest setup. To send each session's events to **multiple** servers — choosing per session by the session's **working directory** — configure `destinations` instead. This is the preferred mechanism; the legacy `context_intelligence_server_url`/`api_key` scalars remain supported and synthesize a single `default` destination that matches all sessions.
+The example above already shows two servers. This section documents the full routing model.
 
-`destinations` is a dict keyed by name, under the same `overrides.hook-context-intelligence.config` block:
+`destinations` is a dict keyed by name, under the `overrides.hook-context-intelligence.config` block:
 
 ```yaml
 # ~/.amplifier/settings.yaml
@@ -288,18 +293,44 @@ resolver.session_dir("abc-123")     # Path to a session's CI directory
 
 The `config` dict passed to `mount()` uses the same keys as the `overrides.hook-context-intelligence.config` block in `settings.yaml`. The hook is a **pure mount-config consumer**: it reads only this config dict (plus coordinator capabilities) and does **not** read environment variables or `settings.yaml` itself. Environment variables reach the config only because the shipped behavior YAML (and any `settings.yaml` override) reference them through `${VAR}` / `${VAR:default}` placeholders, which the Amplifier app-cli expands before `mount()` is called. There is **no** automatic `AMPLIFIER_CONTEXT_INTELLIGENCE_<KEY>` → config-key mapping — an env var with no corresponding `${VAR}` placeholder in the active config never reaches the hook. The **Env var** column below names the variable each shipped placeholder reads.
 
-| Key | Env var | Default | Description |
-|-----|---------|---------|-------------|
-| `context_intelligence_server_url` | `AMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_URL` | *(empty)* | Base URL of the CI server. Events are forwarded only when this is set. |
-| `context_intelligence_api_key` | `AMPLIFIER_CONTEXT_INTELLIGENCE_API_KEY` | *(empty)* | Bearer token matching the server's `api_key`. Added as `Authorization: Bearer <value>` on every HTTP dispatch. |
-| `workspace` | `AMPLIFIER_CONTEXT_INTELLIGENCE_WORKSPACE` | *(auto)* | Written into every `events.jsonl` record and `metadata.json`. Resolution: `config["workspace"]` → `coordinator.config["workspace"]` → `project_slug`. |
-| `log_level` | `AMPLIFIER_CONTEXT_INTELLIGENCE_LOG_LEVEL` | `INFO` | Hook logging level. |
-| `base_path` | — | `~/.amplifier/projects` | Root directory for local JSONL output. |
-| `exclude_events` | — | `[]` | fnmatch patterns for events to suppress. |
-| `dispatch_timeout` | `AMPLIFIER_CONTEXT_INTELLIGENCE_DISPATCH_TIMEOUT` | `30` | HTTP write timeout in seconds for server dispatch uploads. |
-| `dispatch_failure_threshold` | `AMPLIFIER_CONTEXT_INTELLIGENCE_DISPATCH_FAILURE_THRESHOLD` | `3` | Consecutive dispatch failures before the circuit breaker disables dispatch for the session. |
-| `dispatch_queue_capacity` | — | `256` | Maximum queued HTTP dispatches before dispatch is disabled for the session. |
-| `close_drain_timeout` | — | `0.5` | Shutdown grace period in seconds for draining queued HTTP dispatches. |
+#### Server forwarding — `destinations` (current shape)
+
+`destinations` is a dict keyed by destination name. Each value is a dict with these keys:
+
+| Sub-key | Required | Default | Description |
+|---------|----------|---------|-------------|
+| `url` | yes | — | Base URL of the CI server for this destination. |
+| `api_key` | yes | — | Bearer token for this destination. Sent as `Authorization: Bearer <value>` on that destination's POSTs only. |
+| `include` | no | `["**"]` | `.gitignore`-style patterns matched against the session's working directory. The destination is a candidate when any pattern matches. |
+| `exclude` | no | `[]` | `.gitignore`-style patterns; if any matches, the destination is dropped for that session (**exclude wins**). |
+
+Routing: a session is sent to **every** destination where `include` matches **and** `exclude` does not. **Local JSONL is always written**, even when no destination matches. After `${VAR}` expansion, a destination with an empty `url` **or** `api_key` is a **mount error** (fail-fast, naming the offending destination). With no `destinations` configured, the hook is local-JSONL-only. See [Multi-server fan-out](#multi-server-fan-out-destinations) for the full pattern semantics.
+
+#### Other config keys
+
+| Key | Source | Default | Description |
+|-----|--------|---------|-------------|
+| `workspace` | `${...}` placeholder, e.g. `${AMPLIFIER_CONTEXT_INTELLIGENCE_WORKSPACE}` | *(auto)* | Written into every `events.jsonl` record and `metadata.json`. Resolution: `config["workspace"]` → `coordinator.config["workspace"]` → `project_slug`. |
+| `log_level` | `${...}` placeholder | `INFO` | Hook logging level. |
+| `base_path` | direct value | `~/.amplifier/projects` | Root directory for local JSONL output. |
+| `exclude_events` | direct value | `[]` | fnmatch patterns for events to suppress (event names, not paths). |
+| `dispatch_timeout` | `${...}` placeholder | `30` | HTTP write timeout (seconds) for server dispatch uploads. |
+| `dispatch_failure_threshold` | `${...}` placeholder | `3` | Consecutive dispatch failures before the per-destination circuit breaker disables that destination for the session. |
+| `dispatch_queue_capacity` | direct value | `256` | Maximum queued HTTP dispatches per destination before that destination is disabled for the session. |
+| `close_drain_timeout` | direct value | `0.5` | Shutdown grace period (seconds) for draining queued HTTP dispatches. |
+
+> The **Source** column shows how a value reaches the config: a `${VAR}` placeholder in the YAML (expanded by app-cli from `keys.env`/environment), or a direct literal value. There is **no** automatic `AMPLIFIER_*` env-var → config mapping; only `${VAR}` placeholders present in the active config are read.
+
+#### Deprecated — legacy single-server scalars
+
+Supported for back-compat; prefer `destinations`. When set **and** no `destinations` block is present, these synthesize a single `default` destination with `include: ["**"]`.
+
+| Key | `${...}` placeholder used by shipped YAML | Behavior |
+|-----|-------------------------------------------|----------|
+| `context_intelligence_server_url` | `${AMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_URL:}` | Base URL of the single legacy server. |
+| `context_intelligence_api_key` | `${AMPLIFIER_CONTEXT_INTELLIGENCE_API_KEY:}` | Bearer token for it. |
+
+Legacy degradation (differs from `destinations`): if `context_intelligence_server_url` is set but `context_intelligence_api_key` is empty after expansion, the hook **degrades to local-only and logs a WARNING — it does not fail to mount** (an empty `url`/`api_key` inside a `destinations` entry *is* a hard mount error).
 
 ---
 
