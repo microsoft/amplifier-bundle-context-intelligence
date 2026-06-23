@@ -71,7 +71,7 @@ def _slugify_path(path_str: str) -> str:
     return slug or _DEFAULT_PROJECT_SLUG
 
 
-class ConfigResolver:
+class HookConfigResolver:
     """Resolve configuration values with lazy fallback chains.
 
     Resolution order per property:
@@ -453,3 +453,9 @@ class ConfigResolver:
                 f"overrides.hook-context-intelligence.config.destinations.<name>."
             )
         return dests
+
+
+# ---------------------------------------------------------------------------
+# Backward-compat alias — import either name (HookConfigResolver is canonical)
+# ---------------------------------------------------------------------------
+ConfigResolver = HookConfigResolver

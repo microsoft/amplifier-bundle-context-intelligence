@@ -169,10 +169,10 @@ async def mount(
     """Mount the context-intelligence hook.
 
     Always:
-    - Registers ConfigResolver as ``context_intelligence.config_resolver`` capability
+    - Registers HookConfigResolver as ``context_intelligence.hook_config_resolver`` capability
     - LoggingHandler  — writes events.jsonl + dispatches to CI server(s)
     """
-    from .config_resolver import ConfigResolver
+    from .config_resolver import HookConfigResolver
     from .handlers.logging_handler import LoggingHandler
     from .skill_fetcher import (
         TOOL_SKILLS_DISCOVERY_CAPABILITY,
@@ -181,9 +181,9 @@ async def mount(
         _is_skills_capable,
     )
 
-    resolver = ConfigResolver(config, coordinator)
+    resolver = HookConfigResolver(config, coordinator)
     log.setLevel(resolver.log_level)
-    coordinator.register_capability("context_intelligence.config_resolver", resolver)
+    coordinator.register_capability("context_intelligence.hook_config_resolver", resolver)
 
     unregister_fns: list[Callable[[], None]] = []
 
@@ -286,7 +286,7 @@ async def mount(
             except Exception:
                 pass
         try:
-            coordinator.register_capability("context_intelligence.config_resolver", None)
+            coordinator.register_capability("context_intelligence.hook_config_resolver", None)
         except Exception:
             pass
         try:

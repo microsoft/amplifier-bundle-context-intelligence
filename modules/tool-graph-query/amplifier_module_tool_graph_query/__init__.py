@@ -21,6 +21,6 @@ async def mount(coordinator: Any, config: dict[str, Any]) -> dict[str, Any]:  # 
     """
     from .graph_query_tool import GraphQueryTool
 
-    tool = GraphQueryTool(coordinator=coordinator)
+    tool = GraphQueryTool(coordinator=coordinator, config=config)
     await coordinator.mount("tools", tool, name=tool.name)
     return {"tool": tool.name, "status": "mounted"}

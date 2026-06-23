@@ -1,11 +1,13 @@
-"""Tests for ConfigResolver resolution chains."""
+"""Tests for HookConfigResolver resolution chains."""
 
 from pathlib import Path
 from unittest.mock import MagicMock
 
 import fnmatch
 
-from amplifier_module_hook_context_intelligence.config_resolver import ConfigResolver
+from amplifier_module_hook_context_intelligence.config_resolver import (
+    HookConfigResolver as ConfigResolver,
+)  # noqa: PLC0414
 from amplifier_module_hook_context_intelligence.config_resolver import _slugify_path
 
 

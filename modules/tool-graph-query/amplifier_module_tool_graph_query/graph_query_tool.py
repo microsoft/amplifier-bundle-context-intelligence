@@ -1,8 +1,15 @@
 """GraphQueryTool — agent-facing tool for executing Cypher queries.
 
-Implements the Amplifier Tool protocol.  Resolves configuration lazily
-via the ``context_intelligence.config_resolver`` coordinator capability
-registered by the hook-context-intelligence module.
+Implements the Amplifier Tool protocol.  Configuration is resolved via the
+three-tier fallback chain in ``resolve_query_endpoint``:
+
+  1. Explicit read-config (``read_destinations:`` in mount config, if set).
+  2. Upload destinations from ``context_intelligence.hook_config_resolver``
+     capability (fixes the destinations-only config bug).
+  3. ``AMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_URL`` env var (canonical last-resort).
+
+The hook resolver is fetched lazily at first ``execute()`` call so that late
+mount order is handled correctly (tools mount before hooks).
 """
 
 from __future__ import annotations
@@ -10,6 +17,7 @@ from __future__ import annotations
 from typing import Any
 
 from context_intelligence.client import AsyncCIClient
+from context_intelligence.tool_resolver import ToolConfigResolver, resolve_query_endpoint
 
 from amplifier_core.models import ToolResult
 
@@ -18,13 +26,15 @@ class GraphQueryTool:
     """Execute Cypher queries against the context-intelligence server.
 
     Implements the Amplifier Tool protocol (name, description, input_schema,
-    execute).  Configuration is resolved lazily at execute() time via the
-    coordinator's ``context_intelligence.config_resolver`` capability.
+    execute).  Configuration is resolved via resolve_query_endpoint() at
+    execute() time, consulting the hook's upload destinations as a fallback.
     """
 
-    def __init__(self, coordinator: Any) -> None:
+    def __init__(self, coordinator: Any, config: dict[str, Any] | None = None) -> None:
         self._coordinator = coordinator
-        self._resolver: Any | None = None
+        self._config = config or {}
+        self._hook_resolver: Any | None = None
+        self._tool_resolver = ToolConfigResolver(self._config, coordinator)
 
     @property
     def name(self) -> str:
@@ -74,22 +84,27 @@ class GraphQueryTool:
             "required": ["query"],
         }
 
+    def _resolve_server_config(self, coordinator: Any) -> tuple[str | None, str | None, str]:
+        """Resolve (server_url, api_key, workspace) using the three-tier fallback chain.
+
+        Late-mount upgrade: retries hook capability lookup on every call while
+        _hook_resolver is None (hook may mount after the tool).
+        """
+        if self._hook_resolver is None:
+            self._hook_resolver = coordinator.get_capability(
+                "context_intelligence.hook_config_resolver"
+            )
+        url, api_key = resolve_query_endpoint(self._hook_resolver, self._tool_resolver)
+        workspace = (
+            self._hook_resolver.workspace
+            if self._hook_resolver is not None
+            else self._tool_resolver.workspace
+        )
+        return url, api_key, workspace
+
     async def execute(self, input: dict[str, Any]) -> ToolResult:  # noqa: A002
-        if self._resolver is None:
-            self._resolver = self._coordinator.get_capability(
-                "context_intelligence.config_resolver"
-            )
+        server_url, api_key, workspace = self._resolve_server_config(self._coordinator)
 
-        if self._resolver is None:
-            return ToolResult(
-                success=False,
-                error={
-                    "message": "context-intelligence hook not configured",
-                    "type": "configuration_error",
-                },
-            )
-
-        server_url = self._resolver.context_intelligence_server_url
         if not server_url:
             return ToolResult(
                 success=False,
@@ -99,7 +114,6 @@ class GraphQueryTool:
                 },
             )
 
-        workspace = self._resolver.workspace
         query: str = input["query"]
         ws_override = input.get("workspace")
         effective_workspace = ws_override if ws_override is not None else workspace
@@ -118,7 +132,6 @@ class GraphQueryTool:
         else:
             params = raw_params
 
-        api_key = self._resolver.context_intelligence_api_key
         async_client = AsyncCIClient(server_url=server_url, api_key=api_key or "")
         result = await async_client.cypher(query, effective_workspace, params=params)
         return ToolResult(success=True, output=result)

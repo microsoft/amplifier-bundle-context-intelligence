@@ -1,19 +1,26 @@
-// ConfigResolver — lazy fallback chain for hook configuration values.
+// Config resolution — two resolvers, lazy fallback chains.
 //
-// Each property is resolved on first access and cached.
-// Empty strings in config are treated as absent and fall through
-// to the next source in the chain (standard or-chain falsy semantics).
+//   HookConfigResolver  (write/upload side)  — owns workspace, paths, and the
+//                        `destinations` fan-out map.
+//   ToolConfigResolver  (read/query side)    — used by the graph_query and
+//                        blob_read tools; resolves the query endpoint via
+//                        resolve_query_endpoint(), EXPLICIT-READ-CONFIG FIRST,
+//                        then falling back to the first hook destination, then env.
+//
+// Each value is resolved on first access and cached. Empty strings are treated
+// as absent and fall through to the next source (or-chain falsy semantics).
 //
 // Render: dot -Tsvg config-resolution.dot -o config-resolution.svg
 
-digraph ConfigResolver {
+digraph ConfigResolution {
     rankdir=TB;
     fontname="Helvetica";
     node [fontname="Helvetica", shape=box, style="rounded,filled", fillcolor="#f0f0f0"];
     edge [fontname="Helvetica", fontsize=10];
 
-    // --- Central node ---
-    resolver [label="ConfigResolver", shape=component, fillcolor="#d4e6f1", style="filled"];
+    // --- Central nodes ---
+    hook_resolver [label="HookConfigResolver\n(hook / write side)", shape=component, fillcolor="#d4e6f1", style="filled"];
+    tool_resolver [label="ToolConfigResolver\n(graph_query / blob_read — read side)", shape=component, fillcolor="#d1f2d4", style="filled"];
 
     // --- Input sources ---
     subgraph cluster_inputs {
@@ -22,14 +29,16 @@ digraph ConfigResolver {
         color="#999999";
 
         hook_config [label="hook config\n(behavior YAML)"];
+        tool_config [label="tool config\n(overrides.tool-graph-query.config /\n overrides.tool-blob-read.config)"];
         coord_config [label="coordinator.config\n(set by app at session creation)"];
         session_cap [label="session.working_dir\ncapability\n(set by foundation bundle.py)"];
         env_vars [label="Environment Variables\nAMPLIFIER_CONTEXT_INTELLIGENCE_*\n(expanded in YAML before mount)", shape=note, fillcolor="#fff3cd"];
     }
 
     env_vars -> hook_config [label="expanded into", style=dashed];
+    env_vars -> tool_config [label="expanded into", style=dashed];
 
-    // --- project_slug resolution ---
+    // --- project_slug resolution (hook) ---
     subgraph cluster_project_slug {
         label="project_slug resolution";
         style=filled;
@@ -46,7 +55,7 @@ digraph ConfigResolver {
         ps_working_dir -> ps_default [label="empty?"];
     }
 
-    // --- base_path resolution ---
+    // --- base_path resolution (hook) ---
     subgraph cluster_base_path {
         label="base_path resolution";
         style=filled;
@@ -61,7 +70,7 @@ digraph ConfigResolver {
         bp_coord -> bp_default [label="empty?"];
     }
 
-    // --- workspace resolution ---
+    // --- workspace resolution (hook) ---
     subgraph cluster_workspace {
         label="workspace resolution";
         style=filled;
@@ -76,19 +85,35 @@ digraph ConfigResolver {
         ws_config -> ws_slug [label="empty?"];
     }
 
-    // --- Simple properties (no fallback chain) ---
+    // --- destinations: the hook's named server map (write / fan-out) ---
+    subgraph cluster_destinations {
+        label="destinations  (hook write side — fan-out)";
+        style=filled;
+        fillcolor="#ede7f6";
+        color="#673ab7";
+
+        dst_map [label="destinations:\n{ name → Destination(url, api_key,\n include, exclude) }\nnamed map, declaration order"];
+        dst_legacy [label="legacy scalars\ncontext_intelligence_server_url / _api_key\n→ synthesize {\"default\": …}\nONLY when no destinations block\n(both fields required)", shape=note, fillcolor="#fff3cd"];
+        dst_fanout [label="fan-out: send to EVERY destination where\ninclude matches AND exclude does not\n(exclude wins; zero / one / several)\nlocal JSONL always written"];
+        dst_first [label="first destination\n= next(iter(destinations.values()), None)"];
+
+        dst_legacy -> dst_map [label="synthesize", style=dashed];
+        dst_map -> dst_fanout [label="route"];
+        dst_map -> dst_first [label="for queries"];
+    }
+
+    // --- Simple hook properties (no coordinator fallback) ---
     subgraph cluster_simple {
-        label="Direct config properties\n(no coordinator fallback)";
+        label="Direct hook config properties";
         style=filled;
         fillcolor="#f3e5f5";
         color="#9c27b0";
 
-        server_url [label="context_intelligence_server_url\nNone if empty"];
         log_level [label="log_level\ndefault: INFO"];
         exclude [label="exclude_events\ndefault: frozenset()"];
     }
 
-    // --- Derived paths ---
+    // --- Derived paths (hook) ---
     subgraph cluster_derived {
         label="Derived Paths";
         style=filled;
@@ -99,15 +124,41 @@ digraph ConfigResolver {
         blob_root [label="blob_store_root\nbase_path / project_slug /\nsessions"];
     }
 
-    // --- Edges from resolver ---
-    resolver -> ps_config [lhead=cluster_project_slug];
-    resolver -> bp_config [lhead=cluster_base_path];
-    resolver -> ws_coord [lhead=cluster_workspace];
-    resolver -> server_url [lhead=cluster_simple];
+    // --- Query endpoint resolution (read side, ToolConfigResolver) ---
+    // resolve_query_endpoint(hook_resolver, tool_resolver): per-field, EXPLICIT-FIRST.
+    subgraph cluster_query {
+        label="resolve_query_endpoint()  (read side — per field, explicit-first)";
+        style=filled;
+        fillcolor="#e0f2f1";
+        color="#009688";
 
-    hook_config -> resolver [label="config dict"];
-    coord_config -> resolver [label="coordinator"];
+        q1 [label="1. read_destinations[first]\n.url / .api_key\n(explicit read override;\n absent ⇒ synthesize default from\n tool's explicit scalars)"];
+        q2 [label="2. hook destinations[first]\n.url / .api_key\n(bug-fix bridge: destinations-only\n setups 'just work' for reads)"];
+        q3 [label="3. env\nAMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_URL /\n_API_KEY\n(single canonical last-resort fallback)"];
+        q_none [label="else → None\n→ configuration_error", shape=note, fillcolor="#ffcdd2"];
+
+        q1 -> q2 [label="empty?"];
+        q2 -> q3 [label="empty?"];
+        q3 -> q_none [label="empty?"];
+    }
+
+    // --- Edges from the hook resolver ---
+    hook_resolver -> ps_config [lhead=cluster_project_slug];
+    hook_resolver -> bp_config [lhead=cluster_base_path];
+    hook_resolver -> ws_coord [lhead=cluster_workspace];
+    hook_resolver -> dst_map [lhead=cluster_destinations];
+    hook_resolver -> log_level [lhead=cluster_simple];
+
+    hook_config -> hook_resolver [label="config dict"];
+    coord_config -> hook_resolver [label="coordinator"];
     session_cap -> ps_working_dir [label="working_dir", style=dashed];
+
+    // --- Edges from the tool resolver ---
+    tool_resolver -> q1 [lhead=cluster_query];
+    tool_config -> tool_resolver [label="config dict"];
+    coord_config -> tool_resolver [label="coordinator"];
+    // tier 2 reads the hook's first destination (shared model)
+    dst_first -> q2 [style=dashed, label="first hook destination", color="#673ab7"];
 
     // --- Derived path dependencies ---
     ps_default -> session_dir [style=dashed, label="project_slug", color="#999999"];

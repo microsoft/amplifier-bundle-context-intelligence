@@ -15,6 +15,6 @@ __amplifier_module_type__ = "tool"
 async def mount(coordinator: Any, config: Any) -> dict[str, Any]:  # noqa: ARG001
     from amplifier_module_tool_blob_read.blob_read_tool import BlobReadTool
 
-    tool = BlobReadTool(coordinator)
+    tool = BlobReadTool(coordinator, config)
     await coordinator.mount("tools", tool, name=tool.name)
     return {"tool": tool.name, "status": "mounted"}

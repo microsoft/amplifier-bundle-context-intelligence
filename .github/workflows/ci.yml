@@ -90,10 +90,18 @@ jobs:
       - name: Install dependencies
         working-directory: modules/${{ matrix.module }}
         # --frozen: respect the module's own lockfile exactly as committed.
-        # The module's path dependency on `../..` is resolved from the
-        # checked-out root, so no special setup is needed.
+        # The module declares the shared bundle as a @main git ref (NOT a path
+        # source), so uv installs the *published* context_intelligence. The Run
+        # tests step shadows it with the in-repo source (below).
         run: uv sync --frozen
 
       - name: Run tests
         working-directory: modules/${{ matrix.module }}
+        # Test the module against the IN-REPO shared library, which may carry
+        # not-yet-published changes (e.g. context_intelligence/tool_resolver.py)
+        # that @main only gains when this PR merges. Put the checked-out root on
+        # PYTHONPATH to shadow the @main-installed copy — the same convention
+        # AGENTS.md prescribes for local runs.
+        env:
+          PYTHONPATH: ${{ github.workspace }}
         run: uv run pytest tests/ -q --tb=short --ignore=tests/dtu

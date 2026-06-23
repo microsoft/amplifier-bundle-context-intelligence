@@ -100,7 +100,7 @@ overrides:
           include: ["**"]                # every session (the default)
 ```
 
-That single-destination block is the common case. To route different projects to different servers — or to exclude some entirely — add more named destinations; see [Multi-server fan-out](#multi-server-fan-out-destinations). For the full routing model and pattern rules, see the [Configuration reference](#configuration-reference).
+That single-destination block is the common case. To route different projects to different servers — or to exclude some entirely — add more named destinations; for the full routing model and pattern rules, see [Server forwarding — `destinations`](#server-forwarding--destinations) in the Configuration reference.
 
 > **Never write a literal API key into `settings.yaml`.** That file is version-controllable configuration; a secret written there is one accidental commit away from exposure. Always reference it via `${VAR}` from `keys.env`.
 
@@ -134,78 +134,7 @@ When this bundle is loaded through the [Amplifier app-cli](https://github.com/mi
 
 `~/.amplifier/settings.yaml` is the app-cli's knob for bundle configuration. It is safe to commit to version control **as long as secrets are referenced via `${VAR_NAME}` interpolation**, never as literal values. The actual secrets stay exclusively in `~/.amplifier/keys.env`. The `${...}` placeholder is resolved by the app-cli **before** the value reaches the hook — the hook reads only its mount config dict and never the environment directly, so the variable name in `keys.env` is entirely your choice (it never has to match any `AMPLIFIER_*` convention).
 
-### Configuring servers with `destinations` (current shape)
-
-`destinations` is a named map of servers under `overrides.hook-context-intelligence.config`. Each entry has a `url`, an `api_key`, and optional `.gitignore`-style `include`/`exclude` patterns that decide which sessions route to it (by working directory). This is the canonical configuration shape:
-
-```bash
-# ~/.amplifier/keys.env  — secrets only, never commit this file
-PERSONAL_CI_KEY=<personal-server-key>
-TEAM_CI_KEY=<team-server-key>
-```
-
-```yaml
-# ~/.amplifier/settings.yaml
-overrides:
-  hook-context-intelligence:
-    config:
-      workspace: "my-project"          # optional — auto-resolved if omitted
-      destinations:
-        personal:
-          url: "http://localhost:8000"
-          api_key: "${PERSONAL_CI_KEY}"
-          include: ["**"]              # all sessions...
-          exclude: ["**/client-*/"]    # ...except any client-* project dir and below
-        team:
-          url: "https://ci.team.example"
-          api_key: "${TEAM_CI_KEY}"
-          include: ["**/work/"]        # only sessions under a "work" directory
-```
-
-A session's events are sent to **every** destination it matches (true fan-out — zero, one, or several), and **local JSONL is always written** regardless. The per-destination `api_key` becomes the `Authorization: Bearer <key>` header on that server's POSTs; because each destination references its own `${VAR}`, distinct keys never cross between servers. For the full routing model and pattern semantics see [Multi-server fan-out](#multi-server-fan-out-destinations) and the [Configuration reference](#configuration-reference).
-
-### Multi-server fan-out (`destinations`)
-
-The example above already shows two servers. This section documents the full routing model.
-
-`destinations` is a dict keyed by name, under the `overrides.hook-context-intelligence.config` block:
-
-```yaml
-# ~/.amplifier/settings.yaml
-overrides:
-  hook-context-intelligence:
-    config:
-      destinations:
-        personal:
-          url: "${PERSONAL_CI_URL}"
-          api_key: "${PERSONAL_CI_KEY}"     # secret lives in keys.env, referenced here
-          include: ["**"]                   # all sessions...
-          exclude: ["**/client-*/"]         # ...except any client-* project dir and everything under it
-        team:
-          url: "${TEAM_CI_URL}"
-          api_key: "${TEAM_CI_KEY}"
-          include: ["**/work/"]             # only sessions under a "work" directory
-```
-
-**How routing is decided.** For each session the hook derives a match key from the session's working directory (the `session.working_dir` capability) and tests it against every destination. A destination is **active** for a session iff the working dir matches an `include` pattern **and** does not match an `exclude` pattern — **exclude wins, per destination**. The session's events are sent to **every** active destination (true fan-out): a session can match zero, one, or several. **Local JSONL is always written**, regardless of how many destinations match.
-
-**Pattern semantics — `.gitignore` rules.** `include` / `exclude` patterns use `.gitignore` (gitwildmatch) semantics, matched against the session's working **directory**:
-
-| Pattern | Matches |
-|---------|---------|
-| `foo/`, `foo`, `**/foo/`, `**/foo` | the directory `foo` **and everything beneath it** |
-| `**` | every session |
-| empty `include` list | nothing (the destination is inactive) |
-
-Prefer the trailing-slash directory form (e.g. `**/work/`) to mean "this project and all its sessions" — it matches whether the session is launched from the project **root** or any subdirectory. (A pattern that targets only contents, like `**/work/**`, still also matches the directory itself here, because the match key is a directory.)
-
-**Defaults & validation.** Omitted `include` defaults to `["**"]` (match everything); omitted `exclude` defaults to none. After `${VAR}` expansion, a `destinations` entry whose `url` **or** `api_key` is empty is a **mount error** (fail-fast, naming the offending destination). With no `destinations` and no legacy url, the hook is local-JSONL-only.
-
-**Legacy single-server behavior differs on one point.** When only the legacy scalars are set (no `destinations`) and the `url` is present but the `api_key` is empty — e.g. an unset `${AMPLIFIER_CONTEXT_INTELLIGENCE_API_KEY:}` — the hook **degrades to local-only and logs a WARNING; it does not fail to mount**. (A `destinations` entry with an empty url/api_key is a hard error; the legacy scalar path is intentionally lenient for back-compat.)
-
-**Per-project override.** Because `destinations` is keyed by name, a project `.amplifier/settings.yaml` can override a single destination's `include`/`exclude` (e.g. `destinations.team.include`) without restating the others — the app-cli deep-merges user → project settings.
-
-> **Secrets:** keep `api_key` values in `~/.amplifier/keys.env` and reference them via `${VAR}` in `settings.yaml`. Never write a literal key into `settings.yaml`.
+The actual `destinations` configuration — its sub-keys, routing rules, pattern semantics, defaults, validation, and per-project overrides — lives in one place: [Server forwarding — `destinations`](#server-forwarding--destinations) in the Configuration reference.
 
 ---
 
@@ -278,10 +207,10 @@ cleanup = await mount(coordinator, config={
 
 ### Accessing resolved values
 
-`mount()` registers a `ConfigResolver` as the `context_intelligence.config_resolver` capability:
+`mount()` registers a `HookConfigResolver` as the `context_intelligence.hook_config_resolver` capability:
 
 ```python
-resolver = coordinator.get_capability("context_intelligence.config_resolver")
+resolver = coordinator.get_capability("context_intelligence.hook_config_resolver")
 resolver.workspace                  # resolved workspace string
 resolver.base_path                  # resolved Path object
 resolver.session_dir("abc-123")     # Path to a session's CI directory
@@ -293,18 +222,52 @@ resolver.session_dir("abc-123")     # Path to a session's CI directory
 
 The `config` dict passed to `mount()` uses the same keys as the `overrides.hook-context-intelligence.config` block in `settings.yaml`. The hook is a **pure mount-config consumer**: it reads only this config dict (plus coordinator capabilities) and does **not** read environment variables or `settings.yaml` itself. Environment variables reach the config only because the shipped behavior YAML (and any `settings.yaml` override) reference them through `${VAR}` / `${VAR:default}` placeholders, which the Amplifier app-cli expands before `mount()` is called. There is **no** automatic `AMPLIFIER_CONTEXT_INTELLIGENCE_<KEY>` → config-key mapping — an env var with no corresponding `${VAR}` placeholder in the active config never reaches the hook. The **Env var** column below names the variable each shipped placeholder reads.
 
-#### Server forwarding — `destinations` (current shape)
+#### Server forwarding — `destinations`
 
-`destinations` is a dict keyed by destination name. Each value is a dict with these keys:
+`destinations` is a dict keyed by destination name, under `overrides.hook-context-intelligence.config`. Each value is a dict with these keys:
 
 | Sub-key | Required | Default | Description |
 |---------|----------|---------|-------------|
 | `url` | yes | — | Base URL of the CI server for this destination. |
-| `api_key` | yes | — | Bearer token for this destination. Sent as `Authorization: Bearer <value>` on that destination's POSTs only. |
+| `api_key` | yes | — | Bearer token for this destination. Sent as `Authorization: Bearer <value>` on that destination's POSTs only — because each destination references its own `${VAR}`, distinct keys never cross between servers. |
 | `include` | no | `["**"]` | `.gitignore`-style patterns matched against the session's working directory. The destination is a candidate when any pattern matches. |
 | `exclude` | no | `[]` | `.gitignore`-style patterns; if any matches, the destination is dropped for that session (**exclude wins**). |
 
-Routing: a session is sent to **every** destination where `include` matches **and** `exclude` does not. **Local JSONL is always written**, even when no destination matches. After `${VAR}` expansion, a destination with an empty `url` **or** `api_key` is a **mount error** (fail-fast, naming the offending destination). With no `destinations` configured, the hook is local-JSONL-only. See [Multi-server fan-out](#multi-server-fan-out-destinations) for the full pattern semantics.
+```yaml
+# ~/.amplifier/settings.yaml — route different projects to different servers
+overrides:
+  hook-context-intelligence:
+    config:
+      workspace: "my-project"          # optional — auto-resolved if omitted
+      destinations:
+        personal:
+          url: "http://localhost:8000"
+          api_key: "${PERSONAL_CI_KEY}"   # secret lives in keys.env, referenced here
+          include: ["**"]                 # all sessions...
+          exclude: ["**/client-*/"]       # ...except any client-* project dir and below
+        team:
+          url: "https://ci.team.example"
+          api_key: "${TEAM_CI_KEY}"
+          include: ["**/work/"]           # only sessions under a "work" directory
+```
+
+**Routing.** For each session the hook derives a match key from the session's working directory (the `session.working_dir` capability) and tests it against every destination. A destination is **active** for a session iff the working dir matches an `include` pattern **and** does not match an `exclude` pattern — **exclude wins, per destination**. The session's events are sent to **every** active destination (true fan-out): a session can match zero, one, or several. **Local JSONL is always written**, regardless of how many destinations match.
+
+**Pattern semantics — `.gitignore` rules.** `include` / `exclude` patterns use `.gitignore` (gitwildmatch) semantics, matched against the session's working **directory**:
+
+| Pattern | Matches |
+|---------|---------|
+| `foo/`, `foo`, `**/foo/`, `**/foo` | the directory `foo` **and everything beneath it** |
+| `**` | every session |
+| empty `include` list | nothing (the destination is inactive) |
+
+Prefer the trailing-slash directory form (e.g. `**/work/`) to mean "this project and all its sessions" — it matches whether the session is launched from the project **root** or any subdirectory. (A pattern that targets only contents, like `**/work/**`, still also matches the directory itself here, because the match key is a directory.)
+
+**Defaults & validation.** Omitted `include` defaults to `["**"]` (match everything); omitted `exclude` defaults to none. After `${VAR}` expansion, a `destinations` entry whose `url` **or** `api_key` is empty is a **mount error** (fail-fast, naming the offending destination). With no `destinations` configured, the hook is local-JSONL-only. (The legacy scalar path is intentionally more lenient — see [Deprecated — legacy single-server scalars](#deprecated--legacy-single-server-scalars) below.)
+
+**Per-project override.** Because `destinations` is keyed by name, a project `.amplifier/settings.yaml` can override a single destination's `include`/`exclude` (e.g. `destinations.team.include`) without restating the others — the app-cli deep-merges user → project settings.
+
+> **Secrets:** keep `api_key` values in `~/.amplifier/keys.env` and reference them via `${VAR}` in `settings.yaml`. Never write a literal key into `settings.yaml`.
 
 #### Other config keys
 
@@ -331,6 +294,49 @@ Supported for back-compat; prefer `destinations`. When set **and** no `destinati
 | `context_intelligence_api_key` | `${AMPLIFIER_CONTEXT_INTELLIGENCE_API_KEY:}` | Bearer token for it. |
 
 Legacy degradation (differs from `destinations`): if `context_intelligence_server_url` is set but `context_intelligence_api_key` is empty after expansion, the hook **degrades to local-only and logs a WARNING — it does not fail to mount** (an empty `url`/`api_key` inside a `destinations` entry *is* a hard mount error).
+
+---
+
+#### Query tools (`graph-query`, `blob-read`) — read-side endpoint
+
+The hook config above governs **where events are written** (the upload / fan-out side). The **query tools** `tool-graph-query` and `tool-blob-read` are the **read side** — they call a Context Intelligence server to answer graph queries and fetch blobs. They resolve their `(server_url, api_key)` independently per field, **explicit-read-config first**, and the chain is designed so that **configuring `destinations` alone is enough** — you do **not** have to repeat the endpoint for queries:
+
+| Order | Source | Notes |
+|-------|--------|-------|
+| **1** | First entry of `read_destinations` on the tool's own config (`overrides.tool-graph-query.config` / `overrides.tool-blob-read.config`) | The explicit read override. Wins when set. |
+| **2** | First entry of the hook's `destinations` block | **The common case** — queries follow the same server you upload to, with zero extra config. This is the bridge that makes a `destinations`-only setup "just work" for reads. |
+| **3** | Env `AMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_URL` / `AMPLIFIER_CONTEXT_INTELLIGENCE_API_KEY` | Single canonical last-resort fallback (reached via `${VAR}` placeholders in the shipped YAML, same convention as everywhere else). |
+| — | else | `configuration_error: "context-intelligence server URL not configured"`. |
+
+Each field walks the chain independently (a tier that supplies a `url` but no `api_key` lets `api_key` fall through). **Env is a true fallback — it never outranks the hook destination** (tier 2). There are **no** `*_PRIVATE_*` environment variables; the only env names consulted are the canonical `AMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_URL` / `_API_KEY`.
+
+**`read_destinations`** is a dict keyed by name, mirroring the hook's `destinations` shape. The **first** entry (declaration / insertion order) is used. Reach for it only when the read endpoint must differ from the upload destination (e.g. a read replica or a debugging override) — it overrides the **read path only** and does not change where the hook uploads:
+
+```yaml
+# ~/.amplifier/settings.yaml — only needed when queries must hit a DIFFERENT server than uploads
+overrides:
+  tool-graph-query:
+    config:
+      read_destinations:
+        default:
+          url: "http://read-replica.example.com"
+          api_key: "${CI_READ_KEY}"        # secret lives in keys.env, referenced here
+  tool-blob-read:
+    config:
+      read_destinations:
+        default:
+          url: "http://read-replica.example.com"
+          api_key: "${CI_READ_KEY}"
+```
+
+| Sub-key | Required | Default | Description |
+|---------|----------|---------|-------------|
+| `url` | yes | — | Base URL of the CI server the query tool reads from. |
+| `api_key` | yes | — | Bearer token for read requests to that server. |
+
+**Legacy back-compat (read side):** with no `read_destinations` key present, explicit top-level scalars on the tool config (`context_intelligence_server_url` + `context_intelligence_api_key`, **both** required) synthesize a single `default` read entry at tier 1 — symmetric to the hook's legacy synthesis. With neither set, resolution falls through to the hook destination (tier 2) and then env (tier 3).
+
+> **Most users configure nothing here.** A single hook `destinations` entry already powers both upload and query. `read_destinations` exists only for the read-replica / split-endpoint case.
 
 ---
 
@@ -483,7 +489,7 @@ amplifier-bundle-context-intelligence/
 │   ├── event-schema.md                 ← all 51+ Amplifier events
 │   ├── graph-model-reference.md        ← Neo4j graph model for Cypher queries
 │   ├── safe-extraction-patterns.md     ← JSONL navigation patterns
-│   ├── config-resolution.dot           ← ConfigResolver fallback chain diagram
+│   ├── config-resolution.dot           ← HookConfigResolver fallback chain diagram
 │   ├── session-disk-layout.dot         ← on-disk session directory structure
 │   ├── delegation-strategy.dot         ← graph-analyst → session-navigator delegation logic
 │   ├── agents/
