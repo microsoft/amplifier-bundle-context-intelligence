@@ -38,10 +38,8 @@ model_role: [reasoning, general]
 tools:
   - module: tool-delegate
     source: git+https://github.com/microsoft/amplifier-foundation@main#subdirectory=modules/tool-delegate
-  - module: tool-graph-query
-    source: git+https://github.com/microsoft/amplifier-bundle-context-intelligence@main#subdirectory=modules/tool-graph-query
-  - module: tool-blob-read
-    source: git+https://github.com/microsoft/amplifier-bundle-context-intelligence@main#subdirectory=modules/tool-blob-read
+  - module: tool-context-intelligence-query
+    source: git+https://github.com/microsoft/amplifier-bundle-context-intelligence@main#subdirectory=modules/tool-context-intelligence-query
   - module: tool-filesystem
     source: git+https://github.com/microsoft/amplifier-module-tool-filesystem@main
     config:

@@ -20,7 +20,7 @@ digraph ConfigResolution {
 
     // --- Central nodes ---
     hook_resolver [label="HookConfigResolver\n(hook / write side)", shape=component, fillcolor="#d4e6f1", style="filled"];
-    tool_resolver [label="ToolConfigResolver\n(graph_query / blob_read — read side)", shape=component, fillcolor="#d1f2d4", style="filled"];
+    tool_resolver [label="ToolConfigResolver\n(tool-context-intelligence-query\ngraph_query + blob_read — read side)", shape=component, fillcolor="#d1f2d4", style="filled"];
 
     // --- Input sources ---
     subgraph cluster_inputs {
@@ -29,7 +29,7 @@ digraph ConfigResolution {
         color="#999999";
 
         hook_config [label="hook config\n(behavior YAML)"];
-        tool_config [label="tool config\n(overrides.tool-graph-query.config /\n overrides.tool-blob-read.config)"];
+        tool_config [label="tool config\n(overrides.tool-context-intelligence-query.config)"];
         coord_config [label="coordinator.config\n(set by app at session creation)"];
         session_cap [label="session.working_dir\ncapability\n(set by foundation bundle.py)"];
         env_vars [label="Environment Variables\nAMPLIFIER_CONTEXT_INTELLIGENCE_*\n(expanded in YAML before mount)", shape=note, fillcolor="#fff3cd"];
@@ -132,7 +132,7 @@ digraph ConfigResolution {
         fillcolor="#e0f2f1";
         color="#009688";
 
-        q1 [label="1. read_destinations[first]\n.url / .api_key\n(explicit read override;\n absent ⇒ synthesize default from\n tool's explicit scalars)"];
+        q1 [label="1. sources[first]\n.url / .api_key\n(explicit read override;\n absent ⇒ synthesize default from\n tool's explicit scalars)"];
         q2 [label="2. hook destinations[first]\n.url / .api_key\n(bug-fix bridge: destinations-only\n setups 'just work' for reads)"];
         q3 [label="3. env\nAMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_URL /\n_API_KEY\n(single canonical last-resort fallback)"];
         q_none [label="else → None\n→ configuration_error", shape=note, fillcolor="#ffcdd2"];

@@ -1,56 +1,55 @@
-// This repository packages "Context Intelligence" — a toolkit that automatically records and lets you explore what happened during AI work sessions.
+// This repository packages tools and AI assistants that record, search, and analyze Amplifier's own work-session history.
 digraph context_intelligence {
     rankdir=LR
     fontname="Helvetica"
     fontsize=12
-    label="Context Intelligence — Session Recording & Exploration Toolkit\nv0.1.0 · a bundle of AI helpers, tools, and skills"
+    label="Context Intelligence — Session History Toolkit\nA bundle that records and analyzes Amplifier's past work sessions (v0.1.0)"
     labelloc=t
     labeljust=c
     nodesep=0.6
     ranksep=0.7
     bgcolor="white"
-    source_hash="7758e3d982ed1c85e71f0883ab4ac4596d336fd517ba1192e2580fbe98c220d2"
+    source_hash="4636e62f1ae10ff3f60e2b22dcb755c49a7851ad51669ebb1fcb900c54a33559"
 
     node [fontname="Helvetica", fontsize=11, style="filled,rounded"]
     edge [fontname="Helvetica", fontsize=9]
 
-    root_context_intelligence [label="Context Intelligence (Main Package)\nv0.1.0\n0 tools · 0 agents\n~98 tok aggregate", shape=box, fillcolor="#80cbc4", style="filled,rounded,bold", penwidth=2]
+    root_context_intelligence [label="Context Intelligence (Main Package)\n0 tools · 0 agents\n~98 tok aggregate", shape=box, fillcolor="#80cbc4", style="filled,rounded,bold", penwidth=2]
 
     subgraph cluster_behaviors {
-        label="Behaviors (Reusable Skill Bundles)"
+        label="Capability Bundles"
         style="filled"
         fillcolor="#f9f9f9"
         color="#999999"
 
-        beh_context_intelligence_behavior [label="Core Skill Bundle\ncontext-intelligence-behavior\n4 tools\n~2549 tok", shape=box, fillcolor="#e0f2f1", style="filled,rounded"]
+        beh_context_intelligence_behavior [label="Session Analysis Toolkit\n4 tools\n~2549 tok", shape=box, fillcolor="#e0f2f1", style="filled,rounded"]
     }
 
     subgraph cluster_agents {
-        label="Agents (Specialized AI Helpers)"
+        label="Specialist Assistants"
         style="filled"
         fillcolor="#f9f9f9"
         color="#999999"
 
-        agt_context_intelligence_design_facilitator [label="Guides Designing New Tools\ncontext-intelligence-design-facilitator\n~187 tok desc", shape=box, fillcolor="#c8e6c9", style="filled,rounded"]
-        agt_context_intelligence_tool_designer [label="Designs Tool Blueprints\ncontext-intelligence-tool-designer\n~198 tok desc", shape=box, fillcolor="#c8e6c9", style="filled,rounded"]
-        agt_graph_analyst [label="Analyzes Session Data\ngraph-analyst\n~543 tok desc", shape=box, fillcolor="#c8e6c9", style="filled,rounded"]
-        agt_session_navigator [label="Browses Past Sessions\nsession-navigator\n~366 tok desc", shape=box, fillcolor="#c8e6c9", style="filled,rounded"]
+        agt_context_intelligence_design_facilitator [label="Design Helper\n(guides new features)\n~187 tok desc", shape=box, fillcolor="#c8e6c9", style="filled,rounded"]
+        agt_context_intelligence_tool_designer [label="Tool Builder Helper\n~198 tok desc", shape=box, fillcolor="#c8e6c9", style="filled,rounded"]
+        agt_graph_analyst [label="Session Graph Analyst\n(answers questions about sessions)\n~543 tok desc", shape=box, fillcolor="#c8e6c9", style="filled,rounded"]
+        agt_session_navigator [label="Session File Navigator\n(reads raw session files)\n~366 tok desc", shape=box, fillcolor="#c8e6c9", style="filled,rounded"]
     }
 
     subgraph cluster_modules {
-        label="Modules (Building-Block Tools)"
+        label="Building Blocks (Code Components)"
         style="filled"
         fillcolor="#f9f9f9"
         color="#999999"
 
-        mod_hook_context_intelligence [label="Records Activity Automatically\nhook-context-intelligence", shape=box, fillcolor="#bbdefb", style="filled,rounded"]
-        mod_tool_blob_read [label="Reads Stored Data\ntool-blob-read", shape=box, fillcolor="#bbdefb", style="filled,rounded"]
-        mod_tool_context_intelligence_upload [label="Uploads Session Data\ntool-context-intelligence-upload", shape=box, fillcolor="#bbdefb", style="filled,rounded"]
-        mod_tool_graph_query [label="Searches the Data Graph\ntool-graph-query", shape=box, fillcolor="#bbdefb", style="filled,rounded"]
+        mod_hook_context_intelligence [label="Auto Session Recorder", shape=box, fillcolor="#bbdefb", style="filled,rounded"]
+        mod_tool_context_intelligence_query [label="Session Search Tool", shape=box, fillcolor="#bbdefb", style="filled,rounded"]
+        mod_tool_context_intelligence_upload [label="Session Upload Tool", shape=box, fillcolor="#bbdefb", style="filled,rounded"]
     }
 
     subgraph cluster_legend {
-        label="Legend"
+        label="Legend (Color Key)"
         style="filled"
         fillcolor="white"
         color="#cccccc"
@@ -70,7 +69,7 @@ digraph context_intelligence {
 
     disclaimer [label="Token estimates: ~4 chars/token\nSolid border = local (counted)\nDashed + red = external, hidden cost (not counted)\nDashed + muted = external, no cost\nExcludes: sub-session costs, runtime-dynamic", shape=note, fillcolor="#eceff1", style="filled", fontsize=9]
 
-    ext_githttps___github_com_microsoft_amplifier_foundation_main [label="Shared Foundation (External)\namplifier-foundation\n(external, cost)", shape=box, fillcolor="#80cbc4", style="dashed", color="red", penwidth=2]
+    ext_githttps___github_com_microsoft_amplifier_foundation_main [label="amplifier-foundation\n(shared base, external)", shape=box, fillcolor="#80cbc4", style="dashed", color="red", penwidth=2]
 
     root_context_intelligence -> ext_githttps___github_com_microsoft_amplifier_foundation_main [style=dashed]
     root_context_intelligence -> beh_context_intelligence_behavior [label="composes"]

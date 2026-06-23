@@ -1,7 +1,7 @@
 """Unit tests for context_intelligence.tool_resolver.
 
 Tests the shared helpers (_first_entry, _first_destination, resolve_query_endpoint)
-and ToolConfigResolver.read_destinations (including legacy synthesis — spec §7 cases
+and ToolConfigResolver.sources (including legacy synthesis — spec §7 cases
 #9 and #10 at the unit level).
 """
 
@@ -134,51 +134,51 @@ class TestResolveQueryEndpoint:
 
 
 # ---------------------------------------------------------------------------
-# TestToolConfigResolverReadDestinations
+# TestToolConfigResolverSources
 # ---------------------------------------------------------------------------
 
 
-class TestToolConfigResolverReadDestinations:
-    """ToolConfigResolver.read_destinations — parsing and legacy synthesis."""
+class TestToolConfigResolverSources:
+    """ToolConfigResolver.sources — parsing and legacy synthesis."""
 
     def test_explicit_mapping_parsed(self) -> None:
-        """Explicit read_destinations key → parsed into ReadEndpoint dict."""
-        from context_intelligence.tool_resolver import ReadEndpoint, ToolConfigResolver
+        """Explicit sources key → parsed into Source dict."""
+        from context_intelligence.tool_resolver import Source, ToolConfigResolver
 
         config = {
-            "read_destinations": {
+            "sources": {
                 "default": {"url": "http://read.example.com", "api_key": "read-key"},
             }
         }
         resolver = ToolConfigResolver(config, _make_coordinator())
-        rd = resolver.read_destinations
+        rd = resolver.sources
 
         assert "default" in rd
-        assert isinstance(rd["default"], ReadEndpoint)
+        assert isinstance(rd["default"], Source)
         assert rd["default"].url == "http://read.example.com"
         assert rd["default"].api_key == "read-key"
         assert rd["default"].name == "default"
 
     def test_explicit_empty_dict_returns_empty(self) -> None:
-        """Explicit read_destinations={} → {} (no legacy synthesis)."""
+        """Explicit sources={} → {} (no legacy synthesis)."""
         from context_intelligence.tool_resolver import ToolConfigResolver
 
-        config = {"read_destinations": {}}
+        config = {"sources": {}}
         resolver = ToolConfigResolver(config, _make_coordinator())
-        assert resolver.read_destinations == {}
+        assert resolver.sources == {}
 
     def test_non_dict_entry_skipped(self) -> None:
-        """Non-dict entries under read_destinations are silently skipped."""
+        """Non-dict entries under sources are silently skipped."""
         from context_intelligence.tool_resolver import ToolConfigResolver
 
         config = {
-            "read_destinations": {
+            "sources": {
                 "bad": "not-a-dict",
                 "good": {"url": "http://read.example.com", "api_key": "k"},
             }
         }
         resolver = ToolConfigResolver(config, _make_coordinator())
-        rd = resolver.read_destinations
+        rd = resolver.sources
         assert "bad" not in rd
         assert "good" in rd
 
@@ -187,37 +187,37 @@ class TestToolConfigResolverReadDestinations:
         from context_intelligence.tool_resolver import ToolConfigResolver
 
         config = {
-            "read_destinations": {
+            "sources": {
                 "default": {"url": "  http://read.example.com  ", "api_key": "  key  "},
             }
         }
         resolver = ToolConfigResolver(config, _make_coordinator())
-        rd = resolver.read_destinations
+        rd = resolver.sources
         assert rd["default"].url == "http://read.example.com"
         assert rd["default"].api_key == "key"
 
     # --- Case #9: legacy synthesis when BOTH scalars present ---
 
     def test_absent_key_both_scalars_synthesizes_default(self) -> None:
-        """Case #9 unit: absent read_destinations + both scalars → synthesized default."""
-        from context_intelligence.tool_resolver import ReadEndpoint, ToolConfigResolver
+        """Case #9 unit: absent sources key + both scalars → synthesized default."""
+        from context_intelligence.tool_resolver import Source, ToolConfigResolver
 
         config = {
             "context_intelligence_server_url": "http://legacy.example.com",
             "context_intelligence_api_key": "legacy-key",
         }
         resolver = ToolConfigResolver(config, _make_coordinator())
-        rd = resolver.read_destinations
+        rd = resolver.sources
 
         assert "default" in rd
-        assert isinstance(rd["default"], ReadEndpoint)
+        assert isinstance(rd["default"], Source)
         assert rd["default"].url == "http://legacy.example.com"
         assert rd["default"].api_key == "legacy-key"
 
     # --- Case #10: url-only → no synthesis ---
 
     def test_absent_key_url_only_no_synthesis(self) -> None:
-        """Case #10 unit: absent read_destinations + url only → {} (no synthesis)."""
+        """Case #10 unit: absent sources key + url only → {} (no synthesis)."""
         from context_intelligence.tool_resolver import ToolConfigResolver
 
         config = {
@@ -225,27 +225,27 @@ class TestToolConfigResolverReadDestinations:
             # no context_intelligence_api_key
         }
         resolver = ToolConfigResolver(config, _make_coordinator())
-        assert resolver.read_destinations == {}
+        assert resolver.sources == {}
 
     def test_absent_key_no_scalars_returns_empty(self) -> None:
         """Absent key + no scalars → {} (neither synthesis nor parse)."""
         from context_intelligence.tool_resolver import ToolConfigResolver
 
         resolver = ToolConfigResolver({}, _make_coordinator())
-        assert resolver.read_destinations == {}
+        assert resolver.sources == {}
 
-    def test_read_destinations_cached_after_first_access(self) -> None:
-        """read_destinations is cached — same object returned on second access."""
+    def test_sources_cached_after_first_access(self) -> None:
+        """sources is cached — same object returned on second access."""
         from context_intelligence.tool_resolver import ToolConfigResolver
 
         config = {
-            "read_destinations": {
+            "sources": {
                 "default": {"url": "http://read.example.com", "api_key": "k"},
             }
         }
         resolver = ToolConfigResolver(config, _make_coordinator())
-        rd1 = resolver.read_destinations
-        rd2 = resolver.read_destinations
+        rd1 = resolver.sources
+        rd2 = resolver.sources
         assert rd1 is rd2
 
     # --- env is excluded from legacy synthesis (tier 3 only) ---
@@ -266,7 +266,7 @@ class TestToolConfigResolverReadDestinations:
         }
         with patch.dict(os.environ, env_patch):
             resolver = ToolConfigResolver({}, _make_coordinator())
-            rd = resolver.read_destinations
+            rd = resolver.sources
 
-        # Env must NOT synthesize into read_destinations — result is empty dict.
+        # Env must NOT synthesize into sources — result is empty dict.
         assert rd == {}

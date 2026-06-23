@@ -299,34 +299,29 @@ Legacy degradation (differs from `destinations`): if `context_intelligence_serve
 
 #### Query tools (`graph-query`, `blob-read`) — read-side endpoint
 
-The hook config above governs **where events are written** (the upload / fan-out side). The **query tools** `tool-graph-query` and `tool-blob-read` are the **read side** — they call a Context Intelligence server to answer graph queries and fetch blobs. They resolve their `(server_url, api_key)` independently per field, **explicit-read-config first**, and the chain is designed so that **configuring `destinations` alone is enough** — you do **not** have to repeat the endpoint for queries:
+The hook config above governs **where events are written** (the upload / fan-out side). The **query tools** `graph_query` and `blob_read` (both mounted by the `tool-context-intelligence-query` module) are the **read side** — they call a Context Intelligence server to answer graph queries and fetch blobs. They share a single `ToolConfigResolver` built once in `mount()`, so **a single config namespace** (`overrides.tool-context-intelligence-query.config`) serves both tools. They resolve their `(server_url, api_key)` independently per field, **explicit-read-config first**, and the chain is designed so that **configuring `destinations` alone is enough** — you do **not** have to repeat the endpoint for queries:
 
 | Order | Source | Notes |
 |-------|--------|-------|
-| **1** | First entry of `read_destinations` on the tool's own config (`overrides.tool-graph-query.config` / `overrides.tool-blob-read.config`) | The explicit read override. Wins when set. |
+| **1** | First entry of `sources` on the tool's own config (`overrides.tool-context-intelligence-query.config`) | The explicit read override. Wins when set. Applies to both `graph_query` and `blob_read` — configure once. |
 | **2** | First entry of the hook's `destinations` block | **The common case** — queries follow the same server you upload to, with zero extra config. This is the bridge that makes a `destinations`-only setup "just work" for reads. |
 | **3** | Env `AMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_URL` / `AMPLIFIER_CONTEXT_INTELLIGENCE_API_KEY` | Single canonical last-resort fallback (reached via `${VAR}` placeholders in the shipped YAML, same convention as everywhere else). |
 | — | else | `configuration_error: "context-intelligence server URL not configured"`. |
 
 Each field walks the chain independently (a tier that supplies a `url` but no `api_key` lets `api_key` fall through). **Env is a true fallback — it never outranks the hook destination** (tier 2). There are **no** `*_PRIVATE_*` environment variables; the only env names consulted are the canonical `AMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_URL` / `_API_KEY`.
 
-**`read_destinations`** is a dict keyed by name, mirroring the hook's `destinations` shape. The **first** entry (declaration / insertion order) is used. Reach for it only when the read endpoint must differ from the upload destination (e.g. a read replica or a debugging override) — it overrides the **read path only** and does not change where the hook uploads:
+**`sources`** is a dict keyed by name, mirroring the hook's `destinations` shape. The **first** entry (declaration / insertion order) is used. Reach for it only when the read endpoint must differ from the upload destination (e.g. a read replica or a debugging override) — it overrides the **read path only** and does not change where the hook uploads:
 
 ```yaml
 # ~/.amplifier/settings.yaml — only needed when queries must hit a DIFFERENT server than uploads
+# One config namespace covers both graph_query and blob_read tools — configure once.
 overrides:
-  tool-graph-query:
+  tool-context-intelligence-query:
     config:
-      read_destinations:
+      sources:
         default:
           url: "http://read-replica.example.com"
           api_key: "${CI_READ_KEY}"        # secret lives in keys.env, referenced here
-  tool-blob-read:
-    config:
-      read_destinations:
-        default:
-          url: "http://read-replica.example.com"
-          api_key: "${CI_READ_KEY}"
 ```
 
 | Sub-key | Required | Default | Description |
@@ -334,9 +329,9 @@ overrides:
 | `url` | yes | — | Base URL of the CI server the query tool reads from. |
 | `api_key` | yes | — | Bearer token for read requests to that server. |
 
-**Legacy back-compat (read side):** with no `read_destinations` key present, explicit top-level scalars on the tool config (`context_intelligence_server_url` + `context_intelligence_api_key`, **both** required) synthesize a single `default` read entry at tier 1 — symmetric to the hook's legacy synthesis. With neither set, resolution falls through to the hook destination (tier 2) and then env (tier 3).
+**Legacy back-compat (read side):** with no `sources` key present, explicit top-level scalars on the tool config (`context_intelligence_server_url` + `context_intelligence_api_key`, **both** required) synthesize a single `default` read entry at tier 1 — symmetric to the hook's legacy synthesis. With neither set, resolution falls through to the hook destination (tier 2) and then env (tier 3).
 
-> **Most users configure nothing here.** A single hook `destinations` entry already powers both upload and query. `read_destinations` exists only for the read-replica / split-endpoint case.
+> **Most users configure nothing here.** A single hook `destinations` entry already powers both upload and query. `sources` exists only for the read-replica / split-endpoint case.
 
 ---
 
@@ -498,8 +493,7 @@ amplifier-bundle-context-intelligence/
 │   └── jsonl-event-schema.md               ← events.jsonl schema contract
 ├── modules/
 │   ├── hook-context-intelligence/      ← the Python hook module
-│   ├── tool-graph-query/               ← graph_query tool module
-│   └── tool-blob-read/                 ← blob_read tool module
+│   └── tool-context-intelligence-query/ ← graph_query + blob_read tools
 ├── docs/
 │   ├── context-intelligence-exploration-guide.md   ← what to explore and how to test
 │   ├── dispatch-circuit-breaker.dot    ← dispatch flow and circuit breaker state machine

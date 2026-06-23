@@ -1,7 +1,8 @@
-"""Tests for BlobReadTool implementation.
+"""Tests for BlobReadTool — ported from tool-blob-read, updated for merged module.
 
-All tests mock ``amplifier_module_tool_blob_read.blob_read_tool.AsyncCIClient``
-so HTTP transport is never exercised in unit tests.
+Constructor change: BlobReadTool(coordinator, resolver=None).
+Tests that previously passed config= now inject a ToolConfigResolver directly.
+Patch path updated to amplifier_module_tool_context_intelligence_query.blob_read_tool.
 """
 
 from __future__ import annotations
@@ -20,7 +21,7 @@ import pytest
 from amplifier_core import ToolResult
 
 # ---------------------------------------------------------------------------
-# Module-level helper functions (NO conftest.py, NO pytest fixtures)
+# Module-level helper functions
 # ---------------------------------------------------------------------------
 
 
@@ -32,8 +33,8 @@ def _make_coordinator(resolver: Any) -> MagicMock:
     return coordinator
 
 
-def _make_resolver(server_url: str | None, api_key: str | None = None) -> MagicMock:
-    """Return a MagicMock resolver with context_intelligence_server_url set.
+def _make_hook_resolver(server_url: str | None, api_key: str | None = None) -> MagicMock:
+    """Return a MagicMock hook resolver (returned by get_capability).
 
     api_key defaults to None so tests that don't exercise auth get a clean mock.
     Also sets destinations so _first_destination() can iterate it safely.
@@ -51,6 +52,15 @@ def _make_resolver(server_url: str | None, api_key: str | None = None) -> MagicM
     return resolver
 
 
+def _make_tool_resolver(config: dict = None) -> Any:
+    """Build a real ToolConfigResolver from config for injection."""
+    from context_intelligence.tool_resolver import ToolConfigResolver
+
+    coord = MagicMock()
+    coord.config = {}
+    return ToolConfigResolver(config or {}, coord)
+
+
 @contextmanager
 def _patch_async_client(
     fetch_blob_return: Any = None,
@@ -65,7 +75,7 @@ def _patch_async_client(
     mock_instance.fetch_blob = AsyncMock(return_value=fetch_blob_return)
     mock_cls = MagicMock(return_value=mock_instance)
     with patch(
-        "amplifier_module_tool_blob_read.blob_read_tool.AsyncCIClient",
+        "amplifier_module_tool_context_intelligence_query.blob_read_tool.AsyncCIClient",
         mock_cls,
     ):
         yield mock_cls, mock_instance
@@ -95,44 +105,44 @@ class TestBlobReadToolProtocol:
     """Tool protocol surface: name, description, schema, execute return type."""
 
     def test_name_is_blob_read(self) -> None:
-        from amplifier_module_tool_blob_read.blob_read_tool import BlobReadTool
+        from amplifier_module_tool_context_intelligence_query.blob_read_tool import BlobReadTool
 
         tool = BlobReadTool(_make_coordinator(None))
         assert tool.name == "blob_read"
 
     def test_description_mentions_ci_blob_scheme(self) -> None:
-        from amplifier_module_tool_blob_read.blob_read_tool import BlobReadTool
+        from amplifier_module_tool_context_intelligence_query.blob_read_tool import BlobReadTool
 
         tool = BlobReadTool(_make_coordinator(None))
         assert "ci-blob://" in tool.description
 
     def test_description_mentions_file_path(self) -> None:
-        from amplifier_module_tool_blob_read.blob_read_tool import BlobReadTool
+        from amplifier_module_tool_context_intelligence_query.blob_read_tool import BlobReadTool
 
         tool = BlobReadTool(_make_coordinator(None))
         assert "file path" in tool.description.lower()
         assert "disk path" not in tool.description.lower()
 
     def test_schema_type_is_object(self) -> None:
-        from amplifier_module_tool_blob_read.blob_read_tool import BlobReadTool
+        from amplifier_module_tool_context_intelligence_query.blob_read_tool import BlobReadTool
 
         tool = BlobReadTool(_make_coordinator(None))
         assert tool.input_schema["type"] == "object"
 
     def test_schema_has_uri_required(self) -> None:
-        from amplifier_module_tool_blob_read.blob_read_tool import BlobReadTool
+        from amplifier_module_tool_context_intelligence_query.blob_read_tool import BlobReadTool
 
         tool = BlobReadTool(_make_coordinator(None))
         assert "uri" in tool.input_schema["required"]
 
     def test_schema_uri_is_string(self) -> None:
-        from amplifier_module_tool_blob_read.blob_read_tool import BlobReadTool
+        from amplifier_module_tool_context_intelligence_query.blob_read_tool import BlobReadTool
 
         tool = BlobReadTool(_make_coordinator(None))
         assert tool.input_schema["properties"]["uri"]["type"] == "string"
 
     async def test_execute_returns_tool_result(self) -> None:
-        from amplifier_module_tool_blob_read.blob_read_tool import BlobReadTool
+        from amplifier_module_tool_context_intelligence_query.blob_read_tool import BlobReadTool
 
         tool = BlobReadTool(_make_coordinator(None))
         result = await tool.execute({"uri": "ci-blob://session/key"})
@@ -148,7 +158,7 @@ class TestLazyCapabilityResolution:
     """execute() must resolve the config capability lazily and cache it."""
 
     async def test_capability_not_found_returns_configuration_error(self) -> None:
-        from amplifier_module_tool_blob_read.blob_read_tool import BlobReadTool
+        from amplifier_module_tool_context_intelligence_query.blob_read_tool import BlobReadTool
 
         # get_capability returns None → capability not registered
         tool = BlobReadTool(_make_coordinator(None))
@@ -163,10 +173,10 @@ class TestLazyCapabilityResolution:
         assert "not configured" in result.error["message"].lower()
 
     async def test_server_url_none_returns_configuration_error_with_url(self) -> None:
-        from amplifier_module_tool_blob_read.blob_read_tool import BlobReadTool
+        from amplifier_module_tool_context_intelligence_query.blob_read_tool import BlobReadTool
 
-        resolver = _make_resolver(None)
-        tool = BlobReadTool(_make_coordinator(resolver))
+        hook_resolver = _make_hook_resolver(None)
+        tool = BlobReadTool(_make_coordinator(hook_resolver))
         # Clear CI env vars so tier-3 fallback does not accidentally succeed
         clean = {k: "" for k in os.environ if k.startswith("AMPLIFIER_CONTEXT_INTELLIGENCE_")}
         with patch.dict(os.environ, clean):
@@ -178,10 +188,10 @@ class TestLazyCapabilityResolution:
         assert "url" in result.error["message"].lower()
 
     async def test_server_url_empty_returns_configuration_error(self) -> None:
-        from amplifier_module_tool_blob_read.blob_read_tool import BlobReadTool
+        from amplifier_module_tool_context_intelligence_query.blob_read_tool import BlobReadTool
 
-        resolver = _make_resolver("")
-        tool = BlobReadTool(_make_coordinator(resolver))
+        hook_resolver = _make_hook_resolver("")
+        tool = BlobReadTool(_make_coordinator(hook_resolver))
         # Clear CI env vars so tier-3 fallback does not accidentally succeed
         clean = {k: "" for k in os.environ if k.startswith("AMPLIFIER_CONTEXT_INTELLIGENCE_")}
         with patch.dict(os.environ, clean):
@@ -193,10 +203,10 @@ class TestLazyCapabilityResolution:
 
     async def test_resolver_cached_after_first_lookup(self) -> None:
         """get_capability should be called exactly once across two execute() calls."""
-        from amplifier_module_tool_blob_read.blob_read_tool import BlobReadTool
+        from amplifier_module_tool_context_intelligence_query.blob_read_tool import BlobReadTool
 
-        resolver = _make_resolver("http://localhost:8080")
-        coordinator = _make_coordinator(resolver)
+        hook_resolver = _make_hook_resolver("http://localhost:8080")
+        coordinator = _make_coordinator(hook_resolver)
         tool = BlobReadTool(coordinator)
 
         with _patch_async_client(fetch_blob_return={"data": "first"}):
@@ -215,10 +225,10 @@ class TestURIParsing:
     """execute() must validate and parse ci-blob:// URIs before fetching."""
 
     async def test_missing_scheme_returns_uri_error(self) -> None:
-        from amplifier_module_tool_blob_read.blob_read_tool import BlobReadTool
+        from amplifier_module_tool_context_intelligence_query.blob_read_tool import BlobReadTool
 
-        resolver = _make_resolver("http://localhost:8080")
-        tool = BlobReadTool(_make_coordinator(resolver))
+        hook_resolver = _make_hook_resolver("http://localhost:8080")
+        tool = BlobReadTool(_make_coordinator(hook_resolver))
         # No "ci-blob://" prefix at all
         result = await tool.execute({"uri": "session/key"})
 
@@ -228,10 +238,10 @@ class TestURIParsing:
         assert "ci-blob://" in result.error["message"]
 
     async def test_no_slash_after_scheme_returns_uri_error(self) -> None:
-        from amplifier_module_tool_blob_read.blob_read_tool import BlobReadTool
+        from amplifier_module_tool_context_intelligence_query.blob_read_tool import BlobReadTool
 
-        resolver = _make_resolver("http://localhost:8080")
-        tool = BlobReadTool(_make_coordinator(resolver))
+        hook_resolver = _make_hook_resolver("http://localhost:8080")
+        tool = BlobReadTool(_make_coordinator(hook_resolver))
         # Scheme present but no "/" separating session_id from key
         result = await tool.execute({"uri": "ci-blob://sessiononly"})
 
@@ -242,10 +252,10 @@ class TestURIParsing:
 
     async def test_valid_uri_extracts_session_and_key(self) -> None:
         """A well-formed URI must call fetch_blob with correct session_id and key."""
-        from amplifier_module_tool_blob_read.blob_read_tool import BlobReadTool
+        from amplifier_module_tool_context_intelligence_query.blob_read_tool import BlobReadTool
 
-        resolver = _make_resolver("http://localhost:8080")
-        tool = BlobReadTool(_make_coordinator(resolver))
+        hook_resolver = _make_hook_resolver("http://localhost:8080")
+        tool = BlobReadTool(_make_coordinator(hook_resolver))
 
         with _patch_async_client(fetch_blob_return={"ok": True}) as (_, mock_instance):
             await tool.execute({"uri": "ci-blob://my-session/my-key"})
@@ -263,10 +273,10 @@ class TestPathSanitization:
 
     async def test_slashes_sanitized(self) -> None:
         """Slashes in the key must not create unexpected subdirectory depth."""
-        from amplifier_module_tool_blob_read.blob_read_tool import BlobReadTool
+        from amplifier_module_tool_context_intelligence_query.blob_read_tool import BlobReadTool
 
-        resolver = _make_resolver("http://localhost:8080")
-        tool = BlobReadTool(_make_coordinator(resolver))
+        hook_resolver = _make_hook_resolver("http://localhost:8080")
+        tool = BlobReadTool(_make_coordinator(hook_resolver))
 
         with _patch_async_client(fetch_blob_return={"data": "test"}):
             result = await tool.execute({"uri": "ci-blob://my-session/path/with/slashes"})
@@ -279,10 +289,10 @@ class TestPathSanitization:
 
     async def test_special_chars_sanitized(self) -> None:
         """Path traversal sequences in the key must be neutralized in the output path."""
-        from amplifier_module_tool_blob_read.blob_read_tool import BlobReadTool
+        from amplifier_module_tool_context_intelligence_query.blob_read_tool import BlobReadTool
 
-        resolver = _make_resolver("http://localhost:8080")
-        tool = BlobReadTool(_make_coordinator(resolver))
+        hook_resolver = _make_hook_resolver("http://localhost:8080")
+        tool = BlobReadTool(_make_coordinator(hook_resolver))
 
         with _patch_async_client(fetch_blob_return={"data": "test"}):
             result = await tool.execute({"uri": "ci-blob://my-session/../../etc/passwd"})
@@ -294,10 +304,10 @@ class TestPathSanitization:
 
     async def test_path_traversal_neutralized(self) -> None:
         """Output path must always stay under /tmp/ci-blobs/ even with traversal key."""
-        from amplifier_module_tool_blob_read.blob_read_tool import BlobReadTool
+        from amplifier_module_tool_context_intelligence_query.blob_read_tool import BlobReadTool
 
-        resolver = _make_resolver("http://localhost:8080")
-        tool = BlobReadTool(_make_coordinator(resolver))
+        hook_resolver = _make_hook_resolver("http://localhost:8080")
+        tool = BlobReadTool(_make_coordinator(hook_resolver))
 
         with _patch_async_client(fetch_blob_return={"data": "test"}):
             result = await tool.execute({"uri": "ci-blob://my-session/../../etc/passwd"})
@@ -321,11 +331,11 @@ class TestBlobReadSuccess:
 
     async def test_successful_fetch_writes_file_and_returns_path(self) -> None:
         """Dict blob must be written as json.dumps(data); output is the file path."""
-        from amplifier_module_tool_blob_read.blob_read_tool import BlobReadTool
+        from amplifier_module_tool_context_intelligence_query.blob_read_tool import BlobReadTool
 
         blob_data = {"session": "test", "data": [1, 2, 3]}
-        resolver = _make_resolver("http://localhost:8080")
-        tool = BlobReadTool(_make_coordinator(resolver))
+        hook_resolver = _make_hook_resolver("http://localhost:8080")
+        tool = BlobReadTool(_make_coordinator(hook_resolver))
 
         with _patch_async_client(fetch_blob_return=blob_data):
             result = await tool.execute({"uri": "ci-blob://my-session/my-key"})
@@ -338,10 +348,10 @@ class TestBlobReadSuccess:
 
     async def test_output_path_structure(self) -> None:
         """Parent directory name == session_id, filename == key.json."""
-        from amplifier_module_tool_blob_read.blob_read_tool import BlobReadTool
+        from amplifier_module_tool_context_intelligence_query.blob_read_tool import BlobReadTool
 
-        resolver = _make_resolver("http://localhost:8080")
-        tool = BlobReadTool(_make_coordinator(resolver))
+        hook_resolver = _make_hook_resolver("http://localhost:8080")
+        tool = BlobReadTool(_make_coordinator(hook_resolver))
 
         with _patch_async_client(fetch_blob_return={"ok": True}):
             result = await tool.execute({"uri": "ci-blob://my-session/my-key"})
@@ -354,10 +364,10 @@ class TestBlobReadSuccess:
 
     async def test_string_blob_written_directly(self) -> None:
         """String blob must be written as raw text, NOT wrapped in json.dumps."""
-        from amplifier_module_tool_blob_read.blob_read_tool import BlobReadTool
+        from amplifier_module_tool_context_intelligence_query.blob_read_tool import BlobReadTool
 
-        resolver = _make_resolver("http://localhost:8080")
-        tool = BlobReadTool(_make_coordinator(resolver))
+        hook_resolver = _make_hook_resolver("http://localhost:8080")
+        tool = BlobReadTool(_make_coordinator(hook_resolver))
 
         raw_string = "hello world, this is raw text"
 
@@ -381,10 +391,10 @@ class TestBlobReadErrors:
     """execute() maps fetch_blob returning None to a typed http_error."""
 
     async def test_fetch_blob_none_returns_http_error(self) -> None:
-        from amplifier_module_tool_blob_read.blob_read_tool import BlobReadTool
+        from amplifier_module_tool_context_intelligence_query.blob_read_tool import BlobReadTool
 
-        resolver = _make_resolver("http://localhost:8080")
-        tool = BlobReadTool(_make_coordinator(resolver))
+        hook_resolver = _make_hook_resolver("http://localhost:8080")
+        tool = BlobReadTool(_make_coordinator(hook_resolver))
 
         with _patch_async_client(fetch_blob_return=None):
             result = await tool.execute({"uri": "ci-blob://my-session/my-key"})
@@ -404,10 +414,10 @@ class TestAuthHeader:
 
     async def test_api_key_passed_to_async_ci_client(self) -> None:
         """When api_key is set the AsyncCIClient must be constructed with it."""
-        from amplifier_module_tool_blob_read.blob_read_tool import BlobReadTool
+        from amplifier_module_tool_context_intelligence_query.blob_read_tool import BlobReadTool
 
-        resolver = _make_resolver("http://localhost:8080", api_key="my-secret")
-        tool = BlobReadTool(_make_coordinator(resolver))
+        hook_resolver = _make_hook_resolver("http://localhost:8080", api_key="my-secret")
+        tool = BlobReadTool(_make_coordinator(hook_resolver))
 
         with _patch_async_client(fetch_blob_return={"ok": True}) as (mock_cls, _):
             await tool.execute({"uri": "ci-blob://my-session/my-key"})
@@ -416,10 +426,10 @@ class TestAuthHeader:
 
     async def test_none_api_key_passes_empty_string(self) -> None:
         """When api_key is None the AsyncCIClient must receive an empty string."""
-        from amplifier_module_tool_blob_read.blob_read_tool import BlobReadTool
+        from amplifier_module_tool_context_intelligence_query.blob_read_tool import BlobReadTool
 
-        resolver = _make_resolver("http://localhost:8080", api_key=None)
-        tool = BlobReadTool(_make_coordinator(resolver))
+        hook_resolver = _make_hook_resolver("http://localhost:8080", api_key=None)
+        tool = BlobReadTool(_make_coordinator(hook_resolver))
 
         with _patch_async_client(fetch_blob_return={"ok": True}) as (mock_cls, _):
             await tool.execute({"uri": "ci-blob://my-session/my-key"})
@@ -444,6 +454,15 @@ def _make_dest_br(url: str, api_key: str) -> SimpleNamespace:
     return SimpleNamespace(name="default", url=url, api_key=api_key)
 
 
+def _tool_resolver_br(config: dict = None) -> Any:
+    """Build a ToolConfigResolver for blob-read config-fallback tests."""
+    from context_intelligence.tool_resolver import ToolConfigResolver
+
+    coord = MagicMock()
+    coord.config = {}
+    return ToolConfigResolver(config or {}, coord)
+
+
 # ---------------------------------------------------------------------------
 # TestBlobReadConfigFallback — §7 case #8 parity tests
 # ---------------------------------------------------------------------------
@@ -455,21 +474,22 @@ class TestBlobReadConfigFallback:
     Re-runs cases #1, #2, #5, #6 against BlobReadTool to prove identical resolution.
     """
 
-    # Case #8/#1 — read_destinations wins over destination
+    # Case #8/#1 — sources wins over destination
     async def test_read_config_wins_over_destination(self) -> None:
-        """BlobReadTool case #8/#1: explicit read_destinations wins over hook destinations."""
-        from amplifier_module_tool_blob_read.blob_read_tool import BlobReadTool
+        """BlobReadTool case #8/#1: explicit sources wins over hook destinations."""
+        from amplifier_module_tool_context_intelligence_query.blob_read_tool import BlobReadTool
 
         hook_resolver = _make_hook_resolver_br(
             destinations={"default": _make_dest_br("http://upload.example.com", "upload-key")}
         )
         coordinator = _make_coordinator(hook_resolver)
         config = {
-            "read_destinations": {
+            "sources": {
                 "default": {"url": "http://read.example.com", "api_key": "read-key"},
             }
         }
-        tool = BlobReadTool(coordinator, config)
+        resolver = _tool_resolver_br(config)
+        tool = BlobReadTool(coordinator, resolver)
 
         with _patch_async_client(fetch_blob_return={"ok": True}) as (mock_cls, _):
             result = await tool.execute({"uri": "ci-blob://my-session/my-key"})
@@ -481,14 +501,15 @@ class TestBlobReadConfigFallback:
 
     # Case #8/#2 — destinations-only falls through to tier 2
     async def test_destinations_only_falls_through_to_tier2(self) -> None:
-        """BlobReadTool case #8/#2: no read_destinations → uses hook destination."""
-        from amplifier_module_tool_blob_read.blob_read_tool import BlobReadTool
+        """BlobReadTool case #8/#2: no sources key → uses hook destination."""
+        from amplifier_module_tool_context_intelligence_query.blob_read_tool import BlobReadTool
 
         hook_resolver = _make_hook_resolver_br(
             destinations={"default": _make_dest_br("http://dest.example.com", "dest-key")}
         )
         coordinator = _make_coordinator(hook_resolver)
-        tool = BlobReadTool(coordinator, config={})
+        resolver = _tool_resolver_br({})
+        tool = BlobReadTool(coordinator, resolver)
 
         with _patch_async_client(fetch_blob_return={"ok": True}) as (mock_cls, _):
             result = await tool.execute({"uri": "ci-blob://my-session/my-key"})
@@ -501,11 +522,12 @@ class TestBlobReadConfigFallback:
     # Case #8/#5 — env hit
     async def test_env_hit(self) -> None:
         """BlobReadTool case #8/#5: canonical env vars work as tier-3 fallback."""
-        from amplifier_module_tool_blob_read.blob_read_tool import BlobReadTool
+        from amplifier_module_tool_context_intelligence_query.blob_read_tool import BlobReadTool
 
         hook_resolver = _make_hook_resolver_br(destinations={})
         coordinator = _make_coordinator(hook_resolver)
-        tool = BlobReadTool(coordinator, config={})
+        resolver = _tool_resolver_br({})
+        tool = BlobReadTool(coordinator, resolver)
 
         env_patch = {
             "AMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_URL": "http://env.example.com",
@@ -525,13 +547,14 @@ class TestBlobReadConfigFallback:
     # Regression: env is below hook destination (tier 2 beats tier 3)
     async def test_env_does_not_override_hook_destination(self) -> None:
         """BlobReadTool regression: canonical env + hook destination → destination wins."""
-        from amplifier_module_tool_blob_read.blob_read_tool import BlobReadTool
+        from amplifier_module_tool_context_intelligence_query.blob_read_tool import BlobReadTool
 
         hook_resolver = _make_hook_resolver_br(
             destinations={"default": _make_dest_br("http://dest.example.com", "dest-key")}
         )
         coordinator = _make_coordinator(hook_resolver)
-        tool = BlobReadTool(coordinator, config={})
+        resolver = _tool_resolver_br({})
+        tool = BlobReadTool(coordinator, resolver)
 
         # Canonical env set — must NOT override the hook destination
         env_patch = {
@@ -553,11 +576,12 @@ class TestBlobReadConfigFallback:
     # Case #8/#6 — all miss → configuration_error
     async def test_all_miss_returns_configuration_error(self) -> None:
         """BlobReadTool case #8/#6: no config, no destinations, no env → configuration_error."""
-        from amplifier_module_tool_blob_read.blob_read_tool import BlobReadTool
+        from amplifier_module_tool_context_intelligence_query.blob_read_tool import BlobReadTool
 
         hook_resolver = _make_hook_resolver_br(destinations={})
         coordinator = _make_coordinator(hook_resolver)
-        tool = BlobReadTool(coordinator, config={})
+        resolver = _tool_resolver_br({})
+        tool = BlobReadTool(coordinator, resolver)
 
         # Exclude ALL CI env vars (including canonical SERVER_URL / API_KEY)
         clean_env = {

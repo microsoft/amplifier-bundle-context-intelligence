@@ -4,10 +4,13 @@ Configuration is resolved via the three-tier fallback chain in
 ``resolve_query_endpoint`` (same as GraphQueryTool — parity guaranteed by the
 shared helper):
 
-  1. Explicit read-config (``read_destinations:`` in mount config, if set).
+  1. Explicit read-config (``sources:`` in mount config, if set).
   2. Upload destinations from ``context_intelligence.hook_config_resolver``
      capability (fixes the destinations-only config bug).
   3. ``AMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_URL`` env var (canonical last-resort).
+
+The ``ToolConfigResolver`` is injected at construction time by ``mount()``
+(one shared instance for both CI read tools — single config namespace).
 """
 
 from __future__ import annotations
@@ -18,6 +21,7 @@ from pathlib import Path
 from typing import Any
 
 from amplifier_core import ToolResult
+
 from context_intelligence.client import AsyncCIClient
 from context_intelligence.tool_resolver import ToolConfigResolver, resolve_query_endpoint
 
@@ -33,11 +37,10 @@ def _sanitize_path_component(s: str) -> str:
 class BlobReadTool:
     """Tool that fetches a ci-blob:// URI from the server and writes it to disk."""
 
-    def __init__(self, coordinator: Any, config: dict[str, Any] | None = None) -> None:
+    def __init__(self, coordinator: Any, resolver: ToolConfigResolver | None = None) -> None:
         self._coordinator = coordinator
-        self._config = config or {}
+        self._tool_resolver = resolver or ToolConfigResolver({}, coordinator)
         self._hook_resolver: Any | None = None
-        self._tool_resolver = ToolConfigResolver(self._config, coordinator)
 
     @property
     def name(self) -> str:

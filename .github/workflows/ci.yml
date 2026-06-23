@@ -77,9 +77,8 @@ jobs:
       matrix:
         module:
           - hook-context-intelligence
-          - tool-blob-read
+          - tool-context-intelligence-query
           - tool-context-intelligence-upload
-          - tool-graph-query
     steps:
       - uses: actions/checkout@v4
 

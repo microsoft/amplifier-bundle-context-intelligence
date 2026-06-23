@@ -1,15 +1,14 @@
-"""Test that the blob-read tool pyproject.toml declares the bundle dependency in a
-form that installs standalone (outside the monorepo).
+"""Test that tool-context-intelligence-query pyproject.toml declares the bundle dependency
+in a form that installs standalone (outside the monorepo).
 
-The tool imports from the `context_intelligence` package shipped by the parent
-bundle. For the tool to install standalone under the Amplifier agent's
-`uv pip install --no-sources` policy, the bundle MUST be referenced as a PEP 508
-direct git reference inside [project.dependencies] (which survives --no-sources),
-NOT via a [tool.uv.sources] `path = "../.."` entry (which --no-sources strips).
+The tools import from the `context_intelligence` package shipped by the parent bundle.
+For the module to install standalone under the Amplifier agent's `uv pip install
+--no-sources` policy, the bundle MUST be referenced as a PEP 508 direct git reference
+inside [project.dependencies] (which survives --no-sources), NOT via a
+[tool.uv.sources] `path = "../.."` entry (which --no-sources strips).
 
-This guard mirrors hook-context-intelligence/tests/test_hook_dependencies.py so
-that every module references the parent bundle uniformly and cannot regress to a
-uv path source (the original cause of the uv conflicting-URLs co-install failure).
+Merged from tool-graph-query and tool-blob-read versions (both were identical except
+for module name) — now a single guard for the merged module.
 """
 
 from __future__ import annotations
@@ -37,7 +36,7 @@ def _dep_name(dep: str) -> str:
 
 
 class TestToolDependencies:
-    """Verify the tool declares the bundle as a standalone-installable dependency."""
+    """Verify the module declares the bundle as a standalone-installable dependency."""
 
     def test_bundle_declared_as_direct_git_reference(self) -> None:
         """The bundle must be a PEP 508 direct git reference in [project.dependencies].
@@ -59,8 +58,6 @@ class TestToolDependencies:
 
         The `path = '../..'` assumption is exactly what breaks standalone install:
         --no-sources strips [tool.uv.sources], leaving an unresolvable reference.
-        Two modules referencing the bundle via path while others use a git URL is
-        what produced uv's "conflicting URLs" abort on a single co-install command.
         """
         data = _load_pyproject()
         sources: dict = data.get("tool", {}).get("uv", {}).get("sources", {})
@@ -94,3 +91,24 @@ class TestToolDependencies:
             "tool.hatch.metadata.allow-direct-references must be true to build a wheel "
             f"carrying the direct git reference, got: {allow!r}"
         )
+
+    def test_entry_point_module_id_is_correct(self) -> None:
+        """Entry point key must match the module ID used in graph-analyst.md."""
+        data = _load_pyproject()
+        eps = data.get("project", {}).get("entry-points", {}).get("amplifier.modules", {})
+        assert "tool-context-intelligence-query" in eps, (
+            f"Entry point 'tool-context-intelligence-query' not found in "
+            f"[project.entry-points.'amplifier.modules']: {eps}"
+        )
+        assert (
+            "amplifier_module_tool_context_intelligence_query"
+            in eps["tool-context-intelligence-query"]
+        )
+
+    def test_asyncio_mode_is_auto(self) -> None:
+        """pytest-asyncio must be in auto mode for the test suite to run correctly."""
+        data = _load_pyproject()
+        asyncio_mode = (
+            data.get("tool", {}).get("pytest", {}).get("ini_options", {}).get("asyncio_mode")
+        )
+        assert asyncio_mode == "auto", f"asyncio_mode must be 'auto', got: {asyncio_mode!r}"
