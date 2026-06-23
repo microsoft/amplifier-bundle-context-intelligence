@@ -702,9 +702,7 @@ class TestWorkingDirFromResolver:
         )
         assert meta["working_dir"] == "/resolver/working/dir"
 
-    async def test_present_but_empty_event_working_dir_does_not_win(
-        self, tmp_path: Path
-    ) -> None:
+    async def test_present_but_empty_event_working_dir_does_not_win(self, tmp_path: Path) -> None:
         """(b) An empty working_dir in the event payload does not clobber the resolver value.
 
         The old code used data.get("working_dir", ""), so a payload that carries
@@ -736,9 +734,7 @@ class TestWorkingDirFromResolver:
         # Resolver's value wins over the event's empty string.
         assert meta["working_dir"] == "/real/path"
 
-    async def test_resolver_working_dir_empty_stores_empty_gracefully(
-        self, tmp_path: Path
-    ) -> None:
+    async def test_resolver_working_dir_empty_stores_empty_gracefully(self, tmp_path: Path) -> None:
         """(c-i) When resolver.working_dir is '', metadata working_dir is '' (graceful)."""
         from amplifier_module_hook_context_intelligence.handlers.logging_handler import (
             LoggingHandler,
