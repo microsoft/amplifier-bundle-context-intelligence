@@ -42,6 +42,7 @@ class _FakeResolver:
         self.workspace = workspace
         self.parent_id = parent_id
         self.resolve_instance_id = resolve_instance_id
+        self.working_dir: str = ""
 
     def session_dir(self, session_id: str) -> Path:
         return self.base_path / self.project_slug / "sessions" / session_id / "context-intelligence"

@@ -156,6 +156,21 @@ class HookConfigResolver:
         return self._project_slug
 
     @property
+    def working_dir(self) -> str:
+        """Absolute session working directory from the ``session.working_dir`` capability.
+
+        Read live (not cached) so it reflects mid-session working-directory changes.
+        Returns "" when the capability is unavailable.
+        """
+        get_cap = getattr(self._coordinator, "get_capability", None)
+        if get_cap is None:
+            return ""
+        wd = get_cap("session.working_dir")
+        if not isinstance(wd, str) or not wd:
+            return ""
+        return wd
+
+    @property
     def base_path(self) -> Path:
         """Resolved base path for project storage.
 
