@@ -310,16 +310,19 @@ The hook config above governs **where events are written** (the upload / fan-out
 
 Each field walks the chain independently (a tier that supplies a `url` but no `api_key` lets `api_key` fall through). **Env is a true fallback — it never outranks the hook destination** (tier 2). There are **no** `*_PRIVATE_*` environment variables; the only env names consulted are the canonical `AMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_URL` / `_API_KEY`.
 
-**`sources`** is a dict keyed by name, mirroring the hook's `destinations` shape. The **first** entry (declaration / insertion order) is used. Reach for it only when the read endpoint must differ from the upload destination (e.g. a read replica or a debugging override) — it overrides the **read path only** and does not change where the hook uploads:
+**`sources`** is a mapping keyed by name, mirroring the hook's `destinations` shape. **Only a single read source is supported in this version** — the read path does **not** fan out to multiple sources. Configure exactly one entry (conventionally named `default`); if more than one is present, only the **first** (declaration / insertion order) is used and the rest are ignored.
+
+In most setups you configure nothing here: **with no `sources` set, the read tools use the first configured `destination` in the hook config as their read source** (tier 2 below). Reach for `sources` only when the read endpoint must differ from the upload destination (e.g. a read replica or a debugging override) — it overrides the **read path only** and does not change where the hook uploads:
 
 ```yaml
-# ~/.amplifier/settings.yaml — only needed when queries must hit a DIFFERENT server than uploads
+# ~/.amplifier/settings.yaml — only needed when queries must hit a DIFFERENT server than uploads.
 # One config namespace covers both graph_query and blob_read tools — configure once.
+# Only ONE read source is supported; name it `default`.
 overrides:
   tool-context-intelligence-query:
     config:
       sources:
-        default:
+        default:                            # the single read source (only the first entry is honored)
           url: "http://read-replica.example.com"
           api_key: "${CI_READ_KEY}"        # secret lives in keys.env, referenced here
 ```
