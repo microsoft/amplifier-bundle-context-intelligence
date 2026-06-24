@@ -299,7 +299,7 @@ class LoggingHandler:
             "started_at": data.get("timestamp", ""),
             "last_event_at": data.get("timestamp", ""),
             "status": "running",
-            "working_dir": data.get("working_dir", ""),
+            "working_dir": self._resolver.working_dir,
         }
         meta_path.write_text(json.dumps(metadata, separators=(",", ":")))
 
@@ -334,7 +334,7 @@ class LoggingHandler:
             or meta.get("parent_id", "")
         )
         meta["started_at"] = data.get("timestamp", "") or meta.get("started_at", "")
-        meta["working_dir"] = data.get("working_dir", "") or meta.get("working_dir", "")
+        meta["working_dir"] = self._resolver.working_dir or meta.get("working_dir", "")
 
         for field in _OPTIONAL_METADATA_FIELDS:
             value = data.get(field)

@@ -71,7 +71,7 @@ def _slugify_path(path_str: str) -> str:
     return slug or _DEFAULT_PROJECT_SLUG
 
 
-class ConfigResolver:
+class HookConfigResolver:
     """Resolve configuration values with lazy fallback chains.
 
     Resolution order per property:
@@ -154,6 +154,21 @@ class ConfigResolver:
             )
             self._project_slug = str(raw)
         return self._project_slug
+
+    @property
+    def working_dir(self) -> str:
+        """Absolute session working directory from the ``session.working_dir`` capability.
+
+        Read live (not cached) so it reflects mid-session working-directory changes.
+        Returns "" when the capability is unavailable.
+        """
+        get_cap = getattr(self._coordinator, "get_capability", None)
+        if get_cap is None:
+            return ""
+        wd = get_cap("session.working_dir")
+        if not isinstance(wd, str) or not wd:
+            return ""
+        return wd
 
     @property
     def base_path(self) -> Path:
@@ -453,3 +468,9 @@ class ConfigResolver:
                 f"overrides.hook-context-intelligence.config.destinations.<name>."
             )
         return dests
+
+
+# ---------------------------------------------------------------------------
+# Backward-compat alias — import either name (HookConfigResolver is canonical)
+# ---------------------------------------------------------------------------
+ConfigResolver = HookConfigResolver

@@ -20,11 +20,16 @@ class _FakeResolver:
     """Minimal resolver adapter for testing LoggingHandler in isolation."""
 
     def __init__(
-        self, base_path: Path, project_slug: str, workspace: str = "test-workspace"
+        self,
+        base_path: Path,
+        project_slug: str,
+        workspace: str = "test-workspace",
+        working_dir: str = "",
     ) -> None:
         self.base_path = base_path
         self.project_slug = project_slug
         self.workspace = workspace
+        self.working_dir = working_dir
 
     def session_dir(self, session_id: str) -> Path:
         return self.base_path / self.project_slug / "sessions" / session_id / "context-intelligence"
@@ -91,14 +96,19 @@ class TestSessionStart:
             LoggingHandler,
         )
 
-        handler = LoggingHandler(_FakeResolver(tmp_path, "proj", workspace="my-project"))
+        # working_dir comes from the resolver (session capability), not the event payload.
+        handler = LoggingHandler(
+            _FakeResolver(
+                tmp_path, "proj", workspace="my-project", working_dir="/home/user/project"
+            )
+        )
         await handler(
             "session:start",
             {
                 "session_id": "s1",
                 "parent_id": "p1",
                 "timestamp": "2026-01-15T10:00:00Z",
-                "working_dir": "/home/user/project",
+                # working_dir in event data is NOT used for metadata; resolver value is.
             },
         )
         meta_path = tmp_path / "proj" / "sessions" / "s1" / "context-intelligence" / "metadata.json"
@@ -646,3 +656,178 @@ class TestConfigParentId:
             ).read_text()
         )
         assert meta["parent_id"] == "from-event"
+
+
+# ---------------------------------------------------------------------------
+# TestWorkingDirFromResolver — working_dir is a session attribute, not event data
+# ---------------------------------------------------------------------------
+class TestWorkingDirFromResolver:
+    """working_dir in metadata.json comes from the resolver (session capability), not the event.
+
+    This class covers three key guarantees:
+    (a) working_dir is populated from the resolver even when the first event is NOT
+        session:start and carries no working_dir in its payload.
+    (b) A present-but-empty working_dir in the event payload does NOT win — the resolver
+        value is used (event-payload empty string was the old bug).
+    (c) When the resolver's working_dir is "" (capability unavailable), metadata gracefully
+        stores "", and _enrich does not clobber a previously-set non-empty value.
+    """
+
+    async def test_working_dir_from_resolver_on_non_session_start_first_event(
+        self, tmp_path: Path
+    ) -> None:
+        """(a) working_dir comes from resolver when first event is tool:call (no session:start)."""
+        from amplifier_module_hook_context_intelligence.handlers.logging_handler import (
+            LoggingHandler,
+        )
+
+        resolver = _FakeResolver(tmp_path, "proj", working_dir="/resolver/working/dir")
+        handler = LoggingHandler(resolver)
+
+        # First event is NOT session:start — old code would have stored "" here.
+        await handler(
+            "tool:call",
+            {
+                "session_id": "s1",
+                "timestamp": "2026-01-15T10:00:01Z",
+                "tool_name": "read_file",
+                # No working_dir in payload at all.
+            },
+        )
+
+        meta = json.loads(
+            (
+                tmp_path / "proj" / "sessions" / "s1" / "context-intelligence" / "metadata.json"
+            ).read_text()
+        )
+        assert meta["working_dir"] == "/resolver/working/dir"
+
+    async def test_present_but_empty_event_working_dir_does_not_win(self, tmp_path: Path) -> None:
+        """(b) An empty working_dir in the event payload does not clobber the resolver value.
+
+        The old code used data.get("working_dir", ""), so a payload that carries
+        {"working_dir": ""} (present-but-empty) would return "" and store it.
+        New code ignores event working_dir entirely; the resolver always wins.
+        """
+        from amplifier_module_hook_context_intelligence.handlers.logging_handler import (
+            LoggingHandler,
+        )
+
+        resolver = _FakeResolver(tmp_path, "proj", working_dir="/real/path")
+        handler = LoggingHandler(resolver)
+
+        # Event deliberately carries working_dir="" (present-but-empty).
+        await handler(
+            "session:start",
+            {
+                "session_id": "s1",
+                "timestamp": "2026-01-15T10:00:00Z",
+                "working_dir": "",  # Present but empty — old code would have stored "".
+            },
+        )
+
+        meta = json.loads(
+            (
+                tmp_path / "proj" / "sessions" / "s1" / "context-intelligence" / "metadata.json"
+            ).read_text()
+        )
+        # Resolver's value wins over the event's empty string.
+        assert meta["working_dir"] == "/real/path"
+
+    async def test_resolver_working_dir_empty_stores_empty_gracefully(self, tmp_path: Path) -> None:
+        """(c-i) When resolver.working_dir is '', metadata working_dir is '' (graceful)."""
+        from amplifier_module_hook_context_intelligence.handlers.logging_handler import (
+            LoggingHandler,
+        )
+
+        resolver = _FakeResolver(tmp_path, "proj", working_dir="")
+        handler = LoggingHandler(resolver)
+
+        await handler(
+            "session:start",
+            {
+                "session_id": "s1",
+                "timestamp": "2026-01-15T10:00:00Z",
+            },
+        )
+
+        meta = json.loads(
+            (
+                tmp_path / "proj" / "sessions" / "s1" / "context-intelligence" / "metadata.json"
+            ).read_text()
+        )
+        assert meta["working_dir"] == ""
+
+    async def test_enrich_does_not_clobber_prior_value_with_empty_resolver(
+        self, tmp_path: Path
+    ) -> None:
+        """(c-ii) _enrich does not overwrite a good working_dir with '' from an empty resolver.
+
+        Scenario: first event stores a non-empty working_dir via the resolver, then
+        _enrich_metadata_from_session_init is called (session:start arrives late) while
+        the resolver's working_dir returns "".  The prior value must be preserved.
+        """
+        from amplifier_module_hook_context_intelligence.handlers.logging_handler import (
+            LoggingHandler,
+        )
+
+        # Phase 1: resolver has a working_dir — first event stores it.
+        resolver = _FakeResolver(tmp_path, "proj", working_dir="/first/event/dir")
+        handler = LoggingHandler(resolver)
+
+        await handler(
+            "tool:call",
+            {
+                "session_id": "s1",
+                "timestamp": "2026-01-15T10:00:01Z",
+            },
+        )
+
+        # Verify initial state.
+        meta_path = tmp_path / "proj" / "sessions" / "s1" / "context-intelligence" / "metadata.json"
+        meta = json.loads(meta_path.read_text())
+        assert meta["working_dir"] == "/first/event/dir"
+
+        # Phase 2: resolver now returns "" (e.g. capability went away).
+        resolver.working_dir = ""
+
+        # session:start arrives (triggers _enrich).
+        await handler(
+            "session:start",
+            {
+                "session_id": "s1",
+                "timestamp": "2026-01-15T10:00:02Z",
+                # No working_dir in event payload either.
+            },
+        )
+
+        meta = json.loads(meta_path.read_text())
+        # Prior non-empty value must be preserved; "" from resolver must not clobber.
+        assert meta["working_dir"] == "/first/event/dir"
+
+    async def test_working_dir_from_resolver_overrides_event_on_session_start(
+        self, tmp_path: Path
+    ) -> None:
+        """Resolver value wins even when event carries a different non-empty working_dir."""
+        from amplifier_module_hook_context_intelligence.handlers.logging_handler import (
+            LoggingHandler,
+        )
+
+        resolver = _FakeResolver(tmp_path, "proj", working_dir="/resolver/path")
+        handler = LoggingHandler(resolver)
+
+        await handler(
+            "session:start",
+            {
+                "session_id": "s1",
+                "timestamp": "2026-01-15T10:00:00Z",
+                "working_dir": "/event/path",  # Different value in event — resolver wins.
+            },
+        )
+
+        meta = json.loads(
+            (
+                tmp_path / "proj" / "sessions" / "s1" / "context-intelligence" / "metadata.json"
+            ).read_text()
+        )
+        assert meta["working_dir"] == "/resolver/path"

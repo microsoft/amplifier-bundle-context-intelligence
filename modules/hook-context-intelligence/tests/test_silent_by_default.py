@@ -30,6 +30,7 @@ def _make_resolver(tmp_path, *, server_url=None, api_key=None):
         context_intelligence_server_url=server_url,
         context_intelligence_api_key=api_key,
         workspace="test-workspace",
+        working_dir="",
         dispatch_timeout=10.0,
         dispatch_failure_threshold=3,
         dispatch_queue_capacity=256,

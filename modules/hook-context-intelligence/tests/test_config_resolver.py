@@ -1,11 +1,13 @@
-"""Tests for ConfigResolver resolution chains."""
+"""Tests for HookConfigResolver resolution chains."""
 
 from pathlib import Path
 from unittest.mock import MagicMock
 
 import fnmatch
 
-from amplifier_module_hook_context_intelligence.config_resolver import ConfigResolver
+from amplifier_module_hook_context_intelligence.config_resolver import (
+    HookConfigResolver as ConfigResolver,
+)  # noqa: PLC0414
 from amplifier_module_hook_context_intelligence.config_resolver import _slugify_path
 
 
@@ -700,3 +702,86 @@ class TestSlugifyPath:
     def test_empty_string_returns_default(self) -> None:
         """Empty path string returns the default project slug."""
         assert _slugify_path("") == "default"
+
+
+class TestWorkingDir:
+    """working_dir property — live read of the session.working_dir capability.
+
+    Unlike project_slug (cached), working_dir is read live on every access so it
+    reflects mid-session working-directory changes.  It returns "" when the
+    capability is unavailable.
+    """
+
+    def test_returns_capability_value_when_present(self) -> None:
+        """working_dir returns the path string from the session.working_dir capability."""
+        coordinator = MagicMock()
+        coordinator.get_capability = MagicMock(return_value="/home/user/project")
+        resolver = ConfigResolver(config={}, coordinator=coordinator)
+
+        assert resolver.working_dir == "/home/user/project"
+
+    def test_returns_empty_string_when_capability_returns_none(self) -> None:
+        """working_dir returns '' when get_capability('session.working_dir') is None."""
+        coordinator = MagicMock()
+        coordinator.get_capability = MagicMock(return_value=None)
+        resolver = ConfigResolver(config={}, coordinator=coordinator)
+
+        assert resolver.working_dir == ""
+
+    def test_returns_empty_string_when_capability_returns_empty_string(self) -> None:
+        """working_dir returns '' when the capability returns '' (present-but-empty)."""
+        coordinator = MagicMock()
+        coordinator.get_capability = MagicMock(return_value="")
+        resolver = ConfigResolver(config={}, coordinator=coordinator)
+
+        assert resolver.working_dir == ""
+
+    def test_returns_empty_string_when_capability_returns_non_str(self) -> None:
+        """working_dir returns '' when the capability returns a non-string type."""
+        coordinator = MagicMock()
+        coordinator.get_capability = MagicMock(return_value=42)
+        resolver = ConfigResolver(config={}, coordinator=coordinator)
+
+        assert resolver.working_dir == ""
+
+    def test_returns_empty_string_when_coordinator_lacks_get_capability(self) -> None:
+        """working_dir returns '' when the coordinator has no get_capability method."""
+        bare = _make_bare_coordinator()  # plain object(), no get_capability
+        resolver = ConfigResolver(config={}, coordinator=bare)
+
+        assert resolver.working_dir == ""
+
+    def test_returns_empty_string_when_coordinator_is_none(self) -> None:
+        """working_dir returns '' when coordinator is None."""
+        resolver = ConfigResolver(config={}, coordinator=None)
+
+        assert resolver.working_dir == ""
+
+    def test_not_cached_reads_live(self) -> None:
+        """working_dir is NOT cached — each access re-reads the capability.
+
+        This is intentional: working_dir must reflect mid-session cwd changes,
+        unlike project_slug which is cached after first access.
+        """
+        coordinator = MagicMock()
+        coordinator.get_capability = MagicMock(return_value="/first/path")
+        resolver = ConfigResolver(config={}, coordinator=coordinator)
+
+        first = resolver.working_dir
+        assert first == "/first/path"
+
+        # Simulate capability value changing mid-session.
+        coordinator.get_capability = MagicMock(return_value="/second/path")
+        second = resolver.working_dir
+        assert second == "/second/path"
+
+        # Contrast with project_slug which IS cached.
+        assert first != second
+
+    def test_returns_str_type(self) -> None:
+        """working_dir always returns a str."""
+        coordinator = MagicMock()
+        coordinator.get_capability = MagicMock(return_value="/some/path")
+        resolver = ConfigResolver(config={}, coordinator=coordinator)
+
+        assert isinstance(resolver.working_dir, str)

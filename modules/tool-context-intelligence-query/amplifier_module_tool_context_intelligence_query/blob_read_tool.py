@@ -1,4 +1,17 @@
-"""BlobReadTool — fetches blob content from the context-intelligence server."""
+"""BlobReadTool — fetches blob content from the context-intelligence server.
+
+Configuration is resolved via the three-tier fallback chain in
+``resolve_query_endpoint`` (same as GraphQueryTool — parity guaranteed by the
+shared helper):
+
+  1. Explicit read-config (``sources:`` in mount config, if set).
+  2. Upload destinations from ``context_intelligence.hook_config_resolver``
+     capability (fixes the destinations-only config bug).
+  3. ``AMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_URL`` env var (canonical last-resort).
+
+The ``ToolConfigResolver`` is injected at construction time by ``mount()``
+(one shared instance for both CI read tools — single config namespace).
+"""
 
 from __future__ import annotations
 
@@ -8,7 +21,9 @@ from pathlib import Path
 from typing import Any
 
 from amplifier_core import ToolResult
+
 from context_intelligence.client import AsyncCIClient
+from context_intelligence.tool_resolver import ToolConfigResolver, resolve_query_endpoint
 
 _URI_SCHEME = "ci-blob://"
 _BLOB_DIR = Path("/tmp/ci-blobs")
@@ -22,9 +37,10 @@ def _sanitize_path_component(s: str) -> str:
 class BlobReadTool:
     """Tool that fetches a ci-blob:// URI from the server and writes it to disk."""
 
-    def __init__(self, coordinator: Any) -> None:
+    def __init__(self, coordinator: Any, resolver: ToolConfigResolver | None = None) -> None:
         self._coordinator = coordinator
-        self._resolver: Any = None
+        self._tool_resolver = resolver or ToolConfigResolver({}, coordinator)
+        self._hook_resolver: Any | None = None
 
     @property
     def name(self) -> str:
@@ -51,22 +67,14 @@ class BlobReadTool:
         }
 
     async def execute(self, input: dict[str, Any]) -> ToolResult:  # noqa: A002
-        # (1) Lazy capability resolution
-        if self._resolver is None:
-            self._resolver = self._coordinator.get_capability(
-                "context_intelligence.config_resolver"
-            )
-        if self._resolver is None:
-            return ToolResult(
-                success=False,
-                error={
-                    "message": "context-intelligence hook not configured",
-                    "type": "configuration_error",
-                },
+        # (1) Lazy hook resolver resolution
+        if self._hook_resolver is None:
+            self._hook_resolver = self._coordinator.get_capability(
+                "context_intelligence.hook_config_resolver"
             )
 
-        # (2) Get server_url from resolver
-        server_url: str | None = self._resolver.context_intelligence_server_url
+        # (2) Resolve server_url + api_key via three-tier chain
+        server_url, api_key = resolve_query_endpoint(self._hook_resolver, self._tool_resolver)
         if not server_url:
             return ToolResult(
                 success=False,
@@ -105,7 +113,6 @@ class BlobReadTool:
         safe_key = _sanitize_path_component(key)
 
         # (5) Construct AsyncCIClient
-        api_key: str | None = self._resolver.context_intelligence_api_key
         async_client = AsyncCIClient(server_url=server_url, api_key=api_key or "")
 
         # (6) Fetch blob using original unsanitized values for the server request
