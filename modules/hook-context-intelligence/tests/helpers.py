@@ -7,9 +7,8 @@ Usage::
 
     from tests.helpers import make_lifecycle_coordinator, mount_and_ready
 
-The ``config_resolver``-focused tests in ``test_config_resolver.py`` and the
-skill-fetcher-specific tests in ``test_skill_fetcher_mount.py`` use different
-coordinator shapes and should keep their own local helpers.
+The ``config_resolver``-focused tests in ``test_config_resolver.py`` use a
+different coordinator shape and keep their own local helpers.
 """
 
 from __future__ import annotations

@@ -1,0 +1,20 @@
+bundle:
+  name: context-intelligence-navigation-behavior
+  version: 0.1.0
+  description: >
+    LAYER 1 of 3 (innermost). Adds session-navigator (reads raw session JSONL
+    on disk, no graph server). Includes: nothing. Use alone for local/offline
+    navigation fallback.
+
+agents:
+  include:
+    - context-intelligence:session-navigator
+
+tools:
+  - module: tool-delegate
+    source: git+https://github.com/microsoft/amplifier-foundation@main#subdirectory=modules/tool-delegate
+  - module: tool-skills
+    source: git+https://github.com/microsoft/amplifier-bundle-skills@main#subdirectory=modules/tool-skills
+    config:
+      skills:
+        - "git+https://github.com/microsoft/amplifier-bundle-context-intelligence@main#subdirectory=skills/context-intelligence-session-navigation"

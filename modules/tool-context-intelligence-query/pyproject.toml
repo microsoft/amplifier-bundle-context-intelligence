@@ -24,6 +24,9 @@ package = true
 [tool.hatch.build.targets.wheel]
 packages = ["amplifier_module_tool_context_intelligence_query"]
 
+[tool.hatch.build.targets.wheel.force-include]
+"amplifier_module_tool_context_intelligence_query/bundled_skill/context-intelligence-graph-query.md" = "amplifier_module_tool_context_intelligence_query/bundled_skill/context-intelligence-graph-query.md"
+
 [tool.hatch.metadata]
 # Required to build a wheel that carries a PEP 508 direct-reference (git+https) dependency.
 allow-direct-references = true

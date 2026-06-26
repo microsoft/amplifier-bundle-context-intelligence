@@ -73,7 +73,7 @@ def _extract_logging_handler(coordinator: MagicMock) -> Any:
     """Extract the LoggingHandler instance from registrations.
 
     Searches by name="LoggingHandler" to avoid false matches with other
-    priority-100 handlers (e.g. SkillFetcher's skill:unloaded handler).
+    priority-100 handlers.
     """
     for call in coordinator.hooks.register.call_args_list:
         if call.kwargs.get("name") == "LoggingHandler":

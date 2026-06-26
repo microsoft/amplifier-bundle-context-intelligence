@@ -50,7 +50,6 @@ class TestLoggingOnlyIntegration:
         await on_session_ready(coordinator)
 
         # Extract LoggingHandler from registrations by name (canonical identifier).
-        # Priority alone is not unique — SkillFetcher also uses priority=100.
         # register() positional args: (event, handler) — index [1] is the handler callable.
         handler = None
         for call in coordinator.hooks.register.call_args_list:

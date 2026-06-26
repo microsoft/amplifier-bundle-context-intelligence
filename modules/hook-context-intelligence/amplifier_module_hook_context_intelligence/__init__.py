@@ -11,7 +11,7 @@ destinations : dict, optional
       url     : str  — base URL of the CI server (app expands ${VAR} before mount).
       api_key : str  — bearer token.
       include : list[str], optional — pathspec (gitwildmatch) patterns; default ["**"].
-      exclude : list[str], optional — exclude-wins patterns; default [].
+      exclude : list[str], optional — exclude-wins patterns; default []
     Configured via overrides.hook-context-intelligence.config.destinations in settings.yaml.
     App-cli deep-merges project-over-user, so per-project overrides patch individual
     destination sub-keys without clobbering others.
@@ -27,7 +27,7 @@ workspace : str, optional
     Resolved automatically from the coordinator when not set
     (see ConfigResolver.workspace).
 log_level : str, optional
-    Logging level.  Default ``"WARNING"``.
+    Logging level.  Default ``"WARNING"``
 base_path : str, optional
     Root directory for JSONL output.  Defaults to the coordinator
     working directory.
@@ -41,10 +41,6 @@ additional_events : list[str], optional
     Event names to register unconditionally, regardless of capability
     discovery order.  Use to capture events from modules that mount after
     this hook (e.g. ``delegate:agent_spawned``).
-
-Note: Skills are fetched from the first configured destination (insertion order),
-typically "default" from the legacy-synthesized single-server path. This preserves
-today's single-server behavior for skill fetching, which is not per-destination.
 """
 
 from __future__ import annotations
@@ -52,96 +48,11 @@ from __future__ import annotations
 import fnmatch
 import logging
 from collections.abc import Callable, Coroutine
-from pathlib import Path
-from typing import TYPE_CHECKING, Any
-
-if TYPE_CHECKING:
-    from .skill_fetcher import SkillFetcher
+from typing import Any
 
 log = logging.getLogger(__name__)
 
 __amplifier_module_type__ = "hook"
-
-# Path to the bundle root — works regardless of cache location or mounting order
-# Path(__file__).parent = amplifier_module_hook_context_intelligence/
-# .parent               = hook-context-intelligence/
-# .parent               = modules/
-# .parent               = bundle root (where skills/ lives)
-_BUNDLE_ROOT = Path(__file__).parent.parent.parent.parent
-
-
-def _resolve_skill_path(skill_name: str, coordinator: Any) -> Path | None:
-    """Resolve the filesystem path for a watched skill's SKILL.md file.
-
-    Primary: queries the ``skills_discovery`` coordinator capability
-    (registered by the tool-skills module at mount time).  Returns
-    ``metadata.path`` when the capability finds the skill.
-
-    Fallback: returns ``_BUNDLE_ROOT / 'skills' / skill_name / 'SKILL.md'``
-    when the parent directory exists on disk.
-
-    Returns ``None`` when neither source can provide a valid path.
-    """
-    from .skill_fetcher import TOOL_SKILLS_DISCOVERY_CAPABILITY
-
-    # Primary: use skills_discovery capability
-    discovery = coordinator.get_capability(TOOL_SKILLS_DISCOVERY_CAPABILITY)
-    if discovery is not None:
-        metadata = discovery.find(skill_name)
-        if metadata is not None:
-            log.debug(
-                "skill_path_resolved: %s -> %s (via skills_discovery)",
-                skill_name,
-                metadata.path,
-            )
-            return metadata.path
-
-    # Fallback: check bundle root location
-    fallback = _BUNDLE_ROOT / "skills" / skill_name / "SKILL.md"
-    if fallback.parent.exists():
-        log.debug(
-            "skill_path_resolved: %s -> %s (via bundle root fallback)",
-            skill_name,
-            fallback,
-        )
-        return fallback
-
-    log.warning(
-        "skill_path_unresolvable: %s — not found via skills_discovery or bundle root", skill_name
-    )
-    return None
-
-
-async def _refresh_watched_skills(
-    coordinator: Any,
-    fetcher: "SkillFetcher",
-    skills_capable: bool,
-) -> None:
-    """Refresh all watched skills by resolving their paths and updating content.
-
-    Branch B (not skills_capable): writes bundled legacy content via
-    ``fetcher.write_legacy_content``.
-
-    Branch C (skills_capable): fetches live content from the server via
-    ``fetcher.fetch``, wrapped in a try/except to skip individual failures.
-    """
-    from .skill_fetcher import WATCHED_SKILLS
-
-    for skill_name in WATCHED_SKILLS:
-        skill_path = _resolve_skill_path(skill_name, coordinator)
-        if skill_path is None:
-            continue
-
-        if not skills_capable:
-            # Branch B: old server — write bundled legacy content
-            fetcher.write_legacy_content(skill_name, skill_path)
-        else:
-            # Branch C: new server — fetch live content
-            try:
-                await fetcher.fetch(skill_name, skill_path)
-            except Exception as exc:
-                # Swallow per-skill failures — one bad skill must not block others
-                log.warning("skill_fetch_failed: %s — %s", skill_name, exc)
 
 
 async def _discover_events(coordinator: Any) -> set[str]:
@@ -174,12 +85,6 @@ async def mount(
     """
     from .config_resolver import HookConfigResolver
     from .handlers.logging_handler import LoggingHandler
-    from .skill_fetcher import (
-        TOOL_SKILLS_DISCOVERY_CAPABILITY,
-        WATCHED_SKILLS,
-        SkillFetcher,
-        _is_skills_capable,
-    )
 
     resolver = HookConfigResolver(config, coordinator)
     log.setLevel(resolver.log_level)
@@ -200,69 +105,7 @@ async def mount(
             "overrides.hook-context-intelligence.config.destinations for multi-server fan-out."
         )
 
-    # --- Skill-fetch server selection (spec §5.1.3) ---
-    # Skills are global, not per-destination. Use first destination with a non-empty url
-    # (insertion order). Synthesized "default" is always first on the legacy path.
-    skill_fetch_url = next((d.url for d in all_destinations.values() if d.url), None)
-
     logging_handler = LoggingHandler(resolver)
-
-    # Skill fetch phase — deferred to skills:discovered event
-    fetcher: SkillFetcher | None = None
-    skills_capable: bool = False
-
-    if not skill_fetch_url:
-        log.info("skill_fetch_skipped: no server_url in config")
-    else:
-        _tentative_fetcher = SkillFetcher(skill_fetch_url)
-        result = await _tentative_fetcher.check_server_version()
-        log.info(
-            "skill_version_check: server=%s reachable=%s version=%s",
-            skill_fetch_url,
-            result.reachable,
-            result.version,
-        )
-
-        if not result.reachable:
-            # Branch A: server unreachable — delegation fallback stays, SKILL.md untouched
-            log.info("skill_fetch_branch=A: server unreachable — SKILL.md unchanged")
-        else:
-            # Reachable: defer skill fetch to skills:discovered event
-            fetcher = _tentative_fetcher
-            skills_capable = _is_skills_capable(result.version)
-
-            async def on_skills_discovered(event_name: str, data: dict[str, Any]) -> None:
-                await _refresh_watched_skills(coordinator, fetcher, skills_capable)  # type: ignore[arg-type]
-
-            unreg_skills_discovered = coordinator.hooks.register(
-                "skills:discovered",
-                on_skills_discovered,
-                priority=50,
-                name="SkillFetcher-trigger",
-            )
-            unregister_fns.append(unreg_skills_discovered)
-            log.info("skill_fetch_deferred: registered skills:discovered handler")
-            # tools mount before hooks in Amplifier: if skills_discovery is
-            # already registered (tool-skills already ran), fetch immediately.
-            # The event handler above handles the reverse order if it ever occurs.
-            if coordinator.get_capability(TOOL_SKILLS_DISCOVERY_CAPABILITY) is not None:
-                log.info(
-                    "skill_fetch_immediate: skills_discovery already registered "
-                    "(tools mount before hooks) — fetching now"
-                )
-                await _refresh_watched_skills(coordinator, fetcher, skills_capable)
-
-    # skill:unloaded handler — re-fetches watched skills when they are reloaded
-    if fetcher is not None:
-
-        async def on_skill_unloaded(event_name: str, data: dict[str, Any]) -> None:
-            if data.get("skill_name") in WATCHED_SKILLS:
-                await _refresh_watched_skills(coordinator, fetcher, skills_capable)  # type: ignore[arg-type]
-
-        unreg_skill = coordinator.hooks.register(
-            "skill:unloaded", on_skill_unloaded, priority=100, name="SkillFetcher"
-        )
-        unregister_fns.append(unreg_skill)
 
     # Share mutable state with on_session_ready via a private capability.
     # The cleanup closure closes over unregister_fns by reference — any entries
