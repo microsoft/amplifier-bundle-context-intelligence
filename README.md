@@ -21,6 +21,20 @@ Two agents are included for querying session data:
 
 A **`/context-intelligence` mode** is also included for building new context intelligence-aware tooling. Activate it to enter a design workspace where you can investigate session data, explore the graph model, and produce reusable Amplifier components (skills, agents, context files, recipes, CLIs) for your project.
 
+### Composition — pick the layer you need
+
+The bundle ships as **composable layered behaviors** rather than one monolith. Richer layers `include` the lighter ones, so you compose only what you need:
+
+| Behavior | Adds | Use when |
+|----------|------|----------|
+| `context-intelligence-logging` | the telemetry hook only (event capture + optional server fan-out) | you want **pure session telemetry/logging** — no agents, tools, skills, or mode |
+| `context-intelligence-navigation` (Layer 1) | `session-navigator` (reads raw JSONL on disk; no graph server) | local/offline navigation fallback only |
+| `context-intelligence-analysis` (Layer 2) | `graph-analyst` + graph/query skills + the query tools (⊃ navigation) | graph read/query/exploration, no design mode |
+| `context-intelligence-design` (Layer 3) | the `/context-intelligence` design mode (⊃ analysis) | full read/query **plus** the tooling-design workflow |
+| `context-intelligence` (umbrella) | `design` **+** `logging` together | the full drop-in: read/query/design **and** session instrumentation |
+
+The umbrella `context-intelligence.yaml` is the drop-in install (Quick Start below). Reach for a single layer when an integrator needs something leaner — e.g. compose `context-intelligence-logging` into an app that only needs telemetry, with zero analysis/skill machinery.
+
 ---
 
 ## Understanding workspace
@@ -336,6 +350,27 @@ overrides:
 
 > **Most users configure nothing here.** A single hook `destinations` entry already powers both upload and query. `sources` exists only for the read-replica / split-endpoint case.
 
+#### Skill body sync — `skill_sync_enabled` (opt-in)
+
+The `graph-analyst` agent uses a `context-intelligence-graph-query` skill that documents the Cypher patterns it issues. The bundle ships a **SHA-pinned vendored copy** of that skill body (`bundled_skill/context-intelligence-graph-query.md`, inside the `tool-context-intelligence-query` module), so the skill works fully offline with **zero network traffic** for skill acquisition. The optional `skill_sync_enabled` knob controls whether — at session start — the skill body is *refreshed from a Context Intelligence server* instead of using the vendored copy. It lives in the same namespace as `sources` (`overrides.tool-context-intelligence-query.config`).
+
+| Key | Source | Default | Description |
+|-----|--------|---------|-------------|
+| `skill_sync_enabled` | tool config → `coordinator.config` → env `AMPLIFIER_CONTEXT_INTELLIGENCE_SKILL_SYNC_ENABLED` → default | **`false`** | When **`false`** (default): no skill network traffic at all. If a server source is resolved, the vendored offline body is swapped in (still zero network); if none is resolved, the shipped stub is retained. When **`true`** and a server source resolves: the skill body is version-gated and conditionally fetched from the server at session start (a `skill:unloaded` reload handler is also registered). When `true` but the server is offline, the agent degrades gracefully (no crash). |
+
+```yaml
+# ~/.amplifier/settings.yaml — opt IN to refreshing the graph-query skill body from the server.
+# Default is OFF: the bundled, SHA-pinned skill body is used and NO skill traffic occurs.
+overrides:
+  tool-context-intelligence-query:
+    config:
+      skill_sync_enabled: true        # default false — leave unset for the zero-network path
+```
+
+Skill sync resolves its server using the **same** `(server_url, api_key)` chain as the query tools above (`sources` → hook `destinations` → env). The vendored-body install **fails loud** if the on-disk body's SHA does not match the pin. See [`docs/context-intelligence-skill-sync-flow.png`](docs/context-intelligence-skill-sync-flow.png) for the full enabled/disabled decision flow.
+
+> **Telemetry hook does not fetch skills.** Skill acquisition belongs entirely to the query tool (above) and is opt-in. The `hook-context-intelligence` module is **pure telemetry** — event capture and `destinations` fan-out only — and performs no skill loading.
+
 ---
 
 ## Server dispatch
@@ -477,6 +512,13 @@ See [`context/dual-path-library-template.md`](context/dual-path-library-template
 ```
 amplifier-bundle-context-intelligence/
 ├── bundle.md                           ← root bundle definition
+├── bundle.dot / bundle.png             ← generated bundle structure diagram
+├── behaviors/                          ← composable layered behaviors (compose what you need)
+│   ├── context-intelligence-navigation.yaml  ← Layer 1: session-navigator only
+│   ├── context-intelligence-analysis.yaml    ← Layer 2: + graph-analyst + query tools (⊃ navigation)
+│   ├── context-intelligence-design.yaml      ← Layer 3: + design mode (⊃ analysis)
+│   ├── context-intelligence-logging.yaml     ← orthogonal: telemetry hook only
+│   └── context-intelligence.yaml             ← umbrella: design + logging (full drop-in)
 ├── modes/
 │   └── context-intelligence.md  ← design-time mode
 ├── agents/
@@ -495,15 +537,24 @@ amplifier-bundle-context-intelligence/
 │   ├── dual-path-library-template.md      ← copy-paste library template for dual-path tools
 │   └── jsonl-event-schema.md               ← events.jsonl schema contract
 ├── modules/
-│   ├── hook-context-intelligence/      ← the Python hook module
-│   └── tool-context-intelligence-query/ ← graph_query + blob_read tools
+│   ├── hook-context-intelligence/      ← the Python hook module — PURE TELEMETRY
+│   │                                     (no skill_fetcher.py / legacy_content/ — skills moved out)
+│   └── tool-context-intelligence-query/ ← graph_query + blob_read tools + opt-in skill sync
+│       └── amplifier_module_tool_context_intelligence_query/
+│           ├── graph_query_tool.py     ← skill_sync_enabled knob (default false)
+│           ├── skill_sync.py           ← on_session_ready orchestration (opt-in)
+│           ├── skill_fetcher.py        ← server version-gate + conditional fetch (only when enabled)
+│           └── bundled_skill/
+│               └── context-intelligence-graph-query.md  ← SHA-pinned vendored offline body
 ├── docs/
 │   ├── context-intelligence-exploration-guide.md   ← what to explore and how to test
+│   ├── context-intelligence-skill-sync-flow.dot    ← skill-sync enabled/disabled decision flow
 │   ├── dispatch-circuit-breaker.dot    ← dispatch flow and circuit breaker state machine
 │   └── logging-handler-flow.dot        ← thin forwarder architecture
 ├── skills/
 │   ├── context-intelligence-graph-query/
-│   └── context-intelligence-session-navigation/
+│   ├── context-intelligence-session-navigation/
+│   └── …                               ← additional graph/design skills
 └── tests/
 ```
 
