@@ -86,6 +86,16 @@ class GraphQueryTool:
             "required": ["query"],
         }
 
+    @property
+    def skill_sync_enabled(self) -> bool:
+        """Pass-through to the resolver's skill_sync_enabled knob.
+
+        Consumed by skill_sync.on_session_ready via the coordinator capability;
+        returning False (the resolver default) makes the sync path a complete
+        no-op (zero GET /version, zero skill fetch, no reload handler).
+        """
+        return self._tool_resolver.skill_sync_enabled
+
     def _resolve_server_config(self, coordinator: Any) -> tuple[str | None, str | None, str]:
         """Resolve (server_url, api_key, workspace) using the three-tier fallback chain.
 
