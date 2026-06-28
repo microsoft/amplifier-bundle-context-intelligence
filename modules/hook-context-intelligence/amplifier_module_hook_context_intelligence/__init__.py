@@ -198,6 +198,8 @@ async def on_session_ready(coordinator: Any) -> None:
             failure_threshold=resolver.dispatch_failure_threshold,
             queue_capacity=resolver.dispatch_queue_capacity,
             close_drain_timeout=resolver.close_drain_timeout,
+            auth_mode=d.auth_mode,
+            auth_resource=d.auth_resource,
         )
         for d in active.values()
     ]

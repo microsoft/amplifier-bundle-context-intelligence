@@ -23,7 +23,11 @@ from typing import Any
 from amplifier_core import ToolResult
 
 from context_intelligence.client import AsyncCIClient
-from context_intelligence.tool_resolver import ToolConfigResolver, resolve_query_endpoint
+from context_intelligence.tool_resolver import (
+    ToolConfigResolver,
+    resolve_query_auth_strategy,
+    resolve_query_endpoint,
+)
 
 _URI_SCHEME = "ci-blob://"
 _BLOB_DIR = Path("/tmp/ci-blobs")
@@ -73,8 +77,11 @@ class BlobReadTool:
                 "context_intelligence.hook_config_resolver"
             )
 
-        # (2) Resolve server_url + api_key via three-tier chain
+        # (2) Resolve server_url + api_key + auth strategy via three-tier chain
         server_url, api_key = resolve_query_endpoint(self._hook_resolver, self._tool_resolver)
+        auth_strategy = resolve_query_auth_strategy(
+            self._hook_resolver, self._tool_resolver, api_key=api_key or ""
+        )
         if not server_url:
             return ToolResult(
                 success=False,
@@ -112,8 +119,10 @@ class BlobReadTool:
         safe_session_id = _sanitize_path_component(session_id)
         safe_key = _sanitize_path_component(key)
 
-        # (5) Construct AsyncCIClient
-        async_client = AsyncCIClient(server_url=server_url, api_key=api_key or "")
+        # (5) Construct AsyncCIClient with auth strategy
+        async_client = AsyncCIClient(
+            server_url=server_url, api_key=api_key or "", auth_strategy=auth_strategy
+        )
 
         # (6) Fetch blob using original unsanitized values for the server request
         data = await async_client.fetch_blob(session_id, key)

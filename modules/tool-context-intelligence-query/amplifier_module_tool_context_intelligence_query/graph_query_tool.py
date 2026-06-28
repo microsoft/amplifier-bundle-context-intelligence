@@ -20,7 +20,11 @@ from __future__ import annotations
 from typing import Any
 
 from context_intelligence.client import AsyncCIClient
-from context_intelligence.tool_resolver import ToolConfigResolver, resolve_query_endpoint
+from context_intelligence.tool_resolver import (
+    ToolConfigResolver,
+    resolve_query_auth_strategy,
+    resolve_query_endpoint,
+)
 
 from amplifier_core.models import ToolResult
 
@@ -96,8 +100,8 @@ class GraphQueryTool:
         """
         return self._tool_resolver.skill_sync_enabled
 
-    def _resolve_server_config(self, coordinator: Any) -> tuple[str | None, str | None, str]:
-        """Resolve (server_url, api_key, workspace) using the three-tier fallback chain.
+    def _resolve_server_config(self, coordinator: Any) -> tuple[str | None, str | None, str, Any]:
+        """Resolve (server_url, api_key, workspace, auth_strategy) using the three-tier fallback chain.
 
         Late-mount upgrade: retries hook capability lookup on every call while
         _hook_resolver is None (hook may mount after the tool).
@@ -107,15 +111,20 @@ class GraphQueryTool:
                 "context_intelligence.hook_config_resolver"
             )
         url, api_key = resolve_query_endpoint(self._hook_resolver, self._tool_resolver)
+        auth_strategy = resolve_query_auth_strategy(
+            self._hook_resolver, self._tool_resolver, api_key=api_key or ""
+        )
         workspace = (
             self._hook_resolver.workspace
             if self._hook_resolver is not None
             else self._tool_resolver.workspace
         )
-        return url, api_key, workspace
+        return url, api_key, workspace, auth_strategy
 
     async def execute(self, input: dict[str, Any]) -> ToolResult:  # noqa: A002
-        server_url, api_key, workspace = self._resolve_server_config(self._coordinator)
+        server_url, api_key, workspace, auth_strategy = self._resolve_server_config(
+            self._coordinator
+        )
 
         if not server_url:
             return ToolResult(
@@ -144,6 +153,8 @@ class GraphQueryTool:
         else:
             params = raw_params
 
-        async_client = AsyncCIClient(server_url=server_url, api_key=api_key or "")
+        async_client = AsyncCIClient(
+            server_url=server_url, api_key=api_key or "", auth_strategy=auth_strategy
+        )
         result = await async_client.cypher(query, effective_workspace, params=params)
         return ToolResult(success=True, output=result)

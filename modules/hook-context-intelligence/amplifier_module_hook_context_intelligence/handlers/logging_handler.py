@@ -84,7 +84,11 @@ class _DestinationDispatcher:
         failure_threshold: int,
         queue_capacity: int,
         close_drain_timeout: float,
+        auth_mode: str = "static",
+        auth_resource: str = "",
     ) -> None:
+        from context_intelligence.auth import AuthStrategy, build_auth_strategy  # noqa: PLC0415
+
         self._name = name
         self._url = url.rstrip("/")
         self._api_key = api_key
@@ -93,6 +97,12 @@ class _DestinationDispatcher:
         self._failure_threshold = failure_threshold
         self._queue_capacity = queue_capacity
         self._close_drain_timeout = close_drain_timeout
+        # Build the auth strategy ONCE at init; credential SDK handles token refresh internally.
+        self._strategy: AuthStrategy = build_auth_strategy(
+            auth_mode=auth_mode,
+            api_key=api_key,
+            auth_resource=auth_resource,
+        )
         self._client: httpx.AsyncClient | None = None
         self._queue: asyncio.Queue[tuple[str, dict[str, Any]]] = asyncio.Queue(
             maxsize=queue_capacity
@@ -132,28 +142,34 @@ class _DestinationDispatcher:
                 self._queue.task_done()
 
     async def _post(self, event: str, data: dict[str, Any]) -> None:
-        """POST one event to this destination. Circuit-breaker per-destination."""
+        """POST one event to this destination. Circuit-breaker per-destination.
+
+        The Authorization header is produced PER REQUEST via self._strategy.headers().
+        This ensures Entra tokens are refreshed by the azure-identity SDK when they
+        near expiry — long-lived dispatchers never serve stale tokens.
+        """
         if not self._enabled:
             return
 
-        # Lazy client creation
+        # Lazy client creation — no auth header baked in; header goes on each post.
         if self._client is None or self._client.is_closed:
-            client_kwargs: dict[str, Any] = {
-                "timeout": httpx.Timeout(
+            self._client = httpx.AsyncClient(
+                timeout=httpx.Timeout(
                     connect=_CONNECT_TIMEOUT,
                     write=self._dispatch_timeout,
                     read=_READ_TIMEOUT,
                     pool=_POOL_TIMEOUT,
                 ),
-                "limits": httpx.Limits(max_connections=1, max_keepalive_connections=1),
-            }
-            if self._api_key:
-                client_kwargs["headers"] = {"Authorization": f"Bearer {self._api_key}"}
-            self._client = httpx.AsyncClient(**client_kwargs)
+                limits=httpx.Limits(max_connections=1, max_keepalive_connections=1),
+            )
 
         try:
             payload = build_payload(event, self._workspace, data)
-            response = await self._client.post(f"{self._url}/events", json=payload)
+            # Per-request header: Entra SDK returns cached token and refreshes near expiry.
+            auth_headers = self._strategy.headers()
+            response = await self._client.post(
+                f"{self._url}/events", json=payload, headers=auth_headers
+            )
             response.raise_for_status()
             self._consecutive_failures = 0
         except RuntimeError as exc:

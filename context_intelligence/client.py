@@ -13,7 +13,10 @@ from __future__ import annotations
 import json
 import logging
 import urllib.request
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from context_intelligence.auth import AuthStrategy
 
 logger = logging.getLogger("context_intelligence.client")
 
@@ -174,19 +177,34 @@ class CIClient:
         Base URL of the context-intelligence server (trailing slash is stripped).
     api_key:
         API key sent as ``Authorization: Bearer <api_key>`` on every request.
+        Used only when *auth_strategy* is not provided (backward compat).
+    auth_strategy:
+        Optional pre-built ``AuthStrategy``.  When provided, ``headers()`` is
+        called PER REQUEST so that Entra tokens are refreshed automatically.
+        When ``None``, an ``ApiKeyAuth(api_key)`` is built implicitly (backward compat).
     """
 
-    def __init__(self, server_url: str, api_key: str) -> None:
+    def __init__(
+        self,
+        server_url: str,
+        api_key: str = "",
+        auth_strategy: "AuthStrategy | None" = None,
+    ) -> None:
+        from context_intelligence.auth import ApiKeyAuth  # noqa: PLC0415
+
         self._server_url: str = server_url.rstrip("/")
         self._api_key: str = api_key
+        self._strategy: AuthStrategy = (  # type: ignore[assignment]
+            auth_strategy if auth_strategy is not None else ApiKeyAuth(api_key)
+        )
 
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
 
     def _auth_headers(self) -> dict[str, str]:
-        """Return the ``Authorization`` header dict."""
-        return _build_headers(self._api_key)
+        """Return the ``Authorization`` header dict, computed per-request via strategy."""
+        return self._strategy.headers()
 
     # ------------------------------------------------------------------
     # Public API
@@ -314,15 +332,30 @@ class AsyncCIClient:
         Base URL of the context-intelligence server (trailing slash is stripped).
     api_key:
         API key sent as ``Authorization: Bearer <api_key>`` on every request.
+        Used only when *auth_strategy* is not provided (backward compat).
+    auth_strategy:
+        Optional pre-built ``AuthStrategy``.  When provided, ``headers()`` is
+        called PER REQUEST so that Entra tokens are refreshed automatically.
+        When ``None``, an ``ApiKeyAuth(api_key)`` is built implicitly (backward compat).
     """
 
-    def __init__(self, server_url: str, api_key: str) -> None:
+    def __init__(
+        self,
+        server_url: str,
+        api_key: str = "",
+        auth_strategy: "AuthStrategy | None" = None,
+    ) -> None:
+        from context_intelligence.auth import ApiKeyAuth  # noqa: PLC0415
+
         if httpx is None:
             raise ImportError(
                 "httpx is required for AsyncCIClient. Install it with: pip install httpx"
             )
         self._server_url: str = server_url.rstrip("/")
         self._api_key: str = api_key
+        self._strategy: AuthStrategy = (  # type: ignore[assignment]
+            auth_strategy if auth_strategy is not None else ApiKeyAuth(api_key)
+        )
 
     # ------------------------------------------------------------------
     # Public API
@@ -359,7 +392,7 @@ class AsyncCIClient:
         }
         try:
             async with httpx.AsyncClient() as client:  # type: ignore[union-attr]
-                resp = await client.post(url, json=body, headers=_build_headers(self._api_key))
+                resp = await client.post(url, json=body, headers=self._strategy.headers())
                 resp.raise_for_status()
                 result = resp.json()
         except Exception:
@@ -394,7 +427,7 @@ class AsyncCIClient:
         url = f"{self._server_url}/blobs/{session_id}/{key}"
         try:
             async with httpx.AsyncClient() as client:  # type: ignore[union-attr]
-                resp = await client.get(url, headers=_build_headers(self._api_key))
+                resp = await client.get(url, headers=self._strategy.headers())
                 resp.raise_for_status()
                 return resp.json()
         except Exception:
@@ -419,7 +452,7 @@ class AsyncCIClient:
         url = f"{self._server_url}/blobs/{session_id}"
         try:
             async with httpx.AsyncClient() as client:  # type: ignore[union-attr]
-                resp = await client.get(url, headers=_build_headers(self._api_key))
+                resp = await client.get(url, headers=self._strategy.headers())
                 resp.raise_for_status()
                 result = resp.json()
         except Exception:

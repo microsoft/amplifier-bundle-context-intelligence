@@ -35,13 +35,17 @@ _DEFAULT_EXCLUDE_EVENTS: list[str] = ["llm:stream_*delta"]
 class Destination:
     """A single context-intelligence fan-out destination.
 
-    name:    dict key in config['destinations']; identifier + merge key.
-    url:     base URL (app already expanded ${VAR}). POSTs go to f"{url}/events".
-    api_key: bearer token (app already expanded ${VAR}).
-    include: pathspec (gitwildmatch) patterns. No default — a destination without
-             an explicit include has an empty pattern set and matches NOTHING.
-             Declare include explicitly to receive any sessions.
-    exclude: pathspec patterns; exclude-wins, per-destination (S3). Default [].
+    name:          dict key in config['destinations']; identifier + merge key.
+    url:           base URL (app already expanded ${VAR}). POSTs go to f"{url}/events".
+    api_key:       bearer token (app already expanded ${VAR}). Required for auth_mode="static".
+    include:       pathspec (gitwildmatch) patterns. No default — a destination without
+                   an explicit include has an empty pattern set and matches NOTHING.
+                   Declare include explicitly to receive any sessions.
+    exclude:       pathspec patterns; exclude-wins, per-destination (S3). Default [].
+    auth_mode:     ``"static"`` (default) — use api_key as bearer token.
+                   ``"entra"``            — acquire a delegated Entra token via azure-identity.
+    auth_resource: Entra resource URI (e.g. ``api://<client_id>``). Required for auth_mode="entra".
+                   App already expanded any ${VAR} before mount.
     """
 
     name: str
@@ -49,6 +53,8 @@ class Destination:
     api_key: str
     include: tuple[str, ...] = ()
     exclude: tuple[str, ...] = ()
+    auth_mode: str = "static"
+    auth_resource: str = ""
 
 
 def _slugify_path(path_str: str) -> str:
@@ -369,12 +375,16 @@ class HookConfigResolver:
                     api_key = str(spec.get("api_key", "") or "").strip()
                     include = tuple(spec.get("include") or [])
                     exclude = tuple(spec.get("exclude") or [])
+                    auth_mode = str(spec.get("auth_mode", "static") or "static").strip()
+                    auth_resource = str(spec.get("auth_resource", "") or "").strip()
                     result[name] = Destination(
                         name=name,
                         url=url,
                         api_key=api_key,
                         include=include,
                         exclude=exclude,
+                        auth_mode=auth_mode,
+                        auth_resource=auth_resource,
                     )
             self._destinations = result
             return self._destinations
@@ -446,8 +456,11 @@ class HookConfigResolver:
     def validate_destinations(self) -> dict[str, Destination]:
         """Validate and return all configured destinations. Fail-fast (C3).
 
-        After the app's ${VAR} expansion, a destination with an empty/missing
-        url OR api_key is a configuration ERROR, not a silent per-event drop.
+        Per-target XOR auth validation:
+        - auth_mode="static" (default): api_key must be non-empty.
+        - auth_mode="entra":           auth_resource must be non-empty; api_key is not required.
+        - unknown auth_mode:           always raises.
+        - url must always be non-empty.
 
         Raises:
             ValueError: naming the offending destination(s) and the empty field(s).
@@ -459,12 +472,20 @@ class HookConfigResolver:
         for name, dest in dests.items():
             if not dest.url:
                 problems.append(f"{name}: missing url")
-            if not dest.api_key:
-                problems.append(f"{name}: missing api_key")
+            if dest.auth_mode == "static":
+                if not dest.api_key:
+                    problems.append(f"{name}: missing api_key")
+            elif dest.auth_mode == "entra":
+                if not dest.auth_resource:
+                    problems.append(f"{name}: missing auth_resource (required for auth_mode=entra)")
+            else:
+                problems.append(
+                    f"{name}: unknown auth_mode {dest.auth_mode!r} (valid: 'static', 'entra')"
+                )
         if problems:
             raise ValueError(
                 f"context-intelligence destinations misconfigured: {', '.join(problems)}. "
-                f"Set url and api_key (or the expanded ${{VAR}}) under "
+                f"Set url and api_key (static) or auth_resource (entra) under "
                 f"overrides.hook-context-intelligence.config.destinations.<name>."
             )
         return dests
