@@ -1,15 +1,10 @@
-"""Shared test fixtures for the context-intelligence hook module."""
+"""Shared pytest configuration and fixtures for tool-context-intelligence-query tests."""
 
 from __future__ import annotations
 
 from typing import Any
 
 import pytest
-
-# Neo4j fixtures, HookStateService, and reference graph helpers have been
-# removed — all graph-creation code is now server-side.
-# This file is intentionally minimal: individual test modules provide their
-# own fixtures via local helpers or pytest tmp_path.
 
 
 @pytest.fixture(autouse=True)

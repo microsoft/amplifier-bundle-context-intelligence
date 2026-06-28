@@ -33,8 +33,10 @@ def _resolver(config: dict) -> object:
 
 
 class FakeToken:
-    def __init__(self, token: str) -> None:
+    # expires_on far future so cached tokens are never considered stale in tests
+    def __init__(self, token: str, expires_on: float = 9_999_999_999.0) -> None:
         self.token = token
+        self.expires_on = expires_on
 
 
 class FakeCredential:
@@ -324,9 +326,11 @@ class TestDispatcherEntraPerRequestHeader:
         for i in range(3):
             await d._post(f"event:{i}", {"session_id": "s1"})
 
-        # credential.get_token was called 3 times (once per post)
-        assert len(fake_cred.calls) == 3, (
-            f"Expected 3 get_token calls (one per post), got {len(fake_cred.calls)}"
+        # strategy.headers() is called once per post (not baked at construction time),
+        # but the in-process cache means get_token is only called on the FIRST miss.
+        # Subsequent posts serve the cached token — expected call count is 1, not 3.
+        assert len(fake_cred.calls) == 1, (
+            f"Expected 1 get_token call (cached after first), got {len(fake_cred.calls)}"
         )
 
 
