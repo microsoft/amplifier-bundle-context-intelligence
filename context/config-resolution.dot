@@ -92,7 +92,7 @@ digraph ConfigResolution {
         fillcolor="#ede7f6";
         color="#673ab7";
 
-        dst_map [label="destinations:\n{ name → Destination(url, api_key,\n include, exclude) }\nnamed map, declaration order"];
+        dst_map [label="destinations:\n{ name → Destination(url, api_key,\n include, exclude,\n auth_mode, auth_resource) }\nnamed map, declaration order\nauth_mode: 'static' (default) | 'entra'\nauth_resource: api://<id>  (entra only)\n  ${VAR}-substitutable; required for entra"];
         dst_legacy [label="legacy scalars\ncontext_intelligence_server_url / _api_key\n→ synthesize {\"default\": …}\nONLY when no destinations block\n(both fields required)", shape=note, fillcolor="#fff3cd"];
         dst_fanout [label="fan-out: send to EVERY destination where\ninclude matches AND exclude does not\n(exclude wins; zero / one / several)\nlocal JSONL always written"];
         dst_first [label="first destination\n= next(iter(destinations.values()), None)"];
@@ -132,7 +132,7 @@ digraph ConfigResolution {
         fillcolor="#e0f2f1";
         color="#009688";
 
-        q1 [label="1. sources[first]\n.url / .api_key\n(explicit read override;\n absent ⇒ synthesize default from\n tool's explicit scalars)"];
+        q1 [label="1. sources[first]\n.url / .api_key\n.auth_mode / .auth_resource\n(explicit read override;\n absent ⇒ synthesize default from\n tool's explicit scalars)"];
         q2 [label="2. hook destinations[first]\n.url / .api_key\n(bug-fix bridge: destinations-only\n setups 'just work' for reads)"];
         q3 [label="3. env\nAMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_URL /\n_API_KEY\n(single canonical last-resort fallback)"];
         q_none [label="else → None\n→ configuration_error", shape=note, fillcolor="#ffcdd2"];
@@ -141,6 +141,13 @@ digraph ConfigResolution {
         q2 -> q3 [label="empty?"];
         q3 -> q_none [label="empty?"];
     }
+
+    // --- auth_mode / auth_resource annotation (Destination + Source) ---
+    auth_note [
+        label="auth_mode / auth_resource  (Destination + Source)\n─────────────────────────────────────────────\nauth_mode: 'static' (default)  →  api_key required\n           'entra'             →  auth_resource required; api_key optional\nauth_resource: api://<client_id>  —  ${VAR}-substitutable\nPer-target XOR: fail-loud at mount; no silent fallback.\nEntra: delegated token via AzureCliCredential + in-process cache.\n→  See  docs/auth-flow.dot  for the full token-cache flow.",
+        shape=note, style=filled, penwidth=1,
+        fillcolor="#EDE7F6", color="#4527A0", fontsize=10
+    ];
 
     // --- Edges from the hook resolver ---
     hook_resolver -> ps_config [lhead=cluster_project_slug];
@@ -166,4 +173,8 @@ digraph ConfigResolution {
     ps_default -> blob_root [style=dashed, label="project_slug", color="#999999"];
     bp_default -> blob_root [style=dashed, label="base_path", color="#999999"];
     ws_slug -> ws_coord [style=invis]; // layout hint
+
+    // --- auth_note connections ---
+    dst_map -> auth_note [style=dotted, arrowhead=none, color="#4527A0", label="auth fields"];
+    q1 -> auth_note [style=dotted, arrowhead=none, color="#4527A0", constraint=false];
 }
