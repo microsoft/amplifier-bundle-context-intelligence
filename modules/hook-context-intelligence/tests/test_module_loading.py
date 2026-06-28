@@ -3,7 +3,7 @@
 import importlib.metadata
 from pathlib import Path
 
-import yaml
+from tests.helpers import ci_hook, composed_behavior
 
 REPO_ROOT = Path(__file__).parent.parent.parent.parent
 MODULE_ROOT = Path(__file__).parent.parent
@@ -62,12 +62,13 @@ class TestModuleTypeClassification:
 
 class TestBundleYamlEntryPointConsistency:
     def _load_behavior_yaml(self) -> dict:
-        path = REPO_ROOT / "behaviors" / "context-intelligence.yaml"
-        return yaml.safe_load(path.read_text())
+        # The umbrella context-intelligence.yaml is now a thin includes-only file.
+        # Resolve the full composition so hooks from all layers are visible.
+        return composed_behavior()
 
     def test_behavior_yaml_module_matches_entry_point(self):
         data = self._load_behavior_yaml()
-        # Located by module name, not position: the behavior also wires hooks-mode.
+        # Located by module name across all composed layers.
         hook_modules = [h["module"] for h in data.get("hooks", [])]
         assert "hook-context-intelligence" in hook_modules
 
@@ -134,20 +135,18 @@ class TestBehaviorYamlConfigShape:
     """Validate the behavior YAML has the expected thin-forwarder config shape."""
 
     def _load_behavior_yaml(self) -> dict:
-        path = REPO_ROOT / "behaviors" / "context-intelligence.yaml"
-        return yaml.safe_load(path.read_text())
+        # The umbrella context-intelligence.yaml is now a thin includes-only file.
+        # Resolve the full composition so hooks from all layers are visible.
+        return composed_behavior()
 
     def _ci_hook(self, data: dict) -> dict:
-        """Return the hook-context-intelligence spec, located by module name.
+        """Return the hook-context-intelligence spec from the composed view.
 
-        The behavior may wire multiple hooks (e.g. hooks-mode for mode discovery),
-        so this must not assume a fixed position in the hooks list.
+        Delegates to the shared ci_hook helper which enforces exactly-one
+        semantics: fails loud on zero matches (chain broken) and on >1 matches
+        (duplicate declaration).
         """
-        matches = [
-            h for h in data.get("hooks", []) if h.get("module") == "hook-context-intelligence"
-        ]
-        assert matches, "behavior must wire the hook-context-intelligence hook"
-        return matches[0]
+        return ci_hook(data)
 
     def test_yaml_parses_correctly(self):
         """YAML must parse without errors via yaml.safe_load."""
