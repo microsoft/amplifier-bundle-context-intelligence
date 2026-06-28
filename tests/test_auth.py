@@ -58,8 +58,10 @@ class TestApiKeyAuth:
 class FakeToken:
     """Minimal fake of azure.core.credentials.AccessToken."""
 
-    def __init__(self, token: str) -> None:
+    # expires_on far in the future so cached tokens are never considered stale
+    def __init__(self, token: str, expires_on: float = 9_999_999_999.0) -> None:
         self.token = token
+        self.expires_on = expires_on
 
 
 class FakeCredential:
