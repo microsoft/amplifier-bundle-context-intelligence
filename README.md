@@ -334,6 +334,23 @@ overrides:
 >
 > **Server-side prerequisite.** Entra mode requires the **server** to be configured to validate Entra tokens. Against a server that only accepts static keys, use `auth_mode: static`.
 
+#### Token caching & refresh (Entra)
+
+Entra mode (`auth_mode: entra`) caches the bearer token **in memory, per process** — shared across a session and its in-process subsessions. (The `static` `api_key` path holds a constant key: nothing is cached or refreshed.)
+
+The cached token is **reused until shortly before it expires** (Azure CLI tokens typically live ~60–90 min), then **refreshed automatically on the next request**. Net effect: the `az` credential is invoked **at most once per token lifetime per process**, not on every request — so auth adds no meaningful latency to the hot path.
+
+The refresh safety window is tunable via the env var **`AMPLIFIER_CONTEXT_INTELLIGENCE_TOKEN_REFRESH_MARGIN_S`** (default **300** seconds): the token is refreshed once it is within this many seconds of expiry.
+
+```bash
+# ~/.amplifier/keys.env — refresh 600s (10 min) before expiry instead of the default 300s
+AMPLIFIER_CONTEXT_INTELLIGENCE_TOKEN_REFRESH_MARGIN_S=600
+```
+
+**Fail-loud.** If a refresh fails (e.g. your `az` session has expired or you ran `az logout`), the error surfaces — a stale or empty token is never sent. Re-running `az login` resolves it.
+
+**Switching `az account` / tenant mid-session.** Because the token is cached, a freshly switched identity is **not** picked up until the cached token refreshes (within `~margin` of expiry); until then, events would be attributed to the previously cached identity. To switch identities immediately, **start a new session** — a fresh process resets the cache.
+
 #### Other config keys
 
 | Key | Source | Default | Description |

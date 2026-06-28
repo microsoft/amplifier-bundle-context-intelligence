@@ -173,14 +173,23 @@ digraph DispatchCircuitBreaker {
             fontcolor="#2E7D32",
             penwidth=1.5
         ];
-        check_client -> post [
+        node [shape=box, style="rounded,filled", penwidth=1.5];
+
+        build_auth_header [
+            label="build auth header\n─────────────────────────────────\nstrategy.headers()\ncache hit  →  Bearer <cached_token>  (~0.002 ms)\nmiss  →  az refresh  (~487–913 ms,  ≤ once / ~67 min)\nSee docs/auth-flow.dot for cache detail.",
+            fillcolor="#EDE7F6",
+            color="#673AB7"
+        ];
+
+        check_client -> build_auth_header [
             label="  No (reuse)  ",
             color="#00838F",
             fontcolor="#00838F",
             penwidth=1.5
         ];
 
-        create_client -> post [penwidth=1.5];
+        create_client -> build_auth_header [penwidth=1.5];
+        build_auth_header -> post [penwidth=1.5, color="#673AB7"];
         post -> check_result [penwidth=1.5];
 
         check_result -> on_success [

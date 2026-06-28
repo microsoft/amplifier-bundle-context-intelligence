@@ -1,0 +1,397 @@
+// Auth Flow — Entra Token Cache as Visual Centerpiece
+// Context-Intelligence Bundle
+//
+// Shows the complete per-request auth path for hook dispatch (LoggingHandler)
+// and tool queries.  The in-process _TokenCache is the design pivot: it makes
+// AzureCliCredential (~487–913 ms az subprocess) a ≤-once-per-67-min cost
+// rather than a per-request cost.
+//
+// Shape vocabulary
+//   box   (rounded,filled) — process step / action
+//   diamond               — decision branch
+//   cylinder              — data store / cache (singleton)
+//   note                  — annotation / invariant
+//
+// Color semantics
+//   #E3F2FD / #1565C0  blue         — entry / exit / bearer output
+//   #1B5E20 / white    dark green   — HOT PATH  (THE FAST LANE, penwidth=3)
+//   #FFECB3 / #E65100  amber/orange — CACHE DECISION centerpiece (penwidth=3)
+//   #FFF8E1 / #F57F17  yellow       — decision diamond / lock acquire
+//   #FFF3E0 / #E65100  orange       — miss / az refresh path
+//   #FFEBEE / #C62828  red          — FAIL-LOUD / 401 rejection
+//   #EDE7F6 / #4527A0  deep purple  — entra lane / singletons
+//   #B39DDB / #4527A0  medium purple — singleton nodes
+//   #F5F5F5 / #9E9E9E  gray         — static lane (trivial path)
+//   #E0F7FA / #00838F  teal         — CI server zone
+//   #E8F5E9 / #2E7D32  green        — success / store / 202-200
+//   #ECEFF1 / #546E7A  blue-gray    — reset() utility path
+//
+// Render: dot -Tpng auth-flow.dot -o auth-flow.png
+
+digraph AuthFlow {
+    rankdir=TB;
+    fontname="Helvetica";
+    fontsize=12;
+    compound=true;
+    nodesep=0.7;
+    ranksep=0.85;
+    pad=0.5;
+
+    // ─── Global defaults ───────────────────────────────────────────────
+    node [fontname="Helvetica", fontsize=11];
+    edge [fontname="Helvetica", fontsize=10];
+
+    // ══════════════════════════════════════════════════════════════════
+    // ENTRY
+    // ══════════════════════════════════════════════════════════════════
+
+    request_entry [
+        label="strategy.headers()  called per request\n─────────────────────────────────\n_DestinationDispatcher._post()  (hook dispatch)\nor query tool  before each GET / POST\nbuild_auth_strategy()  at mount  →  ~zero cost\n(no credential built, no token acquired)",
+        shape=box, style="rounded,filled", penwidth=2,
+        fillcolor="#E3F2FD", color="#1565C0"
+    ];
+
+    auth_mode_check [
+        label="auth_mode?",
+        shape=diamond, style=filled, penwidth=2,
+        fillcolor="#FFF8E1", color="#F57F17", fontcolor="#F57F17"
+    ];
+
+    // ══════════════════════════════════════════════════════════════════
+    // STATIC LANE — simple / small intentionally
+    // ══════════════════════════════════════════════════════════════════
+
+    subgraph cluster_static {
+        label="static  lane";
+        style=filled;
+        fillcolor="#F5F5F5";
+        color="#9E9E9E";
+        fontsize=11;
+        fontname="Helvetica Bold";
+
+        node [shape=box, style="rounded,filled", penwidth=1.5];
+
+        api_key_auth [
+            label="ApiKeyAuth\n─────────────────────────────────\nreturn { \"Authorization\": \"Bearer <api_key>\" }\nConstant — no subprocess, no cache,\nzero cost every call.",
+            fillcolor="#EEEEEE", color="#757575"
+        ];
+    }
+
+    // ══════════════════════════════════════════════════════════════════
+    // ENTRA LANE — EntraTokenAuth  (THE FOCUS)
+    // ══════════════════════════════════════════════════════════════════
+
+    subgraph cluster_entra {
+        label="entra  lane  —  EntraTokenAuth  (THE FOCUS)";
+        style=filled;
+        fillcolor="#EDE7F6";
+        color="#4527A0";
+        fontsize=12;
+        fontname="Helvetica Bold";
+
+        // ─── Process-level singletons ───────────────────────────────
+        subgraph cluster_singletons {
+            label="Process-level singletons  —  built once, lazily, shared by all sessions";
+            style=filled;
+            fillcolor="#D1C4E9";
+            color="#4527A0";
+            fontsize=11;
+            fontname="Helvetica Bold";
+
+            singleton_cred [
+                label="AzureCliCredential  (SINGLETON)\n─────────────────────────────────\n_get_singleton_credential()\nOne instance per process.\nNO token acquired at mount / strategy build.",
+                shape=box, style="rounded,filled", penwidth=1.5,
+                fillcolor="#B39DDB", color="#4527A0"
+            ];
+
+            singleton_cache [
+                label="_MODULE_CACHE  (_TokenCache  SINGLETON)\n─────────────────────────────────\nscope  →  (token_str, expires_on)\nOne in-memory dict shared by all callers.\nHot path is lock-free  (plain dict.get + float compare).",
+                shape=cylinder, style=filled, penwidth=2,
+                fillcolor="#B39DDB", color="#4527A0"
+            ];
+        }
+
+        scope_compute [
+            label="scope  =  f\"{auth_resource}/.default\"",
+            shape=box, style="rounded,filled", penwidth=1.5,
+            fillcolor="#EDE7F6", color="#7E57C2"
+        ];
+
+        // ╔══════════════════════════════════════════════════════════╗
+        // ║         CACHE DECISION — VISUAL CENTERPIECE              ║
+        // ╚══════════════════════════════════════════════════════════╝
+        cache_check [
+            label="CACHE  DECISION\n─────────────────────────────────────────\ncache.get(scope)\n↓\ntime.time()  <  expires_on  −  margin  ?",
+            shape=diamond, style=filled, penwidth=3,
+            fillcolor="#FFECB3", color="#E65100", fontcolor="#BF360C",
+            fontsize=13, fontname="Helvetica Bold"
+        ];
+
+        margin_note [
+            label="margin  =  AMPLIFIER_CONTEXT_INTELLIGENCE_TOKEN_REFRESH_MARGIN_S\ndefault: 300 s  (5 min safety buffer before expiry)",
+            shape=note, style=filled, penwidth=1,
+            fillcolor="#FFF8E1", color="#F57F17", fontsize=10
+        ];
+
+        // ─── HOT PATH (cache hit) ─ bold / highlighted ──────────────
+        hot_path [
+            label="HOT PATH  —  cache hit\n─────────────────────────────────\nlock-free  dict read  +  float compare\n~0.002 ms\nno lock  ·  no subprocess  ·  no await",
+            shape=box, style="rounded,filled", penwidth=3,
+            fillcolor="#1B5E20", color="#1B5E20", fontcolor="white",
+            fontsize=12, fontname="Helvetica Bold"
+        ];
+
+        // ─── MISS / near-expiry path ─────────────────────────────────
+        acquire_lock [
+            label="acquire  threading.Lock\n─────────────────────────────────\nSerializes concurrent refreshes.\nthreading.Lock  (not asyncio.Lock —\nloop-agnostic across in-process subsessions)",
+            shape=box, style="rounded,filled", penwidth=1.5,
+            fillcolor="#FFF8E1", color="#F57F17"
+        ];
+
+        double_check [
+            label="double-check\nanother thread refreshed\nwhile we waited?",
+            shape=diamond, style=filled, penwidth=1.5,
+            fillcolor="#FFF8E1", color="#F57F17", fontcolor="#F57F17"
+        ];
+
+        get_token [
+            label="credential.get_token(scope)\n─────────────────────────────────\naz  CLI  subprocess\n~487–913 ms  (measured)\n≤ once per ~67-min token lifetime",
+            shape=box, style="rounded,filled", penwidth=2,
+            fillcolor="#FFF3E0", color="#E65100"
+        ];
+
+        store_token [
+            label="_cache.store(scope, token, expires_on)\n─────────────────────────────────\nrelease  threading.Lock",
+            shape=box, style="rounded,filled", penwidth=1.5,
+            fillcolor="#E8F5E9", color="#2E7D32"
+        ];
+
+        // ─── FAIL-LOUD path ──────────────────────────────────────────
+        fail_loud [
+            label="FAIL-LOUD\n─────────────────────────────────\nexception  propagates  to  caller\nnothing  cached  on  failure\nnext  call  retries  from  scratch",
+            shape=box, style="rounded,filled", penwidth=2,
+            fillcolor="#FFEBEE", color="#C62828"
+        ];
+
+    }  // end cluster_entra
+
+    // ─── reset() — utility path (outside normal call flow) ──────────
+    reset_node [
+        label="reset()\n─────────────────────────────────\nclears  _MODULE_CACHE\ndrops  singleton  credential\n→  next headers()  re-authenticates\nUse after:  az account switch  /  tests",
+        shape=box, style="rounded,filled", penwidth=1.5,
+        fillcolor="#ECEFF1", color="#546E7A"
+    ];
+
+    // ─── Bearer output convergence ───────────────────────────────────
+    bearer_header [
+        label="Authorization: Bearer  <token>",
+        shape=box, style="rounded,filled", penwidth=2,
+        fillcolor="#E3F2FD", color="#1565C0"
+    ];
+
+    // ══════════════════════════════════════════════════════════════════
+    // CI SERVER VALIDATION
+    // ══════════════════════════════════════════════════════════════════
+
+    subgraph cluster_server {
+        label="CI server  —  bearer validation";
+        style=filled;
+        fillcolor="#E0F7FA";
+        color="#00838F";
+        fontsize=12;
+        fontname="Helvetica Bold";
+
+        node [shape=box, style="rounded,filled", penwidth=1.5];
+
+        ci_server [
+            label="CI server  validates  bearer\n─────────────────────────────────\nchecks  scp  =  access_as_user\n(delegated  flow  only)",
+            fillcolor="#B2EBF2", color="#00838F"
+        ];
+
+        resp_ok [
+            label="202  (write)  /  200  (read)\n─────────────────────────────────\nscp = access_as_user  ✓\ndelegated  token  accepted",
+            fillcolor="#E8F5E9", color="#2E7D32"
+        ];
+
+        resp_401 [
+            label="401  Unauthorized\n─────────────────────────────────\napp / roles  token  rejected\n(not a delegated scp= token)",
+            fillcolor="#FFEBEE", color="#C62828"
+        ];
+
+        resp_403 [
+            label="403  Forbidden\n─────────────────────────────────\nunmapped  oid\n→  signal:  call  reset()  +  re-auth",
+            fillcolor="#FFF3E0", color="#E65100"
+        ];
+    }
+
+    // ══════════════════════════════════════════════════════════════════
+    // LEGEND
+    // ══════════════════════════════════════════════════════════════════
+
+    subgraph cluster_legend {
+        label="Legend";
+        style=filled;
+        fillcolor="#FAFAFA";
+        color="#B0BEC5";
+        fontsize=11;
+        fontname="Helvetica Bold";
+
+        node [fontsize=10];
+
+        l_cache [
+            label="CACHE DECISION\n(amber diamond, bold border, penwidth=3)\n= fresh check on every call",
+            shape=diamond, style=filled,
+            fillcolor="#FFECB3", color="#E65100", fontcolor="#BF360C"
+        ];
+        l_hot [
+            label="HOT PATH  (dark green, bold border, penwidth=3)\n= lock-free cache hit, ~0.002 ms",
+            shape=box, style="rounded,filled",
+            fillcolor="#1B5E20", color="#1B5E20", fontcolor=white
+        ];
+        l_miss [
+            label="miss path  (orange)\n= az subprocess, ≤ once / ~67 min",
+            shape=box, style="rounded,filled",
+            fillcolor="#FFF3E0", color="#E65100"
+        ];
+        l_fail [
+            label="FAIL-LOUD  (red)\n= exception propagates, nothing cached",
+            shape=box, style="rounded,filled",
+            fillcolor="#FFEBEE", color="#C62828"
+        ];
+        l_static [
+            label="static lane  (gray)\n= constant Bearer, zero cost",
+            shape=box, style="rounded,filled",
+            fillcolor="#EEEEEE", color="#757575"
+        ];
+        l_singleton [
+            label="SINGLETON  (deep purple, cylinder)\n= process-level, shared across sessions",
+            shape=cylinder, style=filled,
+            fillcolor="#B39DDB", color="#4527A0"
+        ];
+        l_reset [
+            label="reset()  (blue-gray)\n= manual recovery after az account switch",
+            shape=box, style="rounded,filled",
+            fillcolor="#ECEFF1", color="#546E7A"
+        ];
+
+        l_cache -> l_hot   [style=invis];
+        l_hot   -> l_miss  [style=invis];
+        l_miss  -> l_fail  [style=invis];
+        l_fail  -> l_static [style=invis];
+        l_static -> l_singleton [style=invis];
+        l_singleton -> l_reset [style=invis];
+    }
+
+    // ══════════════════════════════════════════════════════════════════
+    // EDGES — main flow
+    // ══════════════════════════════════════════════════════════════════
+
+    request_entry -> auth_mode_check [penwidth=2];
+
+    auth_mode_check -> api_key_auth [
+        label="  static  ",
+        color="#757575", fontcolor="#757575", penwidth=1.5
+    ];
+    auth_mode_check -> scope_compute [
+        label="  entra  ",
+        color="#4527A0", fontcolor="#4527A0", penwidth=2
+    ];
+
+    scope_compute -> cache_check [penwidth=2, color="#4527A0"];
+
+    // Margin annotation (no layout effect)
+    margin_note -> cache_check [
+        style=dotted, arrowhead=none,
+        color="#F57F17", constraint=false
+    ];
+
+    // ─── HOT PATH (YES branch) ────────────────────────────────────────
+    cache_check -> hot_path [
+        label="  YES — fresh\n  (hot path, ~0.002 ms)  ",
+        color="#1B5E20", fontcolor="#1B5E20", penwidth=3
+    ];
+
+    // ─── MISS PATH (NO branch) ───────────────────────────────────────
+    cache_check -> acquire_lock [
+        label="  NO — miss / near-expiry  ",
+        color="#E65100", fontcolor="#E65100", penwidth=2
+    ];
+
+    acquire_lock -> double_check [penwidth=1.5];
+
+    double_check -> hot_path [
+        label="  YES — another thread\n  already refreshed  ",
+        color="#1B5E20", fontcolor="#1B5E20", penwidth=1.5
+    ];
+    double_check -> get_token [
+        label="  NO — still stale  ",
+        color="#E65100", fontcolor="#E65100", penwidth=2
+    ];
+
+    get_token -> store_token [
+        label="  success  ",
+        color="#2E7D32", fontcolor="#2E7D32", penwidth=1.5
+    ];
+    get_token -> fail_loud [
+        label="  exception  ",
+        color="#C62828", fontcolor="#C62828", penwidth=2
+    ];
+
+    // ─── Singleton wiring (drawn without affecting rank layout) ──────
+    singleton_cred -> get_token [
+        label="  calls get_token()  ",
+        style=dashed, color="#4527A0", fontcolor="#4527A0",
+        penwidth=1.5, constraint=false
+    ];
+    singleton_cache -> cache_check [
+        label="  cache.get(scope)  ",
+        style=dashed, color="#4527A0", fontcolor="#4527A0",
+        penwidth=1.5, constraint=false
+    ];
+    singleton_cache -> store_token [
+        label="  cache.store()  ",
+        style=dashed, color="#4527A0", fontcolor="#4527A0",
+        penwidth=1.5, constraint=false
+    ];
+
+    // ─── Bearer convergence ──────────────────────────────────────────
+    hot_path     -> bearer_header [penwidth=3, color="#1B5E20"];
+    store_token  -> bearer_header [penwidth=1.5, color="#2E7D32"];
+    api_key_auth -> bearer_header [penwidth=1.5, color="#757575"];
+
+    // ─── POST to CI server ───────────────────────────────────────────
+    bearer_header -> ci_server [
+        label="  POST {url}/events\n  Authorization: Bearer …  ",
+        penwidth=2, color="#00838F", fontcolor="#00838F"
+    ];
+
+    ci_server -> resp_ok [
+        label="  scp=access_as_user  ",
+        color="#2E7D32", fontcolor="#2E7D32", penwidth=1.5
+    ];
+    ci_server -> resp_401 [
+        label="  roles/app token  ",
+        color="#C62828", fontcolor="#C62828", penwidth=1.5
+    ];
+    ci_server -> resp_403 [
+        label="  unmapped oid  ",
+        color="#E65100", fontcolor="#E65100", penwidth=1.5
+    ];
+
+    // ─── reset() recovery path ───────────────────────────────────────
+    resp_403 -> reset_node [
+        label="  recovery:\n  call reset()  ",
+        style=dashed, color="#546E7A", fontcolor="#546E7A",
+        penwidth=1.5, constraint=false
+    ];
+    reset_node -> singleton_cache [
+        label="  clears  ",
+        style=dashed, color="#546E7A", fontcolor="#546E7A",
+        penwidth=1.5, constraint=false
+    ];
+    reset_node -> singleton_cred [
+        label="  drops  ",
+        style=dashed, color="#546E7A", fontcolor="#546E7A",
+        penwidth=1.5, constraint=false
+    ];
+}
