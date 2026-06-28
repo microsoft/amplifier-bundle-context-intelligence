@@ -54,7 +54,7 @@ def _env(suffix: str) -> str | None:
 # Shell-style placeholder expander (used by ToolConfigResolver)
 # ---------------------------------------------------------------------------
 
-_PLACEHOLDER_RE = re.compile(r"\$\{([^}:]+)(?::([^}]*))?\\}")
+_PLACEHOLDER_RE = re.compile(r"\$\{([^}:]+)(?::([^}]*))?}")
 
 
 def _expand_env_placeholders(value: str) -> str:

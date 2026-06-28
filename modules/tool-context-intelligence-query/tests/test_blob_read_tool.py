@@ -422,7 +422,10 @@ class TestAuthHeader:
         with _patch_async_client(fetch_blob_return={"ok": True}) as (mock_cls, _):
             await tool.execute({"uri": "ci-blob://my-session/my-key"})
 
-        mock_cls.assert_called_once_with(server_url="http://localhost:8080", api_key="my-secret")
+        _, call_kwargs = mock_cls.call_args
+        assert call_kwargs["server_url"] == "http://localhost:8080"
+        assert call_kwargs["api_key"] == "my-secret"
+        assert "auth_strategy" in call_kwargs  # strategy is now always passed
 
     async def test_none_api_key_passes_empty_string(self) -> None:
         """When api_key is None the AsyncCIClient must receive an empty string."""
@@ -434,7 +437,10 @@ class TestAuthHeader:
         with _patch_async_client(fetch_blob_return={"ok": True}) as (mock_cls, _):
             await tool.execute({"uri": "ci-blob://my-session/my-key"})
 
-        mock_cls.assert_called_once_with(server_url="http://localhost:8080", api_key="")
+        _, call_kwargs = mock_cls.call_args
+        assert call_kwargs["server_url"] == "http://localhost:8080"
+        assert call_kwargs["api_key"] == ""
+        assert "auth_strategy" in call_kwargs  # strategy is now always passed
 
 
 # ---------------------------------------------------------------------------

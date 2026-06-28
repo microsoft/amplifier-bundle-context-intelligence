@@ -369,10 +369,13 @@ def main() -> None:
     args = parser.parse_args()
 
     # 0a. Resolve auth mode / resource — CLI flags > env vars
+    # Apply _expand_env_placeholders so ${VAR} in settings / env-var values expands correctly.
+    from context_intelligence.config import _expand_env_placeholders
+
     auth_mode: str = args.auth_mode or os.environ.get(
         "AMPLIFIER_CONTEXT_INTELLIGENCE_AUTH_MODE", "static"
     )
-    auth_resource: str = (
+    auth_resource: str = _expand_env_placeholders(
         args.auth_resource
         or os.environ.get("AMPLIFIER_CONTEXT_INTELLIGENCE_AUTH_RESOURCE", "")
         or ""
@@ -386,6 +389,12 @@ def main() -> None:
         api_key=args.api_key,
         auth_mode=auth_mode,
     )
+    # Apply placeholder expansion to the resolved URL and key as well (for consistency:
+    # a settings.yaml value like `context_intelligence_server_url: "http://${MY_HOST}:8000"`
+    # is already app-expanded by app-cli in hook mode, but the upload CLI reads settings.yaml
+    # directly via resolve_config → _parse_settings_yaml which does NOT expand placeholders).
+    server_url = _expand_env_placeholders(server_url)
+    api_key = _expand_env_placeholders(api_key)
 
     # 0c. Build auth strategy — fail loud on misconfiguration
     from context_intelligence.auth import build_auth_strategy

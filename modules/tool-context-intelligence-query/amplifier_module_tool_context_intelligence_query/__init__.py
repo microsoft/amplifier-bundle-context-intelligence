@@ -39,6 +39,7 @@ async def mount(coordinator: Any, config: Any) -> None:
     from .graph_query_tool import GraphQueryTool
 
     resolver = ToolConfigResolver(config or {}, coordinator)  # built ONCE
+    resolver.validate_sources()  # fail-loud on misconfigured sources (mirrors hook validate_destinations)
     gq = GraphQueryTool(coordinator, resolver)
     coordinator.register_capability(_GRAPH_QUERY_TOOL_CAPABILITY, gq)
     br = BlobReadTool(coordinator, resolver)

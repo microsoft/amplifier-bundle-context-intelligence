@@ -93,11 +93,17 @@ class Source(NamedTuple):
 
     url and api_key may be empty strings (→ falsy → that field falls through
     in the per-field resolution chain).
+
+    auth_mode:     ``"static"`` (default) — use api_key as bearer token.
+                   ``"entra"``            — acquire a delegated Entra token via azure-identity.
+    auth_resource: Entra resource URI (e.g. ``api://<client_id>``). Required for auth_mode="entra".
     """
 
     name: str
     url: str
     api_key: str
+    auth_mode: str = "static"
+    auth_resource: str = ""
 
 
 # ---------------------------------------------------------------------------
@@ -131,6 +137,66 @@ def _pick(*candidates: tuple[str | None, str | None]) -> tuple[str | None, str |
         if value:
             return value, source
     return None, None
+
+
+def resolve_query_auth_strategy(
+    hook_resolver: Any | None,
+    tool_resolver: "ToolConfigResolver",
+    api_key: str = "",
+) -> Any:
+    """Build an AuthStrategy for query tool requests.
+
+    Lookup priority (mirrors resolve_query_endpoint field-by-field):
+      1. first entry of tool_resolver.sources  (auth_mode / auth_resource)
+      2. first upload destination on the hook resolver (auth_mode / auth_resource)
+      3. env AMPLIFIER_CONTEXT_INTELLIGENCE_AUTH_MODE / _AUTH_RESOURCE (tier-3 fallback)
+
+    The returned strategy always calls ``headers()`` per-request, so Entra tokens
+    are refreshed by the azure-identity SDK when they near expiry.
+
+    Parameters
+    ----------
+    hook_resolver:
+        The hook's HookConfigResolver (may be None).
+    tool_resolver:
+        The tool's ToolConfigResolver.
+    api_key:
+        Resolved API key (from resolve_query_endpoint). Used for static mode.
+
+    Returns
+    -------
+    AuthStrategy
+        A built auth strategy (``ApiKeyAuth`` or ``EntraTokenAuth``).
+    """
+    from context_intelligence.auth import ApiKeyAuth, build_auth_strategy  # noqa: PLC0415
+
+    read = _first_entry(tool_resolver.sources)
+    dest = _first_destination(hook_resolver)
+
+    # auth_mode / auth_resource: first non-empty source wins
+    auth_mode: str = (
+        (read.auth_mode if read else "")
+        or (getattr(dest, "auth_mode", "") if dest else "")
+        or _env("AUTH_MODE")
+        or "static"
+    )
+    auth_resource: str = (
+        (read.auth_resource if read else "")
+        or (getattr(dest, "auth_resource", "") if dest else "")
+        or _env("AUTH_RESOURCE")
+        or ""
+    )
+
+    if auth_mode == "static":
+        # Return an ApiKeyAuth even for empty key — same graceful-degrade behaviour as before.
+        return ApiKeyAuth(api_key)
+
+    # For entra (and any future mode), delegate to build_auth_strategy which raises loudly.
+    return build_auth_strategy(
+        auth_mode=auth_mode,
+        api_key=api_key,
+        auth_resource=auth_resource,
+    )
 
 
 def resolve_query_endpoint(
@@ -290,9 +356,17 @@ class ToolConfigResolver:
                 for name, spec in raw.items():
                     if not isinstance(spec, dict):
                         continue
-                    url = str(spec.get("url", "") or "").strip()
-                    api_key = str(spec.get("api_key", "") or "").strip()
-                    result[name] = Source(name=name, url=url, api_key=api_key)
+                    url = str(_expand(spec.get("url", "") or "")).strip()
+                    api_key = str(_expand(spec.get("api_key", "") or "")).strip()
+                    auth_mode = str(_expand(spec.get("auth_mode", "static") or "static")).strip()
+                    auth_resource = str(_expand(spec.get("auth_resource", "") or "")).strip()
+                    result[name] = Source(
+                        name=name,
+                        url=url,
+                        api_key=api_key,
+                        auth_mode=auth_mode,
+                        auth_resource=auth_resource,
+                    )
             self._sources = result
             return self._sources
 
@@ -311,6 +385,45 @@ class ToolConfigResolver:
         else:
             self._sources = {}
         return self._sources
+
+    def validate_sources(self) -> dict[str, Source]:
+        """Validate and return all configured sources. Fail-fast (mirrors validate_destinations).
+
+        Per-source XOR auth validation:
+        - auth_mode="static" (default): api_key must be non-empty.
+        - auth_mode="entra":           auth_resource must be non-empty; api_key is not required.
+        - unknown auth_mode:           always raises.
+        - url must always be non-empty for explicitly configured sources.
+
+        Empty sources dict is valid (no explicit read-config; fallback to hook destinations / env).
+
+        Raises:
+            ValueError: naming the offending source(s) and the empty field(s).
+        Returns:
+            The validated sources dict (possibly empty -> fallback to hook resolver / env, OK).
+        """
+        srcs = self.sources
+        problems: list[str] = []
+        for name, src in srcs.items():
+            if not src.url:
+                problems.append(f"{name}: missing url")
+            if src.auth_mode == "static":
+                if not src.api_key:
+                    problems.append(f"{name}: missing api_key")
+            elif src.auth_mode == "entra":
+                if not src.auth_resource:
+                    problems.append(f"{name}: missing auth_resource (required for auth_mode=entra)")
+            else:
+                problems.append(
+                    f"{name}: unknown auth_mode {src.auth_mode!r} (valid: 'static', 'entra')"
+                )
+        if problems:
+            raise ValueError(
+                f"context-intelligence sources misconfigured: {', '.join(problems)}. "
+                f"Set url and api_key (static) or auth_resource (entra) under "
+                f"overrides.tool-context-intelligence-query.config.sources.<name>."
+            )
+        return srcs
 
     @property
     def skill_sync_enabled(self) -> bool:
