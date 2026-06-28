@@ -145,6 +145,7 @@ def resolve_config(
     *,
     server_url: str | None = None,
     api_key: str | None = None,
+    auth_mode: str = "static",
 ) -> tuple[str, str]:
     """Resolve server URL and API key.
 
@@ -154,21 +155,33 @@ def resolve_config(
        ``AMPLIFIER_CONTEXT_INTELLIGENCE_API_KEY``)
     3. ``~/.amplifier/settings.yaml``
 
+    Parameters
+    ----------
+    server_url:
+        Base URL of the CI server (overrides env var / settings.yaml).
+    api_key:
+        API key for static-mode auth (overrides env var / settings.yaml).
+    auth_mode:
+        ``"static"`` (default) — api_key is required.
+        ``"entra"`` — api_key is optional; token is acquired via azure-identity.
+
     Returns:
-        ``(server_url, api_key)`` tuple.
+        ``(server_url, api_key)`` tuple.  In entra mode ``api_key`` may be an
+        empty string — callers must use an ``AuthStrategy`` to build the header.
 
     Raises:
-        SystemExit: if either value cannot be resolved.
+        SystemExit: if server_url cannot be resolved, or if api_key is missing
+        in static mode.
     """
     resolved_url = server_url or os.environ.get("AMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_URL")
     resolved_key = api_key or os.environ.get("AMPLIFIER_CONTEXT_INTELLIGENCE_API_KEY")
 
     # Fallback to settings.yaml
-    if not resolved_url or not resolved_key:
+    if not resolved_url or (not resolved_key and auth_mode == "static"):
         settings = _parse_settings_yaml(SETTINGS_PATH)
         if not resolved_url:
             resolved_url = settings.get("server_url", "")
-        if not resolved_key:
+        if not resolved_key and auth_mode == "static":
             resolved_key = settings.get("api_key", "")
 
     if not resolved_url:
@@ -176,10 +189,10 @@ def resolve_config(
             "No CI server URL found. Set AMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_URL "
             "or use --server-url, or configure in ~/.amplifier/settings.yaml"
         )
-    if not resolved_key:
+    if auth_mode == "static" and not resolved_key:
         raise SystemExit(
             "No CI API key found. Set AMPLIFIER_CONTEXT_INTELLIGENCE_API_KEY "
             "or use --api-key, or configure in ~/.amplifier/settings.yaml"
         )
 
-    return resolved_url, resolved_key
+    return resolved_url, resolved_key or ""

@@ -330,6 +330,29 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Milliseconds to sleep between events (default: 0; use 50-200 to reduce Neo4j pressure)",
     )
 
+    # Auth flags
+    parser.add_argument(
+        "--auth-mode",
+        choices=["static", "entra"],
+        default="static",
+        dest="auth_mode",
+        help=(
+            "Authentication mode: 'static' (default) uses --api-key; "
+            "'entra' acquires a delegated token via 'az login' (AzureCliCredential)."
+        ),
+    )
+    parser.add_argument(
+        "--auth-resource",
+        default=None,
+        metavar="RESOURCE",
+        dest="auth_resource",
+        help=(
+            "Entra resource URI, e.g. 'api://<client_id>'. "
+            "Required when --auth-mode entra. "
+            "Also read from AMPLIFIER_CONTEXT_INTELLIGENCE_AUTH_RESOURCE."
+        ),
+    )
+
     return parser
 
 
@@ -340,15 +363,37 @@ def _build_parser() -> argparse.ArgumentParser:
 
 def main() -> None:
     """CLI entry point — synchronous, exits with an appropriate code."""
+    import os
+
     parser = _build_parser()
     args = parser.parse_args()
 
-    # 0. Resolve server config — CLI flags > env vars > settings.yaml
+    # 0a. Resolve auth mode / resource — CLI flags > env vars
+    auth_mode: str = args.auth_mode or os.environ.get(
+        "AMPLIFIER_CONTEXT_INTELLIGENCE_AUTH_MODE", "static"
+    )
+    auth_resource: str = (
+        args.auth_resource
+        or os.environ.get("AMPLIFIER_CONTEXT_INTELLIGENCE_AUTH_RESOURCE", "")
+        or ""
+    )
+
+    # 0b. Resolve server config — CLI flags > env vars > settings.yaml
     from context_intelligence.config import resolve_config
 
     server_url, api_key = resolve_config(
         server_url=args.server_url,
         api_key=args.api_key,
+        auth_mode=auth_mode,
+    )
+
+    # 0c. Build auth strategy — fail loud on misconfiguration
+    from context_intelligence.auth import build_auth_strategy
+
+    auth_strategy = build_auth_strategy(
+        auth_mode=auth_mode,
+        api_key=api_key,
+        auth_resource=auth_resource,
     )
 
     # 1. Auto-generate job_id if not provided
@@ -399,6 +444,7 @@ def main() -> None:
         api_key=api_key,
         tracker=tracker,
         event_delay_s=args.event_delay_ms / 1000.0,
+        auth_strategy=auth_strategy,
     )
 
     # 7. Write result JSON to stdout
