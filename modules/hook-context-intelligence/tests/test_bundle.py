@@ -3,27 +3,31 @@
 from pathlib import Path
 
 import yaml
+from tests.helpers import ci_hook, composed_behavior
 
 REPO_ROOT = Path(__file__).parent.parent.parent.parent
 MODULE_ROOT = Path(__file__).parent.parent
 
 
 def _load_behavior() -> dict:
-    """Load and parse the behavior YAML file."""
-    path = REPO_ROOT / "behaviors" / "context-intelligence.yaml"
-    return yaml.safe_load(path.read_text())
+    """Return the composed behaviour view (umbrella + all local includes).
+
+    The umbrella ``context-intelligence.yaml`` is now a thin includes-only
+    file — it has no ``hooks:`` of its own.  The CI hook lives in
+    ``context-intelligence-logging.yaml``, reached via the includes chain.
+    This helper resolves that chain so callers see the full composed view.
+    """
+    return composed_behavior()
 
 
 def _ci_hook(data: dict) -> dict:
-    """Return the hook-context-intelligence spec, located by module name.
+    """Return the hook-context-intelligence spec from the composed view.
 
-    The behavior may wire multiple hooks (e.g. hooks-mode for mode discovery),
-    so this must not assume a fixed position in the hooks list.
+    Delegates to the shared ``ci_hook`` helper which enforces exactly-one
+    semantics: fails loud on zero matches (chain broken) and on >1 matches
+    (duplicate declaration).
     """
-    hooks = data.get("hooks", [])
-    matches = [h for h in hooks if h.get("module") == "hook-context-intelligence"]
-    assert matches, "behavior must wire the hook-context-intelligence hook"
-    return matches[0]
+    return ci_hook(data)
 
 
 class TestBundleRoot:
@@ -84,8 +88,12 @@ class TestBehaviorYaml:
         assert (REPO_ROOT / "behaviors" / "context-intelligence.yaml").is_file()
 
     def test_behavior_has_hooks_section(self):
+        # The umbrella context-intelligence.yaml itself has no hooks: — the
+        # composed view must have at least one (the CI hook, via the logging layer).
         data = _load_behavior()
-        assert "hooks" in data, "Behavior YAML must have a hooks: section"
+        assert data.get("hooks"), (
+            "Composed behaviour must wire at least one hook (includes chain broken?)"
+        )
 
     def test_behavior_hook_module_name(self):
         data = _load_behavior()
@@ -128,3 +136,13 @@ class TestBehaviorYaml:
         assert "enable_graph" not in config, (
             "enable_graph must be removed from thin-forwarder config"
         )
+
+    def test_umbrella_composes_ci_hook(self):
+        """Regression: the CI hook must be reachable from the umbrella via the includes chain.
+
+        Goes red if someone removes the logging-behaviour include from
+        context-intelligence.yaml — even if context-intelligence-logging.yaml
+        still exists on disk with the hook wired inside it.
+        """
+        hook = ci_hook(composed_behavior())
+        assert hook["module"] == "hook-context-intelligence"
