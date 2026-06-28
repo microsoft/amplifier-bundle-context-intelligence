@@ -82,6 +82,35 @@ context-intelligence-upload \
     --job-id my-retry-job-001
 ```
 
+### Authentication
+
+By default the tool authenticates with a **static API key** (`--api-key`) — unchanged. It can instead use a **Microsoft Entra bearer token** from your developer `az login` session by selecting `--auth-mode entra`.
+
+| Flag | Required | Description |
+|------|----------|-------------|
+| `--auth-mode {static,entra}` | optional (default `static`) | `static` sends `--api-key` as the bearer. `entra` obtains a Microsoft Entra bearer token from your `az login` session. |
+| `--auth-resource api://<id>` | **required when `--auth-mode entra`** | The Entra audience the token is requested for — `api://<server-app-client-id>`. |
+
+Both can also be supplied via environment variables (both are `${VAR}`-substitutable):
+
+| Env var | Equivalent flag |
+|---------|-----------------|
+| `AMPLIFIER_CONTEXT_INTELLIGENCE_AUTH_MODE` | `--auth-mode` |
+| `AMPLIFIER_CONTEXT_INTELLIGENCE_AUTH_RESOURCE` | `--auth-resource` |
+
+**Replay with an Entra bearer token:**
+
+```bash
+context-intelligence-upload --server-url https://ci.example.com \
+  --auth-mode entra --auth-resource api://<server-app-client-id>
+```
+
+> **Scope of Entra mode in this version.** Entra mode provides **parity with your existing `az login` identity** — it uses your developer `az login` session to obtain the bearer token. It is the **interactive-login** path, not a full enterprise non-interactive auth system.
+>
+> **Non-interactive environments are not yet served by Entra mode.** CI/CD pipelines and cloud-hosted services that cannot run `az login` should keep using a static `--api-key` for now — if you are scripting this in a pipeline, use `--auth-mode static` to avoid surprises. Non-interactive credential support (managed identity / OIDC / service principal) is a planned follow-up.
+>
+> **Server-side prerequisite.** Entra mode requires the **server** to be configured to validate Entra tokens. Against a server that only accepts static keys, use `--auth-mode static`.
+
 ---
 
 ## Amplifier Session Usage
