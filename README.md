@@ -283,6 +283,57 @@ Prefer the trailing-slash directory form (e.g. `**/work/`) to mean "this project
 
 > **Secrets:** keep `api_key` values in `~/.amplifier/keys.env` and reference them via `${VAR}` in `settings.yaml`. Never write a literal key into `settings.yaml`.
 
+#### Authentication — `auth_mode` / `auth_resource`
+
+Each **target** chooses its authentication mode **independently** — every hook `destination` (the write path) and every query-tool `source` (the read path). A mixed fleet is fine: reach one server with a static key and another with a Microsoft Entra bearer token. A target is **never** both at once.
+
+| Mode | Selected by | Credential |
+|------|-------------|------------|
+| **`static`** | `auth_mode: static` — the **default**, unchanged | the target's `api_key`, sent as `Authorization: Bearer <api_key>` |
+| **`entra`** | `auth_mode: entra` | a Microsoft Entra bearer token from your developer `az login` session, requested for the audience named by `auth_resource` |
+
+Two new per-target keys (valid on both `destinations` entries and `sources` entries):
+
+| Sub-key | Required | Default | Description |
+|---------|----------|---------|-------------|
+| `auth_mode` | no | `static` | `static` (use `api_key`) or `entra` (use a Microsoft Entra bearer token). |
+| `auth_resource` | **only when `auth_mode: entra`** | — | The Entra audience the token is requested for — `api://<server-app-client-id>`. |
+
+Both values support `${VAR}` / `${VAR:default}` environment substitution, exactly like `api_key` — e.g. `auth_resource: "${CI_AUTH_RESOURCE}"`.
+
+```yaml
+# ~/.amplifier/settings.yaml — a mixed fleet: one static destination, one Entra destination,
+# plus an Entra read source. auth_mode is chosen per target.
+overrides:
+  hook-context-intelligence:
+    config:
+      destinations:
+        local-dev:                       # static (default)
+          url: "http://localhost:8080"
+          api_key: "${MY_CI_KEY:}"
+          include: ["**"]
+        azure-team:                      # entra
+          url: "https://ci.example.com"
+          auth_mode: entra
+          auth_resource: "api://<server-app-client-id>"
+          include: ["**"]
+  tool-context-intelligence-query:
+    config:
+      sources:
+        azure-team:
+          url: "https://ci.example.com"
+          auth_mode: entra
+          auth_resource: "api://<server-app-client-id>"
+```
+
+**Fail-loud.** A misconfigured target is a **mount error** (fail-fast, naming the offending target): `entra` with an empty `auth_resource`, or `static` with an empty `api_key` — evaluated after `${VAR}` expansion. The hook never silently sends an empty or blank bearer.
+
+> **Scope of Entra mode in this version.** Entra mode provides **parity with your existing `az login` identity** — it uses your developer `az login` session to obtain the bearer token. It is the **interactive-login** path, not a full enterprise non-interactive auth system.
+>
+> **Non-interactive environments are not yet served by Entra mode.** CI/CD pipelines and cloud-hosted services that cannot run `az login` should use a static `api_key` for now — if you are a pipeline author, reach for `auth_mode: static` to avoid surprises. Non-interactive credential support (managed identity / OIDC / service principal) is a planned follow-up.
+>
+> **Server-side prerequisite.** Entra mode requires the **server** to be configured to validate Entra tokens. Against a server that only accepts static keys, use `auth_mode: static`.
+
 #### Other config keys
 
 | Key | Source | Default | Description |
