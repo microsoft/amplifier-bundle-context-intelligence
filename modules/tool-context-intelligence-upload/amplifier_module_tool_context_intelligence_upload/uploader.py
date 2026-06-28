@@ -20,6 +20,7 @@ import httpx
 from amplifier_module_hook_context_intelligence.upload import build_payload
 
 if TYPE_CHECKING:
+    from context_intelligence.auth import AuthStrategy
     from amplifier_module_tool_context_intelligence_upload.progress import ProgressTracker
 
 
@@ -102,6 +103,8 @@ def run_upload(
     api_key: str,
     tracker: ProgressTracker,
     event_delay_s: float = 0.0,
+    *,
+    auth_strategy: AuthStrategy | None = None,
 ) -> UploadResult:
     """Replay all events from *sessions* to the server.
 
@@ -112,13 +115,18 @@ def run_upload(
     server_url:
         Base URL of the Context Intelligence ingestion server.
     api_key:
-        API key used in the ``Authorization: Bearer`` header.
+        API key used in the ``Authorization: Bearer`` header (static mode).
+        Ignored when *auth_strategy* is provided.
     tracker:
         A :class:`ProgressTracker` instance that is updated after every event.
     event_delay_s:
         Seconds to sleep between each successful event POST.  Defaults to
         ``0.0`` (no delay).  Set to a positive value (e.g. ``0.05``) to
         throttle the upload rate and reduce Neo4j write pressure on the server.
+    auth_strategy:
+        Optional :class:`~context_intelligence.auth.AuthStrategy` that produces
+        the ``Authorization`` header.  When ``None``, an ``ApiKeyAuth`` is
+        derived from *api_key* for backward compatibility.
 
     Returns
     -------
@@ -126,9 +134,14 @@ def run_upload(
         Success result after all sessions complete, or failure result if any
         HTTP error occurs.
     """
+    if auth_strategy is None:
+        from context_intelligence.auth import ApiKeyAuth
+
+        auth_strategy = ApiKeyAuth(api_key)
+
     endpoint = f"{server_url}/events"
     timeout = httpx.Timeout(connect=5.0, read=30.0, write=30.0, pool=5.0)
-    headers = {"Authorization": f"Bearer {api_key}"}
+    headers = auth_strategy.headers()
 
     total_events_uploaded = 0
     total_sessions_uploaded = 0
