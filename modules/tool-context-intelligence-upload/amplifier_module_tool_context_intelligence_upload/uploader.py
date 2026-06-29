@@ -105,6 +105,7 @@ def run_upload(
     event_delay_s: float = 0.0,
     *,
     auth_strategy: AuthStrategy | None = None,
+    replay: bool = True,
 ) -> UploadResult:
     """Replay all events from *sessions* to the server.
 
@@ -127,6 +128,13 @@ def run_upload(
         Optional :class:`~context_intelligence.auth.AuthStrategy` that produces
         the ``Authorization`` header.  When ``None``, an ``ApiKeyAuth`` is
         derived from *api_key* for backward compatibility.
+    replay:
+        When ``True`` (the default), every POST is sent with ``?replay=true`` so
+        the server bypasses its in-memory idempotency cache.  This is the safe
+        default for re-uploading historical session data.  Set to ``False`` to
+        re-enable the server's 7-day deduplication cache (the old behaviour);
+        only do this for live, in-progress sessions where duplicate suppression
+        is intentional.
 
     Returns
     -------
@@ -142,6 +150,7 @@ def run_upload(
     endpoint = f"{server_url}/events"
     timeout = httpx.Timeout(connect=5.0, read=30.0, write=30.0, pool=5.0)
     headers = auth_strategy.headers()
+    query_params: dict[str, str] | None = {"replay": "true"} if replay else None
 
     total_events_uploaded = 0
     total_sessions_uploaded = 0
@@ -194,7 +203,7 @@ def run_upload(
                     payload = build_payload(event, workspace, data)
 
                     try:
-                        response = client.post(endpoint, json=payload)
+                        response = client.post(endpoint, json=payload, params=query_params)
                     except httpx.HTTPError as exc:
                         tracker.mark_failed(
                             session_id=session_id,
