@@ -35,6 +35,52 @@ class TestCompactHelp:
         assert "--server-url" in captured.out
         assert "--api-key" in captured.out
 
+    def test_compact_help_usage_line_contains_no_replay(self, capsys):
+        """_COMPACT_HELP usage line must include [--no-replay]."""
+        from amplifier_module_tool_context_intelligence_upload.cli import _COMPACT_HELP
+
+        assert "[--no-replay]" in _COMPACT_HELP
+
+    def test_compact_help_flags_block_contains_no_replay_entry(self, capsys):
+        """_COMPACT_HELP flags block must contain --no-replay entry with idempotency mention."""
+        from amplifier_module_tool_context_intelligence_upload.cli import _COMPACT_HELP
+
+        assert "--no-replay" in _COMPACT_HELP
+        assert "idempotency" in _COMPACT_HELP.lower()
+
+
+# ---------------------------------------------------------------------------
+# --no-replay argparse
+# ---------------------------------------------------------------------------
+
+
+class TestNoReplayArgparse:
+    """The --no-replay flag must be defined with correct argparse properties."""
+
+    def test_no_replay_default_is_false(self):
+        from amplifier_module_tool_context_intelligence_upload.cli import _build_parser
+
+        args = _build_parser().parse_args(
+            ["--path", "/tmp", "--server-url", "http://localhost", "--api-key", "k"]
+        )
+        assert args.no_replay is False
+
+    def test_no_replay_flag_sets_no_replay_true(self):
+        from amplifier_module_tool_context_intelligence_upload.cli import _build_parser
+
+        args = _build_parser().parse_args(
+            [
+                "--path",
+                "/tmp",
+                "--server-url",
+                "http://localhost",
+                "--api-key",
+                "k",
+                "--no-replay",
+            ]
+        )
+        assert args.no_replay is True
+
 
 # ---------------------------------------------------------------------------
 # --help detailed help
@@ -302,6 +348,95 @@ class TestCliEndToEnd:
         result = json.loads(captured.out)
         assert result["status"] == "completed"
         assert result["sessions_uploaded"] == 1
+
+    def test_no_replay_flag_passes_replay_false_to_run_upload(self, tmp_path, capsys):
+        """When --no-replay is passed, run_upload is called with replay=False."""
+        from amplifier_module_tool_context_intelligence_upload.cli import main
+
+        fake_sessions = [(tmp_path, {"session_id": "s1"})]
+        mock_result = MagicMock()
+        mock_result.success = True
+        mock_result.to_dict.return_value = {
+            "status": "completed",
+            "sessions_uploaded": 1,
+            "events_uploaded": 0,
+        }
+
+        with (
+            patch(
+                "sys.argv",
+                [
+                    "context-intelligence-upload",
+                    "--path",
+                    str(tmp_path),
+                    "--server-url",
+                    "http://localhost",
+                    "--api-key",
+                    "key",
+                    "--no-replay",
+                ],
+            ),
+            patch(
+                "amplifier_module_tool_context_intelligence_upload.cli.discover_and_sort",
+                return_value=fake_sessions,
+            ),
+            patch(
+                "amplifier_module_tool_context_intelligence_upload.cli.run_upload",
+                return_value=mock_result,
+            ) as mock_run_upload,
+            patch("amplifier_module_tool_context_intelligence_upload.cli.ProgressTracker"),
+            pytest.raises(SystemExit) as exc_info,
+        ):
+            main()
+
+        assert exc_info.value.code == 0
+        # run_upload was called with replay=False (forwarded from --no-replay)
+        _, kwargs = mock_run_upload.call_args
+        assert kwargs.get("replay") is False
+
+    def test_default_passes_replay_true_to_run_upload(self, tmp_path, capsys):
+        """When --no-replay is NOT passed, run_upload is called with replay=True."""
+        from amplifier_module_tool_context_intelligence_upload.cli import main
+
+        fake_sessions = [(tmp_path, {"session_id": "s1"})]
+        mock_result = MagicMock()
+        mock_result.success = True
+        mock_result.to_dict.return_value = {
+            "status": "completed",
+            "sessions_uploaded": 1,
+            "events_uploaded": 0,
+        }
+
+        with (
+            patch(
+                "sys.argv",
+                [
+                    "context-intelligence-upload",
+                    "--path",
+                    str(tmp_path),
+                    "--server-url",
+                    "http://localhost",
+                    "--api-key",
+                    "key",
+                ],
+            ),
+            patch(
+                "amplifier_module_tool_context_intelligence_upload.cli.discover_and_sort",
+                return_value=fake_sessions,
+            ),
+            patch(
+                "amplifier_module_tool_context_intelligence_upload.cli.run_upload",
+                return_value=mock_result,
+            ) as mock_run_upload,
+            patch("amplifier_module_tool_context_intelligence_upload.cli.ProgressTracker"),
+            pytest.raises(SystemExit) as exc_info,
+        ):
+            main()
+
+        assert exc_info.value.code == 0
+        # run_upload was called with replay=True (the default)
+        _, kwargs = mock_run_upload.call_args
+        assert kwargs.get("replay") is True
 
 
 # ---------------------------------------------------------------------------

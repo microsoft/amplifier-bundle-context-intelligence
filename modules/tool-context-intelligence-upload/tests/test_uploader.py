@@ -336,6 +336,46 @@ class TestUploadUrlAndAuth:
         headers = kwargs.get("headers", {})
         assert headers.get("Authorization") == "Bearer sk-my-key"
 
+    def test_default_sends_replay_true_query_param(self, tmp_path: Path) -> None:
+        """By default, run_upload posts with params={'replay': 'true'} on every call."""
+        events = _make_events(1)
+        session_dir, metadata = _write_session(tmp_path, "abc", events)
+        sessions = [(session_dir, metadata)]
+        tracker = MagicMock()
+
+        with patch("httpx.Client") as mock_client_cls:
+            mock_client = MagicMock()
+            mock_client_cls.return_value.__enter__.return_value = mock_client
+            mock_client.post.return_value = _mock_response(200)
+
+            run_upload(sessions, "https://my-server.example.com", "api-key", tracker)
+
+        # URL still ends with /events (params do not mutate the URL string)
+        url_called = mock_client.post.call_args[0][0]
+        assert url_called.endswith("/events")
+        # The replay query parameter is forwarded as the httpx `params` kwarg.
+        # Use a string value ("true") not a Python bool (True) — httpx serialises
+        # bool True as "True" (capital T), which the server would not recognise.
+        call_kwargs = mock_client.post.call_args[1]
+        assert call_kwargs.get("params") == {"replay": "true"}
+
+    def test_replay_false_sends_no_params(self, tmp_path: Path) -> None:
+        """When replay=False, run_upload posts with params=None (no ?replay= query string)."""
+        events = _make_events(1)
+        session_dir, metadata = _write_session(tmp_path, "abc", events)
+        sessions = [(session_dir, metadata)]
+        tracker = MagicMock()
+
+        with patch("httpx.Client") as mock_client_cls:
+            mock_client = MagicMock()
+            mock_client_cls.return_value.__enter__.return_value = mock_client
+            mock_client.post.return_value = _mock_response(200)
+
+            run_upload(sessions, "https://my-server.example.com", "api-key", tracker, replay=False)
+
+        call_kwargs = mock_client.post.call_args[1]
+        assert call_kwargs.get("params") is None
+
 
 # ---------------------------------------------------------------------------
 # TestUploadEdgeCases
