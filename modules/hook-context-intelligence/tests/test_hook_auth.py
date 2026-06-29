@@ -11,7 +11,6 @@ Covers:
 
 from __future__ import annotations
 
-import asyncio
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -58,34 +57,40 @@ class TestDestinationDataclass:
     """Destination has auth_mode / auth_resource fields."""
 
     def test_default_auth_mode_is_static(self) -> None:
-        r = _resolver({
-            "destinations": {
-                "team": {"url": "http://ci:8000", "api_key": "sk-key", "include": ["**"]},
+        r = _resolver(
+            {
+                "destinations": {
+                    "team": {"url": "http://ci:8000", "api_key": "sk-key", "include": ["**"]},
+                }
             }
-        })
+        )
         d = r.destinations["team"]  # type: ignore[attr-defined]
         assert d.auth_mode == "static"
 
     def test_default_auth_resource_is_empty(self) -> None:
-        r = _resolver({
-            "destinations": {
-                "team": {"url": "http://ci:8000", "api_key": "sk-key", "include": ["**"]},
+        r = _resolver(
+            {
+                "destinations": {
+                    "team": {"url": "http://ci:8000", "api_key": "sk-key", "include": ["**"]},
+                }
             }
-        })
+        )
         d = r.destinations["team"]  # type: ignore[attr-defined]
         assert d.auth_resource == ""
 
     def test_entra_dest_stores_auth_resource(self) -> None:
-        r = _resolver({
-            "destinations": {
-                "azure": {
-                    "url": "http://ci:8000",
-                    "auth_mode": "entra",
-                    "auth_resource": "api://53aa4ffd",
-                    "include": ["**"],
-                },
+        r = _resolver(
+            {
+                "destinations": {
+                    "azure": {
+                        "url": "http://ci:8000",
+                        "auth_mode": "entra",
+                        "auth_resource": "api://53aa4ffd",
+                        "include": ["**"],
+                    },
+                }
             }
-        })
+        )
         d = r.destinations["azure"]  # type: ignore[attr-defined]
         assert d.auth_mode == "entra"
         assert d.auth_resource == "api://53aa4ffd"
@@ -100,101 +105,115 @@ class TestValidateDestinationsXOR:
     """Per-target XOR: entra requires auth_resource, static requires api_key."""
 
     def test_static_valid_passes(self) -> None:
-        r = _resolver({
-            "destinations": {
-                "local": {"url": "http://ci:8000", "api_key": "sk", "include": ["**"]},
+        r = _resolver(
+            {
+                "destinations": {
+                    "local": {"url": "http://ci:8000", "api_key": "sk", "include": ["**"]},
+                }
             }
-        })
+        )
         result = r.validate_destinations()  # type: ignore[attr-defined]
         assert "local" in result
 
     def test_entra_valid_passes(self) -> None:
-        r = _resolver({
-            "destinations": {
-                "azure": {
-                    "url": "http://ci:8000",
-                    "auth_mode": "entra",
-                    "auth_resource": "api://53aa4ffd",
-                    "include": ["**"],
-                },
+        r = _resolver(
+            {
+                "destinations": {
+                    "azure": {
+                        "url": "http://ci:8000",
+                        "auth_mode": "entra",
+                        "auth_resource": "api://53aa4ffd",
+                        "include": ["**"],
+                    },
+                }
             }
-        })
+        )
         result = r.validate_destinations()  # type: ignore[attr-defined]
         assert "azure" in result
 
     def test_entra_missing_auth_resource_raises(self) -> None:
-        r = _resolver({
-            "destinations": {
-                "azure": {
-                    "url": "http://ci:8000",
-                    "auth_mode": "entra",
-                    # no auth_resource
-                    "include": ["**"],
-                },
+        r = _resolver(
+            {
+                "destinations": {
+                    "azure": {
+                        "url": "http://ci:8000",
+                        "auth_mode": "entra",
+                        # no auth_resource
+                        "include": ["**"],
+                    },
+                }
             }
-        })
+        )
         with pytest.raises(ValueError, match="azure.*missing auth_resource"):
             r.validate_destinations()  # type: ignore[attr-defined]
 
     def test_entra_does_not_require_api_key(self) -> None:
         """Entra mode with valid auth_resource and no api_key must NOT raise."""
-        r = _resolver({
-            "destinations": {
-                "azure": {
-                    "url": "http://ci:8000",
-                    "auth_mode": "entra",
-                    "auth_resource": "api://53aa4ffd",
-                    # no api_key — must be OK
-                    "include": ["**"],
-                },
+        r = _resolver(
+            {
+                "destinations": {
+                    "azure": {
+                        "url": "http://ci:8000",
+                        "auth_mode": "entra",
+                        "auth_resource": "api://53aa4ffd",
+                        # no api_key — must be OK
+                        "include": ["**"],
+                    },
+                }
             }
-        })
+        )
         result = r.validate_destinations()  # type: ignore[attr-defined]
         assert "azure" in result
 
     def test_unknown_auth_mode_raises(self) -> None:
-        r = _resolver({
-            "destinations": {
-                "weird": {
-                    "url": "http://ci:8000",
-                    "auth_mode": "kerberos",
-                    "api_key": "k",
-                    "include": ["**"],
-                },
+        r = _resolver(
+            {
+                "destinations": {
+                    "weird": {
+                        "url": "http://ci:8000",
+                        "auth_mode": "kerberos",
+                        "api_key": "k",
+                        "include": ["**"],
+                    },
+                }
             }
-        })
+        )
         with pytest.raises(ValueError, match="kerberos"):
             r.validate_destinations()  # type: ignore[attr-defined]
 
     def test_mixed_fleet_valid(self) -> None:
         """Static + entra destinations coexist; each validates independently."""
-        r = _resolver({
-            "destinations": {
-                "local": {"url": "http://local:8000", "api_key": "sk", "include": ["local/**"]},
-                "azure": {
-                    "url": "http://azure:8000",
-                    "auth_mode": "entra",
-                    "auth_resource": "api://53aa4ffd",
-                    "include": ["**"],
-                },
+        r = _resolver(
+            {
+                "destinations": {
+                    "local": {"url": "http://local:8000", "api_key": "sk", "include": ["local/**"]},
+                    "azure": {
+                        "url": "http://azure:8000",
+                        "auth_mode": "entra",
+                        "auth_resource": "api://53aa4ffd",
+                        "include": ["**"],
+                    },
+                }
             }
-        })
+        )
         result = r.validate_destinations()  # type: ignore[attr-defined]
         assert set(result.keys()) == {"local", "azure"}
 
     def test_mixed_fleet_entra_invalid_raises(self) -> None:
         """Mixed fleet raises if entra dest is missing auth_resource."""
-        r = _resolver({
-            "destinations": {
-                "local": {"url": "http://local:8000", "api_key": "sk", "include": ["**"]},
-                "azure": {
-                    "url": "http://azure:8000",
-                    "auth_mode": "entra",
-                    # missing auth_resource
-                    "include": ["**"],
-                },
+        r = _resolver(
+            {
+                "destinations": {
+                    "local": {"url": "http://local:8000", "api_key": "sk", "include": ["**"]},
+                    "azure": {
+                        "url": "http://azure:8000",
+                        "auth_mode": "entra",
+                        # missing auth_resource
+                        "include": ["**"],
+                    },
+                }
             }
-        })
+        )
         with pytest.raises(ValueError, match="azure"):
             r.validate_destinations()  # type: ignore[attr-defined]
 
@@ -247,7 +266,9 @@ class TestDispatcherEntraPerRequestHeader:
     async def test_entra_header_passed_per_post(self) -> None:
         """Each _post call passes the header from strategy.headers() to client.post."""
         fake_cred = FakeCredential("entra-bearer-abc")
-        d = _make_dispatcher(auth_mode="entra", auth_resource="api://53aa4ffd", credential=fake_cred)
+        d = _make_dispatcher(
+            auth_mode="entra", auth_resource="api://53aa4ffd", credential=fake_cred
+        )
 
         mock_client = AsyncMock()
         mock_client.is_closed = False
@@ -276,12 +297,11 @@ class TestDispatcherEntraPerRequestHeader:
 
     async def test_entra_client_has_no_baked_auth_header(self) -> None:
         """The lazy client created by _post has NO Authorization header at construction."""
-        from amplifier_module_hook_context_intelligence.handlers.logging_handler import (
-            _DestinationDispatcher,
-        )
 
         fake_cred = FakeCredential("some-token")
-        d = _make_dispatcher(auth_mode="entra", auth_resource="api://53aa4ffd", credential=fake_cred)
+        d = _make_dispatcher(
+            auth_mode="entra", auth_resource="api://53aa4ffd", credential=fake_cred
+        )
 
         mock_response = MagicMock(raise_for_status=MagicMock())
 
@@ -311,10 +331,18 @@ class TestDispatcherEntraPerRequestHeader:
             from amplifier_module_hook_context_intelligence.handlers.logging_handler import (
                 _DestinationDispatcher,
             )
+
             d = _DestinationDispatcher(
-                name="t", url="http://h:8000", api_key="", workspace="ws",
-                dispatch_timeout=10.0, failure_threshold=3, queue_capacity=256,
-                close_drain_timeout=0.5, auth_mode="entra", auth_resource="api://53aa4ffd",
+                name="t",
+                url="http://h:8000",
+                api_key="",
+                workspace="ws",
+                dispatch_timeout=10.0,
+                failure_threshold=3,
+                queue_capacity=256,
+                close_drain_timeout=0.5,
+                auth_mode="entra",
+                auth_resource="api://53aa4ffd",
             )
 
         mock_client = AsyncMock()
