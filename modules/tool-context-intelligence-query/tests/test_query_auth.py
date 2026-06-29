@@ -68,15 +68,17 @@ class TestSourceDataclass:
         assert src.auth_resource == ""
 
     def test_entra_source_stores_auth_resource(self) -> None:
-        r = _tool_resolver({
-            "sources": {
-                "azure": {
-                    "url": "http://ci:8000",
-                    "auth_mode": "entra",
-                    "auth_resource": "api://53aa4ffd",
+        r = _tool_resolver(
+            {
+                "sources": {
+                    "azure": {
+                        "url": "http://ci:8000",
+                        "auth_mode": "entra",
+                        "auth_resource": "api://53aa4ffd",
+                    }
                 }
             }
-        })
+        )
         src = r.sources["azure"]  # type: ignore[attr-defined]
         assert src.auth_mode == "entra"
         assert src.auth_resource == "api://53aa4ffd"
@@ -91,30 +93,34 @@ class TestSourceAuthFieldExpansion:
     """`_expand()` (i.e. _expand_env_placeholders) is applied to auth fields."""
 
     def test_auth_resource_placeholder_expanded(self) -> None:
-        r = _tool_resolver({
-            "sources": {
-                "azure": {
-                    "url": "http://ci:8000",
-                    "auth_mode": "entra",
-                    "auth_resource": "${MY_CI_RESOURCE_QTEST}",
+        r = _tool_resolver(
+            {
+                "sources": {
+                    "azure": {
+                        "url": "http://ci:8000",
+                        "auth_mode": "entra",
+                        "auth_resource": "${MY_CI_RESOURCE_QTEST}",
+                    }
                 }
             }
-        })
+        )
         with patch.dict(os.environ, {"MY_CI_RESOURCE_QTEST": "api://abc-123"}, clear=False):
             r._sources = None  # type: ignore[attr-defined]
             src = r.sources["azure"]  # type: ignore[attr-defined]
         assert src.auth_resource == "api://abc-123"
 
     def test_auth_resource_with_default_unset_uses_default(self) -> None:
-        r = _tool_resolver({
-            "sources": {
-                "azure": {
-                    "url": "http://ci:8000",
-                    "auth_mode": "entra",
-                    "auth_resource": "${_UNSET_QTEST:api://fallback}",
+        r = _tool_resolver(
+            {
+                "sources": {
+                    "azure": {
+                        "url": "http://ci:8000",
+                        "auth_mode": "entra",
+                        "auth_resource": "${_UNSET_QTEST:api://fallback}",
+                    }
                 }
             }
-        })
+        )
         env = {k: v for k, v in os.environ.items() if k != "_UNSET_QTEST"}
         with patch.dict(os.environ, env, clear=True):
             r._sources = None  # type: ignore[attr-defined]
@@ -136,47 +142,55 @@ class TestValidateSourcesXOR:
         assert "local" in result
 
     def test_entra_valid_passes(self) -> None:
-        r = _tool_resolver({
-            "sources": {
-                "azure": {
-                    "url": "http://ci:8000",
-                    "auth_mode": "entra",
-                    "auth_resource": "api://53aa4ffd",
+        r = _tool_resolver(
+            {
+                "sources": {
+                    "azure": {
+                        "url": "http://ci:8000",
+                        "auth_mode": "entra",
+                        "auth_resource": "api://53aa4ffd",
+                    }
                 }
             }
-        })
+        )
         result = r.validate_sources()  # type: ignore[attr-defined]
         assert "azure" in result
 
     def test_entra_missing_auth_resource_raises(self) -> None:
-        r = _tool_resolver({
-            "sources": {
-                "azure": {"url": "http://ci:8000", "auth_mode": "entra"},
+        r = _tool_resolver(
+            {
+                "sources": {
+                    "azure": {"url": "http://ci:8000", "auth_mode": "entra"},
+                }
             }
-        })
+        )
         with pytest.raises(ValueError, match="azure.*missing auth_resource"):
             r.validate_sources()  # type: ignore[attr-defined]
 
     def test_entra_does_not_require_api_key(self) -> None:
-        r = _tool_resolver({
-            "sources": {
-                "azure": {
-                    "url": "http://ci:8000",
-                    "auth_mode": "entra",
-                    "auth_resource": "api://53aa4ffd",
-                    # no api_key — must be OK
+        r = _tool_resolver(
+            {
+                "sources": {
+                    "azure": {
+                        "url": "http://ci:8000",
+                        "auth_mode": "entra",
+                        "auth_resource": "api://53aa4ffd",
+                        # no api_key — must be OK
+                    }
                 }
             }
-        })
+        )
         result = r.validate_sources()  # type: ignore[attr-defined]
         assert "azure" in result
 
     def test_unknown_auth_mode_raises(self) -> None:
-        r = _tool_resolver({
-            "sources": {
-                "weird": {"url": "http://ci:8000", "auth_mode": "kerberos", "api_key": "k"},
+        r = _tool_resolver(
+            {
+                "sources": {
+                    "weird": {"url": "http://ci:8000", "auth_mode": "kerberos", "api_key": "k"},
+                }
             }
-        })
+        )
         with pytest.raises(ValueError, match="kerberos"):
             r.validate_sources()  # type: ignore[attr-defined]
 
@@ -187,16 +201,18 @@ class TestValidateSourcesXOR:
         assert result == {}
 
     def test_mixed_sources_validate_independently(self) -> None:
-        r = _tool_resolver({
-            "sources": {
-                "local": {"url": "http://local:8000", "api_key": "sk"},
-                "azure": {
-                    "url": "http://azure:8000",
-                    "auth_mode": "entra",
-                    "auth_resource": "api://53aa4ffd",
-                },
+        r = _tool_resolver(
+            {
+                "sources": {
+                    "local": {"url": "http://local:8000", "api_key": "sk"},
+                    "azure": {
+                        "url": "http://azure:8000",
+                        "auth_mode": "entra",
+                        "auth_resource": "api://53aa4ffd",
+                    },
+                }
             }
-        })
+        )
         result = r.validate_sources()  # type: ignore[attr-defined]
         assert set(result.keys()) == {"local", "azure"}
 
@@ -223,15 +239,17 @@ class TestResolveQueryAuthStrategy:
         from context_intelligence.tool_resolver import resolve_query_auth_strategy
 
         fake_cred = FakeCredential("entra-query-token")
-        r = _tool_resolver({
-            "sources": {
-                "azure": {
-                    "url": "http://ci:8000",
-                    "auth_mode": "entra",
-                    "auth_resource": "api://53aa4ffd",
+        r = _tool_resolver(
+            {
+                "sources": {
+                    "azure": {
+                        "url": "http://ci:8000",
+                        "auth_mode": "entra",
+                        "auth_resource": "api://53aa4ffd",
+                    }
                 }
             }
-        })
+        )
         with patch("context_intelligence.auth._make_cli_credential", return_value=fake_cred):
             strategy = resolve_query_auth_strategy(None, r, api_key="")  # type: ignore[arg-type]
 
