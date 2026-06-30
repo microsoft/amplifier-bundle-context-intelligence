@@ -121,30 +121,30 @@ class _DestinationDispatcher:
             maxsize=queue_capacity
         )
         self._worker_task: asyncio.Task[None] | None = None
-        self._consecutive_failures = 0
-        self._enabled = True
+        self._consecutive_failures = 0  # backoff driver only — never disables
+        self._degraded_warned = False
+        self._current: tuple[str, dict[str, Any]] | None = None  # in-flight held event
+        self._overflow_dropped = 0
+        self._auth_failures = 0
+        self._last_status: int | None = None
+        self._last_overflow_log = 0.0
+        self._last_permanent_log = 0.0
 
     def _ensure_worker(self) -> None:
         if self._worker_task is None or self._worker_task.done():
             self._worker_task = asyncio.create_task(self._worker())
 
     def enqueue(self, event: str, data: dict[str, Any]) -> None:
-        """Enqueue an event for dispatch. Drops if disabled or queue full."""
-        if not self._enabled:
-            return
+        """Enqueue an event for dispatch. HOT PATH — zero awaits, zero I/O.
+
+        Drops on full queue (bumps _overflow_dropped counter). Never disables.
+        """
         self._ensure_worker()
         try:
             self._queue.put_nowait((event, data))
         except asyncio.QueueFull:
-            self._enabled = False
-            logger.warning(
-                "server_dispatch_queue_full: dest=%s url=%s capacity=%d event=%s"
-                " dispatch disabled; local JSONL capture continues.",
-                self._name,
-                self._url,
-                self._queue_capacity,
-                event,
-            )
+            self._overflow_dropped += 1
+            # Rate-limited overflow logging added in Task 10.
 
     async def _worker(self) -> None:
         while True:
@@ -155,15 +155,14 @@ class _DestinationDispatcher:
                 self._queue.task_done()
 
     async def _post(self, event: str, data: dict[str, Any]) -> None:
-        """POST one event to this destination. Circuit-breaker per-destination.
+        """POST one event to this destination.
 
         The Authorization header is produced PER REQUEST via self._strategy.headers().
         This ensures Entra tokens are refreshed by the azure-identity SDK when they
         near expiry — long-lived dispatchers never serve stale tokens.
-        """
-        if not self._enabled:
-            return
 
+        Never permanently disables. Backoff is driven by _consecutive_failures only.
+        """
         # Lazy client creation — no auth header baked in; header goes on each post.
         if self._client is None or self._client.is_closed:
             self._client = httpx.AsyncClient(
@@ -201,16 +200,6 @@ class _DestinationDispatcher:
                 self._url,
                 exc_info=True,
             )
-            if self._consecutive_failures >= self._failure_threshold:
-                self._enabled = False
-                logger.warning(
-                    "Context intelligence server unreachable after %d attempts"
-                    " — dispatch disabled for this destination (dest=%s url=%s)."
-                    " Local JSONL capture continues.",
-                    self._consecutive_failures,
-                    self._name,
-                    self._url,
-                )
 
     async def close(self) -> None:
         """Drain, cancel worker, close client."""
