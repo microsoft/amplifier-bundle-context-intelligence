@@ -42,6 +42,9 @@ dev = [
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
+markers = [
+    "nightly: wall-clock performance benchmarks; flaky on shared CI, excluded from the required gate",
+]
 
 [tool.pyright]
 pythonVersion = "3.11"
