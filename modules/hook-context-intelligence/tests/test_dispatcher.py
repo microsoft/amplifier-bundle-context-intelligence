@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import pytest
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -34,10 +35,6 @@ def _dispatcher(
 
 
 class TestDispatcherInit:
-    def test_enabled_on_init(self) -> None:
-        d = _dispatcher()
-        assert d._enabled is True
-
     def test_client_none_on_init(self) -> None:
         d = _dispatcher()
         assert d._client is None
@@ -89,37 +86,9 @@ class TestDispatcherEnqueue:
         assert d._worker_task is not None
         await d.close()
 
-    def test_disabled_dispatcher_does_not_enqueue(self) -> None:
-        d = _dispatcher()
-        d._enabled = False
-        d.enqueue("session:start", {"session_id": "s1"})
-        assert d._queue.qsize() == 0
-
-    async def test_full_queue_disables_dispatcher(self) -> None:
-        d = _dispatcher(queue_capacity=1)
-        # Prevent worker from draining
-        d._ensure_worker = lambda: None  # type: ignore[method-assign]
-        d._queue.put_nowait(("dummy", {}))
-        d.enqueue("overflow", {"session_id": "s1"})
-        assert d._enabled is False
-
 
 class TestDispatcherBreaker:
-    """Circuit breaker opens per-destination after failure_threshold consecutive failures."""
-
-    async def test_breaker_opens_after_threshold(self) -> None:
-        d = _dispatcher(failure_threshold=3)
-        mock_client = AsyncMock()
-        mock_client.is_closed = False
-        mock_client.post.side_effect = Exception("conn refused")
-        d._client = mock_client
-
-        with patch("amplifier_module_hook_context_intelligence.handlers.logging_handler.logger"):
-            for _ in range(3):
-                await d._post("session:start", {"session_id": "s1"})
-
-        assert d._enabled is False
-        assert d._consecutive_failures == 3
+    """Consecutive failures tracked; backoff driven by _consecutive_failures."""
 
     async def test_success_resets_counter(self) -> None:
         d = _dispatcher(failure_threshold=5)
@@ -134,15 +103,6 @@ class TestDispatcherBreaker:
                 await d._post("session:start", {"session_id": "s1"})
 
         assert d._consecutive_failures == 0
-        assert d._enabled is True
-
-    async def test_disabled_post_is_noop(self) -> None:
-        d = _dispatcher(failure_threshold=3)
-        d._enabled = False
-        mock_client = AsyncMock()
-        d._client = mock_client
-        await d._post("session:start", {"session_id": "s1"})
-        mock_client.post.assert_not_called()
 
     async def test_closed_client_runtime_error_skipped(self) -> None:
         d = _dispatcher()
@@ -155,36 +115,6 @@ class TestDispatcherBreaker:
 
         await d._post("session:end", {"session_id": "s1"})
         assert d._consecutive_failures == 0
-        assert d._enabled is True
-
-
-class TestDispatcherIsolation:
-    """Failures in dispatcher A must NOT affect dispatcher B."""
-
-    async def test_breaker_a_does_not_affect_b(self) -> None:
-        d_a = _dispatcher(name="a", failure_threshold=3)
-        d_b = _dispatcher(name="b", failure_threshold=3)
-
-        # A always fails
-        mock_client_a = AsyncMock()
-        mock_client_a.is_closed = False
-        mock_client_a.post.side_effect = Exception("a is down")
-        d_a._client = mock_client_a
-
-        # B always succeeds
-        mock_client_b = AsyncMock()
-        mock_client_b.is_closed = False
-        mock_client_b.post.return_value = MagicMock(raise_for_status=MagicMock())
-        d_b._client = mock_client_b
-
-        with patch("amplifier_module_hook_context_intelligence.handlers.logging_handler.logger"):
-            for _ in range(3):
-                await d_a._post("session:start", {"session_id": "s1"})
-            await d_b._post("session:start", {"session_id": "s1"})
-
-        assert d_a._enabled is False, "A's breaker should be open"
-        assert d_b._enabled is True, "B should be unaffected"
-        mock_client_b.post.assert_awaited_once()
 
 
 class TestSetDispatchersWorkerLeak:
@@ -308,3 +238,78 @@ class TestDispatcherClose:
             await d.close()
 
         assert d._worker_task is None
+
+
+class TestNoPermanentLatch:
+    """_DestinationDispatcher must NEVER permanently disable via a boolean latch."""
+
+    def test_no_enabled_attribute(self) -> None:
+        d = _dispatcher()
+        assert not hasattr(d, "_enabled")
+
+    def test_degraded_warned_false_on_init(self) -> None:
+        d = _dispatcher()
+        assert d._degraded_warned is False
+
+    def test_current_none_on_init(self) -> None:
+        d = _dispatcher()
+        assert d._current is None
+
+    def test_overflow_dropped_zero_on_init(self) -> None:
+        d = _dispatcher()
+        assert d._overflow_dropped == 0
+
+    def test_auth_failures_zero_on_init(self) -> None:
+        d = _dispatcher()
+        assert d._auth_failures == 0
+
+    def test_log_gates_zero_on_init(self) -> None:
+        d = _dispatcher()
+        assert d._last_overflow_log == 0.0
+        assert d._last_permanent_log == 0.0
+
+    def test_full_queue_does_not_disable(self) -> None:
+        """Queue overflow bumps _overflow_dropped but NEVER sets _enabled=False (which no longer exists)."""
+        d = _dispatcher(queue_capacity=1)
+        # Prevent worker from draining
+        d._ensure_worker = lambda: None  # type: ignore[method-assign]
+        d._queue.put_nowait(("dummy", {}))
+        d.enqueue("overflow", {"session_id": "s1"})
+        assert d._overflow_dropped == 1
+        assert d._queue.qsize() == 1
+        assert not hasattr(d, "_enabled")
+
+
+class TestDestinationIsolation:
+    """Failures in one destination must NOT permanently disable another."""
+
+    @pytest.mark.skip(reason="enabled by Task 5 worker loop")
+    async def test_one_degraded_destination_does_not_affect_another(self) -> None:
+        """dest B delivers ['e1','e2'] while dest A is down."""
+        d_a = _dispatcher(name="a", failure_threshold=3)
+        d_b = _dispatcher(name="b", failure_threshold=3)
+
+        # A always fails
+        mock_client_a = AsyncMock()
+        mock_client_a.is_closed = False
+        mock_client_a.post.side_effect = Exception("a is down")
+        d_a._client = mock_client_a
+
+        # B always succeeds
+        mock_client_b = AsyncMock()
+        mock_client_b.is_closed = False
+        mock_client_b.post.return_value = MagicMock(raise_for_status=MagicMock())
+        d_b._client = mock_client_b
+
+        events = ["e1", "e2"]
+        with patch("amplifier_module_hook_context_intelligence.handlers.logging_handler.logger"):
+            for e in events:
+                d_a.enqueue(e, {"session_id": "s1"})
+                d_b.enqueue(e, {"session_id": "s1"})
+            # Allow workers to process
+            await asyncio.sleep(0.1)
+
+        # B should have delivered both events; A degraded but not disabled
+        assert mock_client_b.post.await_count == len(events)
+        assert not hasattr(d_a, "_enabled")
+        assert not hasattr(d_b, "_enabled")
