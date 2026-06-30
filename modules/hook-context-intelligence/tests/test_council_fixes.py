@@ -36,6 +36,7 @@ LOGGER_PATH = f"{MOD}.logger"
 # Shared helpers
 # ---------------------------------------------------------------------------
 
+
 def _dispatcher(**overrides: object) -> _DestinationDispatcher:
     """Create a _DestinationDispatcher with task-specific defaults."""
     defaults: dict[str, object] = dict(
@@ -80,6 +81,7 @@ def _rendered(call: object) -> str:
 # Bug A1: WriteTimeout must return _TRANSIENT (not propagate)
 # ---------------------------------------------------------------------------
 
+
 async def test_write_timeout_is_transient_not_dropped() -> None:
     """httpx.WriteTimeout must return _TRANSIENT so the worker retries the event.
 
@@ -98,6 +100,7 @@ async def test_write_timeout_is_transient_not_dropped() -> None:
 # ---------------------------------------------------------------------------
 # Bug A2: 3xx redirects must be _PERMANENT (not _DELIVERED)
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.parametrize(
     "status_code",
@@ -144,8 +147,7 @@ async def test_redirect_logs_misconfig_and_skips() -> None:
             pass
 
     redirect_warnings = [
-        c for c in mock_logger.warning.call_args_list
-        if "unexpected redirect" in _rendered(c)
+        c for c in mock_logger.warning.call_args_list if "unexpected redirect" in _rendered(c)
     ]
     assert len(redirect_warnings) == 1
 
@@ -153,6 +155,7 @@ async def test_redirect_logs_misconfig_and_skips() -> None:
 # ---------------------------------------------------------------------------
 # Bug B: queue_capacity must be clamped >= 1 inside _DestinationDispatcher
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.parametrize("bad_cap", [0, -1, -100], ids=["zero", "neg1", "neg100"])
 def test_queue_capacity_clamped_in_constructor(bad_cap: int) -> None:
@@ -208,8 +211,7 @@ async def test_auth_escalation_fires_at_threshold_one() -> None:
             pass
 
     auth_warnings = [
-        c for c in mock_logger.warning.call_args_list
-        if "rejecting auth" in _rendered(c)
+        c for c in mock_logger.warning.call_args_list if "rejecting auth" in _rendered(c)
     ]
     assert len(auth_warnings) >= 1, (
         f"Expected >= 1 'rejecting auth' warning at failure_threshold=1, "
@@ -244,10 +246,98 @@ async def test_auth_escalation_rewarns_periodically() -> None:
                 pass
 
     auth_warnings = [
-        c for c in mock_logger.warning.call_args_list
-        if "rejecting auth" in _rendered(c)
+        c for c in mock_logger.warning.call_args_list if "rejecting auth" in _rendered(c)
     ]
     assert len(auth_warnings) >= 2, (
         f"Expected >= 2 'rejecting auth' warnings with periodic re-warn, "
         f"got {len(auth_warnings)}: {mock_logger.warning.call_args_list}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Bug D: printed recovery command must include --path flag
+# ---------------------------------------------------------------------------
+
+
+async def test_overflow_message_has_runnable_path() -> None:
+    """Overflow warning must include --path flag for copy-paste correctness.
+
+    Without the fix, the message prints 'context-intelligence-upload /data/sessions'
+    (a bare path), which argparse rejects at the CLI. With the fix it prints
+    'context-intelligence-upload --path /data/sessions'.
+    """
+    d = _dispatcher(queue_capacity=1, storage_path="/data/sessions")
+
+    with patch(LOGGER_PATH) as mock_logger:
+        # First enqueue fills the single-slot queue; second overflows it.
+        d.enqueue("test:event", {"x": 1})
+        d.enqueue("test:event", {"x": 2})  # triggers overflow — synchronous, no yield
+
+    # Cleanup the worker task created by _ensure_worker().
+    if d._worker_task is not None:
+        d._worker_task.cancel()
+        try:
+            await d._worker_task
+        except asyncio.CancelledError:
+            pass
+
+    overflow_warnings = [
+        c for c in mock_logger.warning.call_args_list if "buffer full" in _rendered(c)
+    ]
+    assert len(overflow_warnings) >= 1, (
+        f"Expected >= 1 overflow warning, got all warnings: {mock_logger.warning.call_args_list}"
+    )
+    last_msg = _rendered(overflow_warnings[-1])
+    assert "--path /data/sessions" in last_msg, (
+        f"Expected '--path /data/sessions' in overflow warning, got: {last_msg!r}"
+    )
+    assert "<path>" not in last_msg, (
+        f"Expected no placeholder '<path>' in overflow warning, got: {last_msg!r}"
+    )
+
+
+async def test_shutdown_message_has_runnable_path() -> None:
+    """Shutdown warning must include --path flag for copy-paste correctness.
+
+    Without the fix, the message prints 'context-intelligence-upload /data/sessions'
+    (a bare path), which argparse rejects at the CLI. With the fix it prints
+    'context-intelligence-upload --path /data/sessions'.
+
+    _post hangs via asyncio.sleep(10) after signalling that it has started, so
+    the event stays in-flight when close() times out after 0.05 s, guaranteeing
+    total > 0 and the shutdown WARNING is emitted.
+    """
+    started = asyncio.Event()
+
+    async def hanging_post(event: str, data: dict) -> str:  # type: ignore[type-arg]
+        started.set()
+        await asyncio.sleep(10)
+        return _DELIVERED  # unreachable; satisfies return type
+
+    d = _dispatcher(
+        storage_path="/data/sessions",
+        close_drain_timeout=0.05,
+        backoff_initial=0.001,
+        backoff_max=0.001,
+    )
+    d._post = hanging_post  # type: ignore[method-assign]
+
+    d.enqueue("test:event", {"x": 1})
+    await started.wait()  # worker has dequeued the event and is stuck inside _post
+
+    with patch(LOGGER_PATH) as mock_logger:
+        await d.close()
+
+    shutdown_warnings = [
+        c for c in mock_logger.warning.call_args_list if "shutdown" in _rendered(c)
+    ]
+    assert len(shutdown_warnings) >= 1, (
+        f"Expected >= 1 shutdown warning, got all warnings: {mock_logger.warning.call_args_list}"
+    )
+    last_msg = _rendered(shutdown_warnings[-1])
+    assert "--path /data/sessions" in last_msg, (
+        f"Expected '--path /data/sessions' in shutdown warning, got: {last_msg!r}"
+    )
+    assert "<path>" not in last_msg, (
+        f"Expected no placeholder '<path>' in shutdown warning, got: {last_msg!r}"
     )
