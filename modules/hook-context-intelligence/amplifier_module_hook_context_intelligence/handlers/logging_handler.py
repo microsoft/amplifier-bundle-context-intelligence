@@ -144,7 +144,6 @@ class _DestinationDispatcher:
         self._workspace = workspace
         self._dispatch_timeout = dispatch_timeout
         self._failure_threshold = failure_threshold
-        self._queue_capacity = queue_capacity
         self._close_drain_timeout = close_drain_timeout
         self._backoff_initial = backoff_initial
         self._backoff_max = backoff_max
@@ -157,9 +156,8 @@ class _DestinationDispatcher:
             auth_resource=auth_resource,
         )
         self._client: httpx.AsyncClient | None = None
-        self._queue: asyncio.Queue[tuple[str, dict[str, Any]]] = asyncio.Queue(
-            maxsize=queue_capacity
-        )
+        self._queue_capacity = max(1, queue_capacity)
+        self._queue: asyncio.Queue[tuple[str, dict[str, Any]]] = asyncio.Queue(maxsize=self._queue_capacity)
         self._worker_task: asyncio.Task[None] | None = None
         self._consecutive_failures = 0  # backoff driver only — never disables
         self._degraded_warned = False

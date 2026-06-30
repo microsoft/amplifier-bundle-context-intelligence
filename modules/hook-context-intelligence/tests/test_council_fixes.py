@@ -148,3 +148,19 @@ async def test_redirect_logs_misconfig_and_skips() -> None:
         if "unexpected redirect" in _rendered(c)
     ]
     assert len(redirect_warnings) == 1
+
+
+# ---------------------------------------------------------------------------
+# Bug B: queue_capacity must be clamped >= 1 inside _DestinationDispatcher
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("bad_cap", [0, -1, -100], ids=["zero", "neg1", "neg100"])
+def test_queue_capacity_clamped_in_constructor(bad_cap: int) -> None:
+    """queue_capacity <= 0 must be clamped to 1 inside _DestinationDispatcher.__init__.
+
+    asyncio.Queue(maxsize=0) is UNBOUNDED — any value <= 0 silently removes the
+    memory guard. The clamp must be a class invariant, not a caller responsibility.
+    """
+    d = _dispatcher(queue_capacity=bad_cap)
+
+    assert d._queue.maxsize == 1
