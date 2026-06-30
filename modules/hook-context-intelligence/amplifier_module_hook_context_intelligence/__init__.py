@@ -198,6 +198,10 @@ async def on_session_ready(coordinator: Any) -> None:
             failure_threshold=resolver.dispatch_failure_threshold,
             queue_capacity=resolver.dispatch_queue_capacity,
             close_drain_timeout=resolver.close_drain_timeout,
+            backoff_initial=resolver.dispatch_backoff_initial,
+            backoff_max=resolver.dispatch_backoff_max,
+            backoff_jitter=resolver.dispatch_backoff_jitter,
+            storage_path=str(resolver.base_path),
             auth_mode=d.auth_mode,
             auth_resource=d.auth_resource,
         )
