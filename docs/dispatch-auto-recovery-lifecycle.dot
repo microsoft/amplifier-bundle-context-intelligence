@@ -1,0 +1,87 @@
+// Context-Intelligence Dispatch — Auto-Recovery Lifecycle (single consolidated view)
+// Context-Intelligence Bundle — LoggingHandler / _DestinationDispatcher
+//
+// SANCTIONED AMENDMENT: replaces the design's five separate .dot diagrams with one
+// consolidated lifecycle diagram (agreed with user; flagged by cranky-old-sam /
+// intent-keeper as a downgrade worth surfacing — intentional, not an unflagged deviation).
+//
+// Covers: HEALTHY drain, _post() classify, DELIVERED / TRANSIENT / PERMANENT outcomes,
+// DEGRADED hold-backoff-retry loop (DEGRADED once/episode, persistent-401 escalation),
+// RECOVERY on first success after degrade, OVERFLOW drop-newest (never disabled),
+// SHUTDOWN bounded drain (cancellation-safe, honest count, real storage path).
+//
+// Render: dot -Tpng dispatch-auto-recovery-lifecycle.dot -o dispatch-auto-recovery-lifecycle.png
+digraph DispatchAutoRecovery {
+    rankdir=TB;
+    fontname="Helvetica";
+    fontsize=12;
+    nodesep=0.7;
+    ranksep=0.9;
+    pad=0.5;
+
+    node [fontname="Helvetica", fontsize=11, shape=box, style="rounded,filled"];
+    edge [fontname="Helvetica", fontsize=10];
+
+    healthy   [label="HEALTHY\ndrain queue in order,\none event at a time",
+               fillcolor="#E8F5E9", color="#2E7D32", penwidth=2];
+
+    post      [label="_post(event)\nclassify result",
+               fillcolor="#E0F7FA", color="#00838F", penwidth=1.5];
+
+    delivered [label="DELIVERED (2xx)\ntask_done, reset backoff\n_consecutive_failures = 0\n_degraded_warned = False",
+               fillcolor="#E8F5E9", color="#2E7D32", penwidth=1.5];
+
+    transient [label="TRANSIENT\n(conn/timeout/5xx/429/401)\n_consecutive_failures += 1",
+               fillcolor="#FFF3E0", color="#E65100", penwidth=1.5];
+
+    permanent [label="PERMANENT\n(403 / 400 / 413 / 422)\nloud rate-limited log\nskip event, task_done, advance",
+               fillcolor="#FFEBEE", color="#C62828", penwidth=1.5];
+
+    degraded  [label="DEGRADED\nhold in-flight event,\nfull-jitter backoff (initial/max/jitter knobs),\nretry SAME event (never disabled)\n────────────────────────\nDEGRADED notice once/episode\npersistent 401 (>= threshold consecutive):\nescalate WARNING \"check credentials\"",
+               fillcolor="#FFF8E1", color="#F57F17", penwidth=2];
+
+    recovery  [label="RECOVERY\nfirst delivery after degrade\n\"Reconnected — resuming delivery\"\n(no event count)",
+               fillcolor="#E8F5E9", color="#2E7D32", penwidth=1.5];
+
+    overflow  [label="OVERFLOW (queue full)\ndrop NEWEST (durable in events.jsonl)\nbump _overflow_dropped counter\nloud rate-limited log naming\nthe REAL storage path\nNEVER disabled",
+               fillcolor="#FFF3E0", color="#E65100", penwidth=2];
+
+    shutdown  [label="SHUTDOWN\nbounded drain (close_drain_timeout)\ncancellation-safe (cancels sleeping worker)\nif undelivered > 0 or was degraded:\n  loud WARNING, honest count =\n  queued + in-flight + overflow-dropped\n  naming the REAL storage path",
+               fillcolor="#ECEFF1", color="#455A64", penwidth=2];
+
+    // --- main dispatch path ---
+    healthy   -> post;
+    post      -> delivered [label="2xx", color="#2E7D32", fontcolor="#2E7D32"];
+    post      -> transient [label="transient", color="#E65100", fontcolor="#E65100"];
+    post      -> permanent [label="permanent", color="#C62828", fontcolor="#C62828"];
+
+    // --- DEGRADED retry loop ---
+    transient -> degraded  [color="#F57F17", fontcolor="#F57F17"];
+    degraded  -> post      [label="sleep backoff,\nretry same event",
+                             color="#F57F17", fontcolor="#F57F17",
+                             penwidth=2, constraint=false];
+
+    // --- recovery path ---
+    delivered -> recovery  [label="if was degraded",
+                             color="#2E7D32", fontcolor="#2E7D32",
+                             style=dashed];
+    recovery  -> healthy   [color="#2E7D32"];
+
+    // --- normal success path ---
+    delivered -> healthy   [label="if healthy",
+                             color="#2E7D32", fontcolor="#2E7D32"];
+
+    // --- permanent skip: advance to next event ---
+    permanent -> healthy   [label="advance", color="#C62828", fontcolor="#C62828"];
+
+    // --- overflow (enqueue while full) ---
+    healthy   -> overflow  [style=dashed, label="enqueue while full",
+                             color="#E65100", fontcolor="#E65100"];
+    overflow  -> healthy   [style=dashed, color="#E65100"];
+
+    // --- shutdown ---
+    healthy   -> shutdown  [style=dotted, label="close()",
+                             color="#455A64", fontcolor="#455A64"];
+    degraded  -> shutdown  [style=dotted, label="close()",
+                             color="#455A64", fontcolor="#455A64"];
+}

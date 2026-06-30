@@ -360,8 +360,11 @@ AMPLIFIER_CONTEXT_INTELLIGENCE_TOKEN_REFRESH_MARGIN_S=600
 | `base_path` | direct value | `~/.amplifier/projects` | Root directory for local JSONL output. |
 | `exclude_events` | direct value | `[]` | fnmatch patterns for events to suppress (event names, not paths). |
 | `dispatch_timeout` | `${...}` placeholder | `30` | HTTP write timeout (seconds) for server dispatch uploads. |
-| `dispatch_failure_threshold` | `${...}` placeholder | `3` | Consecutive dispatch failures before the per-destination circuit breaker disables that destination for the session. |
-| `dispatch_queue_capacity` | direct value | `256` | Maximum queued HTTP dispatches per destination before that destination is disabled for the session. |
+| `dispatch_failure_threshold` | `${...}` placeholder | `3` | Consecutive **transient** failures before the worker enters DEGRADED state and emits a warning notice; also gates the persistent-401 auth-escalation. Does **not** disable dispatch — dispatch is never permanently disabled. |
+| `dispatch_queue_capacity` | direct value | `256` | Maximum queued HTTP dispatches per destination. Clamped to `>= 1` (a value of `0` would be unbounded). When full, the newest event is dropped (durable in `events.jsonl`) and a rate-limited warning is logged naming the real storage path; dispatch is **never** disabled. |
+| `dispatch_backoff_initial` | `${...}` placeholder | `1.0` | Initial backoff sleep (seconds) for the first DEGRADED retry. |
+| `dispatch_backoff_max` | `${...}` placeholder | `30.0` | Maximum backoff sleep (seconds); the cap for capped full-jitter backoff. |
+| `dispatch_backoff_jitter` | `${...}` placeholder | `true` | Enable full-jitter backoff. Set `false` to use a fixed `dispatch_backoff_initial` sleep per retry. String-aware: `"false"`, `"0"`, `"no"`, `"off"` (any case) are treated as `false`. |
 | `close_drain_timeout` | direct value | `0.5` | Shutdown grace period (seconds) for draining queued HTTP dispatches. |
 
 > The **Source** column shows how a value reaches the config: a `${VAR}` placeholder in the YAML (expanded by app-cli from `keys.env`/environment), or a direct literal value. There is **no** automatic `AMPLIFIER_*` env-var → config mapping; only `${VAR}` placeholders present in the active config are read.
@@ -451,25 +454,35 @@ HTTP timeouts are phase-specific: short `connect`/`pool` fail-fast bounds, a mod
 
 Each live POST carries a deterministic `idempotency_key` derived from the sanitized event envelope. The server may use it to suppress duplicate live submissions while still allowing explicit replay from local `events.jsonl`.
 
-If the dispatch queue fills, dispatch is disabled for the rest of the session and local JSONL capture continues.
+If the dispatch queue fills, the newest event is dropped (it remains durable in `events.jsonl`) and a rate-limited warning is logged naming the real storage path. Dispatch is **never** permanently disabled.
 
 ### Connection reuse
 
 The worker uses lazy creation: it creates an `httpx.AsyncClient` on the first dispatch request and keeps it alive for the entire session lifetime. This avoids opening a connection before any events arrive. TCP connection pooling means a single keep-alive connection is reused for all POSTs rather than opening a new one per event. The client is closed via `aclose()` during session finalization.
 
-### Circuit breaker
+### Auto-recovery
 
-1. Every failed dispatch increments the consecutive failure counter.
-2. Once the counter reaches `dispatch_failure_threshold`, dispatch is permanently disabled for the session.
-3. One debug message is emitted (visible only at DEBUG log level):
-   > `Context intelligence server unreachable after N attempts — dispatch disabled for this session. Local JSONL capture continues.`
-4. Subsequent events are silently skipped; local JSONL capture continues unaffected.
+The dispatcher never permanently disables a destination. On any transient failure (connection errors, timeouts, 5xx, 429, 401) the worker enters **DEGRADED** state: it holds the failed event in a local variable and retries the *same* event with capped full-jitter backoff (`dispatch_backoff_initial`, `dispatch_backoff_max`, `dispatch_backoff_jitter`) until the POST succeeds or the session ends. Ordering is preserved by construction — a single background worker, one in-flight event, new events queue behind it.
 
-### Recovery
+**Failure classification** — `_post()` returns one of three outcomes:
+- **DELIVERED** (2xx): reset failure counter and backoff; worker resumes draining the queue.
+- **TRANSIENT** (connection errors, timeouts, 5xx, 429, 401): worker enters/stays DEGRADED, sleeps backoff, retries the same event.
+- **PERMANENT** (403, 400, 413, 422): loud rate-limited log; skip event, advance to the next.
 
-Restart the session once the server is back. There is no mid-session auto-recovery. The JSONL files contain a complete record and can be replayed into the server after it recovers.
+**Notifications — self-healing (emitted once; do not require user action):**
+- **DEGRADED notice** — emitted once per continuous failure episode (not per retry) when `_consecutive_failures` reaches `dispatch_failure_threshold`.
+- **RECOVERY notice** — "Reconnected — resuming delivery" on the first successful POST after DEGRADED. No event count (the count is not knowable without a replay scan).
+- **Persistent-401 escalation** — if `>= dispatch_failure_threshold` consecutive 401s are observed, a WARNING is emitted: "Check credentials — server is returning 401".
 
-See [`docs/dispatch-circuit-breaker.dot`](docs/dispatch-circuit-breaker.dot) for the full dispatch flow and circuit breaker state machine.
+**Notifications — action-needed (require user action to recover):**
+- **OVERFLOW** — when the in-memory queue is full, the newest event is dropped (remains durable in `events.jsonl`) and a rate-limited WARNING is logged naming `context-intelligence-upload <real storage path>`.
+- **Shutdown-undelivered** — if any events remain undelivered when `close()` is called, a WARNING is emitted with an honest count (`queued + in-flight + overflow-dropped`) and the real storage path.
+
+**Idempotency contract:** each POST carries a deterministic `idempotency_key` (SHA-256 over `{event, workspace, data}`). Retries are safe — the server can suppress duplicate deliveries. (The "single server-side record" guarantee is an assumption verified by the real-server E2E tests, not the unit suite.)
+
+**Known limitation:** during a prolonged outage, once the bounded in-memory queue fills, the newest events are dropped from the queue but remain durable in `events.jsonl`. Recover them after the outage with `context-intelligence-upload <real storage path>`.
+
+See [`docs/dispatch-circuit-breaker.dot`](docs/dispatch-circuit-breaker.dot) for the updated dispatch flow and [`docs/dispatch-auto-recovery-lifecycle.dot`](docs/dispatch-auto-recovery-lifecycle.dot) for the consolidated auto-recovery lifecycle (HEALTHY → DEGRADED → RECOVERY → OVERFLOW → SHUTDOWN).
 
 ---
 
