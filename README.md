@@ -472,7 +472,7 @@ The dispatcher never permanently disables a destination. On any transient failur
 **Notifications — self-healing (emitted once; do not require user action):**
 - **DEGRADED notice** — emitted once per continuous failure episode (not per retry) when `_consecutive_failures` reaches `dispatch_failure_threshold`.
 - **RECOVERY notice** — "Reconnected — resuming delivery" on the first successful POST after DEGRADED. No event count (the count is not knowable without a replay scan).
-- **Persistent-401 escalation** — if `>= dispatch_failure_threshold` consecutive 401s are observed, a WARNING is emitted: "Check credentials — server is returning 401".
+- **Persistent-401 escalation** — if `>= dispatch_failure_threshold` consecutive 401s are observed, a rate-limited WARNING is emitted periodically (at most once per 60 s): "this looks like an auth problem, not a network blip. Check credentials."
 
 **Notifications — action-needed (require user action to recover):**
 - **OVERFLOW** — when the in-memory queue is full, the newest event is dropped (remains durable in `events.jsonl`) and a rate-limited WARNING is logged naming `context-intelligence-upload <real storage path>`.

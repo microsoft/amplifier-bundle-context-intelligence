@@ -167,6 +167,7 @@ class _DestinationDispatcher:
         self._last_status: int | None = None
         self._last_overflow_log = 0.0
         self._last_permanent_log = 0.0
+        self._last_auth_log = 0.0
 
     def _ensure_worker(self) -> None:
         if self._worker_task is None or self._worker_task.done():
@@ -241,16 +242,19 @@ class _DestinationDispatcher:
                                 self._name,
                             )
                             self._degraded_warned = True
-                        elif self._auth_failures == self._failure_threshold:
-                            logger.warning(
-                                "%s still rejecting auth (HTTP 401) after %d attempts"
-                                " — this looks like an auth problem, not a network blip."
-                                " Check credentials.",
-                                self._name,
-                                self._auth_failures,
-                            )
                         else:
                             logger.debug("server_dispatch_retry dest=%s", self._name)
+                        if self._auth_failures >= self._failure_threshold:
+                            now = time.monotonic()
+                            if now - self._last_auth_log >= _LOG_RATE_LIMIT_SECONDS:
+                                self._last_auth_log = now
+                                logger.warning(
+                                    "%s still rejecting auth (HTTP 401) after %d attempts"
+                                    " — this looks like an auth problem, not a network blip."
+                                    " Check credentials.",
+                                    self._name,
+                                    self._auth_failures,
+                                )
                         await self._sleep_backoff()
                         continue  # retry the same event
                     # _DELIVERED or _PERMANENT — advance to next event
