@@ -144,7 +144,14 @@ def cmd_reconstruct(args: argparse.Namespace) -> int:
 
     # ── Discover sessions ─────────────────────────────────────────────────────
     log.info("Discovering sessions for workspace %s ...", workspace)
-    sessions, disk_only_ids = _ci_discover.discover_sessions(client, workspace, sessions_dir)
+    sessions, scan = _ci_discover.discover_sessions(client, workspace, sessions_dir)
+
+    # Absent root is a distinct failure — not "found zero" (§D.3)
+    if not scan.root_exists:
+        log.error("root not found: %s", scan.root)
+        return 1
+
+    disk_only_ids: list[str] = scan.disk_only_ids
 
     # Filter to a specific session if requested
     if args.session:

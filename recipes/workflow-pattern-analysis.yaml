@@ -96,15 +96,15 @@ stages:
         condition: "{{prescope}} != ''"
         command: |
           python3 -c "
-          import json, glob, os
-          paths = glob.glob(
-              os.path.expanduser('~/.amplifier/projects/**/context-intelligence/events.jsonl'),
-              recursive=True
-          )
+          import json, os
+          from pathlib import Path
+          root = Path(os.environ.get('AMPLIFIER_CONTEXT_INTELLIGENCE_BASE_PATH') or os.path.expanduser('~/.amplifier/projects'))
+          _raw = sorted(root.glob('*/sessions/*/context-intelligence/events.jsonl'))
           workspace = '{{workspace}}'
           prescope = '{{prescope}}'
           if workspace:
-              paths = [p for p in paths if workspace in p]
+              _raw = [p for p in _raw if p.parents[3].name == workspace]
+          paths = [str(p) for p in _raw]
           candidates = []
           total_scanned = len(paths)
           for p in paths:
@@ -169,15 +169,15 @@ stages:
         condition: "{{graph_probe.graph_available}} != 'true'"
         command: |
           python3 -c "
-          import json, glob, os
-          paths = glob.glob(
-              os.path.expanduser('~/.amplifier/projects/**/context-intelligence/events.jsonl'),
-              recursive=True
-          )
+          import json, os
+          from pathlib import Path
+          root = Path(os.environ.get('AMPLIFIER_CONTEXT_INTELLIGENCE_BASE_PATH') or os.path.expanduser('~/.amplifier/projects'))
+          _raw = sorted(root.glob('*/sessions/*/context-intelligence/events.jsonl'))
           workspace = '{{workspace}}'
           max_sessions = {{max_sessions}}
           if workspace:
-              paths = [p for p in paths if workspace in p]
+              _raw = [p for p in _raw if p.parents[3].name == workspace]
+          paths = [str(p) for p in _raw]
           session_ids_str = '{{session_ids}}'
           try:
               session_ids = json.loads(session_ids_str)

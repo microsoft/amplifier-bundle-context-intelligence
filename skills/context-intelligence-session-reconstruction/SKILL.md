@@ -128,8 +128,9 @@ After reconstruction, verify the output files were written correctly:
 **Check line counts for events and transcript:**
 
 ```bash
-wc -l ~/.amplifier/projects/{workspace}/sessions/{session-id}/context-intelligence/events.jsonl
-wc -l ~/.amplifier/projects/{workspace}/sessions/{session-id}/context-intelligence/transcript.jsonl
+CONTEXT_INTELLIGENCE_ROOT="${AMPLIFIER_CONTEXT_INTELLIGENCE_BASE_PATH:-$HOME/.amplifier/projects}"
+wc -l "$CONTEXT_INTELLIGENCE_ROOT"/{workspace}/sessions/{session-id}/context-intelligence/events.jsonl
+wc -l "$CONTEXT_INTELLIGENCE_ROOT"/{workspace}/sessions/{session-id}/context-intelligence/transcript.jsonl
 ```
 
 A reconstructed `events.jsonl` should have at least a few lines (session start, prompts, tool calls). Zero lines indicates the session had no recoverable events.
@@ -137,7 +138,8 @@ A reconstructed `events.jsonl` should have at least a few lines (session start, 
 **Validate metadata JSON is well-formed:**
 
 ```bash
-cat ~/.amplifier/projects/{workspace}/sessions/{session-id}/context-intelligence/metadata.json | python3 -m json.tool
+CONTEXT_INTELLIGENCE_ROOT="${AMPLIFIER_CONTEXT_INTELLIGENCE_BASE_PATH:-$HOME/.amplifier/projects}"
+cat "$CONTEXT_INTELLIGENCE_ROOT"/{workspace}/sessions/{session-id}/context-intelligence/metadata.json | python3 -m json.tool
 ```
 
 This confirms the file is valid JSON. Check that `bundle`, `model`, and `session_id` fields are populated.

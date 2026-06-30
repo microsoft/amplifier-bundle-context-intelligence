@@ -165,6 +165,28 @@ async def on_session_ready(coordinator: Any) -> None:
     unregister_fns = state["unregister_fns"]
     destinations: dict[str, Destination] = state["destinations"]
 
+    # --- §C.3 mandatory startup consistency check (always-fire, read-only) ---
+    # Compare the canonicalized writer root against the canonicalized env value.
+    # When they disagree the writer and readers target different roots — a silent
+    # split that this check makes LOUD.  Never writes os.environ (multiplexed-safe).
+    import os  # local import — only this path needs the process env
+
+    from context_intelligence.config import canonicalize_base_path as _canon
+
+    _ENV_VAR = "AMPLIFIER_CONTEXT_INTELLIGENCE_BASE_PATH"
+    _env_raw = os.environ.get(_ENV_VAR)
+    if _env_raw:
+        _env_root = _canon(_env_raw)
+        _writer_root = _canon(str(resolver.base_path))
+        if _env_root != _writer_root:
+            log.warning(
+                "context-intelligence: BASE_PATH env (%s) and resolved base_path (%s) disagree"
+                " — readers and the writer will target different roots;"
+                ' bind base_path: "${AMPLIFIER_CONTEXT_INTELLIGENCE_BASE_PATH:}" in the hook config',
+                _env_root,
+                _writer_root,
+            )
+
     # --- Destination selection (C2: working_dir capability ONLY, fail-loud) ---
     active: dict[str, Destination] = {}
     match_key: str = ""

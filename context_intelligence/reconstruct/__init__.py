@@ -33,6 +33,7 @@ Public API:
 from __future__ import annotations
 
 from context_intelligence.reconstruct.discover import (
+    DiskScanResult,
     discover_sessions,
     sessions_dir_for_project,
     workspace_slug,
@@ -49,6 +50,7 @@ __all__ = [
     "extract_transcript",
     "extract_metadata",
     "build_disk_only_metadata",
+    "DiskScanResult",
     "discover_sessions",
     "workspace_slug",
     "sessions_dir_for_project",
