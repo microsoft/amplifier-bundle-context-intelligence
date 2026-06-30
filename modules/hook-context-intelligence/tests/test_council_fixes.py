@@ -164,3 +164,90 @@ def test_queue_capacity_clamped_in_constructor(bad_cap: int) -> None:
     d = _dispatcher(queue_capacity=bad_cap)
 
     assert d._queue.maxsize == 1
+
+
+# ---------------------------------------------------------------------------
+# Bug C: persistent-401 escalation — reachable at failure_threshold=1, re-warns periodically
+# ---------------------------------------------------------------------------
+
+
+def _auth_then_deliver(d: _DestinationDispatcher, n_401: int) -> None:
+    """Attach a fake _post to d: first n_401 calls return _TRANSIENT (401), then _DELIVERED."""
+    calls: list[int] = [0]
+
+    async def fake_post(event: str, data: dict) -> str:  # type: ignore[type-arg]
+        if calls[0] < n_401:
+            calls[0] += 1
+            d._last_status = 401
+            return _TRANSIENT
+        return _DELIVERED
+
+    d._post = fake_post  # type: ignore[method-assign]
+
+
+async def test_auth_escalation_fires_at_threshold_one() -> None:
+    """At failure_threshold=1 with one 401 followed by delivery, >= 1 'rejecting auth' warning.
+
+    Regression for Bug C: the old code used strict == AND put the check in an elif after
+    the one-time DEGRADED branch. At failure_threshold=1, the first 401 always took the
+    'if not self._degraded_warned:' branch, making the elif unreachable and thus never
+    emitting the auth escalation warning.
+    """
+    d = _dispatcher(failure_threshold=1)
+    _auth_then_deliver(d, 1)
+    d._sleep_backoff = AsyncMock()
+
+    with patch(LOGGER_PATH) as mock_logger:
+        d._queue.put_nowait(("test:event", {"session_id": "s1"}))
+        task = asyncio.create_task(d._worker())
+        await d._queue.join()
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+    auth_warnings = [
+        c for c in mock_logger.warning.call_args_list
+        if "rejecting auth" in _rendered(c)
+    ]
+    assert len(auth_warnings) >= 1, (
+        f"Expected >= 1 'rejecting auth' warning at failure_threshold=1, "
+        f"got {len(auth_warnings)}: {mock_logger.warning.call_args_list}"
+    )
+
+
+async def test_auth_escalation_rewarns_periodically() -> None:
+    """With time.monotonic advancing 61s per call, 3x 401s emit >= 2 'rejecting auth' warnings.
+
+    Regression for Bug C: the old code used strict == so the auth warning could fire at
+    most once, ever. A rotated/dead key would retry forever with at most one warning —
+    a silent multi-day outage. The fix uses >= and rate-limits with _LOG_RATE_LIMIT_SECONDS
+    (60s), re-emitting periodically as long as 401s continue.
+    """
+    d = _dispatcher(failure_threshold=1)
+    _auth_then_deliver(d, 3)
+    d._sleep_backoff = AsyncMock()
+
+    # Monotonic ticks advance by 61s per call — always >= _LOG_RATE_LIMIT_SECONDS (60s).
+    ticks = iter(range(61, 100000, 61))
+
+    with patch(f"{MOD}.time.monotonic", side_effect=ticks):
+        with patch(LOGGER_PATH) as mock_logger:
+            d._queue.put_nowait(("test:event", {"session_id": "s1"}))
+            task = asyncio.create_task(d._worker())
+            await d._queue.join()
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+
+    auth_warnings = [
+        c for c in mock_logger.warning.call_args_list
+        if "rejecting auth" in _rendered(c)
+    ]
+    assert len(auth_warnings) >= 2, (
+        f"Expected >= 2 'rejecting auth' warnings with periodic re-warn, "
+        f"got {len(auth_warnings)}: {mock_logger.warning.call_args_list}"
+    )
