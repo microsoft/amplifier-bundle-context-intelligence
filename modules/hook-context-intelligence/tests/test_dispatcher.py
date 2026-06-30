@@ -4,10 +4,13 @@ from __future__ import annotations
 
 import asyncio
 import pytest
+import httpx
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from amplifier_module_hook_context_intelligence.handlers.logging_handler import (
+    _DELIVERED,
+    _TRANSIENT,
     _DestinationDispatcher,
 )
 
@@ -78,7 +81,9 @@ class TestDispatcherEnqueue:
         d = _dispatcher()
         mock_client = AsyncMock()
         mock_client.is_closed = False
-        mock_client.post.return_value = MagicMock(raise_for_status=MagicMock())
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_client.post.return_value = mock_response
         d._client = mock_client
 
         d.enqueue("session:start", {"session_id": "s1"})
@@ -88,23 +93,37 @@ class TestDispatcherEnqueue:
 
 
 class TestDispatcherBreaker:
-    """Consecutive failures tracked; backoff driven by _consecutive_failures."""
+    """_post return values: TRANSIENT on network errors, DELIVERED on success/teardown.
 
-    async def test_success_resets_counter(self) -> None:
+    Migrated from the old consecutive-failures counter model to the new three-way
+    outcome return type (_DELIVERED | _TRANSIENT | _PERMANENT). _consecutive_failures
+    management now lives in the worker loop (Task 5).
+    """
+
+    async def test_transient_then_delivered(self) -> None:
+        """Two ConnectError calls return _TRANSIENT; the final 200 returns _DELIVERED."""
         d = _dispatcher(failure_threshold=5)
-        mock_response = MagicMock(raise_for_status=MagicMock())
+        mock_response = MagicMock()
+        mock_response.status_code = 200
         mock_client = AsyncMock()
         mock_client.is_closed = False
-        mock_client.post.side_effect = [Exception("fail"), Exception("fail"), mock_response]
+        mock_client.post.side_effect = [
+            httpx.ConnectError("conn refused"),
+            httpx.ConnectError("conn refused"),
+            mock_response,
+        ]
         d._client = mock_client
 
-        with patch("amplifier_module_hook_context_intelligence.handlers.logging_handler.logger"):
-            for _ in range(3):
-                await d._post("session:start", {"session_id": "s1"})
+        results = []
+        for _ in range(3):
+            results.append(await d._post("session:start", {"session_id": "s1"}))
 
-        assert d._consecutive_failures == 0
+        assert results[0] == _TRANSIENT
+        assert results[1] == _TRANSIENT
+        assert results[2] == _DELIVERED
 
-    async def test_closed_client_runtime_error_skipped(self) -> None:
+    async def test_closed_client_runtime_error_returns_delivered(self) -> None:
+        """RuntimeError('client has been closed') is treated as teardown — returns _DELIVERED."""
         d = _dispatcher()
         mock_client = AsyncMock()
         mock_client.is_closed = False
@@ -113,8 +132,8 @@ class TestDispatcherBreaker:
         )
         d._client = mock_client
 
-        await d._post("session:end", {"session_id": "s1"})
-        assert d._consecutive_failures == 0
+        result = await d._post("session:end", {"session_id": "s1"})
+        assert result == _DELIVERED
 
 
 class TestSetDispatchersWorkerLeak:
@@ -188,7 +207,9 @@ class TestDispatcherClose:
         d = _dispatcher(close_drain_timeout=1.0)
         mock_client = AsyncMock()
         mock_client.is_closed = False
-        mock_client.post.return_value = MagicMock(raise_for_status=MagicMock())
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_client.post.return_value = mock_response
         d._client = mock_client
 
         d.enqueue("session:start", {"session_id": "s1"})

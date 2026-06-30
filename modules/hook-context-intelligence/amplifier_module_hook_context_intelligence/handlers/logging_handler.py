@@ -38,6 +38,37 @@ _CONNECT_TIMEOUT = 0.5
 _READ_TIMEOUT = 3.0
 _POOL_TIMEOUT = 0.5
 
+# ---------------------------------------------------------------------------
+# _post outcome constants (Task 4)
+# ---------------------------------------------------------------------------
+#: Returned by _post when the event was successfully delivered (HTTP < 400).
+_DELIVERED: str = "delivered"
+#: Returned by _post when delivery should be retried with backoff (network
+#: errors, HTTP 5xx, HTTP 429, HTTP 401).
+_TRANSIENT: str = "transient"
+#: Returned by _post when the event must be skipped permanently (HTTP 4xx
+#: other than 401/429, i.e. malformed or forbidden).
+_PERMANENT: str = "permanent"
+
+
+# ---------------------------------------------------------------------------
+# HTTP outcome classification helper (Task 4)
+# ---------------------------------------------------------------------------
+def _classify_http_outcome(status_code: int) -> str:
+    """Map an HTTP status code to a _post outcome constant.
+
+    Classification table (Option X):
+    - ``_DELIVERED``:  any status < 400
+    - ``_TRANSIENT``:  401, 429, or any 5xx (retry forever w/ backoff)
+    - ``_PERMANENT``:  403, 400, 413, 422, and any other 4xx (loud skip)
+    """
+    if status_code < 400:
+        return _DELIVERED
+    if status_code == 401 or status_code == 429 or status_code >= 500:
+        return _TRANSIENT
+    # 403, 400, 413, 422, and any other 4xx
+    return _PERMANENT
+
 
 # ---------------------------------------------------------------------------
 # Sanitization helpers
@@ -154,14 +185,32 @@ class _DestinationDispatcher:
             finally:
                 self._queue.task_done()
 
-    async def _post(self, event: str, data: dict[str, Any]) -> None:
-        """POST one event to this destination.
+    async def _post(self, event: str, data: dict[str, Any]) -> str:
+        """POST one event to this destination and return a three-way outcome.
+
+        Returns
+        -------
+        _DELIVERED
+            HTTP status < 400, or a RuntimeError whose message contains "closed"
+            (client torn down during session teardown — treated as done).
+        _TRANSIENT
+            Network-level httpx errors (ConnectError, ConnectTimeout, ReadTimeout,
+            PoolTimeout, RemoteProtocolError) or HTTP 401/429/5xx — caller should
+            retry with backoff.
+        _PERMANENT
+            HTTP 403 or any other 4xx (400, 413, 422, …) — event cannot be
+            delivered; caller should log loudly and skip.
 
         The Authorization header is produced PER REQUEST via self._strategy.headers().
         This ensures Entra tokens are refreshed by the azure-identity SDK when they
         near expiry — long-lived dispatchers never serve stale tokens.
 
-        Never permanently disables. Backoff is driven by _consecutive_failures only.
+        Never mutates disable state. _consecutive_failures management belongs to the
+        worker loop (Task 5). _last_status is set on every HTTP response so the worker
+        (Task 9) can detect persistent auth failures.
+
+        Unclassified exceptions (bare Exception, TypeError, etc.) are NOT caught here;
+        they propagate so the worker supervisor (Task 6) can log loud and survive.
         """
         # Lazy client creation — no auth header baked in; header goes on each post.
         if self._client is None or self._client.is_closed:
@@ -175,31 +224,33 @@ class _DestinationDispatcher:
                 limits=httpx.Limits(max_connections=1, max_keepalive_connections=1),
             )
 
+        payload = build_payload(event, self._workspace, data)
+        # Per-request header: Entra SDK returns cached token and refreshes near expiry.
+        auth_headers = self._strategy.headers()
+
         try:
-            payload = build_payload(event, self._workspace, data)
-            # Per-request header: Entra SDK returns cached token and refreshes near expiry.
-            auth_headers = self._strategy.headers()
             response = await self._client.post(
                 f"{self._url}/events", json=payload, headers=auth_headers
             )
-            response.raise_for_status()
-            self._consecutive_failures = 0
         except RuntimeError as exc:
-            # Client closed during session teardown — skip silently.
+            # Client closed during session teardown — treat as delivered (done).
             if "closed" in str(exc):
-                return
+                return _DELIVERED
             raise
-        except Exception:
-            self._consecutive_failures += 1
-            logger.debug(
-                "server_dispatch_failed: attempt %d/%d event=%s dest=%s url=%s",
-                self._consecutive_failures,
-                self._failure_threshold,
-                event,
-                self._name,
-                self._url,
-                exc_info=True,
-            )
+        except (
+            httpx.ConnectError,
+            httpx.ConnectTimeout,
+            httpx.ReadTimeout,
+            httpx.PoolTimeout,
+            httpx.RemoteProtocolError,
+        ):
+            return _TRANSIENT
+        # Bare Exception / TypeError / other unclassified exceptions propagate.
+
+        # Record status on every HTTP response (worker uses this for 401 escalation).
+        self._last_status = response.status_code
+
+        return _classify_http_outcome(response.status_code)
 
     async def close(self) -> None:
         """Drain, cancel worker, close client."""

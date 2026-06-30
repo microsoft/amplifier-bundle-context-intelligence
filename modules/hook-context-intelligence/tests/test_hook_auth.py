@@ -272,7 +272,7 @@ class TestDispatcherEntraPerRequestHeader:
 
         mock_client = AsyncMock()
         mock_client.is_closed = False
-        mock_client.post.return_value = MagicMock(raise_for_status=MagicMock())
+        mock_client.post.return_value = MagicMock(status_code=200)
         d._client = mock_client  # type: ignore[attr-defined]
 
         await d._post("session:start", {"session_id": "s1"})  # type: ignore[attr-defined]
@@ -287,7 +287,7 @@ class TestDispatcherEntraPerRequestHeader:
 
         mock_client = AsyncMock()
         mock_client.is_closed = False
-        mock_client.post.return_value = MagicMock(raise_for_status=MagicMock())
+        mock_client.post.return_value = MagicMock(status_code=200)
         d._client = mock_client  # type: ignore[attr-defined]
 
         await d._post("session:start", {"session_id": "s1"})  # type: ignore[attr-defined]
@@ -303,7 +303,7 @@ class TestDispatcherEntraPerRequestHeader:
             auth_mode="entra", auth_resource="api://53aa4ffd", credential=fake_cred
         )
 
-        mock_response = MagicMock(raise_for_status=MagicMock())
+        mock_response = MagicMock(status_code=200)
 
         with patch("httpx.AsyncClient") as mock_cls:
             mock_instance = AsyncMock()
@@ -347,7 +347,7 @@ class TestDispatcherEntraPerRequestHeader:
 
         mock_client = AsyncMock()
         mock_client.is_closed = False
-        mock_client.post.return_value = MagicMock(raise_for_status=MagicMock())
+        mock_client.post.return_value = MagicMock(status_code=200)
         d._client = mock_client
 
         # Post 3 events
@@ -375,7 +375,7 @@ class TestDispatcherStaticBackwardCompat:
 
         mock_client = AsyncMock()
         mock_client.is_closed = False
-        mock_response = MagicMock(raise_for_status=MagicMock())
+        mock_response = MagicMock(status_code=200)
         mock_client.post.return_value = mock_response
         d._client = mock_client  # type: ignore[attr-defined]
 
