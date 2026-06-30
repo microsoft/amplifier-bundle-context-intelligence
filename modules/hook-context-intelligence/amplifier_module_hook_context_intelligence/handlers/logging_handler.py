@@ -169,6 +169,14 @@ class _DestinationDispatcher:
         """Enqueue an event for dispatch. HOT PATH — zero awaits, zero I/O.
 
         Drops on full queue (bumps _overflow_dropped counter). Never disables.
+
+        Immutability contract: ``data`` MUST be treated as immutable from the
+        moment it is enqueued. Neither ``_worker`` nor ``_post`` may mutate the
+        dict in-place. This guarantees that ``_compute_idempotency_key`` produces
+        the same value on every retry attempt — including the lost-ACK path where
+        a ``RemoteProtocolError`` is raised after the server has already processed
+        the event. Any mutation would silently change the idempotency key and
+        defeat server-side dedup.
         """
         self._ensure_worker()
         try:
