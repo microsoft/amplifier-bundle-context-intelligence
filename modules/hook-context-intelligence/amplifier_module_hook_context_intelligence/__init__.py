@@ -166,25 +166,56 @@ async def on_session_ready(coordinator: Any) -> None:
     destinations: dict[str, Destination] = state["destinations"]
 
     # --- §C.3 mandatory startup consistency check (always-fire, read-only) ---
-    # Compare the canonicalized writer root against the canonicalized env value.
+    # Compare what the READERS will compute (canonicalized env var, defaulting
+    # when unset) against what the WRITER resolved (canonicalized base_path).
     # When they disagree the writer and readers target different roots — a silent
     # split that this check makes LOUD.  Never writes os.environ (multiplexed-safe).
+    #
+    # This fires in BOTH directions, covering the two ways relocation can break:
+    #   1. env SET, writer at a different root  — binding did not expand, or a
+    #      config override fought the env var.
+    #   2. env UNSET, writer NOT at default     — someone relocated via
+    #      config.base_path / settings.yaml, which the env-only readers CANNOT
+    #      see (relocation is reader-visible ONLY via the env var). The earlier
+    #      `if _env_raw:` guard missed this case entirely.
     import os  # local import — only this path needs the process env
 
-    from context_intelligence.config import canonicalize_base_path as _canon
+    from context_intelligence.config import reader_writer_roots_disagree
 
     _ENV_VAR = "AMPLIFIER_CONTEXT_INTELLIGENCE_BASE_PATH"
-    _env_raw = os.environ.get(_ENV_VAR)
-    if _env_raw:
-        _env_root = _canon(_env_raw)
-        _writer_root = _canon(str(resolver.base_path))
-        if _env_root != _writer_root:
-            log.warning(
-                "context-intelligence: BASE_PATH env (%s) and resolved base_path (%s) disagree"
-                " — readers and the writer will target different roots;"
-                ' bind base_path: "${AMPLIFIER_CONTEXT_INTELLIGENCE_BASE_PATH:}" in the hook config',
-                _env_root,
+    _env_raw = os.environ.get(_ENV_VAR)  # may be None/empty → readers fall to default
+    # Pure, unit-tested divergence core (see tests/test_base_path_parity.py).
+    _disagree, _reader_root, _writer_root = reader_writer_roots_disagree(
+        _env_raw, resolver.base_path
+    )
+    if _disagree:
+        log.warning(
+            "context-intelligence: writer base_path (%s) and reader root (%s) disagree"
+            " — readers (discover, recipe, navigation skills) resolve the root ONLY from"
+            " %s, so captures written under %s will be invisible to them."
+            ' Relocate via the env var (or bind base_path: "${%s:}" in the hook config),'
+            " not via config.base_path alone.",
+            _writer_root,
+            _reader_root,
+            _ENV_VAR,
+            _writer_root,
+            _ENV_VAR,
+        )
+    else:
+        # Positive confirmation at the operator's surface (default level is INFO).
+        # Fires ONLY when relocation is actually in effect, so the operator who
+        # relocated can SEE it took effect — closing the "success and silent
+        # misconfiguration look identical at the moment of action" gap. Stays
+        # silent in the default (non-relocated) case so it adds no noise.
+        from context_intelligence.config import DEFAULT_BASE_PATH
+
+        if _writer_root != DEFAULT_BASE_PATH:
+            log.info(
+                "context-intelligence: capturing to %s"
+                " (readers resolve the same root from %s)."
+                " Relocation is per-process, not per-session.",
                 _writer_root,
+                _ENV_VAR,
             )
 
     # --- Destination selection (C2: working_dir capability ONLY, fail-loud) ---

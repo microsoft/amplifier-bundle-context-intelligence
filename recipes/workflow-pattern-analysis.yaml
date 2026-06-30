@@ -102,8 +102,23 @@ stages:
           _raw = sorted(root.glob('*/sessions/*/context-intelligence/events.jsonl'))
           workspace = '{{workspace}}'
           prescope = '{{prescope}}'
+          def _ws_match(p, ws):
+              # Directory-first (fast): slug == workspace. Fall back to the
+              # workspace FIELD in events.jsonl when workspace was set explicitly
+              # and differs from the project slug (matches the navigation skills).
+              if p.parents[3].name == ws:
+                  return True
+              try:
+                  with open(p) as fh:
+                      # Bound the read so a malformed newline-less file can't be slurped whole,
+                      # but stay well above any real session:start line so a valid (long) first
+                      # event is not truncated into invalid JSON and the session silently dropped.
+                      obj = json.loads(fh.readline(1048576))
+                  return isinstance(obj, dict) and obj.get('workspace') == ws
+              except Exception:
+                  return False
           if workspace:
-              _raw = [p for p in _raw if p.parents[3].name == workspace]
+              _raw = [p for p in _raw if _ws_match(p, workspace)]
           paths = [str(p) for p in _raw]
           candidates = []
           total_scanned = len(paths)
@@ -175,8 +190,23 @@ stages:
           _raw = sorted(root.glob('*/sessions/*/context-intelligence/events.jsonl'))
           workspace = '{{workspace}}'
           max_sessions = {{max_sessions}}
+          def _ws_match(p, ws):
+              # Directory-first (fast): slug == workspace. Fall back to the
+              # workspace FIELD in events.jsonl when workspace was set explicitly
+              # and differs from the project slug (matches the navigation skills).
+              if p.parents[3].name == ws:
+                  return True
+              try:
+                  with open(p) as fh:
+                      # Bound the read so a malformed newline-less file can't be slurped whole,
+                      # but stay well above any real session:start line so a valid (long) first
+                      # event is not truncated into invalid JSON and the session silently dropped.
+                      obj = json.loads(fh.readline(1048576))
+                  return isinstance(obj, dict) and obj.get('workspace') == ws
+              except Exception:
+                  return False
           if workspace:
-              _raw = [p for p in _raw if p.parents[3].name == workspace]
+              _raw = [p for p in _raw if _ws_match(p, workspace)]
           paths = [str(p) for p in _raw]
           session_ids_str = '{{session_ids}}'
           try:

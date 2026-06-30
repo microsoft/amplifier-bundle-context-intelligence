@@ -70,6 +70,12 @@ def canonicalize_base_path(raw: str | Path | None) -> Path:
     No ``os.path.normpath`` or CWD-anchoring — pathlib already drops trailing
     slashes; absoluteness, not normalisation, is the load-bearing property.
 
+    .. important:: **Duplicated by design.** The fold gate forbids the hook's
+       ``config_resolver.py`` from importing this package, so the SAME rules are
+       inlined in ``HookConfigResolver.base_path``.  The two copies MUST stay
+       byte-equivalent; ``tests/test_base_path_parity.py`` pins writer ≡ reader.
+       If you edit one, edit the other and the parity test.
+
     Parameters
     ----------
     raw:
@@ -112,6 +118,40 @@ def context_intelligence_base_path() -> Path:
     return canonicalize_base_path(_env("BASE_PATH"))
 
 
+def reader_writer_roots_disagree(
+    env_raw: str | None,
+    writer_base_path: str | Path,
+) -> tuple[bool, Path, Path]:
+    """Compare the reader root against the writer root (§C.3 consistency check).
+
+    Pure, side-effect-free core of the startup consistency check in the hook's
+    ``on_session_ready``.  Extracted here (rather than left inline) so the
+    divergence condition is **unit-testable** without importing the hook package
+    (which needs ``amplifier_core`` at import time).
+
+    Both operands pass through the SAME :func:`canonicalize_base_path`, so the
+    comparison is symmetric: a relocated *writer* whose root the env-only readers
+    cannot see produces ``disagree=True``.
+
+    Parameters
+    ----------
+    env_raw:
+        The raw ``AMPLIFIER_CONTEXT_INTELLIGENCE_BASE_PATH`` value (``None`` when
+        unset/empty) — exactly what every reader resolves from.
+    writer_base_path:
+        The writer's resolved ``base_path`` (e.g. ``resolver.base_path``).
+
+    Returns
+    -------
+    tuple[bool, Path, Path]
+        ``(disagree, reader_root, writer_root)``.  ``disagree`` is ``True`` when
+        the canonicalized roots differ — the caller should then warn LOUD.
+    """
+    reader_root = canonicalize_base_path(env_raw)
+    writer_root = canonicalize_base_path(str(writer_base_path))
+    return reader_root != writer_root, reader_root, writer_root
+
+
 # ---------------------------------------------------------------------------
 # Shared capture-path helpers (canonical capture definition — §D.1)
 # ---------------------------------------------------------------------------
@@ -147,28 +187,6 @@ def capture_paths_under_sessions_dir(sessions_dir: Path) -> list[Path]:
         ``session_id`` for any path ``p`` is ``p.parent.parent.name``.
     """
     return sorted(sessions_dir.glob(CAPTURE_GLOB))
-
-
-def capture_paths_under_base(base: Path) -> list[Path]:
-    """Return all capture paths under a base root across all projects.
-
-    Scans ``<base>/*/sessions/*/context-intelligence/events.jsonl`` —
-    the same fixed shape as :func:`capture_paths_under_sessions_dir` reached
-    from two levels higher.
-
-    Parameters
-    ----------
-    base:
-        The base root directory (e.g. ``~/.amplifier/projects``).
-
-    Returns
-    -------
-    list[Path]
-        Sorted list of ``events.jsonl`` file paths across all projects under
-        *base*.  ``project_slug`` for any path ``p`` is ``p.parents[3].name``;
-        ``session_id`` is ``p.parent.parent.name``.
-    """
-    return sorted(base.glob("*/sessions/" + CAPTURE_GLOB))
 
 
 # ---------------------------------------------------------------------------

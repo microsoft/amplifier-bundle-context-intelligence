@@ -245,12 +245,23 @@ class HookConfigResolver:
         ``canonicalize_base_path`` in ``context_intelligence.config``; inlined
         here to keep zero hook→reader-package coupling and the fold gate green):
 
+        0. **Unexpanded-placeholder guard.** A value that still looks like a
+           shell placeholder (``${...}``) means the host app did NOT expand the
+           ``base_path: "${AMPLIFIER_CONTEXT_INTELLIGENCE_BASE_PATH:}"`` binding
+           (the hook relies on the app layer to expand ``${VAR}`` before mount,
+           exactly as it does for ``url`` / ``api_key`` / ``exclude_events``).
+           Rather than treat the literal ``${...}`` as a bogus relative path and
+           warn on every session, fall back to the default **silently**.  The
+           env-reading readers still relocate via the variable directly, and the
+           §C.3 startup consistency check in ``on_session_ready`` fires LOUD if
+           the variable was actually set (i.e. real relocation was intended but
+           the binding did not expand).
         1. Strip whitespace from the raw string.
         2. Empty string → ``_DEFAULT_BASE_PATH`` (never anchored to CWD).
         3. Expand ``~`` via :meth:`~pathlib.Path.expanduser`.
         4. If the result is still relative → warn, fall back to default.
 
-        Both the writer (this property) and readers call the same four rules so
+        Both the writer (this property) and readers call the same rules so
         canonicalized paths are byte-identical regardless of which side resolves
         them.  The §D.2 contract test drives the real property and asserts
         writer ≡ reader and always absolute.
@@ -261,9 +272,16 @@ class HookConfigResolver:
                 or self._coordinator_config_get("base_path")
                 or _DEFAULT_BASE_PATH
             )
-            # §D.2 canonicalizer (inline — no os, no import os, fold-gate safe)
+            # §D.2 canonicalizer (inline — no os, no import os, fold-gate safe).
+            # DUPLICATED BY DESIGN: the byte-equivalent reader copy is
+            # `canonicalize_base_path` in `context_intelligence.config`. The fold
+            # gate forbids importing that package here, so the two MUST be kept in
+            # sync by hand; `tests/test_base_path_parity.py` pins writer ≡ reader.
+            # Edit one → edit the other and the parity test.
             s = str(raw).strip()
-            if not s:
+            if not s or s.startswith("${"):
+                # Empty, OR an unexpanded ${VAR} placeholder (host app did not
+                # expand the binding). Either way → default, no noise. §D.2 rule 0.
                 self._base_path = Path(_DEFAULT_BASE_PATH).expanduser()
             else:
                 p = Path(s).expanduser()

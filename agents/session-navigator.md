@@ -132,13 +132,24 @@ $CONTEXT_INTELLIGENCE_ROOT/{project-slug}/sessions/{session_id}/context-intellig
 > `context-intelligence/` path segment and MUST NOT stop at `sessions/<id>/`:
 >
 > ```
-> CORRECT:  "$CONTEXT_INTELLIGENCE_ROOT"/*/sessions/*/context-intelligence/metadata.json
+> CORRECT:  "$CONTEXT_INTELLIGENCE_ROOT"/*/sessions/*/context-intelligence/events.jsonl
 > WRONG:    "$CONTEXT_INTELLIGENCE_ROOT"/*/sessions/*/metadata.json   # catches Amplifier core's files
 > ```
 >
 > **Why:** Amplifier core writes `sessions/<id>/metadata.json` with NO `context-intelligence/`
 > segment. Globbing one level too shallow latches onto core's files and produces a confident
 > wrong count.
+>
+> **Canonical marker = `events.jsonl`.** The Python readers (`discover.py`, the workflow recipe)
+> treat `context-intelligence/events.jsonl` as the single discriminator of a real capture.
+> `metadata.json` is read here only for its fields; both files are written together, so either
+> glob keeps the `context-intelligence/` segment and avoids the false-positive. For a strict
+> capture count that matches the code, glob `events.jsonl`.
+
+> **⛔ RELOCATION RULE:** The root comes ONLY from `AMPLIFIER_CONTEXT_INTELLIGENCE_BASE_PATH`
+> (unset → `$HOME/.amplifier/projects`). The hook's `config.base_path` moves the *writer* but
+> NOT these readers — if a capture seems missing, confirm the writer was relocated via the env
+> var, not `config.base_path` alone.
 
 > **⛔ FAIL-LOUD RULE:** When zero captures are found, say exactly `"looked in <root>, found 0"` —
 > never report a confident count from a shallower glob, never silently fall back to a different
@@ -168,7 +179,8 @@ If this directory exists and contains sessions with `context-intelligence/` subd
 
 ```bash
 CONTEXT_INTELLIGENCE_ROOT="${AMPLIFIER_CONTEXT_INTELLIGENCE_BASE_PATH:-$HOME/.amplifier/projects}"
-for f in "$CONTEXT_INTELLIGENCE_ROOT"/*/sessions/*/context-intelligence/metadata.json; do
+for ev in "$CONTEXT_INTELLIGENCE_ROOT"/*/sessions/*/context-intelligence/events.jsonl; do
+  f="${ev%/events.jsonl}/metadata.json"   # canonical marker = events.jsonl; fields from sibling
   jq -r 'select(.workspace == "{WORKSPACE}") | input_filename' "$f" 2>/dev/null
 done
 ```
@@ -190,12 +202,14 @@ Find sessions by ID, project slug, date, or agent name, always scoped to the pro
 CONTEXT_INTELLIGENCE_ROOT="${AMPLIFIER_CONTEXT_INTELLIGENCE_BASE_PATH:-$HOME/.amplifier/projects}"
 
 # List sessions in a workspace (directory-first path)
-for f in "$CONTEXT_INTELLIGENCE_ROOT"/my-project/sessions/*/context-intelligence/metadata.json; do
+for ev in "$CONTEXT_INTELLIGENCE_ROOT"/my-project/sessions/*/context-intelligence/events.jsonl; do
+  f="${ev%/events.jsonl}/metadata.json"   # canonical marker = events.jsonl; fields from sibling
   jq -r '[.session_id, .workspace, .status, .started_at, .agent_name // "(root)"] | join("\t")' "$f" 2>/dev/null
 done | sort -t$'\t' -k4
 
 # List sessions scoped by workspace field (cross-project scan)
-for f in "$CONTEXT_INTELLIGENCE_ROOT"/*/sessions/*/context-intelligence/metadata.json; do
+for ev in "$CONTEXT_INTELLIGENCE_ROOT"/*/sessions/*/context-intelligence/events.jsonl; do
+  f="${ev%/events.jsonl}/metadata.json"   # canonical marker = events.jsonl; fields from sibling
   jq -r 'select(.workspace == "my-project") | [.session_id, .status, .started_at, .agent_name // "(root)"] | join("\t")' "$f" 2>/dev/null
 done | sort -t$'\t' -k3
 
@@ -206,7 +220,8 @@ find "$CONTEXT_INTELLIGENCE_ROOT"/my-project/sessions -maxdepth 1 -name "*PARTIA
   | while read -r d; do [ -d "$d/context-intelligence" ] && echo "$d"; done
 
 # Find sessions by agent name within a workspace
-for f in "$CONTEXT_INTELLIGENCE_ROOT"/my-project/sessions/*/context-intelligence/metadata.json; do
+for ev in "$CONTEXT_INTELLIGENCE_ROOT"/my-project/sessions/*/context-intelligence/events.jsonl; do
+  f="${ev%/events.jsonl}/metadata.json"   # canonical marker = events.jsonl; fields from sibling
   jq -r 'select(.agent_name == "TARGET_AGENT") | .session_id' "$f" 2>/dev/null
 done
 
@@ -252,7 +267,8 @@ jq -r '{parent_id, workspace, status}' metadata.json
 
 # Find child sessions within a workspace
 PARENT_ID="YOUR_SESSION_ID_HERE"
-for f in "$CONTEXT_INTELLIGENCE_ROOT"/my-project/sessions/*/context-intelligence/metadata.json; do
+for ev in "$CONTEXT_INTELLIGENCE_ROOT"/my-project/sessions/*/context-intelligence/events.jsonl; do
+  f="${ev%/events.jsonl}/metadata.json"   # canonical marker = events.jsonl; fields from sibling
   jq -r "select(.parent_id == \"$PARENT_ID\") | [.session_id, .agent_name // \"(root)\", .status, .workspace] | join(\"\t\")" "$f" 2>/dev/null
 done
 

@@ -28,7 +28,7 @@ $CONTEXT_INTELLIGENCE_ROOT/{project-slug}/sessions/{session_id}/context-intellig
 └── metadata.json     # session metadata, written on start, updated on end
 ```
 
-- `$CONTEXT_INTELLIGENCE_ROOT` — resolved from the idiom `"${AMPLIFIER_CONTEXT_INTELLIGENCE_BASE_PATH:-$HOME/.amplifier/projects}"` (unset → legacy default; configurable via `config.base_path`)
+- `$CONTEXT_INTELLIGENCE_ROOT` — resolved from the idiom `"${AMPLIFIER_CONTEXT_INTELLIGENCE_BASE_PATH:-$HOME/.amplifier/projects}"` (unset → legacy default). **Relocation is reader-visible ONLY via this env var.** The hook's `config.base_path` moves where the *writer* stores captures, but readers (this skill, `discover.py`, the recipe) resolve the root solely from the env var — so always relocate via `AMPLIFIER_CONTEXT_INTELLIGENCE_BASE_PATH`, not `config.base_path` alone, or readers will look in the wrong place.
 - `{project-slug}` — derived from the full working directory path (see Project Slug Algorithm below)
 - `{session_id}` — unique session identifier (UUID or UUID with agent suffix for child sessions)
 - `context-intelligence/` — subdirectory containing the session data files
@@ -46,13 +46,20 @@ $CONTEXT_INTELLIGENCE_ROOT/-home-user-myapp/sessions/55c8841a-1234-5678-9abc-def
 > `context-intelligence/` path segment and MUST NOT stop at `sessions/<id>/`:
 >
 > ```
-> CORRECT:  "$CONTEXT_INTELLIGENCE_ROOT"/*/sessions/*/context-intelligence/metadata.json
+> CORRECT:  "$CONTEXT_INTELLIGENCE_ROOT"/*/sessions/*/context-intelligence/events.jsonl
 > WRONG:    "$CONTEXT_INTELLIGENCE_ROOT"/*/sessions/*/metadata.json   # catches Amplifier core's files
 > ```
 >
 > **Why:** Amplifier core writes `sessions/<id>/metadata.json` with NO `context-intelligence/`
 > segment. Globbing one level too shallow latches onto core's files and produces a confident
 > wrong count.
+>
+> **Canonical marker = `events.jsonl`.** The Python readers (`discover.py`, the workflow
+> recipe) treat `context-intelligence/events.jsonl` as the single discriminator of a real
+> capture. `metadata.json` is used here only to read fields (`workspace`, `status`, …); both
+> files are written together, so either glob includes the `context-intelligence/` segment and
+> avoids the false-positive. When you need a strict capture count that matches the code,
+> glob `events.jsonl`, not `metadata.json`.
 
 > **⚠ FAIL-LOUD RULE:** When zero captures are found, say exactly `"looked in <root>, found 0"` —
 > never report a confident count from a shallower glob, never silently fall back to a different path.
@@ -200,12 +207,14 @@ grep -rl '"workspace":"{workspace}"' "$CONTEXT_INTELLIGENCE_ROOT"/*/sessions/*/c
 
 ```bash
 # Fast path: workspace matches directory name (default case)
-for f in "$CONTEXT_INTELLIGENCE_ROOT"/my-project/sessions/*/context-intelligence/metadata.json; do
+for ev in "$CONTEXT_INTELLIGENCE_ROOT"/my-project/sessions/*/context-intelligence/events.jsonl; do
+  f="${ev%/events.jsonl}/metadata.json"   # canonical marker = events.jsonl; fields from sibling
   jq -r '[.session_id, .status, .started_at, .agent_name // "(root)"] | join("\t")' "$f" 2>/dev/null
 done | sort -t$'\t' -k3
 
 # Scoped path: workspace set explicitly — scan all projects, filter by field
-for f in "$CONTEXT_INTELLIGENCE_ROOT"/*/sessions/*/context-intelligence/metadata.json; do
+for ev in "$CONTEXT_INTELLIGENCE_ROOT"/*/sessions/*/context-intelligence/events.jsonl; do
+  f="${ev%/events.jsonl}/metadata.json"   # canonical marker = events.jsonl; fields from sibling
   jq -r 'select(.workspace == "my-project") | [.session_id, .status, .started_at, .agent_name // "(root)"] | join("\t")' "$f" 2>/dev/null
 done | sort -t$'\t' -k3
 ```
@@ -230,12 +239,14 @@ jq -r '.workspace' "$CONTEXT_INTELLIGENCE_ROOT"/-home-user-myapp/sessions/*/cont
 
 ```bash
 # Within a single project directory:
-for f in "$CONTEXT_INTELLIGENCE_ROOT"/my-project/sessions/*/context-intelligence/metadata.json; do
+for ev in "$CONTEXT_INTELLIGENCE_ROOT"/my-project/sessions/*/context-intelligence/events.jsonl; do
+  f="${ev%/events.jsonl}/metadata.json"   # canonical marker = events.jsonl; fields from sibling
   jq -r 'select(.status == "running") | .session_id' "$f" 2>/dev/null
 done
 
 # Cross-project, scoped to workspace:
-for f in "$CONTEXT_INTELLIGENCE_ROOT"/*/sessions/*/context-intelligence/metadata.json; do
+for ev in "$CONTEXT_INTELLIGENCE_ROOT"/*/sessions/*/context-intelligence/events.jsonl; do
+  f="${ev%/events.jsonl}/metadata.json"   # canonical marker = events.jsonl; fields from sibling
   jq -r 'select(.workspace == "my-project" and .status == "running") | .session_id' "$f" 2>/dev/null
 done
 ```

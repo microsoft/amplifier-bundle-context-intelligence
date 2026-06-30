@@ -130,9 +130,12 @@ Delegate to `context-intelligence:graph-analyst` to:
   ALL on-disk sessions regardless of graph indexing state. Disk scan entry:
   ```bash
   CONTEXT_INTELLIGENCE_ROOT="${AMPLIFIER_CONTEXT_INTELLIGENCE_BASE_PATH:-$HOME/.amplifier/projects}"
-  find "$CONTEXT_INTELLIGENCE_ROOT" -path "*/context-intelligence/metadata.json" 2>/dev/null
+  # Enumerate captures by the canonical marker (events.jsonl), matching the Python
+  # readers; read the sibling metadata.json for the format/version filter.
+  find "$CONTEXT_INTELLIGENCE_ROOT" -path "*/context-intelligence/events.jsonl" 2>/dev/null \
+    | while read -r ev; do echo "${ev%/events.jsonl}/metadata.json"; done
   ```
-  Filter to `format == "context-intelligence"` AND `version == "1.0.0"`.
+  Filter to `format == "context-intelligence"` AND `version == "1.0.0"` (from metadata.json).
   Follow `@context-intelligence:context/safe-extraction-patterns.md` — never load full
   `llm:request` lines.
 - Validate coverage: compare graph session count against disk count and inform the user
