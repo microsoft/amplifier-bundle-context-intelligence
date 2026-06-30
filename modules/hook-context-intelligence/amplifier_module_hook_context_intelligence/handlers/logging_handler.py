@@ -189,10 +189,15 @@ class _DestinationDispatcher:
         the outer loop fetches the next event — order is preserved by
         construction (single worker, one in-flight event at a time).
 
-        Unclassified exceptions (bare ``Exception``, ``TypeError``, …) propagate
-        so the worker supervisor (Task 6) can log loudly and restart the loop.
-        ``task_done()`` is called in the ``BaseException`` handler so that
-        ``asyncio.Queue.join()`` in ``close()`` never hangs.
+        Unclassified exceptions (bare ``Exception``, ``TypeError``, …) are
+        caught by the supervisor (Task 6): logged loudly, the poisoned in-flight
+        event is dropped (``task_done()`` + clear ``_current``), and the worker
+        re-enters the outer loop so subsequent events keep draining.
+
+        ``asyncio.CancelledError`` is a ``BaseException`` (not ``Exception``) so
+        it bypasses the unclassified handler. A separate handler calls
+        ``task_done()`` before re-raising so that ``asyncio.Queue.join()`` in
+        ``close()`` never hangs.
         """
         while True:
             event, payload_data = await self._queue.get()
@@ -209,12 +214,25 @@ class _DestinationDispatcher:
                     self._queue.task_done()
                     self._current = None
                     break
-            except BaseException:
-                # Ensure task_done() is always paired with queue.get() even
-                # when an unclassified exception or CancelledError propagates.
+            except asyncio.CancelledError:
+                # CancelledError must propagate so close() can cancel the worker.
+                # Pair task_done() with the queue.get() above before re-raising.
                 self._queue.task_done()
                 self._current = None
                 raise
+            except Exception:
+                # Unclassified exception — log loudly, drop the poisoned event,
+                # clear in-flight state, and re-enter the loop so the worker
+                # keeps draining subsequent events (Task 6 / TB-01).
+                logger.exception(
+                    "worker_unclassified_exception: poisoned event dropped"
+                    " dest=%s event=%s",
+                    self._name,
+                    event,
+                )
+                self._queue.task_done()
+                self._current = None
+                # Outer while True continues — worker survives.
 
     async def _sleep_backoff(self) -> None:
         """Sleep for a capped exponential backoff interval.
