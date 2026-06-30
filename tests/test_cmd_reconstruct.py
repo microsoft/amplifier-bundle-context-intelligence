@@ -25,6 +25,8 @@ import sys
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+from context_intelligence.reconstruct.discover import DiskScanResult
+
 REPO_ROOT = Path(__file__).parent.parent
 SCRIPTS_DIR = REPO_ROOT / "scripts"
 SCRIPT_PATH = SCRIPTS_DIR / "context-intelligence.py"
@@ -102,7 +104,15 @@ class TestCmdReconstructExists:
             patch("context_intelligence.config.resolve_config", return_value=("http://s", "key")),
             patch(
                 "context_intelligence.reconstruct.discover.discover_sessions",
-                return_value=([], []),
+                return_value=(
+                    [],
+                    DiskScanResult(
+                        root=Path("/tmp/test-project/sessions"),
+                        root_exists=True,
+                        disk_only_ids=[],
+                        candidate_ids=[],
+                    ),
+                ),
             ),
         ):
             args = _make_args()
@@ -136,7 +146,15 @@ class TestCmdReconstructReturnCode:
             patch("context_intelligence.config.resolve_config", return_value=("http://s", "key")),
             patch(
                 "context_intelligence.reconstruct.discover.discover_sessions",
-                return_value=([], []),
+                return_value=(
+                    [],
+                    DiskScanResult(
+                        root=Path("/tmp/test-project/sessions"),
+                        root_exists=True,
+                        disk_only_ids=[],
+                        candidate_ids=[],
+                    ),
+                ),
             ),
         ):
             args = _make_args()
@@ -162,7 +180,15 @@ class TestCmdReconstructReturnCode:
             patch("context_intelligence.config.resolve_config", return_value=("http://s", "key")),
             patch(
                 "context_intelligence.reconstruct.discover.discover_sessions",
-                return_value=([mock_session], []),
+                return_value=(
+                    [mock_session],
+                    DiskScanResult(
+                        root=Path("/tmp/test-project/sessions"),
+                        root_exists=True,
+                        disk_only_ids=[],
+                        candidate_ids=[],
+                    ),
+                ),
             ),
             patch(
                 "context_intelligence.reconstruct.events.extract_events",
@@ -200,7 +226,15 @@ class TestCmdReconstructReturnCode:
             patch("context_intelligence.config.resolve_config", return_value=("http://s", "key")),
             patch(
                 "context_intelligence.reconstruct.discover.discover_sessions",
-                return_value=([mock_session], []),
+                return_value=(
+                    [mock_session],
+                    DiskScanResult(
+                        root=Path("/tmp/test-project/sessions"),
+                        root_exists=True,
+                        disk_only_ids=[],
+                        candidate_ids=[],
+                    ),
+                ),
             ),
             patch(
                 "context_intelligence.reconstruct.events.extract_events",
@@ -249,7 +283,15 @@ class TestWhatToReconstruct:
             patch("context_intelligence.config.resolve_config", return_value=("http://s", "key")),
             patch(
                 "context_intelligence.reconstruct.discover.discover_sessions",
-                return_value=([mock_session], []),
+                return_value=(
+                    [mock_session],
+                    DiskScanResult(
+                        root=Path("/tmp/test-project/sessions"),
+                        root_exists=True,
+                        disk_only_ids=[],
+                        candidate_ids=[],
+                    ),
+                ),
             ),
             patch(
                 "context_intelligence.reconstruct.events.extract_events",
@@ -292,7 +334,15 @@ class TestWhatToReconstruct:
             patch("context_intelligence.config.resolve_config", return_value=("http://s", "key")),
             patch(
                 "context_intelligence.reconstruct.discover.discover_sessions",
-                return_value=([mock_session], []),
+                return_value=(
+                    [mock_session],
+                    DiskScanResult(
+                        root=Path("/tmp/test-project/sessions"),
+                        root_exists=True,
+                        disk_only_ids=[],
+                        candidate_ids=[],
+                    ),
+                ),
             ),
             patch(
                 "context_intelligence.reconstruct.events.extract_events",
@@ -335,7 +385,15 @@ class TestWhatToReconstruct:
             patch("context_intelligence.config.resolve_config", return_value=("http://s", "key")),
             patch(
                 "context_intelligence.reconstruct.discover.discover_sessions",
-                return_value=([mock_session], []),
+                return_value=(
+                    [mock_session],
+                    DiskScanResult(
+                        root=Path("/tmp/test-project/sessions"),
+                        root_exists=True,
+                        disk_only_ids=[],
+                        candidate_ids=[],
+                    ),
+                ),
             ),
             patch(
                 "context_intelligence.reconstruct.events.extract_events",
@@ -378,7 +436,15 @@ class TestWhatToReconstruct:
             patch("context_intelligence.config.resolve_config", return_value=("http://s", "key")),
             patch(
                 "context_intelligence.reconstruct.discover.discover_sessions",
-                return_value=([mock_session], []),
+                return_value=(
+                    [mock_session],
+                    DiskScanResult(
+                        root=Path("/tmp/test-project/sessions"),
+                        root_exists=True,
+                        disk_only_ids=[],
+                        candidate_ids=[],
+                    ),
+                ),
             ),
             patch(
                 "context_intelligence.reconstruct.events.extract_events",
@@ -435,7 +501,15 @@ class TestSessionFiltering:
             patch("context_intelligence.config.resolve_config", return_value=("http://s", "key")),
             patch(
                 "context_intelligence.reconstruct.discover.discover_sessions",
-                return_value=(sessions, []),
+                return_value=(
+                    sessions,
+                    DiskScanResult(
+                        root=Path("/tmp/test-project/sessions"),
+                        root_exists=True,
+                        disk_only_ids=[],
+                        candidate_ids=[],
+                    ),
+                ),
             ),
             patch(
                 "context_intelligence.reconstruct.events.extract_events",
@@ -500,7 +574,15 @@ class TestSkipExisting:
             patch("context_intelligence.config.resolve_config", return_value=("http://s", "key")),
             patch(
                 "context_intelligence.reconstruct.discover.discover_sessions",
-                return_value=([mock_session], []),
+                return_value=(
+                    [mock_session],
+                    DiskScanResult(
+                        root=Path("/tmp/test-project/sessions"),
+                        root_exists=True,
+                        disk_only_ids=[],
+                        candidate_ids=[],
+                    ),
+                ),
             ),
             patch(
                 "context_intelligence.reconstruct.discover.workspace_slug",
@@ -555,7 +637,15 @@ class TestSkipExisting:
             patch("context_intelligence.config.resolve_config", return_value=("http://s", "key")),
             patch(
                 "context_intelligence.reconstruct.discover.discover_sessions",
-                return_value=([mock_session], []),
+                return_value=(
+                    [mock_session],
+                    DiskScanResult(
+                        root=Path("/tmp/test-project/sessions"),
+                        root_exists=True,
+                        disk_only_ids=[],
+                        candidate_ids=[],
+                    ),
+                ),
             ),
             patch(
                 "context_intelligence.reconstruct.discover.workspace_slug",
@@ -615,7 +705,15 @@ class TestDryRun:
             patch("context_intelligence.config.resolve_config", return_value=("http://s", "key")),
             patch(
                 "context_intelligence.reconstruct.discover.discover_sessions",
-                return_value=([mock_session], []),
+                return_value=(
+                    [mock_session],
+                    DiskScanResult(
+                        root=Path("/tmp/test-project/sessions"),
+                        root_exists=True,
+                        disk_only_ids=[],
+                        candidate_ids=[],
+                    ),
+                ),
             ),
             patch(
                 "context_intelligence.reconstruct.discover.workspace_slug",
@@ -679,7 +777,15 @@ class TestDiskOnlySessions:
             patch("context_intelligence.config.resolve_config", return_value=("http://s", "key")),
             patch(
                 "context_intelligence.reconstruct.discover.discover_sessions",
-                return_value=([], [disk_only_id]),
+                return_value=(
+                    [],
+                    DiskScanResult(
+                        root=Path("/tmp/test-project/sessions"),
+                        root_exists=True,
+                        disk_only_ids=[disk_only_id],
+                        candidate_ids=[disk_only_id],
+                    ),
+                ),
             ),
             patch(
                 "context_intelligence.reconstruct.discover.workspace_slug",
@@ -716,7 +822,15 @@ class TestDiskOnlySessions:
             patch("context_intelligence.config.resolve_config", return_value=("http://s", "key")),
             patch(
                 "context_intelligence.reconstruct.discover.discover_sessions",
-                return_value=([], [disk_only_id]),
+                return_value=(
+                    [],
+                    DiskScanResult(
+                        root=Path("/tmp/test-project/sessions"),
+                        root_exists=True,
+                        disk_only_ids=[disk_only_id],
+                        candidate_ids=[disk_only_id],
+                    ),
+                ),
             ),
             patch(
                 "context_intelligence.reconstruct.discover.workspace_slug",
