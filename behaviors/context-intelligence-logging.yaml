@@ -40,6 +40,29 @@ hooks:
         - delegate:agent_completed
         - delegate:agent_cancelled
         - delegate:error
+      # base_path — relocation root for ALL captures.
+      #
+      # This binding is how relocation reaches the readers too: discover.py, the
+      # workflow recipe, and the navigation skills resolve their root ONLY from
+      # the AMPLIFIER_CONTEXT_INTELLIGENCE_BASE_PATH env var. Binding base_path to
+      # the same var keeps the writer and readers in lock-step.
+      #
+      # REQUIRES the host app to expand ${VAR:default} placeholders before mount
+      # (the hook does not self-expand — same contract as url/api_key above). The
+      # Amplifier app-cli does this. On a host that does NOT expand the ${VAR:}
+      # (colon-empty-default) form, the unexpanded literal falls back to the
+      # default SILENTLY, and the §C.3 consistency check in on_session_ready warns
+      # LOUD if the var was actually set — so a broken binding is never silent.
+      #
+      # ⚠ Do NOT relocate by hard-coding a path here instead of the env var:
+      # the writer would move but the env-only readers would not follow, and they
+      # would report "found 0". Always relocate via the env var.
+      #
+      # ⚠ Relocation granularity is PER-PROCESS, not per-session: every session in
+      # one process shares the one env value. A host that needs different roots per
+      # session must use separate processes. At session start the hook logs (INFO)
+      # the active capture root whenever relocation is in effect, so you can confirm
+      # it took effect.
       base_path: "${AMPLIFIER_CONTEXT_INTELLIGENCE_BASE_PATH:}"
       # project_slug: (auto-resolved from working directory; uncomment to override)
       # exclude_events: []  (optional fnmatch patterns; uncomment and list events to suppress)
