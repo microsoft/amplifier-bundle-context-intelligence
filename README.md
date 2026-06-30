@@ -475,12 +475,12 @@ The dispatcher never permanently disables a destination. On any transient failur
 - **Persistent-401 escalation** — if `>= dispatch_failure_threshold` consecutive 401s are observed, a rate-limited WARNING is emitted periodically (at most once per 60 s): "this looks like an auth problem, not a network blip. Check credentials."
 
 **Notifications — action-needed (require user action to recover):**
-- **OVERFLOW** — when the in-memory queue is full, the newest event is dropped (remains durable in `events.jsonl`) and a rate-limited WARNING is logged naming `context-intelligence-upload <real storage path>`.
+- **OVERFLOW** — when the in-memory queue is full, the newest event is dropped (remains durable in `events.jsonl`) and a rate-limited WARNING is logged naming `context-intelligence-upload --path <real storage path>` (--server-url/--api-key come from flags or env/config).
 - **Shutdown-undelivered** — if any events remain undelivered when `close()` is called, a WARNING is emitted with an honest count (`queued + in-flight + overflow-dropped`) and the real storage path.
 
 **Idempotency contract:** each POST carries a deterministic `idempotency_key` (SHA-256 over `{event, workspace, data}`). Retries are safe — the server can suppress duplicate deliveries. (The "single server-side record" guarantee is an assumption verified by the real-server E2E tests, not the unit suite.)
 
-**Known limitation:** during a prolonged outage, once the bounded in-memory queue fills, the newest events are dropped from the queue but remain durable in `events.jsonl`. Recover them after the outage with `context-intelligence-upload <real storage path>`.
+**Known limitation:** during a prolonged outage, once the bounded in-memory queue fills, the newest events are dropped from the queue but remain durable in `events.jsonl`. Recover them after the outage with `context-intelligence-upload --path <real storage path>` (--server-url/--api-key come from flags or env/config).
 
 See [`docs/dispatch-circuit-breaker.dot`](docs/dispatch-circuit-breaker.dot) for the updated dispatch flow and [`docs/dispatch-auto-recovery-lifecycle.dot`](docs/dispatch-auto-recovery-lifecycle.dot) for the consolidated auto-recovery lifecycle (HEALTHY → DEGRADED → RECOVERY → OVERFLOW → SHUTDOWN).
 

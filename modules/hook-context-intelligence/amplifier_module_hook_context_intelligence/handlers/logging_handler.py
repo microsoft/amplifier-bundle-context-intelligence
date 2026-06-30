@@ -157,7 +157,9 @@ class _DestinationDispatcher:
         )
         self._client: httpx.AsyncClient | None = None
         self._queue_capacity = max(1, queue_capacity)
-        self._queue: asyncio.Queue[tuple[str, dict[str, Any]]] = asyncio.Queue(maxsize=self._queue_capacity)
+        self._queue: asyncio.Queue[tuple[str, dict[str, Any]]] = asyncio.Queue(
+            maxsize=self._queue_capacity
+        )
         self._worker_task: asyncio.Task[None] | None = None
         self._consecutive_failures = 0  # backoff driver only — never disables
         self._degraded_warned = False
@@ -197,7 +199,8 @@ class _DestinationDispatcher:
                 logger.warning(
                     "%s buffer full — %d events dropped since last warning;"
                     " events are durable in events.jsonl."
-                    " To manually upload run: context-intelligence-upload %s",
+                    " To manually upload run: context-intelligence-upload --path %s"
+                    " (--server-url/--api-key come from flags or env/config; see --help)",
                     self._name,
                     self._overflow_dropped,
                     self._storage_path,
@@ -303,8 +306,7 @@ class _DestinationDispatcher:
                 # clear in-flight state, and re-enter the loop so the worker
                 # keeps draining subsequent events (Task 6 / TB-01).
                 logger.exception(
-                    "worker_unclassified_exception: poisoned event dropped"
-                    " dest=%s event=%s",
+                    "worker_unclassified_exception: poisoned event dropped dest=%s event=%s",
                     self._name,
                     event,
                 )
@@ -431,7 +433,8 @@ class _DestinationDispatcher:
                     "%s shutdown: %d undelivered event(s)"
                     " (queued=%d in-flight=%d overflow-dropped=%d)."
                     " Events are durable in events.jsonl."
-                    " To manually upload run: context-intelligence-upload %s",
+                    " To manually upload run: context-intelligence-upload --path %s"
+                    " (--server-url/--api-key come from flags or env/config; see --help)",
                     self._name,
                     total,
                     queued,
