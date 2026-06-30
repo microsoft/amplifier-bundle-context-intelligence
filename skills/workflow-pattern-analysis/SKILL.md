@@ -70,7 +70,7 @@ read_file("${SKILL_DIR}/cypher-patterns.md")     — Cypher query templates Q1�
 Also load from the bundle context when querying the graph or scanning JSONL:
 
 ```
-@context-intelligence:context/graph-model-reference.md   — CI graph schema
+@context-intelligence:context/graph-model-reference.md   — context-intelligence graph schema
 @context-intelligence:context/jsonl-event-schema.md      — on-disk JSONL event schema
 @context-intelligence:context/safe-extraction-patterns.md — safe JSONL extraction patterns
 ```
@@ -129,7 +129,8 @@ Delegate to `context-intelligence:graph-analyst` to:
 - **Disk scan is the explicit alternative** when the user needs comprehensive coverage of
   ALL on-disk sessions regardless of graph indexing state. Disk scan entry:
   ```bash
-  find ~/.amplifier/projects -path "*/context-intelligence/metadata.json" 2>/dev/null
+  CONTEXT_INTELLIGENCE_ROOT="${AMPLIFIER_CONTEXT_INTELLIGENCE_BASE_PATH:-$HOME/.amplifier/projects}"
+  find "$CONTEXT_INTELLIGENCE_ROOT" -path "*/context-intelligence/metadata.json" 2>/dev/null
   ```
   Filter to `format == "context-intelligence"` AND `version == "1.0.0"`.
   Follow `@context-intelligence:context/safe-extraction-patterns.md` — never load full

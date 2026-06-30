@@ -16,25 +16,46 @@ For ready-to-use jq/grep recipes, see `context/safe-extraction-patterns.md`.
 
 ## Disk Layout
 
+Resolve the root once before any discovery:
+
+```bash
+CONTEXT_INTELLIGENCE_ROOT="${AMPLIFIER_CONTEXT_INTELLIGENCE_BASE_PATH:-$HOME/.amplifier/projects}"
 ```
-~/.amplifier/projects/{project-slug}/sessions/{session_id}/context-intelligence/
+
+```
+$CONTEXT_INTELLIGENCE_ROOT/{project-slug}/sessions/{session_id}/context-intelligence/
 ├── events.jsonl      # one JSON object per line, append-only
 └── metadata.json     # session metadata, written on start, updated on end
 ```
 
-- `~/.amplifier/projects/` — default base path (configurable via `config.base_path`)
+- `$CONTEXT_INTELLIGENCE_ROOT` — resolved from the idiom `"${AMPLIFIER_CONTEXT_INTELLIGENCE_BASE_PATH:-$HOME/.amplifier/projects}"` (unset → legacy default; configurable via `config.base_path`)
 - `{project-slug}` — derived from the full working directory path (see Project Slug Algorithm below)
 - `{session_id}` — unique session identifier (UUID or UUID with agent suffix for child sessions)
 - `context-intelligence/` — subdirectory containing the session data files
 - `events.jsonl` — append-only log of every event the kernel emits during the session
 - `metadata.json` — compact session metadata for quick lookup without parsing the full event log
 
-Example paths:
+Example paths (with root resolved):
 
 ```
-~/.amplifier/projects/-home-user-myapp/sessions/55c8841a-1234-5678-9abc-def012345678/context-intelligence/events.jsonl
-~/.amplifier/projects/-home-user-myapp/sessions/55c8841a-1234-5678-9abc-def012345678/context-intelligence/metadata.json
+$CONTEXT_INTELLIGENCE_ROOT/-home-user-myapp/sessions/55c8841a-1234-5678-9abc-def012345678/context-intelligence/events.jsonl
+$CONTEXT_INTELLIGENCE_ROOT/-home-user-myapp/sessions/55c8841a-1234-5678-9abc-def012345678/context-intelligence/metadata.json
 ```
+
+> **⚠ MARKER RULE — the defect this prevents:** Every discovery glob MUST include the
+> `context-intelligence/` path segment and MUST NOT stop at `sessions/<id>/`:
+>
+> ```
+> CORRECT:  "$CONTEXT_INTELLIGENCE_ROOT"/*/sessions/*/context-intelligence/metadata.json
+> WRONG:    "$CONTEXT_INTELLIGENCE_ROOT"/*/sessions/*/metadata.json   # catches Amplifier core's files
+> ```
+>
+> **Why:** Amplifier core writes `sessions/<id>/metadata.json` with NO `context-intelligence/`
+> segment. Globbing one level too shallow latches onto core's files and produces a confident
+> wrong count.
+
+> **⚠ FAIL-LOUD RULE:** When zero captures are found, say exactly `"looked in <root>, found 0"` —
+> never report a confident count from a shallower glob, never silently fall back to a different path.
 
 ---
 
@@ -106,13 +127,13 @@ Example (child session with optional fields):
 
 | Concept | Purpose | Where used |
 |---------|---------|------------|
-| `project_slug` | Directory name under `~/.amplifier/projects/` | On-disk path |
+| `project_slug` | Directory name under `$CONTEXT_INTELLIGENCE_ROOT/` | On-disk path |
 | `workspace` | Field in every record | Querying and filtering |
 
 By **default** workspace equals `project_slug` (both derived from the working directory). They can differ when workspace is set explicitly via `settings.yaml` or env var — for example, workspace `"my-api"` while project_slug is `"-home-user-myapp"`.
 
 **Consequence for navigation:**
-- **Directory-first lookup** — when workspace matches the project_slug, all sessions for that workspace live under `~/.amplifier/projects/{workspace}/sessions/`. This is fast and the common case.
+- **Directory-first lookup** — when workspace matches the project_slug, all sessions for that workspace live under `$CONTEXT_INTELLIGENCE_ROOT/{workspace}/sessions/`. This is fast and the common case.
 - **Field-based filtering** — when workspace was set explicitly (overriding the slug default), scan across all project directories and filter records by `jq 'select(.workspace == "TARGET")'`.
 
 Always check both: attempt directory lookup first, then fall back to cross-project field scan.
@@ -157,15 +178,21 @@ Session event files can contain lines with 100k+ tokens (e.g., `llm:response` wi
 
 ## Common Navigation Patterns
 
+Resolve the root once before all discovery snippets in this section:
+
+```bash
+CONTEXT_INTELLIGENCE_ROOT="${AMPLIFIER_CONTEXT_INTELLIGENCE_BASE_PATH:-$HOME/.amplifier/projects}"
+```
+
 ### Resolve workspace to a project directory
 
 ```bash
 # If workspace == project_slug (common default), sessions are here:
-ls ~/.amplifier/projects/{workspace}/sessions/
+ls "$CONTEXT_INTELLIGENCE_ROOT"/{workspace}/sessions/
 
 # If workspace was set explicitly and differs from project_slug,
 # find all directories containing sessions tagged with this workspace:
-grep -rl '"workspace":"{workspace}"' ~/.amplifier/projects/*/sessions/*/context-intelligence/metadata.json \
+grep -rl '"workspace":"{workspace}"' "$CONTEXT_INTELLIGENCE_ROOT"/*/sessions/*/context-intelligence/metadata.json \
   | sed 's|/context-intelligence/metadata.json||'
 ```
 
@@ -173,12 +200,12 @@ grep -rl '"workspace":"{workspace}"' ~/.amplifier/projects/*/sessions/*/context-
 
 ```bash
 # Fast path: workspace matches directory name (default case)
-for f in ~/.amplifier/projects/my-project/sessions/*/context-intelligence/metadata.json; do
+for f in "$CONTEXT_INTELLIGENCE_ROOT"/my-project/sessions/*/context-intelligence/metadata.json; do
   jq -r '[.session_id, .status, .started_at, .agent_name // "(root)"] | join("\t")' "$f" 2>/dev/null
 done | sort -t$'\t' -k3
 
 # Scoped path: workspace set explicitly — scan all projects, filter by field
-for f in ~/.amplifier/projects/*/sessions/*/context-intelligence/metadata.json; do
+for f in "$CONTEXT_INTELLIGENCE_ROOT"/*/sessions/*/context-intelligence/metadata.json; do
   jq -r 'select(.workspace == "my-project") | [.session_id, .status, .started_at, .agent_name // "(root)"] | join("\t")' "$f" 2>/dev/null
 done | sort -t$'\t' -k3
 ```
@@ -195,7 +222,7 @@ head -1 events.jsonl | jq -r '.workspace'
 
 ```bash
 # Count events per workspace across all sessions in a project directory:
-jq -r '.workspace' ~/.amplifier/projects/-home-user-myapp/sessions/*/context-intelligence/events.jsonl \
+jq -r '.workspace' "$CONTEXT_INTELLIGENCE_ROOT"/-home-user-myapp/sessions/*/context-intelligence/events.jsonl \
   | sort | uniq -c | sort -rn
 ```
 
@@ -203,12 +230,12 @@ jq -r '.workspace' ~/.amplifier/projects/-home-user-myapp/sessions/*/context-int
 
 ```bash
 # Within a single project directory:
-for f in ~/.amplifier/projects/my-project/sessions/*/context-intelligence/metadata.json; do
+for f in "$CONTEXT_INTELLIGENCE_ROOT"/my-project/sessions/*/context-intelligence/metadata.json; do
   jq -r 'select(.status == "running") | .session_id' "$f" 2>/dev/null
 done
 
 # Cross-project, scoped to workspace:
-for f in ~/.amplifier/projects/*/sessions/*/context-intelligence/metadata.json; do
+for f in "$CONTEXT_INTELLIGENCE_ROOT"/*/sessions/*/context-intelligence/metadata.json; do
   jq -r 'select(.workspace == "my-project" and .status == "running") | .session_id' "$f" 2>/dev/null
 done
 ```

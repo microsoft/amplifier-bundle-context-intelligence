@@ -239,7 +239,21 @@ class HookConfigResolver:
         """Resolved base path for project storage.
 
         Chain: config['base_path'] → coordinator.config['base_path'] → default.
-        Tilde is expanded.  Result is cached after first access.
+        Result is cached after first access.
+
+        Canonicalisation rules (§D.2 — identical to reader-side
+        ``canonicalize_base_path`` in ``context_intelligence.config``; inlined
+        here to keep zero hook→reader-package coupling and the fold gate green):
+
+        1. Strip whitespace from the raw string.
+        2. Empty string → ``_DEFAULT_BASE_PATH`` (never anchored to CWD).
+        3. Expand ``~`` via :meth:`~pathlib.Path.expanduser`.
+        4. If the result is still relative → warn, fall back to default.
+
+        Both the writer (this property) and readers call the same four rules so
+        canonicalized paths are byte-identical regardless of which side resolves
+        them.  The §D.2 contract test drives the real property and asserts
+        writer ≡ reader and always absolute.
         """
         if self._base_path is None:
             raw = (
@@ -247,7 +261,21 @@ class HookConfigResolver:
                 or self._coordinator_config_get("base_path")
                 or _DEFAULT_BASE_PATH
             )
-            self._base_path = Path(raw).expanduser()
+            # §D.2 canonicalizer (inline — no os, no import os, fold-gate safe)
+            s = str(raw).strip()
+            if not s:
+                self._base_path = Path(_DEFAULT_BASE_PATH).expanduser()
+            else:
+                p = Path(s).expanduser()
+                if not p.is_absolute():
+                    log.warning(
+                        "base_path %r is not absolute; using default %s",
+                        s,
+                        _DEFAULT_BASE_PATH,
+                    )
+                    self._base_path = Path(_DEFAULT_BASE_PATH).expanduser()
+                else:
+                    self._base_path = p
         return self._base_path
 
     @property

@@ -25,6 +25,7 @@ from context_intelligence.config import (
     resolve_config,
 )
 from context_intelligence.reconstruct import (
+    DiskScanResult,
     build_disk_only_metadata,
     discover_sessions,
     extract_events,
@@ -45,6 +46,7 @@ __all__ = [
     "extract_transcript",
     "extract_metadata",
     "build_disk_only_metadata",
+    "DiskScanResult",
     "discover_sessions",
     "workspace_slug",
     "sessions_dir_for_project",

@@ -29,6 +29,10 @@ LOG_SCHEMA = {"name": "amplifier.log", "ver": "1.0.0"}
 AMPLIFIER_DIR = Path.home() / ".amplifier"
 SETTINGS_PATH = AMPLIFIER_DIR / "settings.yaml"
 
+#: The ONE canonical reader-side default root for context-intelligence captures.
+#: All readers fall back to this when AMPLIFIER_CONTEXT_INTELLIGENCE_BASE_PATH is unset.
+DEFAULT_BASE_PATH = Path.home() / ".amplifier" / "projects"
+
 
 # ---------------------------------------------------------------------------
 # Shared env-var helpers (used by HookConfigResolver and ToolConfigResolver)
@@ -48,6 +52,123 @@ def _env(suffix: str) -> str | None:
     """
     value = os.environ.get(_ENV_PREFIX + suffix)
     return value if value else None
+
+
+def canonicalize_base_path(raw: str | Path | None) -> Path:
+    """Canonicalise a raw base-path value to a **guaranteed absolute** :class:`Path`.
+
+    Four rules applied in order (§D.2):
+
+    1. Convert to string and strip whitespace.  ``None`` → empty string.
+    2. Empty string → :data:`DEFAULT_BASE_PATH` (never anchored to CWD).
+    3. Expand ``~`` via :meth:`~pathlib.Path.expanduser`.
+    4. If the result is still relative → warn and fall back to
+       :data:`DEFAULT_BASE_PATH`.  Relative paths are invalid: each OS process
+       has its own CWD, so a relative root produces *different directories* for
+       different processes even when the string is byte-identical.
+
+    No ``os.path.normpath`` or CWD-anchoring — pathlib already drops trailing
+    slashes; absoluteness, not normalisation, is the load-bearing property.
+
+    Parameters
+    ----------
+    raw:
+        A raw string, :class:`~pathlib.Path`, or ``None``.
+
+    Returns
+    -------
+    Path
+        An absolute :class:`~pathlib.Path`.  Never relative, never empty.
+    """
+    s = str(raw).strip() if raw is not None else ""
+    if not s:
+        return DEFAULT_BASE_PATH
+    p = Path(s).expanduser()
+    if not p.is_absolute():
+        log.warning(
+            "base_path %r is not absolute; using default %s",
+            s,
+            DEFAULT_BASE_PATH,
+        )
+        return DEFAULT_BASE_PATH
+    return p
+
+
+def context_intelligence_base_path() -> Path:
+    """Reader-side root for context-intelligence captures.
+
+    Reads ``AMPLIFIER_CONTEXT_INTELLIGENCE_BASE_PATH`` from the environment via
+    :func:`_env` (which returns ``None`` for both unset and empty) and passes the
+    result through :func:`canonicalize_base_path`, which guarantees an absolute
+    path and falls back to :data:`DEFAULT_BASE_PATH` for empty or relative values.
+
+    Mirrors the shell idiom::
+
+        ${AMPLIFIER_CONTEXT_INTELLIGENCE_BASE_PATH:-~/.amplifier/projects}
+
+    This helper is **gate-safe**: it lives in ``config.py``, which already imports
+    ``os``.  It does **not** touch ``config_resolver.py`` (fold-discipline gate).
+    """
+    return canonicalize_base_path(_env("BASE_PATH"))
+
+
+# ---------------------------------------------------------------------------
+# Shared capture-path helpers (canonical capture definition — §D.1)
+# ---------------------------------------------------------------------------
+
+#: Fixed-shape glob (relative to a ``sessions/`` directory) that matches
+#: exactly the files the writer produces.  One capture =
+#: ``<sessions_dir>/<session_id>/context-intelligence/events.jsonl``.
+#:
+#: The ``events.jsonl`` **file** is the discriminator — a bare
+#: ``context-intelligence/`` directory without the file is not a recoverable
+#: capture and must not be counted.  Amplifier core's
+#: ``sessions/<id>/metadata.json`` has no ``context-intelligence/`` segment and
+#: is excluded by construction.
+CAPTURE_GLOB = "*/context-intelligence/events.jsonl"
+
+
+def capture_paths_under_sessions_dir(sessions_dir: Path) -> list[Path]:
+    """Return all capture paths under a project ``sessions/`` directory.
+
+    Uses the fixed-shape :data:`CAPTURE_GLOB` — **not** a recursive ``**``
+    glob — so only the writer's real output layout is matched.
+
+    Parameters
+    ----------
+    sessions_dir:
+        The ``<base>/<project_slug>/sessions`` directory to scan.
+
+    Returns
+    -------
+    list[Path]
+        Sorted list of ``events.jsonl`` file paths, one per qualifying session
+        (including subsessions, which are flat siblings under ``sessions/``).
+        ``session_id`` for any path ``p`` is ``p.parent.parent.name``.
+    """
+    return sorted(sessions_dir.glob(CAPTURE_GLOB))
+
+
+def capture_paths_under_base(base: Path) -> list[Path]:
+    """Return all capture paths under a base root across all projects.
+
+    Scans ``<base>/*/sessions/*/context-intelligence/events.jsonl`` —
+    the same fixed shape as :func:`capture_paths_under_sessions_dir` reached
+    from two levels higher.
+
+    Parameters
+    ----------
+    base:
+        The base root directory (e.g. ``~/.amplifier/projects``).
+
+    Returns
+    -------
+    list[Path]
+        Sorted list of ``events.jsonl`` file paths across all projects under
+        *base*.  ``project_slug`` for any path ``p`` is ``p.parents[3].name``;
+        ``session_id`` is ``p.parent.parent.name``.
+    """
+    return sorted(base.glob("*/sessions/" + CAPTURE_GLOB))
 
 
 # ---------------------------------------------------------------------------
