@@ -520,9 +520,18 @@ class LoggingHandler:
         except Exception:
             logger.warning("LoggingHandler disk write error processing %s", event, exc_info=True)
 
-        # Fan-out to all active dispatchers (each self-gates via _enabled).
+        # Fan-out to all active dispatchers — each enqueue is isolated so that
+        # one dispatcher's failure does not starve the others (mirrors the
+        # defensive disk-write block above).
         for dispatcher in self._dispatchers:
-            dispatcher.enqueue(event, sanitized_data)
+            try:
+                dispatcher.enqueue(event, sanitized_data)
+            except Exception:
+                logger.warning(
+                    "LoggingHandler dispatcher enqueue failed for %s",
+                    event,
+                    exc_info=True,
+                )
 
         return HookResult(action="continue")
 

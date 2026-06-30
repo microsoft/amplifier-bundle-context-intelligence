@@ -13,7 +13,8 @@ redirect warning to help operators diagnose misconfigured URLs.
 from __future__ import annotations
 
 import asyncio
-from unittest.mock import AsyncMock, patch
+from pathlib import Path
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
@@ -341,3 +342,83 @@ async def test_shutdown_message_has_runnable_path() -> None:
     assert "<path>" not in last_msg, (
         f"Expected no placeholder '<path>' in shutdown warning, got: {last_msg!r}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Shared helper: minimal resolver for LoggingHandler fan-out tests
+# ---------------------------------------------------------------------------
+
+
+class _FakeResolver:
+    """Minimal resolver duck-type for LoggingHandler constructor.
+
+    Provides working_dir, workspace, and session_dir(session_id) so that
+    LoggingHandler can be constructed without a real Amplifier resolver.
+    """
+
+    working_dir = "/wd"
+    workspace = "ws"
+
+    def __init__(self, base: Path) -> None:
+        self._base = base
+
+    def session_dir(self, session_id: str) -> Path:
+        return self._base / session_id
+
+
+# ---------------------------------------------------------------------------
+# Bug E1+E2: fan-out loop must isolate dispatcher failures
+# ---------------------------------------------------------------------------
+
+
+async def test_fanout_isolates_dispatcher_failure(tmp_path: Path) -> None:
+    """A failing dispatcher enqueue must not abort delivery to other dispatchers.
+
+    Before the fix, an exception from one dispatcher's enqueue() propagated out
+    of LoggingHandler.__call__, preventing subsequent dispatchers from receiving
+    the event (starvation). The fan-out loop must wrap each enqueue() call in
+    try/except so that one dispatcher's failure is logged and the loop continues.
+    """
+    handler = LoggingHandler(_FakeResolver(tmp_path))
+    bad = MagicMock()
+    bad.enqueue.side_effect = RuntimeError("boom")
+    good = MagicMock()
+    handler._dispatchers = [bad, good]
+
+    # Must not raise — bad dispatcher failure must be isolated.
+    await handler("session:start", {"session_id": "sess1", "workspace": "ws"})
+
+    bad.enqueue.assert_called_once()
+    good.enqueue.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# Pin E3: closed-client RuntimeError must return _DELIVERED (teardown guard)
+# ---------------------------------------------------------------------------
+
+
+async def test_closed_client_runtimeerror_is_delivered() -> None:
+    """RuntimeError('...closed...') from _post must return _DELIVERED.
+
+    Pin test: the teardown guard at the RuntimeError catch in _post classifies a
+    'client has been closed' error as _DELIVERED so events are not re-queued
+    during session teardown. This pin ensures a future httpx message-format
+    change breaks loudly in CI instead of silently reclassifying good events.
+
+    Verification: temporarily changing 'closed' to 'CLOSED' at the guard check
+    causes the RuntimeError to propagate (re-raise path), and this test FAILS.
+    Revert confirms the guard is the only reason it passes.
+    """
+    d = _dispatcher()
+    client = AsyncMock()
+    client.is_closed = False
+    client.post = AsyncMock(
+        side_effect=RuntimeError(
+            "Cannot send a request, as the client has been closed."
+        )
+    )
+    d._client = client
+
+    result = await d._post("test:event", {"session_id": "s1"})
+
+    assert result == _DELIVERED
