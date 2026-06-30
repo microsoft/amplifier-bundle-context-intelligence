@@ -9,6 +9,8 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import random
+import time
 from pathlib import Path
 from typing import Any
 
@@ -27,6 +29,9 @@ logger = logging.getLogger(__name__)
 _OPTIONAL_METADATA_FIELDS = ("agent_name", "parallel_group_id", "recipe_name", "recipe_step")
 _DEFAULT_DISPATCH_QUEUE_CAPACITY = 256
 _DEFAULT_CLOSE_DRAIN_TIMEOUT = 0.5
+_DEFAULT_BACKOFF_INITIAL = 1.0
+_DEFAULT_BACKOFF_MAX = 30.0
+_DEFAULT_BACKOFF_JITTER = True
 _METADATA_FORMAT = "context-intelligence"
 _METADATA_VERSION = "1.0.0"
 _CONNECT_TIMEOUT = 0.5
@@ -86,6 +91,10 @@ class _DestinationDispatcher:
         close_drain_timeout: float,
         auth_mode: str = "static",
         auth_resource: str = "",
+        backoff_initial: float = _DEFAULT_BACKOFF_INITIAL,
+        backoff_max: float = _DEFAULT_BACKOFF_MAX,
+        backoff_jitter: bool = _DEFAULT_BACKOFF_JITTER,
+        storage_path: str | Path = "",
     ) -> None:
         from context_intelligence.auth import AuthStrategy, build_auth_strategy  # noqa: PLC0415
 
@@ -97,6 +106,10 @@ class _DestinationDispatcher:
         self._failure_threshold = failure_threshold
         self._queue_capacity = queue_capacity
         self._close_drain_timeout = close_drain_timeout
+        self._backoff_initial = backoff_initial
+        self._backoff_max = backoff_max
+        self._backoff_jitter = backoff_jitter
+        self._storage_path = storage_path
         # Build the auth strategy ONCE at init; credential SDK handles token refresh internally.
         self._strategy: AuthStrategy = build_auth_strategy(
             auth_mode=auth_mode,

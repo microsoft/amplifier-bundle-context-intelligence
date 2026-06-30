@@ -54,6 +54,27 @@ class TestDispatcherInit:
         d = _dispatcher(url="http://localhost:8080/")
         assert d._url == "http://localhost:8080"
 
+    def test_backoff_and_storage_params_stored(self) -> None:
+        """Backoff knobs and storage_path are plumbed through to instance attributes."""
+        d = _DestinationDispatcher(
+            name="test",
+            url="http://localhost:8080",
+            api_key="test-key",
+            workspace="ws",
+            dispatch_timeout=10.0,
+            failure_threshold=3,
+            queue_capacity=256,
+            close_drain_timeout=0.5,
+            backoff_initial=2.0,
+            backoff_max=20.0,
+            backoff_jitter=False,
+            storage_path="/tmp/ci-sessions",
+        )
+        assert d._backoff_initial == 2.0
+        assert d._backoff_max == 20.0
+        assert d._backoff_jitter is False
+        assert str(d._storage_path) == "/tmp/ci-sessions"
+
 
 class TestDispatcherEnqueue:
     async def test_enqueue_starts_worker(self) -> None:
