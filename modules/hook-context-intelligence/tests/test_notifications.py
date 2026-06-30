@@ -1,7 +1,11 @@
-"""Tests for notification messages — Task 9.
+"""Tests for notification messages — Tasks 9 and 10.
 
 DEGRADED warning (once per episode), RECOVERY notice (on first delivery after degrade),
 and auth-escalation (consecutive 401s after failure_threshold) emitted by _worker().
+
+Task 10 additions:
+- OVERFLOW: rate-limited loud warning with 'buffer full' and real storage path
+- PERMANENT: loud warning for 403 ('check credentials') or 400/other ('malformed event, skipped')
 """
 
 from __future__ import annotations
@@ -156,9 +160,7 @@ class TestRecoveryNotification:
             f"Expected exactly 1 RECOVERY info, got {len(recovery_calls)}: "
             f"{mock_logger.info.call_args_list}"
         )
-        assert d._degraded_warned is False, (
-            "_degraded_warned must be False after recovery"
-        )
+        assert d._degraded_warned is False, "_degraded_warned must be False after recovery"
         await d.close()
 
     async def test_no_recovery_without_prior_degradation(self) -> None:
@@ -171,9 +173,7 @@ class TestRecoveryNotification:
             d.enqueue("e1", {"session_id": "s1"})
             await asyncio.wait_for(d._queue.join(), timeout=2.0)
 
-        recovery_calls = [
-            c for c in mock_logger.info.call_args_list if "Reconnected to" in str(c)
-        ]
+        recovery_calls = [c for c in mock_logger.info.call_args_list if "Reconnected to" in str(c)]
         assert len(recovery_calls) == 0, (
             f"Expected no recovery info for clean delivery, got {len(recovery_calls)}: "
             f"{mock_logger.info.call_args_list}"
@@ -190,9 +190,7 @@ class TestRecoveryNotification:
             d.enqueue("e1", {"session_id": "s1"})
             await asyncio.wait_for(d._queue.join(), timeout=2.0)
 
-        recovery_calls = [
-            c for c in mock_logger.info.call_args_list if "Reconnected to" in str(c)
-        ]
+        recovery_calls = [c for c in mock_logger.info.call_args_list if "Reconnected to" in str(c)]
         assert len(recovery_calls) == 1, "Expected exactly 1 recovery info"
         # The format string is the first positional arg of the log call.
         fmt = recovery_calls[0][0][0]
@@ -305,3 +303,201 @@ class TestAuthEscalation:
             f"got {len(auth_escalation_calls)}: {mock_logger.warning.call_args_list}"
         )
         await d.close()
+
+
+# ---------------------------------------------------------------------------
+# TestOverflowNotification (Task 10)
+# ---------------------------------------------------------------------------
+
+
+class TestOverflowNotification:
+    """Overflow (queue full) notifications — loud, rate-limited, real storage path."""
+
+    async def test_overflow_logs_loud_with_real_path(self) -> None:
+        """queue_capacity=1: one overflow -> warning with 'buffer full' and real path."""
+        storage_path = "/tmp/ci-test-sessions"
+        d = _dispatcher(
+            queue_capacity=1,
+            storage_path=storage_path,
+        )
+        d._post = _make_outcome_post([_DELIVERED])  # type: ignore[method-assign]
+        d._sleep_backoff = AsyncMock()  # type: ignore[method-assign]
+
+        with patch(LOGGER_PATH) as mock_logger:
+            # First enqueue fills the queue; starts worker (doesn't run yet — no await)
+            d.enqueue("e1", {"session_id": "s1"})
+            # Second enqueue overflows (worker hasn't had a chance to run)
+            d.enqueue("e2", {"session_id": "s2"})
+            # Yield control so worker can drain the single queued event
+            await asyncio.wait_for(d._queue.join(), timeout=2.0)
+
+        assert d._overflow_dropped == 1, f"Expected _overflow_dropped==1, got {d._overflow_dropped}"
+
+        overflow_calls = [c for c in mock_logger.warning.call_args_list if "buffer full" in str(c)]
+        assert len(overflow_calls) == 1, (
+            f"Expected exactly 1 overflow warning, got {len(overflow_calls)}: "
+            f"{mock_logger.warning.call_args_list}"
+        )
+
+        rendered = str(overflow_calls[0])
+        assert "buffer full" in rendered, f"'buffer full' not in warning: {rendered!r}"
+        assert storage_path in rendered, (
+            f"Real storage path {storage_path!r} not in warning: {rendered!r}"
+        )
+        assert "<path>" not in rendered, (
+            f"Literal '<path>' found in warning (must be real path): {rendered!r}"
+        )
+        await d.close()
+
+    async def test_overflow_log_is_rate_limited(self) -> None:
+        """256 consecutive overflows -> exactly 1 'buffer full' log, _overflow_dropped==256."""
+        d = _dispatcher(queue_capacity=1, storage_path="/tmp/ci-test-sessions")
+        # Provide enough _DELIVERED outcomes so the worker can drain the one queued event.
+        d._post = _make_outcome_post([_DELIVERED])  # type: ignore[method-assign]
+        d._sleep_backoff = AsyncMock()  # type: ignore[method-assign]
+
+        with patch(LOGGER_PATH) as mock_logger:
+            # Fill the single-slot queue (worker starts but doesn't run yet)
+            d.enqueue("fill", {"session_id": "s0"})
+            # 256 consecutive overflows — all happen before the event loop yields
+            for i in range(256):
+                d.enqueue(f"e{i}", {"session_id": f"s{i}"})
+            # Let worker drain the one queued event
+            await asyncio.wait_for(d._queue.join(), timeout=2.0)
+
+        assert d._overflow_dropped == 256, (
+            f"Expected _overflow_dropped==256, got {d._overflow_dropped}"
+        )
+
+        overflow_calls = [c for c in mock_logger.warning.call_args_list if "buffer full" in str(c)]
+        assert len(overflow_calls) == 1, (
+            f"Expected exactly 1 rate-limited overflow warning (got {len(overflow_calls)}): "
+            f"{mock_logger.warning.call_args_list}"
+        )
+        await d.close()
+
+    async def test_overflow_while_degraded_combined(self) -> None:
+        """OVERFLOW while DEGRADED: _degraded_warned True + _overflow_dropped==1 + loud log."""
+        storage_path = "/tmp/ci-test-sessions"
+        d = _dispatcher(
+            queue_capacity=2,
+            storage_path=storage_path,
+        )
+
+        # Use a mock HTTP client that always returns 503 (TRANSIENT) so e1 never delivers.
+        sleep_entered = asyncio.Event()
+        proceed = asyncio.Event()
+
+        async def blocking_sleep() -> None:
+            sleep_entered.set()
+            await proceed.wait()
+
+        d._sleep_backoff = blocking_sleep  # type: ignore[method-assign]
+        d._post = _make_outcome_post(  # type: ignore[method-assign]
+            [_TRANSIENT, _TRANSIENT, _TRANSIENT, _TRANSIENT, _TRANSIENT]
+        )
+
+        with patch(LOGGER_PATH) as mock_logger:
+            # e1 enters the worker immediately; worker gets TRANSIENT -> sets _degraded_warned
+            d.enqueue("e1", {"session_id": "s1"})
+
+            # Wait until the worker has set _degraded_warned and entered sleep
+            await asyncio.wait_for(sleep_entered.wait(), timeout=2.0)
+            assert d._degraded_warned is True, "_degraded_warned must be True before overflow"
+
+            # Fill the capacity-2 queue while the worker is blocked in sleep
+            d.enqueue("e2", {"session_id": "s2"})
+            d.enqueue("e3", {"session_id": "s3"})
+
+            # e4 overflows — synchronous, so we can assert immediately
+            d.enqueue("e4", {"session_id": "s4"})
+            assert d._overflow_dropped == 1, (
+                f"Expected _overflow_dropped==1, got {d._overflow_dropped}"
+            )
+
+            # Verify overflow log was emitted with real path before we let the worker proceed
+            overflow_calls = [
+                c for c in mock_logger.warning.call_args_list if "buffer full" in str(c)
+            ]
+            assert len(overflow_calls) == 1, (
+                f"Expected 1 overflow warning, got {len(overflow_calls)}: "
+                f"{mock_logger.warning.call_args_list}"
+            )
+            rendered = str(overflow_calls[0])
+            assert storage_path in rendered, (
+                f"Real storage path {storage_path!r} not in warning: {rendered!r}"
+            )
+            assert "<path>" not in rendered, f"Literal '<path>' found in warning: {rendered!r}"
+
+        # Release the blocking sleep and cancel the worker
+        proceed.set()
+        await d.close()
+
+        assert d._degraded_warned is True  # never recovered (worker was cancelled)
+        assert d._overflow_dropped == 1
+
+
+# ---------------------------------------------------------------------------
+# TestPermanentNotification (Task 10)
+# ---------------------------------------------------------------------------
+
+
+class TestPermanentNotification:
+    """PERMANENT outcomes (non-retryable 4xx) produce loud, rate-limited log messages."""
+
+    async def test_permanent_403_logs_check_credentials(self) -> None:
+        """HTTP 403 -> warning containing 'check credentials'."""
+        d = _dispatcher()
+        d._client = _mock_client([_make_response(403)])
+        d._sleep_backoff = AsyncMock()  # type: ignore[method-assign]
+
+        with patch(LOGGER_PATH) as mock_logger:
+            d.enqueue("e1", {"session_id": "s1"})
+            await asyncio.wait_for(d._queue.join(), timeout=2.0)
+
+        perm_calls = [
+            c for c in mock_logger.warning.call_args_list if "check credentials" in str(c)
+        ]
+        assert len(perm_calls) == 1, (
+            f"Expected 1 PERMANENT warning for 403 with 'check credentials', "
+            f"got {len(perm_calls)}: {mock_logger.warning.call_args_list}"
+        )
+        await d.close()
+
+    async def test_permanent_400_logs_malformed(self) -> None:
+        """HTTP 400 -> warning containing 'malformed event, skipped'."""
+        d = _dispatcher()
+        d._client = _mock_client([_make_response(400)])
+        d._sleep_backoff = AsyncMock()  # type: ignore[method-assign]
+
+        with patch(LOGGER_PATH) as mock_logger:
+            d.enqueue("e1", {"session_id": "s1"})
+            await asyncio.wait_for(d._queue.join(), timeout=2.0)
+
+        perm_calls = [
+            c for c in mock_logger.warning.call_args_list if "malformed event, skipped" in str(c)
+        ]
+        assert len(perm_calls) == 1, (
+            f"Expected 1 PERMANENT warning for 400 with 'malformed event, skipped', "
+            f"got {len(perm_calls)}: {mock_logger.warning.call_args_list}"
+        )
+        await d.close()
+
+    async def test_permanent_burst_is_rate_limited(self) -> None:
+        """50 x HTTP 400 -> exactly 1 PERMANENT 'malformed event, skipped' log."""
+        d = _dispatcher()
+        d._client = _mock_client([_make_response(400)] * 50)
+        d._sleep_backoff = AsyncMock()  # type: ignore[method-assign]
+
+        with patch(LOGGER_PATH) as mock_logger:
+            for i in range(50):
+                d.enqueue(f"e{i}", {"session_id": f"s{i}"})
+            await asyncio.wait_for(d._queue.join(), timeout=5.0)
+
+        perm_calls = [
+            c for c in mock_logger.warning.call_args_list if "malformed event, skipped" in str(c)
+        ]
+        assert len(perm_calls) == 1, (
+            f"Expected exactly 1 rate-limited PERMANENT warning (got {len(perm_calls)}): "
+            f"{mock_logger.warning.call_args_list}"
+        )

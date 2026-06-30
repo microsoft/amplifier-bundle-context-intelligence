@@ -37,6 +37,8 @@ _METADATA_VERSION = "1.0.0"
 _CONNECT_TIMEOUT = 0.5
 _READ_TIMEOUT = 3.0
 _POOL_TIMEOUT = 0.5
+#: Minimum seconds between repeated overflow or permanent-skip log warnings.
+_LOG_RATE_LIMIT_SECONDS = 60.0
 
 # ---------------------------------------------------------------------------
 # _post outcome constants (Task 4)
@@ -183,7 +185,17 @@ class _DestinationDispatcher:
             self._queue.put_nowait((event, data))
         except asyncio.QueueFull:
             self._overflow_dropped += 1
-            # Rate-limited overflow logging added in Task 10.
+            now = time.monotonic()
+            if now - self._last_overflow_log >= _LOG_RATE_LIMIT_SECONDS:
+                self._last_overflow_log = now
+                logger.warning(
+                    "%s buffer full — %d events dropped since last warning;"
+                    " events are durable in events.jsonl."
+                    " To manually upload run: context-intelligence-upload %s",
+                    self._name,
+                    self._overflow_dropped,
+                    self._storage_path,
+                )
 
     async def _worker(self) -> None:
         """Process events from the queue with retry-on-transient backoff.
@@ -243,6 +255,21 @@ class _DestinationDispatcher:
                             self._name,
                         )
                         self._degraded_warned = False
+                    elif outcome == _PERMANENT:
+                        now = time.monotonic()
+                        if now - self._last_permanent_log >= _LOG_RATE_LIMIT_SECONDS:
+                            self._last_permanent_log = now
+                            if self._last_status == 403:
+                                logger.warning(
+                                    "%s rejected event (HTTP 403) — check credentials.",
+                                    self._name,
+                                )
+                            else:
+                                logger.warning(
+                                    "%s rejected event (HTTP %d) — malformed event, skipped.",
+                                    self._name,
+                                    self._last_status,
+                                )
                     self._consecutive_failures = 0
                     self._auth_failures = 0
                     self._queue.task_done()
