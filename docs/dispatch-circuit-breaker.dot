@@ -1,17 +1,24 @@
 // Dispatch Circuit Breaker — Queue Worker + _dispatch_to_server + Client Lifecycle
 // Context-Intelligence Bundle — LoggingHandler
 //
-// Shows the full bounded dispatch flow with circuit breaker protection:
+// Shows the full bounded dispatch flow with auto-recovery retry-in-place:
 // - enqueue path in __call__ (bounded queue + worker startup)
-// - _dispatch_to_server internal logic (enabled check, lazy client, POST, failure tracking)
+// - _dispatch_to_server internal logic (classify, DEGRADED/PERMANENT, backoff retry)
 // - client lifecycle (_client=None -> lazy create -> reuse -> aclose on close())
+//
+// UPDATED MODEL (auto-recovery): The one-way _enabled latch is removed.
+// Dispatch is NEVER permanently disabled. On transient failure the worker holds
+// the in-flight event and retries with capped full-jitter backoff until success
+// or session end. Permanent failures (403/400/413/422) are skipped (loud log)
+// and the worker advances to the next event.
 //
 // Color coding:
 //   blue   (#E3F2FD / #1565C0) — entry / exit nodes
-//   red    (#FFEBEE / #C62828) — circuit breaker checks
-//   yellow (#FFF8E1 / #F57F17) — conditional / decision diamonds
+//   red    (#FFEBEE / #C62828) — threshold / permanent-skip nodes
+//   yellow (#FFF8E1 / #F57F17) — conditional / decision diamonds + DEGRADED state
 //   green  (#E8F5E9 / #2E7D32) — success paths / client creation
-//   orange (#FFF3E0 / #E65100) — failure paths
+//   orange (#FFF3E0 / #E65100) — failure paths / overflow
+//   purple (#EDE7F6 / #673AB7) — auth header
 //
 // Render: dot -Tsvg dispatch-circuit-breaker.dot -o dispatch-circuit-breaker.svg
 
@@ -44,26 +51,9 @@ digraph DispatchCircuitBreaker {
         ];
 
         queue_full [
-            label="queue full\n─────────────────────\n_dispatch_enabled = False\nlogger.debug(\n  \"server_dispatch_queue_full\"\n)\nlocal JSONL capture continues",
+            label="queue full\n─────────────────────\ndrop NEWEST (durable in events.jsonl)\nbump counter\nloud rate-limited log naming\nthe REAL storage path; NOT disabled",
             fillcolor="#FFF3E0",
             color="#E65100"
-        ];
-
-        node [shape=diamond, style=filled, penwidth=2];
-
-        check_enabled [
-            label="_dispatch_enabled?",
-            fillcolor="#FFEBEE",
-            color="#C62828",
-            fontcolor="#C62828"
-        ];
-
-        node [shape=box, style="rounded,filled", penwidth=1.5];
-
-        skip [
-            label="silent no-op\n─────────────────────\nreturn immediately\n(circuit open / disabled)",
-            fillcolor="#EEEEEE",
-            color="#757575"
         ];
 
         worker_entry [
@@ -89,6 +79,14 @@ digraph DispatchCircuitBreaker {
             color="#2E7D32"
         ];
 
+        node [shape=box, style="rounded,filled", penwidth=1.5];
+
+        build_auth_header [
+            label="build auth header\n──────────────────────────────────\nstrategy.headers()\ncache hit  →  Bearer <cached_token>  (~0.002 ms)\nmiss  →  az refresh  (~487–913 ms,  ≤ once / ~67 min)\nSee docs/auth-flow.dot for cache detail.",
+            fillcolor="#EDE7F6",
+            color="#673AB7"
+        ];
+
         post [
             label="POST {server_url}/events\n─────────────────────\npayload = {\n  \"event\": event,\n  \"workspace\": _workspace,\n  \"idempotency_key\": deterministic_hash,\n  \"data\": sanitized_data\n}\nclient.post(..., json=payload)\nresponse.raise_for_status()",
             fillcolor="#E0F7FA",
@@ -107,13 +105,13 @@ digraph DispatchCircuitBreaker {
         node [shape=box, style="rounded,filled", penwidth=1.5];
 
         on_success [
-            label="on_success\n─────────────────────\n_consecutive_failures = 0\ncircuit remains closed\nqueue keeps draining",
+            label="on_success\n─────────────────────\n_consecutive_failures = 0\n_degraded_warned = False\nreset backoff; queue keeps draining",
             fillcolor="#E8F5E9",
             color="#2E7D32"
         ];
 
         on_failure [
-            label="on_failure\n─────────────────────\n_consecutive_failures += 1\nlogger.debug(\n  \"server_dispatch_failed:\n  attempt N/threshold\n  event=... url=...\"\n)",
+            label="on_failure\n─────────────────────\n_consecutive_failures += 1\nclassify: TRANSIENT or PERMANENT\n_last_status = status_code",
             fillcolor="#FFF3E0",
             color="#E65100"
         ];
@@ -121,7 +119,7 @@ digraph DispatchCircuitBreaker {
         node [shape=diamond, style=filled, penwidth=2];
 
         check_threshold [
-            label="failures >=\nfailure_threshold?",
+            label="transient?",
             fillcolor="#FFEBEE",
             color="#C62828",
             fontcolor="#C62828"
@@ -129,8 +127,20 @@ digraph DispatchCircuitBreaker {
 
         node [shape=box, style="rounded,filled", penwidth=2];
 
-        trip [
-            label="TRIP circuit breaker\n─────────────────────\n_dispatch_enabled = False\nlogger.debug(\n  \"server unreachable after\n  N attempts — dispatch\n  disabled for session\"\n)",
+        degraded [
+            label="DEGRADED — hold in-flight event,\nfull-jitter backoff, retry SAME event\n(never disabled)\n─────────────────────\n_consecutive_failures >= threshold:\nemit DEGRADED notice once/episode",
+            fillcolor="#FFF8E1",
+            color="#F57F17"
+        ];
+
+        sleep_backoff [
+            label="sleep backoff\n─────────────────────\nawait asyncio.sleep(\n  full_jitter(backoff_initial,\n    backoff_max, attempt)\n)",
+            fillcolor="#FFF8E1",
+            color="#F57F17"
+        ];
+
+        permanent_skip [
+            label="PERMANENT — loud rate-limited log,\nskip event, advance\n─────────────────────\n403 / 400 / 413 / 422:\nlog once (rate-limited), task_done, advance",
             fillcolor="#FFEBEE",
             color="#C62828"
         ];
@@ -141,7 +151,7 @@ digraph DispatchCircuitBreaker {
             color="#1565C0"
         ];
 
-        entry -> check_enabled [penwidth=2];
+        entry -> worker_entry [penwidth=2];
         entry -> queue_full [
             label="  put_nowait fails  ",
             color="#E65100",
@@ -149,20 +159,6 @@ digraph DispatchCircuitBreaker {
             penwidth=1.5
         ];
 
-        check_enabled -> skip [
-            label="  False  ",
-            color="#757575",
-            fontcolor="#757575",
-            penwidth=1.5
-        ];
-        check_enabled -> worker_entry [
-            label="  True  ",
-            color="#2E7D32",
-            fontcolor="#2E7D32",
-            penwidth=2
-        ];
-
-        skip -> done [penwidth=1.5, style=dashed, color="#757575"];
         queue_full -> done [penwidth=1.5, color="#E65100"];
 
         worker_entry -> check_client [penwidth=1.5];
@@ -172,13 +168,6 @@ digraph DispatchCircuitBreaker {
             color="#2E7D32",
             fontcolor="#2E7D32",
             penwidth=1.5
-        ];
-        node [shape=box, style="rounded,filled", penwidth=1.5];
-
-        build_auth_header [
-            label="build auth header\n─────────────────────────────────\nstrategy.headers()\ncache hit  →  Bearer <cached_token>  (~0.002 ms)\nmiss  →  az refresh  (~487–913 ms,  ≤ once / ~67 min)\nSee docs/auth-flow.dot for cache detail.",
-            fillcolor="#EDE7F6",
-            color="#673AB7"
         ];
 
         check_client -> build_auth_header [
@@ -193,7 +182,7 @@ digraph DispatchCircuitBreaker {
         post -> check_result [penwidth=1.5];
 
         check_result -> on_success [
-            label="  2xx  ",
+            label="  2xx (DELIVERED)  ",
             color="#2E7D32",
             fontcolor="#2E7D32",
             penwidth=1.5
@@ -208,20 +197,29 @@ digraph DispatchCircuitBreaker {
         on_success -> done [penwidth=1.5];
         on_failure -> check_threshold [penwidth=1.5];
 
-        check_threshold -> done [
-            label="  No  ",
-            color="#757575",
-            fontcolor="#757575",
-            penwidth=1.5
-        ];
-        check_threshold -> trip [
-            label="  Yes  ",
+        check_threshold -> permanent_skip [
+            label="  No (permanent)  ",
             color="#C62828",
             fontcolor="#C62828",
+            penwidth=1.5
+        ];
+        check_threshold -> degraded [
+            label="  Yes (transient)  ",
+            color="#F57F17",
+            fontcolor="#F57F17",
             penwidth=2
         ];
 
-        trip -> done [penwidth=2, color="#C62828"];
+        degraded -> sleep_backoff [penwidth=2, color="#F57F17"];
+        sleep_backoff -> post [
+            label="  retry same event  ",
+            color="#F57F17",
+            fontcolor="#F57F17",
+            penwidth=2,
+            constraint=false
+        ];
+
+        permanent_skip -> done [penwidth=1.5, color="#C62828"];
     }
 
     subgraph cluster_lifecycle {
