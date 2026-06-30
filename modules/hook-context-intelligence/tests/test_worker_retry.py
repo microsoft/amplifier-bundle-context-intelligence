@@ -12,6 +12,7 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from amplifier_module_hook_context_intelligence.handlers.logging_handler import (
+    _DELIVERED,
     _DestinationDispatcher,
 )
 
@@ -476,4 +477,100 @@ class TestBackoffSequenceEndToEnd:
 
         # e1: [1.0, 2.0], e2: [1.0] — counter reset proves fresh start
         assert sleep_calls == [1.0, 2.0, 1.0]
+        await d.close()
+
+
+# ---------------------------------------------------------------------------
+# TestWorkerSupervisorUnclassifiedExceptions
+# ---------------------------------------------------------------------------
+class TestWorkerSupervisorUnclassifiedExceptions:
+    """Worker survives unclassified exceptions — Task 6 / TB-01.
+
+    If _post raises an unclassified exception the worker must:
+    - log loudly (logger.exception or logger.error)
+    - drop the poisoned event (task_done + clear _current)
+    - re-enter the outer loop (keep draining)
+
+    CancelledError must still propagate so close() works.
+    """
+
+    async def test_worker_survives_unclassified_exception(self) -> None:
+        """Poison event raises ValueError; subsequent events still arrive.
+
+        fake_post raises ValueError('unclassified boom') for event 'poison'
+        but returns _DELIVERED for other events. After the exception:
+        - loud log fires (logger.exception or logger.error called)
+        - 'poison' is dropped (not retried forever)
+        - 'good1' and 'good2' are processed (worker keeps draining)
+        """
+        d = _dispatcher()
+        d._sleep_backoff = AsyncMock()  # no backoff delays
+
+        received: list[str] = []
+
+        async def fake_post(event: str, data: dict[str, Any]) -> str:
+            if event == "poison":
+                raise ValueError("unclassified boom")
+            received.append(event)
+            return _DELIVERED
+
+        d._post = fake_post  # type: ignore[method-assign]
+
+        with patch(
+            "amplifier_module_hook_context_intelligence.handlers.logging_handler.logger"
+        ) as mock_logger:
+            d.enqueue("poison", {"session_id": "s1"})
+            d.enqueue("good1", {"session_id": "s1"})
+            d.enqueue("good2", {"session_id": "s1"})
+
+            await asyncio.wait_for(d._queue.join(), timeout=2.0)
+
+        # Loud log must have fired (exception or error)
+        assert mock_logger.exception.called or mock_logger.error.called, (
+            "Expected logger.exception or logger.error to be called for unclassified exception"
+        )
+        # Poison dropped, good events processed in order
+        assert received == ["good1", "good2"], (
+            f"Expected ['good1', 'good2'] but got {received}"
+        )
+        await d.close()
+
+    async def test_cancelled_error_not_swallowed(self) -> None:
+        """CancelledError from _post propagates — it is not swallowed into the loop.
+
+        If CancelledError were swallowed, the worker would keep looping and sit
+        at await queue.get() forever (worker.done() == False). If it propagates
+        correctly, the worker exits (worker.done() == True).
+        """
+        d = _dispatcher()
+
+        async def fake_post_raise_cancelled(event: str, data: dict[str, Any]) -> str:
+            raise asyncio.CancelledError()
+
+        d._post = fake_post_raise_cancelled  # type: ignore[method-assign]
+
+        # Put directly in queue — do NOT use enqueue() which spawns an internal
+        # worker that would race with the test worker for the queue item.
+        d._queue.put_nowait(("e1", {"session_id": "s1"}))
+
+        # Start a standalone worker task.
+        worker = asyncio.create_task(d._worker())
+
+        # Give the worker time to dequeue "e1" and hit CancelledError.
+        await asyncio.sleep(0.1)
+
+        # If CancelledError propagated, the worker exited → done() is True.
+        # If CancelledError was swallowed, the worker loops back to queue.get()
+        # (blocks forever on empty queue) → done() is False.
+        assert worker.done(), (
+            "Worker is still running after CancelledError from _post — "
+            "CancelledError was swallowed instead of propagating"
+        )
+
+        # Clean up the finished worker task to suppress any unhandled-exception warning.
+        try:
+            await worker
+        except (asyncio.CancelledError, Exception):
+            pass
+
         await d.close()
