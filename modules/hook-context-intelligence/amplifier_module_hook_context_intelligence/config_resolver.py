@@ -14,6 +14,33 @@ log = logging.getLogger(__name__)
 _DEFAULT_BASE_PATH = "~/.amplifier/projects"
 _DEFAULT_PROJECT_SLUG = "default"
 
+# String values that a human operator would write to mean "False".
+# Used by _coerce_bool to prevent the bool('false') == True footgun
+# that occurs when environment variables are wired as strings.
+_FALSEY: frozenset[str] = frozenset({"0", "false", "no", "off", ""})
+
+
+def _coerce_bool(value: Any, *, default: bool) -> bool:
+    """Coerce *value* to bool, handling string env-var representations correctly.
+
+    Resolution:
+    - ``None``  → *default*
+    - ``bool``  → as-is (no conversion)
+    - ``str``   → trimmed and lowercased; in ``_FALSEY`` → ``False``, else ``True``
+    - anything else → ``bool(value)``
+
+    This is the safe alternative to ``bool(value)`` when the value may come
+    from a YAML/env-var string expansion where ``'false'`` must mean ``False``
+    (``bool('false') == True`` is the footgun this function prevents).
+    """
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() not in _FALSEY
+    return bool(value)
+
 # Default event-name patterns (fnmatch) excluded from local JSONL logging and graph dispatch.
 #
 # The pattern ``llm:stream_*delta`` expresses the transient-streaming-delta *category*: it
@@ -276,9 +303,12 @@ class HookConfigResolver:
         """Maximum queued HTTP dispatches before dispatch is disabled.
 
         Reads directly from config['dispatch_queue_capacity'], defaults to 256.
-        No coordinator fallback. Always returns an int.
+        No coordinator fallback. Always returns an int >= 1.
+
+        Values < 1 are clamped to 1. asyncio.Queue(maxsize=0) is UNBOUNDED, so
+        a zero or negative value would silently remove the memory guard (TB-03).
         """
-        return int(self._config.get("dispatch_queue_capacity", 256))
+        return max(1, int(self._config.get("dispatch_queue_capacity", 256)))
 
     @property
     def close_drain_timeout(self) -> float:
@@ -288,6 +318,37 @@ class HookConfigResolver:
         No coordinator fallback. Always returns a float.
         """
         return float(self._config.get("close_drain_timeout", 0.5))
+
+    @property
+    def dispatch_backoff_initial(self) -> float:
+        """Initial retry backoff interval in seconds after a dispatch failure.
+
+        Reads directly from config['dispatch_backoff_initial'], defaults to 1.0.
+        No coordinator fallback. Always returns a float.
+        """
+        return float(self._config.get("dispatch_backoff_initial", 1.0))
+
+    @property
+    def dispatch_backoff_max(self) -> float:
+        """Maximum retry backoff interval in seconds (cap for exponential back-off).
+
+        Reads directly from config['dispatch_backoff_max'], defaults to 30.0.
+        No coordinator fallback. Always returns a float.
+        """
+        return float(self._config.get("dispatch_backoff_max", 30.0))
+
+    @property
+    def dispatch_backoff_jitter(self) -> bool:
+        """Whether to add random jitter to backoff intervals.
+
+        Reads directly from config['dispatch_backoff_jitter'], defaults to True.
+        No coordinator fallback. Always returns a bool.
+
+        String values are coerced via _coerce_bool so that an operator setting
+        an env var to 'false' correctly disables jitter (``bool('false') == True``
+        is the footgun this avoids).
+        """
+        return _coerce_bool(self._config.get("dispatch_backoff_jitter"), default=True)
 
     @property
     def parent_id(self) -> str:

@@ -4,6 +4,7 @@ from pathlib import Path
 from unittest.mock import MagicMock
 
 import fnmatch
+import pytest
 
 from amplifier_module_hook_context_intelligence.config_resolver import (
     HookConfigResolver as ConfigResolver,
@@ -534,6 +535,27 @@ class TestDispatchQueueCapacity:
 
         assert resolver.dispatch_queue_capacity == 64
 
+    def test_zero_is_clamped_to_one(self) -> None:
+        """dispatch_queue_capacity clamps 0 up to 1 (prevents UNBOUNDED asyncio.Queue, TB-03)."""
+        coordinator = _make_coordinator(config={})
+        resolver = ConfigResolver(config={"dispatch_queue_capacity": 0}, coordinator=coordinator)
+
+        assert resolver.dispatch_queue_capacity == 1
+
+    def test_negative_is_clamped_to_one(self) -> None:
+        """dispatch_queue_capacity clamps negative values up to 1."""
+        coordinator = _make_coordinator(config={})
+        resolver = ConfigResolver(config={"dispatch_queue_capacity": -5}, coordinator=coordinator)
+
+        assert resolver.dispatch_queue_capacity == 1
+
+    def test_one_is_allowed(self) -> None:
+        """dispatch_queue_capacity of exactly 1 is valid and stays 1."""
+        coordinator = _make_coordinator(config={})
+        resolver = ConfigResolver(config={"dispatch_queue_capacity": 1}, coordinator=coordinator)
+
+        assert resolver.dispatch_queue_capacity == 1
+
 
 class TestCloseDrainTimeout:
     def test_defaults_to_half_second(self) -> None:
@@ -785,3 +807,101 @@ class TestWorkingDir:
         resolver = ConfigResolver(config={}, coordinator=coordinator)
 
         assert isinstance(resolver.working_dir, str)
+
+
+class TestDispatchBackoffKnobs:
+    """dispatch_backoff_initial, dispatch_backoff_max, dispatch_backoff_jitter properties."""
+
+    def test_backoff_initial_defaults_to_1_0(self) -> None:
+        """dispatch_backoff_initial returns 1.0 when not configured."""
+        coordinator = _make_coordinator(config={})
+        resolver = ConfigResolver(config={}, coordinator=coordinator)
+
+        assert resolver.dispatch_backoff_initial == 1.0
+
+    def test_backoff_initial_reads_string_as_float(self) -> None:
+        """dispatch_backoff_initial reads the string '2' as 2.0."""
+        coordinator = _make_coordinator(config={})
+        resolver = ConfigResolver(
+            config={"dispatch_backoff_initial": "2"}, coordinator=coordinator
+        )
+
+        assert resolver.dispatch_backoff_initial == 2.0
+        assert isinstance(resolver.dispatch_backoff_initial, float)
+
+    def test_backoff_max_defaults_to_30_0(self) -> None:
+        """dispatch_backoff_max returns 30.0 when not configured."""
+        coordinator = _make_coordinator(config={})
+        resolver = ConfigResolver(config={}, coordinator=coordinator)
+
+        assert resolver.dispatch_backoff_max == 30.0
+
+    def test_backoff_max_reads_string_as_float(self) -> None:
+        """dispatch_backoff_max reads the string '10' as 10.0."""
+        coordinator = _make_coordinator(config={})
+        resolver = ConfigResolver(
+            config={"dispatch_backoff_max": "10"}, coordinator=coordinator
+        )
+
+        assert resolver.dispatch_backoff_max == 10.0
+        assert isinstance(resolver.dispatch_backoff_max, float)
+
+    def test_backoff_jitter_defaults_to_true(self) -> None:
+        """dispatch_backoff_jitter returns True when not configured."""
+        coordinator = _make_coordinator(config={})
+        resolver = ConfigResolver(config={}, coordinator=coordinator)
+
+        assert resolver.dispatch_backoff_jitter is True
+
+    def test_backoff_jitter_python_false_stays_false(self) -> None:
+        """dispatch_backoff_jitter: Python bool False stays False (not str coercion path)."""
+        coordinator = _make_coordinator(config={})
+        resolver = ConfigResolver(
+            config={"dispatch_backoff_jitter": False}, coordinator=coordinator
+        )
+
+        assert resolver.dispatch_backoff_jitter is False
+
+    def test_backoff_jitter_string_false_is_false(self) -> None:
+        """REGRESSION GUARD: literal string 'false' -> False (avoids bool('false')==True footgun)."""
+        coordinator = _make_coordinator(config={})
+        resolver = ConfigResolver(
+            config={"dispatch_backoff_jitter": "false"}, coordinator=coordinator
+        )
+
+        assert resolver.dispatch_backoff_jitter is False
+
+    def test_backoff_jitter_string_true_is_true(self) -> None:
+        """REGRESSION GUARD: literal string 'true' -> True."""
+        coordinator = _make_coordinator(config={})
+        resolver = ConfigResolver(
+            config={"dispatch_backoff_jitter": "true"}, coordinator=coordinator
+        )
+
+        assert resolver.dispatch_backoff_jitter is True
+
+    @pytest.mark.parametrize("falsey", ["0", "no", "off", "FALSE", " false ", ""])
+    def test_backoff_jitter_falsey_strings_are_false(self, falsey: str) -> None:
+        """All falsey string variants ('0','no','off','FALSE',' false ','') resolve to False."""
+        coordinator = _make_coordinator(config={})
+        resolver = ConfigResolver(
+            config={"dispatch_backoff_jitter": falsey}, coordinator=coordinator
+        )
+
+        assert resolver.dispatch_backoff_jitter is False
+
+    def test_all_three_knobs_resolve_together(self) -> None:
+        """All three backoff knobs resolve correctly from a single plain config dict."""
+        coordinator = _make_coordinator(config={})
+        resolver = ConfigResolver(
+            config={
+                "dispatch_backoff_initial": "5",
+                "dispatch_backoff_max": "60",
+                "dispatch_backoff_jitter": "false",
+            },
+            coordinator=coordinator,
+        )
+
+        assert resolver.dispatch_backoff_initial == 5.0
+        assert resolver.dispatch_backoff_max == 60.0
+        assert resolver.dispatch_backoff_jitter is False
