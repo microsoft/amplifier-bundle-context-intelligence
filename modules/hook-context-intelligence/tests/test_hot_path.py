@@ -53,6 +53,14 @@ _ALLOWED_HOT_PATH_CALLS: frozenset[str] = frozenset(
         "create_task",
         # _ensure_worker() → self._worker() [coroutine: scheduled, NOT entered]
         "_worker",
+        # Task 10: overflow branch — time.monotonic() is a single syscall (VDSO on Linux),
+        # effectively free (~10 ns). Only reached on the rare QueueFull path, never on
+        # the happy path. Monotonic reads are non-blocking by design.
+        "monotonic",
+        # Task 10: overflow branch — logger.warning() is a lazy-format stdlib call.
+        # Rate-limited to at most once per _LOG_RATE_LIMIT_SECONDS; only reached on
+        # the rare QueueFull path. Accepted overhead on the already-exceptional drop path.
+        "warning",
     }
 )
 
