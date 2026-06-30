@@ -382,17 +382,49 @@ class _DestinationDispatcher:
         return _classify_http_outcome(response.status_code)
 
     async def close(self) -> None:
-        """Drain, cancel worker, close client."""
+        """Drain, cancel worker, close client.
+
+        Emits a loud WARNING when shutting down with undelivered events or in a
+        degraded state.  The count is honest:
+        ``queued(qsize) + in-flight(0 or 1) + overflow-dropped(counter)``.
+        The recovery path uses the real ``self._storage_path`` (never a
+        placeholder like ``<path>``).  A clean shutdown — count 0 and not
+        degraded — emits no such warning.
+
+        Drain is bounded by ``_close_drain_timeout``: ``queue.join()`` runs until
+        that deadline, then the worker is cancelled regardless.  The worker's
+        ``asyncio.sleep`` in ``_sleep_backoff`` is cancellation-safe, so close()
+        returns promptly even when the worker is mid-backoff.
+        """
         if self._worker_task is not None:
+            # Attempt bounded drain: let the worker flush what it can within the timeout.
             try:
                 await asyncio.wait_for(self._queue.join(), timeout=self._close_drain_timeout)
             except asyncio.TimeoutError:
-                logger.debug(
-                    "server_dispatch_drain_timeout: queued events discarded during shutdown"
-                    " dest=%s url=%s",
+                pass  # worker will be cancelled below; undelivered count computed first
+
+            # Compute honest undelivered count BEFORE cancelling the worker.
+            # Cancellation sets self._current = None in the CancelledError handler,
+            # so we must read it here to get an accurate in-flight count.
+            queued = self._queue.qsize()
+            in_flight = 1 if self._current is not None else 0
+            dropped = self._overflow_dropped
+            total = queued + in_flight + dropped
+
+            if self._degraded_warned or total > 0:
+                logger.warning(
+                    "%s shutdown: %d undelivered event(s)"
+                    " (queued=%d in-flight=%d overflow-dropped=%d)."
+                    " Events are durable in events.jsonl."
+                    " To manually upload run: context-intelligence-upload %s",
                     self._name,
-                    self._url,
+                    total,
+                    queued,
+                    in_flight,
+                    dropped,
+                    self._storage_path,
                 )
+
             self._worker_task.cancel()
             try:
                 await self._worker_task
