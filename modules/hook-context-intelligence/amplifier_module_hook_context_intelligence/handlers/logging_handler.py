@@ -215,10 +215,36 @@ class _DestinationDispatcher:
                     outcome = await self._post(event, payload_data)
                     if outcome == _TRANSIENT:
                         self._consecutive_failures += 1
+                        if self._last_status == 401:
+                            self._auth_failures += 1
+                        if not self._degraded_warned:
+                            logger.warning(
+                                "%s unreachable, retrying with backoff — events still"
+                                " captured locally in events.jsonl, no action needed.",
+                                self._name,
+                            )
+                            self._degraded_warned = True
+                        elif self._auth_failures == self._failure_threshold:
+                            logger.warning(
+                                "%s still rejecting auth (HTTP 401) after %d attempts"
+                                " — this looks like an auth problem, not a network blip."
+                                " Check credentials.",
+                                self._name,
+                                self._auth_failures,
+                            )
+                        else:
+                            logger.debug("server_dispatch_retry dest=%s", self._name)
                         await self._sleep_backoff()
                         continue  # retry the same event
                     # _DELIVERED or _PERMANENT — advance to next event
+                    if outcome == _DELIVERED and self._degraded_warned:
+                        logger.info(
+                            "Reconnected to %s — resuming delivery.",
+                            self._name,
+                        )
+                        self._degraded_warned = False
                     self._consecutive_failures = 0
+                    self._auth_failures = 0
                     self._queue.task_done()
                     self._current = None
                     break
