@@ -59,13 +59,20 @@ _PERMANENT: str = "permanent"
 def _classify_http_outcome(status_code: int) -> str:
     """Map an HTTP status code to a _post outcome constant.
 
-    Classification table (Option X):
-    - ``_DELIVERED``:  any status < 400
+    Classification table:
+    - ``_DELIVERED``:  status < 300 (2xx success)
+    - ``_PERMANENT``:  300 <= status < 400 (3xx redirect — deliberately not following;
+      authenticated POST redirects risk bearer-token leakage to another host)
     - ``_TRANSIENT``:  401, 429, or any 5xx (retry forever w/ backoff)
     - ``_PERMANENT``:  403, 400, 413, 422, and any other 4xx (loud skip)
     """
-    if status_code < 400:
+    if status_code < 300:
         return _DELIVERED
+    if status_code < 400:
+        # 3xx redirect: misconfigured URL or HTTPS-enforce redirect.
+        # Do NOT follow — silently following an authenticated POST redirect risks
+        # leaking the bearer token to a different host.
+        return _PERMANENT
     if status_code == 401 or status_code == 429 or status_code >= 500:
         return _TRANSIENT
     # 403, 400, 413, 422, and any other 4xx
@@ -259,7 +266,15 @@ class _DestinationDispatcher:
                         now = time.monotonic()
                         if now - self._last_permanent_log >= _LOG_RATE_LIMIT_SECONDS:
                             self._last_permanent_log = now
-                            if self._last_status == 403:
+                            if self._last_status is not None and 300 <= self._last_status < 400:
+                                logger.warning(
+                                    "%s returned an unexpected redirect (HTTP %d)"
+                                    " — destination URL likely misconfigured;"
+                                    " not following redirects, event skipped.",
+                                    self._name,
+                                    self._last_status,
+                                )
+                            elif self._last_status == 403:
                                 logger.warning(
                                     "%s rejected event (HTTP 403) — check credentials.",
                                     self._name,
@@ -367,10 +382,8 @@ class _DestinationDispatcher:
                 return _DELIVERED
             raise
         except (
+            httpx.TimeoutException,  # ConnectTimeout, ReadTimeout, WriteTimeout, PoolTimeout
             httpx.ConnectError,
-            httpx.ConnectTimeout,
-            httpx.ReadTimeout,
-            httpx.PoolTimeout,
             httpx.RemoteProtocolError,
         ):
             return _TRANSIENT
