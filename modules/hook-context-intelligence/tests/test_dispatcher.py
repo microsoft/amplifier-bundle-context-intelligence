@@ -304,7 +304,6 @@ class TestNoPermanentLatch:
 class TestDestinationIsolation:
     """Failures in one destination must NOT permanently disable another."""
 
-    @pytest.mark.skip(reason="enabled by Task 5 worker loop")
     async def test_one_degraded_destination_does_not_affect_another(self) -> None:
         """dest B delivers ['e1','e2'] while dest A is down."""
         d_a = _dispatcher(name="a", failure_threshold=3)
@@ -319,7 +318,9 @@ class TestDestinationIsolation:
         # B always succeeds
         mock_client_b = AsyncMock()
         mock_client_b.is_closed = False
-        mock_client_b.post.return_value = MagicMock(raise_for_status=MagicMock())
+        ok_response = MagicMock()
+        ok_response.status_code = 200
+        mock_client_b.post.return_value = ok_response
         d_b._client = mock_client_b
 
         events = ["e1", "e2"]

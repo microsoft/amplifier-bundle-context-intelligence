@@ -178,12 +178,62 @@ class _DestinationDispatcher:
             # Rate-limited overflow logging added in Task 10.
 
     async def _worker(self) -> None:
+        """Process events from the queue with retry-on-transient backoff.
+
+        Holds the in-flight event in ``self._current`` during retries so the
+        supervisor (Task 6) can inspect or reassert it. On ``_TRANSIENT``
+        outcomes (network errors, HTTP 5xx/429/401) the SAME event is retried
+        after a capped full-jitter backoff sleep; ``_consecutive_failures``
+        grows the exponent each time. On ``_DELIVERED`` or ``_PERMANENT`` the
+        counter resets, ``task_done()`` is called, ``_current`` is cleared, and
+        the outer loop fetches the next event — order is preserved by
+        construction (single worker, one in-flight event at a time).
+
+        Unclassified exceptions (bare ``Exception``, ``TypeError``, …) propagate
+        so the worker supervisor (Task 6) can log loudly and restart the loop.
+        ``task_done()`` is called in the ``BaseException`` handler so that
+        ``asyncio.Queue.join()`` in ``close()`` never hangs.
+        """
         while True:
             event, payload_data = await self._queue.get()
+            self._current = (event, payload_data)
             try:
-                await self._post(event, payload_data)
-            finally:
+                while True:
+                    outcome = await self._post(event, payload_data)
+                    if outcome == _TRANSIENT:
+                        self._consecutive_failures += 1
+                        await self._sleep_backoff()
+                        continue  # retry the same event
+                    # _DELIVERED or _PERMANENT — advance to next event
+                    self._consecutive_failures = 0
+                    self._queue.task_done()
+                    self._current = None
+                    break
+            except BaseException:
+                # Ensure task_done() is always paired with queue.get() even
+                # when an unclassified exception or CancelledError propagates.
                 self._queue.task_done()
+                self._current = None
+                raise
+
+    async def _sleep_backoff(self) -> None:
+        """Sleep for a capped exponential backoff interval.
+
+        Computes ``cap = min(backoff_initial * 2^(consecutive_failures − 1),
+        backoff_max)``.  The first retry (failures = 1) sleeps exactly
+        ``backoff_initial`` (no jitter); subsequent retries double the cap up
+        to ``backoff_max``.  With ``backoff_jitter=True``, the delay is chosen
+        uniformly at random from ``[0, cap]`` (full-jitter pattern); without
+        jitter the delay equals ``cap`` deterministically.
+
+        Uses ``asyncio.sleep`` so the sleep is cancellable by ``close()``.
+        """
+        cap = min(
+            self._backoff_initial * (2 ** (self._consecutive_failures - 1)),
+            self._backoff_max,
+        )
+        delay = random.uniform(0, cap) if self._backoff_jitter else cap
+        await asyncio.sleep(delay)
 
     async def _post(self, event: str, data: dict[str, Any]) -> str:
         """POST one event to this destination and return a three-way outcome.
