@@ -20,6 +20,7 @@ import httpx
 import pytest
 
 from amplifier_module_hook_context_intelligence.handlers.logging_handler import (
+    _AUTH_GIVEUP_ATTEMPTS,
     _DELIVERED,  # noqa: F401 — imported for shared test use
     _PERMANENT,
     _TRANSIENT,
@@ -420,3 +421,242 @@ async def test_closed_client_runtimeerror_is_delivered() -> None:
     result = await d._post("test:event", {"session_id": "s1"})
 
     assert result == _DELIVERED
+
+
+# ---------------------------------------------------------------------------
+# Bug F: sticky-_last_status sentinel + bounded-401 give-up
+#
+# Root cause proven from server logs: the CI server returned ZERO 401s while a
+# session emitted "still rejecting auth (HTTP 401) after N attempts". _last_status
+# was only written on a real HTTP response (never on the timeout/network path), so
+# after ONE 401 every subsequent TIMEOUT inherited status 401 and was miscounted as
+# an auth failure -- a network blip wearing a 401 label. Separately, a genuine 401
+# was classified retry-forever (_TRANSIENT), so one doomed event blocked the single
+# worker (and the whole queue) indefinitely.
+# ---------------------------------------------------------------------------
+
+
+async def test_timeout_clears_last_status_sentinel() -> None:
+    """A timeout/network error must reset _last_status to None inside _post.
+
+    This is the core of the fix: a timeout carries no HTTP status, so it must NOT
+    let a prior 401 be inherited by the next transient outcome (which the worker
+    would then mis-count as an auth failure and mislabel as a credential problem).
+    """
+    d = _dispatcher()
+    d._last_status = 401  # a prior GENUINE 401 armed the sentinel
+    d._client = _client_raising(httpx.ReadTimeout("read timeout"))
+
+    result = await d._post("test:event", {"session_id": "s1"})
+
+    assert result == _TRANSIENT
+    assert d._last_status is None, (
+        "timeout must clear _last_status so it cannot be inherited as a fake 401"
+    )
+
+
+def _one_401_then_timeouts_then_deliver(d: _DestinationDispatcher, n_timeouts: int) -> None:
+    """Fake _post: 1 genuine 401, then n_timeouts timeouts, then delivery.
+
+    Mirrors the real _post contract post-fix: a 401 sets _last_status=401; a
+    timeout clears it to None (see test_timeout_clears_last_status_sentinel).
+    """
+    calls: list[int] = [0]
+
+    async def fake_post(event: str, data: dict) -> str:  # type: ignore[type-arg]
+        i = calls[0]
+        calls[0] += 1
+        if i == 0:
+            d._last_status = 401
+            return _TRANSIENT
+        if i <= n_timeouts:
+            d._last_status = None  # a timeout has no HTTP status
+            return _TRANSIENT
+        return _DELIVERED
+
+    d._post = fake_post  # type: ignore[method-assign]
+
+
+async def test_timeouts_after_401_do_not_refire_auth_warning() -> None:
+    """One genuine 401 then many timeouts must yield exactly ONE 'rejecting auth' warning.
+
+    The 60s rate-limit is held fully open (monotonic advances 61s per call), so the
+    only thing that can suppress re-warning is the fix: timeouts are not auth
+    failures and must not re-fire the escalation. Before the fix the sticky 401
+    status made every timeout re-emit "still rejecting auth (HTTP 401)".
+    """
+    d = _dispatcher(failure_threshold=1)
+    _one_401_then_timeouts_then_deliver(d, 5)
+    d._sleep_backoff = AsyncMock()
+
+    ticks = iter(range(61, 100000, 61))
+    with patch(f"{MOD}.time.monotonic", side_effect=ticks):
+        with patch(LOGGER_PATH) as mock_logger:
+            d._queue.put_nowait(("test:event", {"session_id": "s1"}))
+            task = asyncio.create_task(d._worker())
+            await d._queue.join()
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+
+    auth_warnings = [
+        c for c in mock_logger.warning.call_args_list if "rejecting auth" in _rendered(c)
+    ]
+    assert len(auth_warnings) == 1, (
+        "timeouts after a 401 must NOT re-fire the auth warning; expected exactly 1, "
+        f"got {len(auth_warnings)}: {[_rendered(c) for c in auth_warnings]}"
+    )
+
+
+async def test_persistent_401_gives_up_and_unblocks_queue() -> None:
+    """A never-succeeding genuine 401 must be bounded so the queue keeps draining.
+
+    Before the fix, a 401 was retried forever (_TRANSIENT) -- the inner loop never
+    broke, so one doomed event blocked the single worker and every later event
+    behind it. After the fix, after _AUTH_GIVEUP_ATTEMPTS consecutive 401s the event
+    is skipped (durable in events.jsonl) and the worker advances. If the fix were
+    absent, queue.join() would never complete and asyncio.wait_for would time out.
+    """
+    d = _dispatcher()  # failure_threshold=3 default; give-up ceiling is 10
+    d._sleep_backoff = AsyncMock()
+
+    async def always_401(event: str, data: dict) -> str:  # type: ignore[type-arg]
+        d._last_status = 401
+        return _TRANSIENT
+
+    d._post = always_401  # type: ignore[method-assign]
+
+    with patch(LOGGER_PATH) as mock_logger:
+        d._queue.put_nowait(("e1", {"session_id": "s1"}))
+        d._queue.put_nowait(("e2", {"session_id": "s2"}))
+        task = asyncio.create_task(d._worker())
+        # Without bounded give-up this join() never returns -> TimeoutError -> fail.
+        await asyncio.wait_for(d._queue.join(), timeout=5.0)
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+    assert d._queue.qsize() == 0, "both doomed 401 events must drain; the queue must unblock"
+    giveup_warnings = [c for c in mock_logger.warning.call_args_list if "giving up" in _rendered(c)]
+    assert len(giveup_warnings) >= 1, (
+        f"expected a 'giving up' warning after {_AUTH_GIVEUP_ATTEMPTS} consecutive 401s, "
+        f"got: {[_rendered(c) for c in mock_logger.warning.call_args_list]}"
+    )
+
+
+async def test_delivery_resets_auth_counter_so_events_never_reach_giveup() -> None:
+    """A success (202) must zero _auth_failures so 401s can't accumulate across events.
+
+    Council (tester-breaker/crusty): if a 202 did not reset the counter, N non-consecutive
+    401s spread over a healthy-most-of-the-time server would eventually trip the give-up
+    ceiling and skip a deliverable event. Two events, each with (_AUTH_GIVEUP_ATTEMPTS - 2)
+    genuine 401s then a 202, must BOTH deliver and produce NO give-up.
+    """
+    per_event_401 = _AUTH_GIVEUP_ATTEMPTS - 2
+    d = _dispatcher()
+    d._sleep_backoff = AsyncMock()
+
+    state: dict[str, int] = {"idx": 0, "n_this_event": 0}
+
+    async def fake_post(event: str, data: dict) -> str:  # type: ignore[type-arg]
+        if state["n_this_event"] < per_event_401:
+            state["n_this_event"] += 1
+            d._last_status = 401
+            return _TRANSIENT
+        state["n_this_event"] = 0  # reset for the next event
+        d._last_status = 202
+        return _DELIVERED
+
+    d._post = fake_post  # type: ignore[method-assign]
+
+    with patch(LOGGER_PATH) as mock_logger:
+        d._queue.put_nowait(("e1", {"session_id": "s1"}))
+        d._queue.put_nowait(("e2", {"session_id": "s2"}))
+        task = asyncio.create_task(d._worker())
+        await asyncio.wait_for(d._queue.join(), timeout=5.0)
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+    assert d._auth_failures == 0, "delivery must reset the auth-failure counter"
+    giveup = [c for c in mock_logger.warning.call_args_list if "giving up" in _rendered(c)]
+    assert giveup == [], (
+        "a delivered event between 401s must prevent give-up; "
+        f"got give-up warnings: {[_rendered(c) for c in giveup]}"
+    )
+
+
+async def test_giveup_fires_on_exactly_the_nth_genuine_401() -> None:
+    """Give-up must trigger on exactly the _AUTH_GIVEUP_ATTEMPTS-th genuine 401 (boundary pin).
+
+    Council (tester-breaker): pin the off-by-one. The increment precedes the >= check, so
+    _post is called exactly _AUTH_GIVEUP_ATTEMPTS times for one never-succeeding event
+    before the worker gives up and advances -- not one fewer, not one more.
+    """
+    d = _dispatcher()
+    d._sleep_backoff = AsyncMock()
+    calls = {"n": 0}
+
+    async def always_401(event: str, data: dict) -> str:  # type: ignore[type-arg]
+        calls["n"] += 1
+        d._last_status = 401
+        return _TRANSIENT
+
+    d._post = always_401  # type: ignore[method-assign]
+
+    with patch(LOGGER_PATH):
+        d._queue.put_nowait(("e1", {"session_id": "s1"}))
+        task = asyncio.create_task(d._worker())
+        await asyncio.wait_for(d._queue.join(), timeout=5.0)
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+    assert calls["n"] == _AUTH_GIVEUP_ATTEMPTS, (
+        f"give-up must fire on exactly the {_AUTH_GIVEUP_ATTEMPTS}th genuine 401, "
+        f"but _post was called {calls['n']} times"
+    )
+
+
+async def test_worker_delivers_next_event_after_giving_up_on_a_doomed_one() -> None:
+    """After give-up on a doomed 401 event, the worker must still DELIVER the next event.
+
+    Council (tester-breaker/ROB): prove the give-up `break` exits only the retry loop, not
+    the worker -- a following, healthy event must be delivered, not stranded.
+    """
+    d = _dispatcher()
+    d._sleep_backoff = AsyncMock()
+    delivered: list[str] = []
+
+    async def fake_post(event: str, data: dict) -> str:  # type: ignore[type-arg]
+        if event == "doomed":
+            d._last_status = 401
+            return _TRANSIENT
+        d._last_status = 202
+        delivered.append(event)
+        return _DELIVERED
+
+    d._post = fake_post  # type: ignore[method-assign]
+
+    with patch(LOGGER_PATH):
+        d._queue.put_nowait(("doomed", {"session_id": "s1"}))
+        d._queue.put_nowait(("healthy", {"session_id": "s2"}))
+        task = asyncio.create_task(d._worker())
+        await asyncio.wait_for(d._queue.join(), timeout=5.0)
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+    assert delivered == ["healthy"], (
+        f"worker must survive give-up and deliver the next event; delivered={delivered}"
+    )
