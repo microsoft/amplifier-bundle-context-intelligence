@@ -413,9 +413,7 @@ async def test_closed_client_runtimeerror_is_delivered() -> None:
     client = AsyncMock()
     client.is_closed = False
     client.post = AsyncMock(
-        side_effect=RuntimeError(
-            "Cannot send a request, as the client has been closed."
-        )
+        side_effect=RuntimeError("Cannot send a request, as the client has been closed.")
     )
     d._client = client
 

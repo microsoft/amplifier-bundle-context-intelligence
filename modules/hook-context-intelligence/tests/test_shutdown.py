@@ -103,8 +103,7 @@ class TestShutdownWarning:
             await d.close()
 
         shutdown_warnings = [
-            c for c in mock_logger.warning.call_args_list
-            if STORAGE_PATH in str(c)
+            c for c in mock_logger.warning.call_args_list if STORAGE_PATH in str(c)
         ]
         assert len(shutdown_warnings) >= 1, (
             f"Expected ≥1 shutdown WARNING mentioning storage path, "
@@ -124,18 +123,13 @@ class TestShutdownWarning:
         with patch(LOGGER_PATH) as mock_logger:
             await d.close()
 
-        shutdown_warnings = [
-            c for c in mock_logger.warning.call_args_list
-            if real_path in str(c)
-        ]
+        shutdown_warnings = [c for c in mock_logger.warning.call_args_list if real_path in str(c)]
         assert len(shutdown_warnings) >= 1, (
             f"WARNING must reference real storage path {real_path!r}, "
             f"got: {mock_logger.warning.call_args_list}"
         )
         for call in shutdown_warnings:
-            assert "<path>" not in str(call), (
-                f"WARNING must not use placeholder '<path>': {call}"
-            )
+            assert "<path>" not in str(call), f"WARNING must not use placeholder '<path>': {call}"
 
     async def test_shutdown_warning_honest_count_equals_queued_plus_inflight_plus_dropped(
         self,
@@ -162,8 +156,7 @@ class TestShutdownWarning:
             await d.close()
 
         shutdown_warnings = [
-            c for c in mock_logger.warning.call_args_list
-            if STORAGE_PATH in str(c)
+            c for c in mock_logger.warning.call_args_list if STORAGE_PATH in str(c)
         ]
         assert len(shutdown_warnings) >= 1, (
             f"Expected shutdown WARNING, got all warnings: {mock_logger.warning.call_args_list}"
@@ -184,9 +177,7 @@ class TestShutdownWarning:
             f"Expected total=6 (queued=2 + in_flight=1 + dropped=3), got total={total} "
             f"(queued={queued}, in_flight={in_flight}, dropped={dropped})"
         )
-        assert str(storage) == STORAGE_PATH, (
-            f"Expected storage={STORAGE_PATH!r}, got {storage!r}"
-        )
+        assert str(storage) == STORAGE_PATH, f"Expected storage={STORAGE_PATH!r}, got {storage!r}"
 
     async def test_undelivered_events_without_degraded_emits_warning(self) -> None:
         """Undelivered events (not degraded) trigger WARNING because total > 0."""
@@ -202,8 +193,7 @@ class TestShutdownWarning:
             await d.close()
 
         shutdown_warnings = [
-            c for c in mock_logger.warning.call_args_list
-            if STORAGE_PATH in str(c)
+            c for c in mock_logger.warning.call_args_list if STORAGE_PATH in str(c)
         ]
         assert len(shutdown_warnings) >= 1, (
             f"Undelivered events alone must trigger shutdown WARNING (even if not degraded): "
@@ -222,15 +212,11 @@ class TestShutdownWarning:
         with patch(LOGGER_PATH) as mock_logger:
             await d.close()
 
-        debug_with_path = [
-            c for c in mock_logger.debug.call_args_list if STORAGE_PATH in str(c)
-        ]
+        debug_with_path = [c for c in mock_logger.debug.call_args_list if STORAGE_PATH in str(c)]
         assert len(debug_with_path) == 0, (
             f"Shutdown storage-path message must be at WARNING, not debug: {debug_with_path}"
         )
-        warn_with_path = [
-            c for c in mock_logger.warning.call_args_list if STORAGE_PATH in str(c)
-        ]
+        warn_with_path = [c for c in mock_logger.warning.call_args_list if STORAGE_PATH in str(c)]
         assert len(warn_with_path) >= 1, (
             f"Expected shutdown WARNING with storage path, "
             f"got warnings: {mock_logger.warning.call_args_list}"
@@ -249,8 +235,7 @@ class TestShutdownWarning:
             await d.close()
 
         shutdown_warnings = [
-            c for c in mock_logger.warning.call_args_list
-            if STORAGE_PATH in str(c)
+            c for c in mock_logger.warning.call_args_list if STORAGE_PATH in str(c)
         ]
         assert len(shutdown_warnings) >= 1, (
             f"Overflow-dropped events must trigger shutdown WARNING: "
@@ -290,12 +275,9 @@ class TestCleanShutdownNoWarning:
         with patch(LOGGER_PATH) as mock_logger:
             await d.close()
 
-        warn_with_path = [
-            c for c in mock_logger.warning.call_args_list if STORAGE_PATH in str(c)
-        ]
+        warn_with_path = [c for c in mock_logger.warning.call_args_list if STORAGE_PATH in str(c)]
         assert len(warn_with_path) == 0, (
-            f"Clean shutdown (all delivered) must not emit shutdown WARNING, "
-            f"got: {warn_with_path}"
+            f"Clean shutdown (all delivered) must not emit shutdown WARNING, got: {warn_with_path}"
         )
 
     async def test_no_events_no_worker_no_warning(self) -> None:
@@ -306,9 +288,7 @@ class TestCleanShutdownNoWarning:
         with patch(LOGGER_PATH) as mock_logger:
             await d.close()
 
-        warn_with_path = [
-            c for c in mock_logger.warning.call_args_list if STORAGE_PATH in str(c)
-        ]
+        warn_with_path = [c for c in mock_logger.warning.call_args_list if STORAGE_PATH in str(c)]
         assert len(warn_with_path) == 0, (
             f"Idle dispatcher must not emit shutdown WARNING, got: {warn_with_path}"
         )
@@ -337,9 +317,7 @@ class TestCleanShutdownNoWarning:
         with patch(LOGGER_PATH) as mock_logger:
             await d.close()
 
-        warn_with_path = [
-            c for c in mock_logger.warning.call_args_list if STORAGE_PATH in str(c)
-        ]
+        warn_with_path = [c for c in mock_logger.warning.call_args_list if STORAGE_PATH in str(c)]
         assert len(warn_with_path) == 0, (
             f"count=0 + not degraded must produce no shutdown WARNING, got: {warn_with_path}"
         )
@@ -376,8 +354,7 @@ class TestDrainBounded:
         # Must complete well within 3x drain_timeout (+ some overhead for cancellation)
         bound = drain_timeout * 3 + 0.2
         assert elapsed < bound, (
-            f"close() took {elapsed:.3f}s; expected < {bound:.3f}s "
-            f"(drain_timeout={drain_timeout}s)"
+            f"close() took {elapsed:.3f}s; expected < {bound:.3f}s (drain_timeout={drain_timeout}s)"
         )
 
     async def test_drain_completes_early_when_all_delivered(self) -> None:
@@ -434,7 +411,7 @@ class TestCancellationSafeSleep:
 
         Expected: close() returns in ~0.15s (drain timeout), NOT ~30s (backoff).
         """
-        HIGH_BACKOFF = 30.0   # worker sleeps this long after first TRANSIENT
+        HIGH_BACKOFF = 30.0  # worker sleeps this long after first TRANSIENT
         DRAIN_TIMEOUT = 0.15  # close() drain window — much shorter than the backoff
 
         d = _dispatcher(

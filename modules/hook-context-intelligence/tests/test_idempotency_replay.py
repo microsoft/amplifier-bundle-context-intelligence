@@ -123,10 +123,7 @@ class TestIdempotencyKeyStability:
         assert client.post.await_count == N + 1
 
         # Extract idempotency_key from every payload sent
-        keys = [
-            call.kwargs["json"]["idempotency_key"]
-            for call in client.post.call_args_list
-        ]
+        keys = [call.kwargs["json"]["idempotency_key"] for call in client.post.call_args_list]
         assert len(keys) == N + 1
 
         # ALL keys must be identical — same event + same data + no mutations
@@ -217,9 +214,7 @@ class TestIdempotencyKeyStability:
 
         # Simulate the kind of mutation that would occur if data were not immutable
         mutated_data = {**data, "_injected_mutation": True}
-        key_after_mutation = _compute_idempotency_key(
-            "session:start", "ws", mutated_data
-        )
+        key_after_mutation = _compute_idempotency_key("session:start", "ws", mutated_data)
 
         assert key_original != key_after_mutation, (
             "Idempotency key must change when data changes — confirming that the "
