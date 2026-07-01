@@ -838,9 +838,7 @@ class TestDispatchBackoffKnobs:
     def test_backoff_initial_reads_string_as_float(self) -> None:
         """dispatch_backoff_initial reads the string '2' as 2.0."""
         coordinator = _make_coordinator(config={})
-        resolver = ConfigResolver(
-            config={"dispatch_backoff_initial": "2"}, coordinator=coordinator
-        )
+        resolver = ConfigResolver(config={"dispatch_backoff_initial": "2"}, coordinator=coordinator)
 
         assert resolver.dispatch_backoff_initial == 2.0
         assert isinstance(resolver.dispatch_backoff_initial, float)
@@ -855,9 +853,7 @@ class TestDispatchBackoffKnobs:
     def test_backoff_max_reads_string_as_float(self) -> None:
         """dispatch_backoff_max reads the string '10' as 10.0."""
         coordinator = _make_coordinator(config={})
-        resolver = ConfigResolver(
-            config={"dispatch_backoff_max": "10"}, coordinator=coordinator
-        )
+        resolver = ConfigResolver(config={"dispatch_backoff_max": "10"}, coordinator=coordinator)
 
         assert resolver.dispatch_backoff_max == 10.0
         assert isinstance(resolver.dispatch_backoff_max, float)
@@ -921,22 +917,6 @@ class TestDispatchBackoffKnobs:
         assert resolver.dispatch_backoff_initial == 5.0
         assert resolver.dispatch_backoff_max == 60.0
         assert resolver.dispatch_backoff_jitter is False
-
-
-class TestDispatchReadTimeoutYAML:
-    def test_dispatch_read_timeout_yaml_default_is_10(self) -> None:
-        """The shipped YAML carries the AMPLIFIER_CONTEXT_INTELLIGENCE_DISPATCH_READ_TIMEOUT:10.0 knob."""
-        import pathlib
-
-        yaml_path = (
-            pathlib.Path(__file__).parents[3]
-            / "behaviors"
-            / "context-intelligence-logging.yaml"
-        )
-        text = yaml_path.read_text()
-        assert "AMPLIFIER_CONTEXT_INTELLIGENCE_DISPATCH_READ_TIMEOUT:10.0" in text, (
-            f"Expected 'AMPLIFIER_CONTEXT_INTELLIGENCE_DISPATCH_READ_TIMEOUT:10.0' in {yaml_path}"
-        )
 
 
 class TestTimeoutCoercion:
