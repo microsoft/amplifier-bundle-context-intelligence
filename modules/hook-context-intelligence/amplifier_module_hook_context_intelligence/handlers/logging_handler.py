@@ -170,9 +170,18 @@ class _DestinationDispatcher:
         self._overflow_dropped = 0
         self._auth_failures = 0
         self._last_status: int | None = None
-        self._last_overflow_log = 0.0
-        self._last_permanent_log = 0.0
-        self._last_auth_log = 0.0
+        # Sentinel "never logged yet" value. MUST be -inf, not 0.0: these are
+        # compared against time.monotonic(), whose reference point is platform-
+        # defined (often process/boot start, not epoch) and can legitimately be
+        # a small number of seconds on a freshly booted host or container. A
+        # 0.0 sentinel would make `now - 0.0 >= _LOG_RATE_LIMIT_SECONDS` false
+        # for the very first occurrence when now < 60s, silently swallowing the
+        # first overflow/permanent/auth-escalation warning of the process's
+        # lifetime. -inf guarantees the first check always passes regardless
+        # of the monotonic clock's absolute baseline.
+        self._last_overflow_log = float("-inf")
+        self._last_permanent_log = float("-inf")
+        self._last_auth_log = float("-inf")
 
     def _ensure_worker(self) -> None:
         if self._worker_task is None or self._worker_task.done():
