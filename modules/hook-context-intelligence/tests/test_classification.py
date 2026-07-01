@@ -27,6 +27,7 @@ from amplifier_module_hook_context_intelligence.handlers.logging_handler import 
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _dispatcher(**overrides: object) -> _DestinationDispatcher:
     """Create a _DestinationDispatcher with minimal defaults."""
     defaults: dict[str, object] = dict(
@@ -70,6 +71,7 @@ def _mock_client_for_exc(exc: BaseException) -> AsyncMock:
 # Outcome constants
 # ---------------------------------------------------------------------------
 
+
 class TestOutcomeConstants:
     """_DELIVERED, _TRANSIENT, _PERMANENT are importable, non-None, and distinct."""
 
@@ -91,6 +93,7 @@ class TestOutcomeConstants:
 # ---------------------------------------------------------------------------
 # 2xx → _DELIVERED
 # ---------------------------------------------------------------------------
+
 
 class TestDelivered:
     """Any HTTP response with status < 400 returns _DELIVERED."""
@@ -129,6 +132,7 @@ class TestDelivered:
 # 5xx / 429 / 401 → _TRANSIENT
 # ---------------------------------------------------------------------------
 
+
 class TestTransientHttp:
     """HTTP 5xx, 429, and 401 return _TRANSIENT."""
 
@@ -154,6 +158,7 @@ class TestTransientHttp:
 # ---------------------------------------------------------------------------
 # httpx network exceptions → _TRANSIENT
 # ---------------------------------------------------------------------------
+
 
 class TestTransientNetworkExceptions:
     """Listed httpx transport exceptions return _TRANSIENT."""
@@ -205,6 +210,7 @@ class TestTransientNetworkExceptions:
 # 403 / 400 / 413 / 422 / other 4xx → _PERMANENT
 # ---------------------------------------------------------------------------
 
+
 class TestPermanent:
     """HTTP 403, 400, 413, 422, and any other 4xx return _PERMANENT."""
 
@@ -230,6 +236,7 @@ class TestPermanent:
 # ---------------------------------------------------------------------------
 # Unclassified exceptions propagate
 # ---------------------------------------------------------------------------
+
 
 class TestUnclassifiedExceptionsPropagates:
     """Bare Exception and TypeError propagate out of _post (not caught)."""

@@ -530,9 +530,7 @@ class TestWorkerSupervisorUnclassifiedExceptions:
             "Expected logger.exception or logger.error to be called for unclassified exception"
         )
         # Poison dropped, good events processed in order
-        assert received == ["good1", "good2"], (
-            f"Expected ['good1', 'good2'] but got {received}"
-        )
+        assert received == ["good1", "good2"], f"Expected ['good1', 'good2'] but got {received}"
         await d.close()
 
     async def test_cancelled_error_not_swallowed(self) -> None:
