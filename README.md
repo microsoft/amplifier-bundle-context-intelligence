@@ -360,6 +360,7 @@ AMPLIFIER_CONTEXT_INTELLIGENCE_TOKEN_REFRESH_MARGIN_S=600
 | `base_path` | direct value | `~/.amplifier/projects` | Root directory for local JSONL output. |
 | `exclude_events` | direct value | `[]` | fnmatch patterns for events to suppress (event names, not paths). |
 | `dispatch_timeout` | `${...}` placeholder | `30` | HTTP write timeout (seconds) for server dispatch uploads. |
+| `dispatch_read_timeout` | `${AMPLIFIER_CONTEXT_INTELLIGENCE_DISPATCH_READ_TIMEOUT}` | `10.0` | HTTP **read** timeout (seconds) for server dispatch. Raised from the legacy hardcoded 3.0 s — the increase prevents spurious read-timeout failures on slow or large server responses (see ci-dispatch-breaker-bug-report.md). A read timeout is classified TRANSIENT and retried with full-jitter backoff. `connect` (0.5 s) and `pool` (0.5 s) timeouts remain fixed and non-configurable. |
 | `dispatch_failure_threshold` | `${...}` placeholder | `3` | Consecutive **transient** failures before the worker enters DEGRADED state and emits a warning notice; also gates the persistent-401 auth-escalation. Does **not** disable dispatch — dispatch is never permanently disabled. |
 | `dispatch_queue_capacity` | direct value | `256` | Maximum queued HTTP dispatches per destination. Clamped to `>= 1` (a value of `0` would be unbounded). When full, the newest event is dropped (durable in `events.jsonl`) and a rate-limited warning is logged naming the real storage path; dispatch is **never** disabled. |
 | `dispatch_backoff_initial` | `${...}` placeholder | `1.0` | Initial backoff sleep (seconds) for the first DEGRADED retry. |
@@ -450,7 +451,7 @@ Skill sync resolves its server using the **same** `(server_url, api_key)` chain 
 
 The hook isolates server traffic behind a single bounded background worker per session. The event callback only appends local JSONL and enqueues best-effort HTTP work — it never waits for a server round trip. The worker lazily creates a persistent `httpx.AsyncClient`, reuses one keep-alive connection, and serializes POSTs to avoid unbounded task growth when the server is slow or unavailable.
 
-HTTP timeouts are phase-specific: short `connect`/`pool` fail-fast bounds, a moderate `read` timeout, and `dispatch_timeout` applied to the `write` phase so larger payload uploads do not fail prematurely.
+HTTP timeouts are phase-specific: short `connect`/`pool` fail-fast bounds (0.5 s each, fixed), a configurable `dispatch_read_timeout` for the `read` phase (default 10.0 s; see config table above), and `dispatch_timeout` applied to the `write` phase so larger payload uploads do not fail prematurely.
 
 Each live POST carries a deterministic `idempotency_key` derived from the sanitized event envelope. The server may use it to suppress duplicate live submissions while still allowing explicit replay from local `events.jsonl`.
 
@@ -460,23 +461,21 @@ If the dispatch queue fills, the newest event is dropped (it remains durable in 
 
 The worker uses lazy creation: it creates an `httpx.AsyncClient` on the first dispatch request and keeps it alive for the entire session lifetime. This avoids opening a connection before any events arrive. TCP connection pooling means a single keep-alive connection is reused for all POSTs rather than opening a new one per event. The client is closed via `aclose()` during session finalization.
 
-### Auto-recovery
+### Auto-recovery dispatch
 
-The dispatcher never permanently disables a destination. On any transient failure (connection errors, timeouts, 5xx, 429, 401) the worker enters **DEGRADED** state: it holds the failed event in a local variable and retries the *same* event with capped full-jitter backoff (`dispatch_backoff_initial`, `dispatch_backoff_max`, `dispatch_backoff_jitter`) until the POST succeeds or the session ends. Ordering is preserved by construction — a single background worker, one in-flight event, new events queue behind it.
+**Architecture.** Each destination gets a dedicated `_DestinationDispatcher` that owns a single background worker draining a bounded `asyncio.Queue` (default capacity 256, clamped `>= 1`). The event callback (`__call__`) only appends local JSONL and enqueues best-effort HTTP work — it never blocks, never waits for a network round trip. The local `events.jsonl` is the durable backstop; server delivery is always best-effort.
 
-**Failure classification** — `_post()` returns one of three outcomes:
-- **DELIVERED** (2xx): reset failure counter and backoff; worker resumes draining the queue.
-- **TRANSIENT** (connection errors, timeouts, 5xx, 429, 401): worker enters/stays DEGRADED, sleeps backoff, retries the same event.
-- **PERMANENT** (403, 400, 413, 422): loud rate-limited log; skip event, advance to the next.
+**Flow.** `_post()` classifies every attempt into one of three outcomes:
 
-**Notifications — self-healing (emitted once; do not require user action):**
-- **DEGRADED notice** — emitted once per continuous failure episode (not per retry) when `_consecutive_failures` reaches `dispatch_failure_threshold`.
-- **RECOVERY notice** — "Reconnected — resuming delivery" on the first successful POST after DEGRADED. No event count (the count is not knowable without a replay scan).
-- **Persistent-401 escalation** — if `>= dispatch_failure_threshold` consecutive 401s are observed, a rate-limited WARNING is emitted periodically (at most once per 60 s): "this looks like an auth problem, not a network blip. Check credentials."
+- **DELIVERED** (2xx): reset failure counter and backoff; emit a RECOVERY notice if returning from DEGRADED state ("Reconnected — resuming delivery"); worker resumes draining the queue.
+- **TRANSIENT** (connect/read/write/pool timeouts, 5xx, 429, 401): worker performs **retry-in-place** — it holds the in-flight event in a local variable and sleeps a capped full-jitter backoff (`dispatch_backoff_initial` → `dispatch_backoff_max`) before retrying the same event. The event is never re-queued and ordering is preserved by construction. After `dispatch_failure_threshold` consecutive transient failures the worker enters **DEGRADED** state and emits a DEGRADED notice once per continuous failure episode. Persistent-401 escalation: if `>= dispatch_failure_threshold` consecutive 401s are observed a rate-limited WARNING ("check credentials") is emitted at most once per 60 s.
+- **PERMANENT** (403, 3xx redirect, 400, 413, 422): loud rate-limited log; skip event, call `task_done()`, advance to the next. Dispatch is **never** permanently disabled.
 
-**Notifications — action-needed (require user action to recover):**
-- **OVERFLOW** — when the in-memory queue is full, the newest event is dropped (remains durable in `events.jsonl`) and a rate-limited WARNING is logged naming `context-intelligence-upload --path <real storage path>` (--server-url/--api-key come from flags or env/config).
-- **Shutdown-undelivered** — if any events remain undelivered when `close()` is called, a WARNING is emitted with an honest count (`queued + in-flight + overflow-dropped`) and the real storage path.
+**Overflow.** When the in-memory queue is full, the newest event is dropped using the drop-newest strategy (oldest events in the queue are preserved in delivery order). The dropped event remains durable in `events.jsonl`. A rate-limited WARNING names the real storage path and the recovery command: `context-intelligence-upload --path <storage path>`.
+
+**Shutdown.** When `close()` is called the worker is given a bounded drain window (`close_drain_timeout`, default 0.5 s) to finish in-flight work. Cancellation-safe: a sleeping backoff is cancelled cleanly. If any events remain undelivered an honest WARNING is emitted with a precise count (`queued + in-flight + overflow-dropped`) and the real storage path.
+
+**Timeouts (all phases).** Connect: 0.5 s (fixed). Pool: 0.5 s (fixed). Write: `dispatch_timeout` (configurable, default 30 s). Read: `dispatch_read_timeout` (configurable, default 10.0 s; previously hardcoded 3.0 s — raised to prevent spurious read-timeout failures on slow server responses; see ci-dispatch-breaker-bug-report.md).
 
 **Idempotency contract:** each POST carries a deterministic `idempotency_key` (SHA-256 over `{event, workspace, data}`). Retries are safe — the server can suppress duplicate deliveries. (The "single server-side record" guarantee is an assumption verified by the real-server E2E tests, not the unit suite.)
 

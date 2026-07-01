@@ -74,7 +74,7 @@ digraph DispatchCircuitBreaker {
         node [shape=box, style="rounded,filled", penwidth=1.5];
 
         create_client [
-            label="create _client\n─────────────────────\nhttpx.AsyncClient(\n  timeout=Timeout(\n    connect=0.5,\n    write=_dispatch_timeout,\n    read=3.0,\n    pool=0.5\n  ),\n  limits=Limits(max_connections=1,\n    max_keepalive_connections=1)\n)",
+            label="create _client\n─────────────────────\nhttpx.AsyncClient(\n  timeout=Timeout(\n    connect=0.5  (fixed),\n    write=dispatch_timeout  (configurable),\n    read=dispatch_read_timeout (default 10s, was 3s),\n    pool=0.5  (fixed)\n  ),\n  limits=Limits(max_connections=1,\n    max_keepalive_connections=1)\n)",
             fillcolor="#E8F5E9",
             color="#2E7D32"
         ];
