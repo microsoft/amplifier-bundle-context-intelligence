@@ -345,9 +345,10 @@ class _DestinationDispatcher:
             HTTP status < 400, or a RuntimeError whose message contains "closed"
             (client torn down during session teardown — treated as done).
         _TRANSIENT
-            Network-level httpx errors (ConnectError, ConnectTimeout, ReadTimeout,
-            PoolTimeout, RemoteProtocolError) or HTTP 401/429/5xx — caller should
-            retry with backoff.
+            Network-level httpx errors -- httpx.NetworkError (ConnectError, ReadError,
+            WriteError, CloseError), httpx.TimeoutException (ConnectTimeout, ReadTimeout,
+            WriteTimeout, PoolTimeout), or httpx.RemoteProtocolError -- or HTTP
+            401/429/5xx — caller should retry with backoff.
         _PERMANENT
             HTTP 403 or any other 4xx (400, 413, 422, …) — event cannot be
             delivered; caller should log loudly and skip.
@@ -390,7 +391,14 @@ class _DestinationDispatcher:
             raise
         except (
             httpx.TimeoutException,  # ConnectTimeout, ReadTimeout, WriteTimeout, PoolTimeout
-            httpx.ConnectError,
+            # NetworkError covers ConnectError AND ReadError/WriteError/CloseError.
+            # A connection can die mid-response just as easily as mid-connect (e.g. the
+            # peer process is killed while a request is in flight) -- httpx raises
+            # ReadError/WriteError for that case, not ConnectError. Narrowing this to
+            # ConnectError alone silently drops the in-flight event (falls through to
+            # the worker's unclassified-exception handler, which is NOT retried) instead
+            # of retrying it, permanently losing an event on a mid-stream server kill.
+            httpx.NetworkError,
             httpx.RemoteProtocolError,
         ):
             return _TRANSIENT
