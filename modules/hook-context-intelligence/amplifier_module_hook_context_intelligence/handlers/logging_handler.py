@@ -46,6 +46,16 @@ _READ_TIMEOUT = 3.0
 _POOL_TIMEOUT = 0.5
 #: Minimum seconds between repeated overflow or permanent-skip log warnings.
 _LOG_RATE_LIMIT_SECONDS = 60.0
+#: Consecutive GENUINE 401 auth rejections on a single in-flight event before the
+#: worker STOPS retrying it. A rejected credential is deterministic -- a static key
+#: that is 401'd once is 401'd on every identical retry -- so retrying forever both
+#: spams warnings and blocks the single worker (and thus the whole queue) behind one
+#: doomed event. After this ceiling the event is skipped (it stays durable in
+#: events.jsonl) so the worker keeps draining; delivery resumes once the operator
+#: fixes credentials and restarts the session. NOTE: only GENUINE 401 responses
+#: count toward this ceiling -- timeouts/network errors do NOT (see _post, which
+#: clears _last_status on those paths).
+_AUTH_GIVEUP_ATTEMPTS: int = 10
 
 # ---------------------------------------------------------------------------
 # _post outcome constants (Task 4)
@@ -189,6 +199,7 @@ class _DestinationDispatcher:
         self._last_overflow_log = float("-inf")
         self._last_permanent_log = float("-inf")
         self._last_auth_log = float("-inf")
+        self._last_giveup_log = float("-inf")
 
     def _ensure_worker(self) -> None:
         if self._worker_task is None or self._worker_task.done():
@@ -255,7 +266,12 @@ class _DestinationDispatcher:
                     outcome = await self._post(event, payload_data)
                     if outcome == _TRANSIENT:
                         self._consecutive_failures += 1
-                        if self._last_status == 401:
+                        # Only a GENUINE, fresh 401 HTTP response is an auth failure.
+                        # Timeouts/network errors clear _last_status in _post, so they
+                        # can never be mistaken for a 401 here -- this is what stops a
+                        # network blip from inflating the auth counter.
+                        is_auth_401 = self._last_status == 401
+                        if is_auth_401:
                             self._auth_failures += 1
                         if not self._degraded_warned:
                             logger.warning(
@@ -266,17 +282,48 @@ class _DestinationDispatcher:
                             self._degraded_warned = True
                         else:
                             logger.debug("server_dispatch_retry dest=%s", self._name)
-                        if self._auth_failures >= self._failure_threshold:
+                        if is_auth_401 and self._auth_failures >= self._failure_threshold:
                             now = time.monotonic()
                             if now - self._last_auth_log >= _LOG_RATE_LIMIT_SECONDS:
                                 self._last_auth_log = now
                                 logger.warning(
-                                    "%s still rejecting auth (HTTP 401) after %d attempts"
-                                    " — this looks like an auth problem, not a network blip."
-                                    " Check credentials.",
+                                    "%s still rejecting auth (HTTP %s) after %d auth"
+                                    " failures on this event — this looks like an auth problem,"
+                                    " not a network blip. Check credentials.",
                                     self._name,
+                                    self._last_status,
                                     self._auth_failures,
                                 )
+                        # A persistent, GENUINE 401 will never succeed on retry (a static
+                        # key is deterministic). Stop blocking the single worker -- and thus
+                        # the whole queue -- on one doomed event: warn once, then skip it
+                        # (it stays durable in events.jsonl) and advance so delivery of
+                        # later events continues. Recovery = fix credentials + restart.
+                        #
+                        # KNOWN SCOPE LIMIT: this give-up path covers 401 ONLY. A server
+                        # that persistently returns a non-401 _TRANSIENT outcome (e.g. a
+                        # stuck 500 or a permanent 429) still retries forever and can block
+                        # the queue head -- the same shape of problem, deliberately left out
+                        # of this change because 401 was the observed incident. Generalising
+                        # the give-up to all persistent transients is a separate change.
+                        if is_auth_401 and self._auth_failures >= _AUTH_GIVEUP_ATTEMPTS:
+                            now = time.monotonic()
+                            if now - self._last_giveup_log >= _LOG_RATE_LIMIT_SECONDS:
+                                self._last_giveup_log = now
+                                logger.warning(
+                                    "%s giving up on event after %d consecutive auth"
+                                    " rejections (HTTP %s) — fix credentials and restart the"
+                                    " session to resume delivery; events remain durable in"
+                                    " events.jsonl.",
+                                    self._name,
+                                    self._auth_failures,
+                                    self._last_status,
+                                )
+                            self._consecutive_failures = 0
+                            self._auth_failures = 0
+                            self._queue.task_done()
+                            self._current = None
+                            break
                         await self._sleep_backoff()
                         continue  # retry the same event
                     # _DELIVERED or _PERMANENT — advance to next event
@@ -431,6 +478,12 @@ class _DestinationDispatcher:
             httpx.NetworkError,
             httpx.RemoteProtocolError,
         ):
+            # A timeout / network error carries NO HTTP status. Clear the sentinel
+            # so a PRIOR 401 cannot be inherited by this outcome and mis-counted as
+            # an auth failure -- that inheritance is what produced false "still
+            # rejecting auth (HTTP 401)" warnings for what were really network blips
+            # (the counter climbed on timeouts, not on real credential rejections).
+            self._last_status = None
             return _TRANSIENT
         # Bare Exception / TypeError / other unclassified exceptions propagate.
 
