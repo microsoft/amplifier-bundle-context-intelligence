@@ -987,6 +987,34 @@ class TestTimeoutCoercion:
         assert resolver.dispatch_read_timeout == pytest.approx(15.5)
 
     # ------------------------------------------------------------------
+    # Non-finite guard (TB-A): inf/-inf/nan must NOT pass the floor.
+    # float("inf")/"nan"/"1e400" parse cleanly, but an infinite read timeout
+    # makes a POST await forever on a slow/hung server — re-opening the exact
+    # "healthy-but-slow server permanently stalls dispatch" failure the guard
+    # exists to prevent. The low-side minimum floor does not catch these.
+    # ------------------------------------------------------------------
+
+    @pytest.mark.parametrize(
+        "bad", ["inf", "infinity", "-inf", "nan", "1e400", float("inf"), float("nan")]
+    )
+    def test_read_timeout_non_finite_falls_back_to_default(self, bad: object) -> None:
+        """dispatch_read_timeout: non-finite input falls back to 10.0, never inf/nan."""
+        coordinator = _make_coordinator(config={})
+        resolver = ConfigResolver(config={"dispatch_read_timeout": bad}, coordinator=coordinator)
+
+        assert resolver.dispatch_read_timeout == 10.0
+
+    @pytest.mark.parametrize(
+        "bad", ["inf", "infinity", "-inf", "nan", "1e400", float("inf"), float("nan")]
+    )
+    def test_dispatch_timeout_non_finite_falls_back_to_default(self, bad: object) -> None:
+        """dispatch_timeout: non-finite input falls back to 10.0, never inf/nan."""
+        coordinator = _make_coordinator(config={})
+        resolver = ConfigResolver(config={"dispatch_timeout": bad}, coordinator=coordinator)
+
+        assert resolver.dispatch_timeout == 10.0
+
+    # ------------------------------------------------------------------
     # dispatch_timeout  (default 10.0, floor 0.1)
     # ------------------------------------------------------------------
 
