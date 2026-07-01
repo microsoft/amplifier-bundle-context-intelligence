@@ -360,7 +360,7 @@ AMPLIFIER_CONTEXT_INTELLIGENCE_TOKEN_REFRESH_MARGIN_S=600
 | `base_path` | direct value | `~/.amplifier/projects` | Root directory for local JSONL output. |
 | `exclude_events` | direct value | `[]` | fnmatch patterns for events to suppress (event names, not paths). |
 | `dispatch_timeout` | `${...}` placeholder | `30` | HTTP write timeout (seconds) for server dispatch uploads. |
-| `dispatch_read_timeout` | `${AMPLIFIER_CONTEXT_INTELLIGENCE_DISPATCH_READ_TIMEOUT}` | `10.0` | HTTP **read** timeout (seconds) for server dispatch. Raised from the legacy hardcoded 3.0 s — the increase prevents spurious read-timeout failures on slow or large server responses (see ci-dispatch-breaker-bug-report.md). A read timeout is classified TRANSIENT and retried with full-jitter backoff. `connect` (0.5 s) and `pool` (0.5 s) timeouts remain fixed and non-configurable. |
+| `dispatch_read_timeout` | `${...}` placeholder | `10.0` | HTTP read timeout (seconds) for server dispatch. Raised from the legacy hardcoded 3.0 s to avoid spurious read-timeout failures on slow server responses; classified TRANSIENT and retried. connect/pool (0.5 s each) remain fixed. |
 | `dispatch_failure_threshold` | `${...}` placeholder | `3` | Consecutive **transient** failures before the worker enters DEGRADED state and emits a warning notice; also gates the persistent-401 auth-escalation. Does **not** disable dispatch — dispatch is never permanently disabled. |
 | `dispatch_queue_capacity` | direct value | `256` | Maximum queued HTTP dispatches per destination. Clamped to `>= 1` (a value of `0` would be unbounded). When full, the newest event is dropped (durable in `events.jsonl`) and a rate-limited warning is logged naming the real storage path; dispatch is **never** disabled. |
 | `dispatch_backoff_initial` | `${...}` placeholder | `1.0` | Initial backoff sleep (seconds) for the first DEGRADED retry. |
@@ -475,7 +475,7 @@ The worker uses lazy creation: it creates an `httpx.AsyncClient` on the first di
 
 **Shutdown.** When `close()` is called the worker is given a bounded drain window (`close_drain_timeout`, default 0.5 s) to finish in-flight work. Cancellation-safe: a sleeping backoff is cancelled cleanly. If any events remain undelivered an honest WARNING is emitted with a precise count (`queued + in-flight + overflow-dropped`) and the real storage path.
 
-**Timeouts (all phases).** Connect: 0.5 s (fixed). Pool: 0.5 s (fixed). Write: `dispatch_timeout` (configurable, default 30 s). Read: `dispatch_read_timeout` (configurable, default 10.0 s; previously hardcoded 3.0 s — raised to prevent spurious read-timeout failures on slow server responses; see ci-dispatch-breaker-bug-report.md).
+**Timeouts (all phases).** Connect: 0.5 s (fixed). Pool: 0.5 s (fixed). Write: `dispatch_timeout` (configurable, default 30 s). Read: `dispatch_read_timeout` (configurable, default 10.0 s; previously hardcoded 3.0 s — raised to prevent spurious read-timeout failures on slow server responses).
 
 **Idempotency contract:** each POST carries a deterministic `idempotency_key` (SHA-256 over `{event, workspace, data}`). Retries are safe — the server can suppress duplicate deliveries. (The "single server-side record" guarantee is an assumption verified by the real-server E2E tests, not the unit suite.)
 
