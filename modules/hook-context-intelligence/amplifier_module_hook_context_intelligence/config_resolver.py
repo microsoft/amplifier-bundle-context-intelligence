@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import math
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -59,6 +60,14 @@ def _coerce_positive_float(value: Any, *, default: float, minimum: float) -> flo
     try:
         parsed = float(value)
     except (TypeError, ValueError):
+        return default
+    # Reject non-finite values (inf, -inf, nan). float("inf")/"nan"/"1e400"
+    # parse cleanly, but a non-finite timeout is a footgun the low-side
+    # ``minimum`` floor does not catch: an infinite read timeout makes a POST
+    # await forever on a slow/hung server, re-opening the exact
+    # "healthy-but-slow server permanently stalls dispatch" failure this guard
+    # exists to prevent. Treat non-finite input as garbage -> fall back to default.
+    if not math.isfinite(parsed):
         return default
     return max(minimum, parsed)
 

@@ -32,6 +32,13 @@ _DEFAULT_CLOSE_DRAIN_TIMEOUT = 0.5
 _DEFAULT_BACKOFF_INITIAL = 1.0
 _DEFAULT_BACKOFF_MAX = 30.0
 _DEFAULT_BACKOFF_JITTER = True
+#: Upper bound on the backoff exponent. ``2 ** n`` computed with a float base
+#: raises ``OverflowError`` once ``n`` reaches ~1024, which a long-lived session
+#: can hit after enough consecutive failures. The backoff is clamped to
+#: ``backoff_max`` long before this exponent matters (2**64 already dwarfs any
+#: sane ceiling), so bounding the exponent changes no delivered delay — it only
+#: removes the overflow footgun that would otherwise crash the retry loop.
+_BACKOFF_MAX_EXPONENT = 64
 _METADATA_FORMAT = "context-intelligence"
 _METADATA_VERSION = "1.0.0"
 _CONNECT_TIMEOUT = 0.5
@@ -322,6 +329,13 @@ class _DestinationDispatcher:
                     self._name,
                     event,
                 )
+                # Reset failure counters: the poisoned event is being dropped, so
+                # the next (unrelated) event must start from a clean slate — its
+                # backoff must not inherit this event's failure count, and the
+                # 401 auth-escalation gate must not carry over. Mirrors the reset
+                # on the normal DELIVERED/PERMANENT advance path.
+                self._consecutive_failures = 0
+                self._auth_failures = 0
                 self._queue.task_done()
                 self._current = None
                 # Outer while True continues — worker survives.
@@ -338,8 +352,15 @@ class _DestinationDispatcher:
 
         Uses ``asyncio.sleep`` so the sleep is cancellable by ``close()``.
         """
+        # Bound the exponent BEFORE exponentiating. ``2 ** n`` with a float base
+        # raises OverflowError near n~1024, which a long-lived session can reach
+        # after enough consecutive failures; that would crash the retry loop and
+        # (via the worker supervisor) start silently dropping events. The result
+        # is clamped to ``backoff_max`` long before the exponent matters, so this
+        # changes no delivered delay — it only removes the overflow footgun.
+        exponent = min(self._consecutive_failures - 1, _BACKOFF_MAX_EXPONENT)
         cap = min(
-            self._backoff_initial * (2 ** (self._consecutive_failures - 1)),
+            self._backoff_initial * (2**exponent),
             self._backoff_max,
         )
         delay = random.uniform(0, cap) if self._backoff_jitter else cap

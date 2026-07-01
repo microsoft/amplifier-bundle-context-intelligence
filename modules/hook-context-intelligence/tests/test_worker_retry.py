@@ -420,6 +420,30 @@ class TestSleepBackoffMethod:
 
         assert sleep_calls == [30.0]
 
+    async def test_extreme_failure_count_does_not_overflow(self) -> None:
+        """TB-B: >1024 consecutive failures must not raise OverflowError.
+
+        Regression guard. Before the exponent cap, ``backoff_initial * 2 ** (n-1)``
+        with a float base raised ``OverflowError: int too large to convert to
+        float`` once ``n`` reached ~1025. That exception escaped ``_sleep_backoff``,
+        bubbled to the worker supervisor, dropped the in-flight event, and left the
+        failure counter pinned high so every subsequent event was dropped instantly.
+        The delay must stay clamped to backoff_max with no exception.
+        """
+        d = _dispatcher(backoff_initial=1.0, backoff_max=30.0, backoff_jitter=False)
+        sleep_calls: list[float] = []
+
+        async def capture(delay: float) -> None:
+            sleep_calls.append(delay)
+
+        with patch("asyncio.sleep", new=capture):
+            for failures in (1025, 5000, 2**20):
+                d._consecutive_failures = failures
+                await d._sleep_backoff()  # must not raise OverflowError
+
+        # Every delay is clamped to backoff_max; nothing overflowed.
+        assert sleep_calls == [30.0, 30.0, 30.0]
+
 
 # ---------------------------------------------------------------------------
 # TestBackoffSequenceEndToEnd
