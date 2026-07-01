@@ -937,3 +937,110 @@ class TestDispatchReadTimeoutYAML:
         assert "AMPLIFIER_CONTEXT_INTELLIGENCE_DISPATCH_READ_TIMEOUT:10.0" in text, (
             f"Expected 'AMPLIFIER_CONTEXT_INTELLIGENCE_DISPATCH_READ_TIMEOUT:10.0' in {yaml_path}"
         )
+
+
+class TestTimeoutCoercion:
+    """Validate safe coercion of dispatch_read_timeout and dispatch_timeout.
+
+    Covers: zero/negative clamp to floor, bad-string/None fallback to default,
+    valid numeric strings and floats pass through unchanged.
+    """
+
+    # ------------------------------------------------------------------
+    # dispatch_read_timeout  (default 10.0, floor 0.1)
+    # ------------------------------------------------------------------
+
+    def test_read_timeout_default_is_10(self) -> None:
+        """dispatch_read_timeout returns 10.0 when the key is absent from config."""
+        coordinator = _make_coordinator(config={})
+        resolver = ConfigResolver(config={}, coordinator=coordinator)
+
+        assert resolver.dispatch_read_timeout == 10.0
+
+    def test_read_timeout_zero_clamps_to_floor(self) -> None:
+        """dispatch_read_timeout: 0 is below the 0.1 floor and must clamp to 0.1."""
+        coordinator = _make_coordinator(config={})
+        resolver = ConfigResolver(config={"dispatch_read_timeout": 0}, coordinator=coordinator)
+
+        assert resolver.dispatch_read_timeout == pytest.approx(0.1)
+
+    def test_read_timeout_negative_clamps_to_floor(self) -> None:
+        """dispatch_read_timeout: -5 is below the 0.1 floor and must clamp to 0.1."""
+        coordinator = _make_coordinator(config={})
+        resolver = ConfigResolver(config={"dispatch_read_timeout": -5}, coordinator=coordinator)
+
+        assert resolver.dispatch_read_timeout == pytest.approx(0.1)
+
+    def test_read_timeout_garbage_string_falls_back_to_default(self) -> None:
+        """dispatch_read_timeout: unparseable string 'abc' falls back to 10.0 (no ValueError)."""
+        coordinator = _make_coordinator(config={})
+        resolver = ConfigResolver(config={"dispatch_read_timeout": "abc"}, coordinator=coordinator)
+
+        assert resolver.dispatch_read_timeout == 10.0
+
+    def test_read_timeout_empty_string_falls_back_to_default(self) -> None:
+        """dispatch_read_timeout: empty string '' falls back to 10.0 (no ValueError)."""
+        coordinator = _make_coordinator(config={})
+        resolver = ConfigResolver(config={"dispatch_read_timeout": ""}, coordinator=coordinator)
+
+        assert resolver.dispatch_read_timeout == 10.0
+
+    def test_read_timeout_none_falls_back_to_default(self) -> None:
+        """dispatch_read_timeout: explicit None falls back to 10.0 (no TypeError)."""
+        coordinator = _make_coordinator(config={})
+        resolver = ConfigResolver(config={"dispatch_read_timeout": None}, coordinator=coordinator)
+
+        assert resolver.dispatch_read_timeout == 10.0
+
+    def test_read_timeout_numeric_string_passes_through(self) -> None:
+        """dispatch_read_timeout: numeric string '20' passes through as 20.0."""
+        coordinator = _make_coordinator(config={})
+        resolver = ConfigResolver(config={"dispatch_read_timeout": "20"}, coordinator=coordinator)
+
+        assert resolver.dispatch_read_timeout == 20.0
+
+    def test_read_timeout_valid_float_passes_through(self) -> None:
+        """dispatch_read_timeout: valid float 15.5 passes through unchanged."""
+        coordinator = _make_coordinator(config={})
+        resolver = ConfigResolver(config={"dispatch_read_timeout": 15.5}, coordinator=coordinator)
+
+        assert resolver.dispatch_read_timeout == pytest.approx(15.5)
+
+    # ------------------------------------------------------------------
+    # dispatch_timeout  (default 10.0, floor 0.1)
+    # ------------------------------------------------------------------
+
+    def test_dispatch_timeout_zero_clamps_to_floor(self) -> None:
+        """dispatch_timeout: 0 is below the 0.1 floor and must clamp to 0.1."""
+        coordinator = _make_coordinator(config={})
+        resolver = ConfigResolver(config={"dispatch_timeout": 0}, coordinator=coordinator)
+
+        assert resolver.dispatch_timeout == pytest.approx(0.1)
+
+    def test_dispatch_timeout_negative_clamps_to_floor(self) -> None:
+        """dispatch_timeout: -1 is below the 0.1 floor and must clamp to 0.1."""
+        coordinator = _make_coordinator(config={})
+        resolver = ConfigResolver(config={"dispatch_timeout": -1}, coordinator=coordinator)
+
+        assert resolver.dispatch_timeout == pytest.approx(0.1)
+
+    def test_dispatch_timeout_garbage_string_falls_back_to_default(self) -> None:
+        """dispatch_timeout: unparseable string 'abc' falls back to 10.0 (no ValueError)."""
+        coordinator = _make_coordinator(config={})
+        resolver = ConfigResolver(config={"dispatch_timeout": "abc"}, coordinator=coordinator)
+
+        assert resolver.dispatch_timeout == 10.0
+
+    def test_dispatch_timeout_none_falls_back_to_default(self) -> None:
+        """dispatch_timeout: explicit None falls back to 10.0 (no TypeError)."""
+        coordinator = _make_coordinator(config={})
+        resolver = ConfigResolver(config={"dispatch_timeout": None}, coordinator=coordinator)
+
+        assert resolver.dispatch_timeout == 10.0
+
+    def test_dispatch_timeout_numeric_string_passes_through(self) -> None:
+        """dispatch_timeout: numeric string '25' passes through as 25.0."""
+        coordinator = _make_coordinator(config={})
+        resolver = ConfigResolver(config={"dispatch_timeout": "25"}, coordinator=coordinator)
+
+        assert resolver.dispatch_timeout == 25.0

@@ -28,6 +28,7 @@ hooks:
       workspace: "${AMPLIFIER_CONTEXT_INTELLIGENCE_WORKSPACE:}"
       log_level: "${AMPLIFIER_CONTEXT_INTELLIGENCE_LOG_LEVEL:INFO}"
       dispatch_timeout: "${AMPLIFIER_CONTEXT_INTELLIGENCE_DISPATCH_TIMEOUT:30}"
+      # Raise if you see read-timeout warnings against a slow/loaded server (default 10s).
       dispatch_read_timeout: "${AMPLIFIER_CONTEXT_INTELLIGENCE_DISPATCH_READ_TIMEOUT:10.0}"
       dispatch_failure_threshold: "${AMPLIFIER_CONTEXT_INTELLIGENCE_DISPATCH_FAILURE_THRESHOLD:3}"
       dispatch_backoff_initial: "${AMPLIFIER_CONTEXT_INTELLIGENCE_DISPATCH_BACKOFF_INITIAL:1.0}"
