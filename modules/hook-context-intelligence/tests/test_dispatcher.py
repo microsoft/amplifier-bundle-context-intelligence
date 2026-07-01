@@ -360,7 +360,7 @@ class TestReadTimeout:
         )
         assert d._read_timeout == 20.0
 
-        captured_timeout: list[httpx.Timeout] = []
+        captured_timeout: list[Any] = []
 
         async def _capture_client_timeout(*args: Any, **kwargs: Any) -> None:
             captured_timeout.append(kwargs.get("timeout") or (args[0] if args else None))
