@@ -284,10 +284,14 @@ class TestNoPermanentLatch:
         d = _dispatcher()
         assert d._auth_failures == 0
 
-    def test_log_gates_zero_on_init(self) -> None:
+    def test_log_gates_never_logged_on_init(self) -> None:
+        """Sentinel is -inf (not 0.0): guarantees the first rate-limited warning of
+        the process's lifetime always fires, even when time.monotonic()'s baseline
+        is small (e.g. a freshly booted host/container with < 60s uptime)."""
         d = _dispatcher()
-        assert d._last_overflow_log == 0.0
-        assert d._last_permanent_log == 0.0
+        assert d._last_overflow_log == float("-inf")
+        assert d._last_permanent_log == float("-inf")
+        assert d._last_auth_log == float("-inf")
 
     def test_full_queue_does_not_disable(self) -> None:
         """Queue overflow bumps _overflow_dropped but NEVER sets _enabled=False (which no longer exists)."""
