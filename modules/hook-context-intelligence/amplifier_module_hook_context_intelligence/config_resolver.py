@@ -41,6 +41,28 @@ def _coerce_bool(value: Any, *, default: bool) -> bool:
         return value.strip().lower() not in _FALSEY
     return bool(value)
 
+
+def _coerce_positive_float(value: Any, *, default: float, minimum: float) -> float:
+    """Coerce *value* to a float >= *minimum*, tolerating bad operator input.
+
+    Resolution:
+    - None or unparseable strings ('', 'abc') -> *default* (never raises)
+    - valid numbers / numeric strings -> float(value)
+    - result is then clamped to max(minimum, parsed)
+
+    This is the safe alternative to ``float(value)`` when the value may come
+    from a YAML/env-var string expansion where malformed or zero/negative values
+    must not crash session startup or produce unusable timeout budgets.
+    """
+    if value is None:
+        return default
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return default
+    return max(minimum, parsed)
+
+
 # Default event-name patterns (fnmatch) excluded from local JSONL logging and graph dispatch.
 #
 # The pattern ``llm:stream_*delta`` expresses the transient-streaming-delta *category*: it
@@ -285,9 +307,12 @@ class HookConfigResolver:
         Reads directly from config['dispatch_timeout'], defaults to 10.0.
         This budget applies to the HTTP write phase; connect/read/pool
         timeouts are fixed in the handler. No coordinator fallback.
-        Always returns a float.
+        Bad/unparseable input falls back to the default; values are clamped
+        to a 0.1 s floor (see _coerce_positive_float).
         """
-        return float(self._config.get("dispatch_timeout", 10.0))
+        return _coerce_positive_float(
+            self._config.get("dispatch_timeout"), default=10.0, minimum=0.1
+        )
 
     @property
     def dispatch_read_timeout(self) -> float:
@@ -295,9 +320,13 @@ class HookConfigResolver:
 
         Reads directly from config['dispatch_read_timeout'], defaults to 10.0.
         This budget applies to the HTTP read phase only; connect/write/pool
-        timeouts are unchanged. No coordinator fallback. Always returns a float.
+        timeouts are unchanged. No coordinator fallback.
+        Bad/unparseable input falls back to the default; values are clamped
+        to a 0.1 s floor (see _coerce_positive_float).
         """
-        return float(self._config.get("dispatch_read_timeout", 10.0))
+        return _coerce_positive_float(
+            self._config.get("dispatch_read_timeout"), default=10.0, minimum=0.1
+        )
 
     @property
     def dispatch_failure_threshold(self) -> int:

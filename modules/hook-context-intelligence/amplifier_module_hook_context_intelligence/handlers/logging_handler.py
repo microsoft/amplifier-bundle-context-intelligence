@@ -129,6 +129,7 @@ class _DestinationDispatcher:
         failure_threshold: int,
         queue_capacity: int,
         close_drain_timeout: float,
+        # Back-compat default for direct construction only; _READ_TIMEOUT (3.0) is intentionally NOT tracking the resolver's 10.0 default. Do not "make them match" -- the resolver is the single source of truth for configured runs.
         read_timeout: float = _READ_TIMEOUT,
         auth_mode: str = "static",
         auth_resource: str = "",
