@@ -10,6 +10,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 from amplifier_module_hook_context_intelligence.handlers.logging_handler import (
     _DELIVERED,
+    _READ_TIMEOUT,
     _TRANSIENT,
     _DestinationDispatcher,
 )
@@ -335,3 +336,72 @@ class TestDestinationIsolation:
         assert mock_client_b.post.await_count == len(events)
         assert not hasattr(d_a, "_enabled")
         assert not hasattr(d_b, "_enabled")
+
+
+class TestReadTimeout:
+    """_DestinationDispatcher read_timeout plumbing."""
+
+    def test_dispatcher_read_timeout_defaults_to_legacy_constant(self) -> None:
+        """Omitting read_timeout defaults _read_timeout to _READ_TIMEOUT (3.0)."""
+        d = _dispatcher()
+        assert d._read_timeout == _READ_TIMEOUT
+
+    async def test_dispatcher_uses_configured_read_timeout_in_client(self) -> None:
+        """Passing read_timeout=20.0 stores it and uses it in the httpx.Timeout read field."""
+        d = _DestinationDispatcher(
+            name="test",
+            url="http://localhost:8080",
+            api_key="test-key",
+            workspace="ws",
+            dispatch_timeout=10.0,
+            failure_threshold=3,
+            queue_capacity=256,
+            close_drain_timeout=0.5,
+            read_timeout=20.0,
+        )
+        assert d._read_timeout == 20.0
+
+        captured_timeout: list[httpx.Timeout] = []
+
+        async def _capture_client_timeout(*args: Any, **kwargs: Any) -> None:
+            captured_timeout.append(kwargs.get("timeout") or (args[0] if args else None))
+            raise httpx.ConnectError("capture only")
+
+        mock_client = AsyncMock()
+        mock_client.is_closed = False
+        mock_client.post.side_effect = _capture_client_timeout
+        d._client = mock_client
+
+        # Drive _post once to trigger the httpx.Timeout build; expect TRANSIENT.
+        result = await d._post("session:start", {"session_id": "s1"})
+        assert result == _TRANSIENT
+
+        # Now verify the client was built with the right read and write timeouts.
+        # The client creation is lazy—it happens before the first post.
+        # We patch httpx.AsyncClient to capture the timeout at construction.
+        captured_build: list[httpx.Timeout] = []
+
+        original_async_client = httpx.AsyncClient
+
+        class _CapturingClient:
+            def __init__(self, *a: Any, **kw: Any) -> None:
+                t = kw.get("timeout")
+                if isinstance(t, httpx.Timeout):
+                    captured_build.append(t)
+                self._inner = original_async_client(*a, **kw)
+
+            def __getattr__(self, name: str) -> Any:
+                return getattr(self._inner, name)
+
+        with patch(
+            "amplifier_module_hook_context_intelligence.handlers.logging_handler.httpx.AsyncClient",
+            _CapturingClient,
+        ):
+            # Reset client to None so _post triggers creation.
+            d._client = None
+            await d._post("session:start", {"session_id": "s1"})
+
+        assert len(captured_build) == 1, "httpx.AsyncClient must be constructed once"
+        t = captured_build[0]
+        assert t.read == 20.0, f"expected read=20.0, got {t.read}"
+        assert t.write == 10.0, f"expected write=10.0, got {t.write}"

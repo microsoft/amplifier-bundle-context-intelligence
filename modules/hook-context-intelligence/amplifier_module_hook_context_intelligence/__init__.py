@@ -195,6 +195,7 @@ async def on_session_ready(coordinator: Any) -> None:
             api_key=d.api_key,
             workspace=resolver.workspace,
             dispatch_timeout=resolver.dispatch_timeout,
+            read_timeout=resolver.dispatch_read_timeout,
             failure_threshold=resolver.dispatch_failure_threshold,
             queue_capacity=resolver.dispatch_queue_capacity,
             close_drain_timeout=resolver.close_drain_timeout,

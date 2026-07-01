@@ -290,6 +290,16 @@ class HookConfigResolver:
         return float(self._config.get("dispatch_timeout", 10.0))
 
     @property
+    def dispatch_read_timeout(self) -> float:
+        """Read timeout in seconds for the HTTP read phase of dispatch.
+
+        Reads directly from config['dispatch_read_timeout'], defaults to 10.0.
+        This budget applies to the HTTP read phase only; connect/write/pool
+        timeouts are unchanged. No coordinator fallback. Always returns a float.
+        """
+        return float(self._config.get("dispatch_read_timeout", 10.0))
+
+    @property
     def dispatch_failure_threshold(self) -> int:
         """Number of consecutive dispatch failures before the circuit opens.
 
