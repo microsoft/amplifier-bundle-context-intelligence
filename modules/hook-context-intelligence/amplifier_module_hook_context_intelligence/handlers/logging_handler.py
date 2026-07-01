@@ -129,6 +129,7 @@ class _DestinationDispatcher:
         failure_threshold: int,
         queue_capacity: int,
         close_drain_timeout: float,
+        read_timeout: float = _READ_TIMEOUT,
         auth_mode: str = "static",
         auth_resource: str = "",
         backoff_initial: float = _DEFAULT_BACKOFF_INITIAL,
@@ -143,6 +144,7 @@ class _DestinationDispatcher:
         self._api_key = api_key
         self._workspace = workspace
         self._dispatch_timeout = dispatch_timeout
+        self._read_timeout = read_timeout
         self._failure_threshold = failure_threshold
         self._close_drain_timeout = close_drain_timeout
         self._backoff_initial = backoff_initial
@@ -366,7 +368,7 @@ class _DestinationDispatcher:
                 timeout=httpx.Timeout(
                     connect=_CONNECT_TIMEOUT,
                     write=self._dispatch_timeout,
-                    read=_READ_TIMEOUT,
+                    read=self._read_timeout,
                     pool=_POOL_TIMEOUT,
                 ),
                 limits=httpx.Limits(max_connections=1, max_keepalive_connections=1),

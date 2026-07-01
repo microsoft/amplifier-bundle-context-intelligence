@@ -494,6 +494,22 @@ class TestDispatchTimeout:
         assert resolver.dispatch_timeout == 45.0
 
 
+class TestDispatchReadTimeout:
+    def test_dispatch_read_timeout_defaults_to_10(self) -> None:
+        """dispatch_read_timeout returns 10.0 when not configured."""
+        coordinator = _make_coordinator(config={})
+        resolver = ConfigResolver(config={}, coordinator=coordinator)
+
+        assert resolver.dispatch_read_timeout == 10.0
+
+    def test_dispatch_read_timeout_honors_override(self) -> None:
+        """dispatch_read_timeout reads the configured value and returns it as a float."""
+        coordinator = _make_coordinator(config={})
+        resolver = ConfigResolver(config={"dispatch_read_timeout": "20"}, coordinator=coordinator)
+
+        assert resolver.dispatch_read_timeout == 20.0
+
+
 class TestDispatchFailureThreshold:
     def test_defaults_to_3(self) -> None:
         """dispatch_failure_threshold returns 3 when not configured."""
@@ -905,3 +921,19 @@ class TestDispatchBackoffKnobs:
         assert resolver.dispatch_backoff_initial == 5.0
         assert resolver.dispatch_backoff_max == 60.0
         assert resolver.dispatch_backoff_jitter is False
+
+
+class TestDispatchReadTimeoutYAML:
+    def test_dispatch_read_timeout_yaml_default_is_10(self) -> None:
+        """The shipped YAML carries the AMPLIFIER_CONTEXT_INTELLIGENCE_DISPATCH_READ_TIMEOUT:10.0 knob."""
+        import pathlib
+
+        yaml_path = (
+            pathlib.Path(__file__).parents[3]
+            / "behaviors"
+            / "context-intelligence-logging.yaml"
+        )
+        text = yaml_path.read_text()
+        assert "AMPLIFIER_CONTEXT_INTELLIGENCE_DISPATCH_READ_TIMEOUT:10.0" in text, (
+            f"Expected 'AMPLIFIER_CONTEXT_INTELLIGENCE_DISPATCH_READ_TIMEOUT:10.0' in {yaml_path}"
+        )
