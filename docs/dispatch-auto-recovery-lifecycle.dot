@@ -25,13 +25,13 @@ digraph DispatchAutoRecovery {
     healthy   [label="HEALTHY\ndrain queue in order,\none event at a time",
                fillcolor="#E8F5E9", color="#2E7D32", penwidth=2];
 
-    post      [label="_post(event)\nclassify result",
+    post      [label="_post(event)\nclassify result\n─────────────────────\ntimeouts: conn=0.5s (fixed), pool=0.5s (fixed)\nwrite=dispatch_timeout (configurable)\nread=dispatch_read_timeout (10s, configurable; was 3s)",
                fillcolor="#E0F7FA", color="#00838F", penwidth=1.5];
 
     delivered [label="DELIVERED (2xx)\ntask_done, reset backoff\n_consecutive_failures = 0\n_degraded_warned = False",
                fillcolor="#E8F5E9", color="#2E7D32", penwidth=1.5];
 
-    transient [label="TRANSIENT\n(conn/timeout/5xx/429/401)\n_consecutive_failures += 1",
+    transient [label="TRANSIENT\n(conn/read/write/pool timeouts, 5xx, 429, 401)\n_consecutive_failures += 1\nretry-in-place: hold event, sleep full-jitter backoff",
                fillcolor="#FFF3E0", color="#E65100", penwidth=1.5];
 
     permanent [label="PERMANENT\n(403 / 400 / 413 / 422)\nloud rate-limited log\nskip event, task_done, advance",
