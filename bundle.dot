@@ -8,7 +8,7 @@ digraph context_intelligence {
     nodesep=0.6
     ranksep=0.7
     bgcolor="white"
-    source_hash="ff1d6a9692415633ceafa3389694c17aa82f8f3d8296b1f7c440c9fb815ea5d2"
+    source_hash="18e3046d9999d7c21d8a948dbb2f0e83ae35c8b72a73e2e2793227571f9c088c"
 
     node [fontname="Helvetica", fontsize=11, style="filled,rounded"]
     edge [fontname="Helvetica", fontsize=9]
@@ -23,8 +23,8 @@ digraph context_intelligence {
 
         beh_context_intelligence_analysis_behavior [label="context-intelligence-analysis-behavior\n1 tools\n~864 tok", shape=box, fillcolor="#e0f2f1", style="filled,rounded"]
         beh_context_intelligence_design_behavior [label="context-intelligence-design-behavior\n1 tools\n~331 tok", shape=box, fillcolor="#e0f2f1", style="filled,rounded"]
-        beh_context_intelligence_logging_behavior [label="context-intelligence-logging-behavior\n1 tools\n~1184 tok", shape=box, fillcolor="#e0f2f1", style="filled,rounded"]
-        beh_context_intelligence_navigation_behavior [label="context-intelligence-navigation-behavior\n2 tools\n~561 tok", shape=box, fillcolor="#e0f2f1", style="filled,rounded"]
+        beh_context_intelligence_logging_behavior [label="context-intelligence-logging-behavior\n1 tools\n~1661 tok", shape=box, fillcolor="#e0f2f1", style="filled,rounded"]
+        beh_context_intelligence_navigation_behavior [label="context-intelligence-navigation-behavior\n2 tools\n~617 tok", shape=box, fillcolor="#e0f2f1", style="filled,rounded"]
         beh_context_intelligence_behavior [label="context-intelligence-behavior\n~236 tok", shape=box, fillcolor="#e0f2f1", style="filled,rounded"]
     }
 
@@ -37,7 +37,7 @@ digraph context_intelligence {
         agt_context_intelligence_design_facilitator [label="context-intelligence-design-facilitator\n~187 tok desc", shape=box, fillcolor="#c8e6c9", style="filled,rounded"]
         agt_context_intelligence_tool_designer [label="context-intelligence-tool-designer\n~198 tok desc", shape=box, fillcolor="#c8e6c9", style="filled,rounded"]
         agt_graph_analyst [label="graph-analyst\n~543 tok desc", shape=box, fillcolor="#c8e6c9", style="filled,rounded"]
-        agt_session_navigator [label="session-navigator\n~366 tok desc", shape=box, fillcolor="#c8e6c9", style="filled,rounded"]
+        agt_session_navigator [label="session-navigator\n~422 tok desc", shape=box, fillcolor="#c8e6c9", style="filled,rounded"]
     }
 
     subgraph cluster_modules {
