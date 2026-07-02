@@ -28,7 +28,7 @@ logger = logging.getLogger(__name__)
 
 _OPTIONAL_METADATA_FIELDS = ("agent_name", "parallel_group_id", "recipe_name", "recipe_step")
 _DEFAULT_DISPATCH_QUEUE_CAPACITY = 256
-_DEFAULT_CLOSE_DRAIN_TIMEOUT = 0.5
+_DEFAULT_CLOSE_DRAIN_TIMEOUT = 10.0
 _DEFAULT_BACKOFF_INITIAL = 1.0
 _DEFAULT_BACKOFF_MAX = 30.0
 _DEFAULT_BACKOFF_JITTER = True
