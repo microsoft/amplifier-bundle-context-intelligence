@@ -384,6 +384,24 @@ class HookConfigResolver:
         )
 
     @property
+    def dispatch_connect_timeout(self) -> float:
+        """Connect timeout in seconds for the HTTP connect phase of dispatch.
+
+        Reads directly from config['dispatch_connect_timeout'], defaults to 3.0.
+        This budget applies to the TCP/TLS connect phase only; write/read/pool
+        timeouts are unchanged. No coordinator fallback. A too-tight connect
+        budget manufactures spurious httpx.TimeoutException -> transient failures
+        (the "unreachable, retrying with backoff" warning) against a healthy
+        server, so the default is deliberately generous for cross-region,
+        Entra-authenticated calls over VPN/proxy. Bad/unparseable input falls
+        back to the default; values are clamped to a 0.1 s floor
+        (see _coerce_positive_float).
+        """
+        return _coerce_positive_float(
+            self._config.get("dispatch_connect_timeout"), default=3.0, minimum=0.1
+        )
+
+    @property
     def dispatch_failure_threshold(self) -> int:
         """Number of consecutive dispatch failures before the circuit opens.
 

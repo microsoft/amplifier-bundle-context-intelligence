@@ -41,7 +41,7 @@ _DEFAULT_BACKOFF_JITTER = True
 _BACKOFF_MAX_EXPONENT = 64
 _METADATA_FORMAT = "context-intelligence"
 _METADATA_VERSION = "1.0.0"
-_CONNECT_TIMEOUT = 0.5
+_CONNECT_TIMEOUT = 3.0
 _READ_TIMEOUT = 3.0
 _POOL_TIMEOUT = 0.5
 #: Minimum seconds between repeated overflow or permanent-skip log warnings.
@@ -148,6 +148,9 @@ class _DestinationDispatcher:
         close_drain_timeout: float,
         # Back-compat default for direct construction only; _READ_TIMEOUT (3.0) is intentionally NOT tracking the resolver's 10.0 default. Do not "make them match" -- the resolver is the single source of truth for configured runs.
         read_timeout: float = _READ_TIMEOUT,
+        # Back-compat default for direct construction only; the resolver
+        # (dispatch_connect_timeout) is the single source of truth for configured runs.
+        connect_timeout: float = _CONNECT_TIMEOUT,
         auth_mode: str = "static",
         auth_resource: str = "",
         backoff_initial: float = _DEFAULT_BACKOFF_INITIAL,
@@ -163,6 +166,7 @@ class _DestinationDispatcher:
         self._workspace = workspace
         self._dispatch_timeout = dispatch_timeout
         self._read_timeout = read_timeout
+        self._connect_timeout = connect_timeout
         self._failure_threshold = failure_threshold
         self._close_drain_timeout = close_drain_timeout
         self._backoff_initial = backoff_initial
@@ -445,7 +449,7 @@ class _DestinationDispatcher:
         if self._client is None or self._client.is_closed:
             self._client = httpx.AsyncClient(
                 timeout=httpx.Timeout(
-                    connect=_CONNECT_TIMEOUT,
+                    connect=self._connect_timeout,
                     write=self._dispatch_timeout,
                     read=self._read_timeout,
                     pool=_POOL_TIMEOUT,
