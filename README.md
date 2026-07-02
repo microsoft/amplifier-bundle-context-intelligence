@@ -167,9 +167,9 @@ az account get-access-token --resource <auth_resource>   # confirms a token can 
 
 If the probe returns **202** but sessions still log the warning, the cause is almost always the **connect timeout** — raise `dispatch_connect_timeout`.
 
-### Related, but a *different* symptom: silent event loss on expired auth
+### Related symptom: `<dest> auth token unavailable (run \`az login\` to refresh) — retrying with backoff; events remain durable in events.jsonl.`
 
-If `auth_mode: entra` and your `az login` session is genuinely expired/absent, token acquisition can fail **before** the request is sent. That path does **not** produce the graceful "retrying with backoff" message above — it surfaces differently (an auth error / `check credentials` escalation) and is a more severe failure mode. The fix is the same: **re-run `az login`.** See [Token caching & refresh (Entra)](#token-caching--refresh-entra).
+If `auth_mode: entra` and your `az login` session is genuinely expired/absent, token acquisition can fail **before** the request is even sent (azure-identity raises rather than returning a token). This is **not** a silent drop — the dispatcher catches the failure, treats it as a transient outcome, and retries with the same capped backoff as a network blip. Because a fresh token is requested on every retry (nothing is cached on failure), simply **re-running `az login`** mid-session lets the very next retry succeed and resume delivery — no restart needed. Events queued in the meantime stay durable in `events.jsonl` regardless. See [Token caching & refresh (Entra)](#token-caching--refresh-entra).
 
 ---
 

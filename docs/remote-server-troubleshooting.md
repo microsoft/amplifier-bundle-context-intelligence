@@ -106,6 +106,22 @@ After a genuinely persistent `401`, the hook **gives up on that event after 10 a
 (it stays durable in `events.jsonl`) and moves on, rather than looping forever — so a bad
 key no longer blocks the whole queue. Fix the key, restart, and replay if needed.
 
+### `<dest> auth token unavailable (run \`az login\` to refresh) — retrying with backoff; events remain durable in events.jsonl.`
+
+**This is a different failure from the `401` above** — it fires *before* a request is even
+sent, when `auth_mode: entra` and token acquisition itself fails (a genuinely expired/absent
+`az login` session causes azure-identity to raise rather than return a token). It is **not**
+a silent drop and it does **not** count toward the 401 give-up ceiling described above (those
+are unrelated failure modes and are tracked separately) — it is treated as any other transient
+dispatch outcome and retried with the same capped backoff.
+
+- **Cause:** `az login` session expired or absent in the environment Amplifier runs in.
+- **Confirm:** `az account show` fails.
+- **Fix:** re-run `az login`. Nothing is cached on a failed token acquisition, so the very
+  next retry (no restart required) picks up the refreshed credential and resumes delivery.
+- **Not data loss:** events queued in the meantime stay durable in `events.jsonl` regardless,
+  same as every other transient path.
+
 ### Which `auth_mode` for Azure?
 
 | Situation | Use |
