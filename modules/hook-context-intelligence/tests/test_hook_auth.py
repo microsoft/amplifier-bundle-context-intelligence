@@ -618,3 +618,54 @@ class TestAuthExceptionWorkerIntegration:
         # Queue fully drained; no in-flight event stranded.
         assert d._queue.qsize() == 0
         assert d._current is None  # type: ignore[attr-defined]
+
+    async def test_auth_path_degraded_warning_does_not_contradict_az_login_guidance(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """The worker's generic DEGRADED warning must NOT tell the operator
+        'no action needed' on the auth path -- that directly contradicts the
+        actionable 'run `az login`' warning _post() emits for the same failure.
+        Regression guard for the reworded, cause-agnostic degraded message.
+        """
+        from context_intelligence.auth import EntraTokenAuth
+
+        from amplifier_module_hook_context_intelligence.handlers.logging_handler import (
+            _DestinationDispatcher,
+        )
+
+        # Fail the first auth attempt (expired az login), then recover so the
+        # worker emits BOTH the auth warning and the degraded warning, then drains.
+        cred = _RaisingCredential(fail_times=1)
+        strategy = EntraTokenAuth(cred, "api://53aa4ffd")
+        with patch("context_intelligence.auth.build_auth_strategy", return_value=strategy):
+            d = _DestinationDispatcher(
+                name="azure",
+                url="http://h:8000",
+                api_key="",
+                workspace="ws",
+                dispatch_timeout=10.0,
+                failure_threshold=3,
+                queue_capacity=256,
+                close_drain_timeout=0.5,
+                auth_mode="entra",
+                auth_resource="api://53aa4ffd",
+                backoff_initial=0.0,
+                backoff_jitter=False,
+            )
+
+        mock_client = AsyncMock()
+        mock_client.is_closed = False
+        mock_client.post.return_value = MagicMock(status_code=200)
+        d._client = mock_client  # type: ignore[attr-defined]
+
+        with caplog.at_level(logging.WARNING):
+            d.enqueue("session:start", {"session_id": "s1"})
+            await asyncio.wait_for(d._queue.join(), timeout=2.0)
+            await d.close()
+
+        # The actionable auth guidance IS present ...
+        assert "az login" in caplog.text
+        # ... and the contradictory reassurance is GONE.
+        assert "no action needed" not in caplog.text
+        # The reworded degraded warning is cause-agnostic.
+        assert "delivery degraded, retrying with backoff" in caplog.text

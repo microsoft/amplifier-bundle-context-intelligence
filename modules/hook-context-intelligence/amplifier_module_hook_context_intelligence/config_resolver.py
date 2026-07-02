@@ -391,7 +391,7 @@ class HookConfigResolver:
         This budget applies to the TCP/TLS connect phase only; write/read/pool
         timeouts are unchanged. No coordinator fallback. A too-tight connect
         budget manufactures spurious httpx.TimeoutException -> transient failures
-        (the "unreachable, retrying with backoff" warning) against a healthy
+        (the "delivery degraded, retrying with backoff" warning) against a healthy
         server, so the default is deliberately generous for cross-region,
         Entra-authenticated calls over VPN/proxy. Bad/unparseable input falls
         back to the default; values are clamped to a 0.1 s floor

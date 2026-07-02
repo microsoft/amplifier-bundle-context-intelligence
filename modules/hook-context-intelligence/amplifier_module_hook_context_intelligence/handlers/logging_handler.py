@@ -283,9 +283,19 @@ class _DestinationDispatcher:
                         if is_auth_401:
                             self._auth_failures += 1
                         if not self._degraded_warned:
+                            # Cause-agnostic on purpose. At this point the worker only
+                            # knows the outcome was _TRANSIENT, NOT why -- it could be a
+                            # network blip OR an auth-header failure (expired `az login`).
+                            # The old wording ("unreachable ... no action needed") asserted
+                            # both a cause (network) and an action-verdict (none) it cannot
+                            # actually know, and directly CONTRADICTED the actionable
+                            # "run `az login`" warning that _post emits on the auth path.
+                            # State only what is true here; the specific preceding warning
+                            # (auth -> run az login; genuine 401 -> check credentials)
+                            # carries any cause-specific guidance.
                             logger.warning(
-                                "%s unreachable, retrying with backoff — events still"
-                                " captured locally in events.jsonl, no action needed.",
+                                "%s delivery degraded, retrying with backoff — events"
+                                " remain durable in events.jsonl.",
                                 self._name,
                             )
                             self._degraded_warned = True

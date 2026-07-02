@@ -102,7 +102,7 @@ class TestDegradedNotification:
         degraded_calls = [
             c
             for c in mock_logger.warning.call_args_list
-            if "unreachable, retrying with backoff" in str(c)
+            if "delivery degraded, retrying with backoff" in str(c)
         ]
         assert len(degraded_calls) == 1, (
             f"Expected exactly 1 DEGRADED warning, got {len(degraded_calls)}: "
@@ -124,7 +124,7 @@ class TestDegradedNotification:
         degraded_calls = [
             c
             for c in mock_logger.warning.call_args_list
-            if "unreachable, retrying with backoff" in str(c)
+            if "delivery degraded, retrying with backoff" in str(c)
         ]
         assert len(degraded_calls) == 2, (
             f"Expected exactly 2 DEGRADED warnings (one per episode), "
@@ -248,7 +248,7 @@ class TestRecoveryNotification:
         degraded_calls = [
             c
             for c in mock_logger.warning.call_args_list
-            if "unreachable, retrying with backoff" in str(c)
+            if "delivery degraded, retrying with backoff" in str(c)
         ]
         assert len(degraded_calls) == 2, (
             f"Expected 2 DEGRADED warnings, got {len(degraded_calls)}: "
