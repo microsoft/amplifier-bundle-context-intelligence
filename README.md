@@ -198,9 +198,18 @@ config = {
     # Tuning — all optional
     "log_level": "WARNING",
     "exclude_events": ["context:compaction"],
-    "dispatch_timeout": 30,
+    "dispatch_timeout": 30,          # HTTP write-phase budget (s), default 10.0
+    "dispatch_read_timeout": 20,     # HTTP read-phase budget (s), default 10.0 — raise for slow/remote servers
+    "close_drain_timeout": 15,       # shutdown flush window (s), default 10.0 — raise for remote (Azure/APIM) drains
     "dispatch_failure_threshold": 3,
 }
+```
+
+> **Deploying against a remote or Azure-hosted server?** For the tuning knobs above,
+> auth diagnosis, and a probe cookbook, see
+> [Troubleshooting remote / Azure-deployed servers](docs/remote-server-troubleshooting.md).
+
+```python
 
 cleanup = await mount(coordinator, config=config)
 await cleanup()

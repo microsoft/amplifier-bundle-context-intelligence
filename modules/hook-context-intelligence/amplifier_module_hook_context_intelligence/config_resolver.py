@@ -408,10 +408,22 @@ class HookConfigResolver:
     def close_drain_timeout(self) -> float:
         """Max seconds to wait for queued HTTP dispatches during cleanup.
 
-        Reads directly from config['close_drain_timeout'], defaults to 0.5.
-        No coordinator fallback. Always returns a float.
+        Reads directly from config['close_drain_timeout'], defaults to 10.0.
+        No coordinator fallback. Bad/unparseable input falls back to the
+        default; values are clamped to a 0.1 s floor (see _coerce_positive_float)
+        — matching the other dispatch_* timeout knobs.
+
+        The default is 10.0 s so that remote deployments (e.g. Azure behind APIM
+        with a per-request Entra token) — whose round-trip is far longer than a
+        sub-second budget allows — drain their queued tail events cleanly at
+        shutdown out of the box. Undelivered events are always durable in
+        events.jsonl (recoverable via context-intelligence-upload) regardless.
+        Local/low-latency setups may lower this — e.g. ``close_drain_timeout: 0.5``
+        — for a snappier shutdown.
         """
-        return float(self._config.get("close_drain_timeout", 0.5))
+        return _coerce_positive_float(
+            self._config.get("close_drain_timeout"), default=10.0, minimum=0.1
+        )
 
     @property
     def dispatch_backoff_initial(self) -> float:

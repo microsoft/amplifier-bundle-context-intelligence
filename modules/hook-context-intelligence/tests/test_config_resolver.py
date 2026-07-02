@@ -574,12 +574,12 @@ class TestDispatchQueueCapacity:
 
 
 class TestCloseDrainTimeout:
-    def test_defaults_to_half_second(self) -> None:
-        """close_drain_timeout returns 0.5 when not configured."""
+    def test_defaults_to_10_seconds(self) -> None:
+        """close_drain_timeout returns 10.0 when not configured (generous for remote drains)."""
         coordinator = _make_coordinator(config={})
         resolver = ConfigResolver(config={}, coordinator=coordinator)
 
-        assert resolver.close_drain_timeout == 0.5
+        assert resolver.close_drain_timeout == 10.0
 
     def test_reads_from_config(self) -> None:
         """close_drain_timeout returns the configured value as a float."""
@@ -587,6 +587,41 @@ class TestCloseDrainTimeout:
         resolver = ConfigResolver(config={"close_drain_timeout": "1.25"}, coordinator=coordinator)
 
         assert resolver.close_drain_timeout == 1.25
+
+    def test_azure_style_override_passes_through(self) -> None:
+        """A remote/Azure deployment can bump the drain window via config (e.g. 5s)."""
+        coordinator = _make_coordinator(config={})
+        resolver = ConfigResolver(config={"close_drain_timeout": "5.0"}, coordinator=coordinator)
+
+        assert resolver.close_drain_timeout == 5.0
+
+    def test_zero_clamps_to_floor(self) -> None:
+        """close_drain_timeout: 0 is below the 0.1 floor and must clamp to 0.1 (parity w/ dispatch_*)."""
+        coordinator = _make_coordinator(config={})
+        resolver = ConfigResolver(config={"close_drain_timeout": 0}, coordinator=coordinator)
+
+        assert resolver.close_drain_timeout == pytest.approx(0.1)
+
+    def test_negative_clamps_to_floor(self) -> None:
+        """close_drain_timeout: -5 is below the 0.1 floor and must clamp to 0.1."""
+        coordinator = _make_coordinator(config={})
+        resolver = ConfigResolver(config={"close_drain_timeout": -5}, coordinator=coordinator)
+
+        assert resolver.close_drain_timeout == pytest.approx(0.1)
+
+    def test_garbage_string_falls_back_to_default(self) -> None:
+        """close_drain_timeout: unparseable string 'abc' falls back to 10.0 (no ValueError crash)."""
+        coordinator = _make_coordinator(config={})
+        resolver = ConfigResolver(config={"close_drain_timeout": "abc"}, coordinator=coordinator)
+
+        assert resolver.close_drain_timeout == 10.0
+
+    def test_none_falls_back_to_default(self) -> None:
+        """close_drain_timeout: explicit None falls back to 10.0 (no TypeError)."""
+        coordinator = _make_coordinator(config={})
+        resolver = ConfigResolver(config={"close_drain_timeout": None}, coordinator=coordinator)
+
+        assert resolver.close_drain_timeout == 10.0
 
 
 class TestAdditionalEvents:
