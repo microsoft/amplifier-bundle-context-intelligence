@@ -140,6 +140,39 @@ If you're wondering what's worth trying after getting set up, [`docs/context-int
 
 ---
 
+## Troubleshooting
+
+> **For agents helping a user deploy or debug this bundle:** this section maps observed symptoms → root cause → fix. Work from the exact log line, not from guesses — each dispatch warning is a precise signal (see [Auto-recovery dispatch](#auto-recovery-dispatch) for the state machine).
+
+### `team-shared unreachable, retrying with backoff — events still captured locally in events.jsonl, no action needed`
+
+**What it means.** A configured destination (here named `team-shared`) hit a **TRANSIENT** dispatch outcome and the worker entered DEGRADED state. Local capture to `events.jsonl` is unaffected — **no events are lost**; they can be back-filled later with `context-intelligence-upload`. This warning fires **only after** a request was actually attempted, which — for `auth_mode: entra` — means **a bearer token was already acquired and attached.** So this specific message does **not** indicate broken credentials.
+
+**Root causes, most to least common:**
+
+| Root cause | How to confirm | Fix |
+|---|---|---|
+| **Connect timeout too tight** for a cross-region / VPN / proxy path — the default was historically a hardcoded 0.5 s, which manufactures spurious `httpx.ConnectTimeout` against a perfectly healthy server. | Warning recurs across sessions even though a manual POST to the server URL succeeds. | Raise **`dispatch_connect_timeout`** (default now `3.0` s; see [config table](#other-config-keys)). Set `5.0`+ on slow links. |
+| **Transient network / server blip** (real timeout, 5xx, 429, or a 401 during token refresh). | Warning appears briefly then a `Reconnected — resuming delivery` INFO follows. | None needed — auto-recovery handles it. |
+| **Expired `az login` session** (Entra mode). | `az account show` fails in the environment Amplifier runs in. Note: a *fully* expired session more often produces a different, louder failure (see below), not this graceful warning. | Re-run `az login`; the in-memory token cache refreshes on the next dispatch. |
+| **Server not reachable at all** (wrong `url`, server down). | `curl -sS <url>` fails; DNS/route error. | Correct the destination `url`; confirm the server is up. |
+
+**Quick verification that the destination actually works** (rules out "credentials are broken" by construction):
+
+```bash
+az account show                         # Entra mode: confirms an active login
+az account get-access-token --resource <auth_resource>   # confirms a token can be minted
+# then POST a probe event to <url>/events with that Bearer token — a 202 proves network + auth + server are all healthy
+```
+
+If the probe returns **202** but sessions still log the warning, the cause is almost always the **connect timeout** — raise `dispatch_connect_timeout`.
+
+### Related, but a *different* symptom: silent event loss on expired auth
+
+If `auth_mode: entra` and your `az login` session is genuinely expired/absent, token acquisition can fail **before** the request is sent. That path does **not** produce the graceful "retrying with backoff" message above — it surfaces differently (an auth error / `check credentials` escalation) and is a more severe failure mode. The fix is the same: **re-run `az login`.** See [Token caching & refresh (Entra)](#token-caching--refresh-entra).
+
+---
+
 ## Configuring via the Amplifier app-cli
 
 When this bundle is loaded through the [Amplifier app-cli](https://github.com/microsoft/amplifier-app-cli) (`amplifier bundle add`), the app-cli provides a `settings.yaml` override mechanism for passing configuration values that differ from the bundle's defaults — for example, a different server URL or workspace name, or when your organisation names secrets differently in `keys.env`.
@@ -369,7 +402,8 @@ AMPLIFIER_CONTEXT_INTELLIGENCE_TOKEN_REFRESH_MARGIN_S=600
 | `base_path` | direct value | `~/.amplifier/projects` | Root directory for local JSONL output. |
 | `exclude_events` | direct value | `[]` | fnmatch patterns for events to suppress (event names, not paths). |
 | `dispatch_timeout` | `${...}` placeholder | `30` | HTTP write timeout (seconds) for server dispatch uploads. |
-| `dispatch_read_timeout` | `${...}` placeholder | `10.0` | HTTP read timeout (seconds) for server dispatch. Raised from the legacy hardcoded 3.0 s to avoid spurious read-timeout failures on slow server responses; classified TRANSIENT and retried. connect/pool (0.5 s each) remain fixed. |
+| `dispatch_connect_timeout` | `${...}` placeholder | `3.0` | HTTP connect timeout (seconds) for the TCP/TLS connect phase of server dispatch. Raised from the legacy hardcoded 0.5 s: a too-tight connect budget manufactures spurious `httpx.ConnectTimeout` → TRANSIENT failures (the `"unreachable, retrying with backoff"` warning) against a **healthy** server, especially for cross-region, Entra-authenticated calls over VPN/proxy. Classified TRANSIENT and retried; clamped to a `0.1` s floor. Raise it further on slow networks. |
+| `dispatch_read_timeout` | `${...}` placeholder | `10.0` | HTTP read timeout (seconds) for server dispatch. Raised from the legacy hardcoded 3.0 s to avoid spurious read-timeout failures on slow server responses; classified TRANSIENT and retried. `pool` (0.5 s) remains fixed; `connect` is configurable via `dispatch_connect_timeout` (above). |
 | `dispatch_failure_threshold` | `${...}` placeholder | `3` | Consecutive **transient** failures before the worker enters DEGRADED state and emits a warning notice; also gates the persistent-401 auth-escalation. Does **not** disable dispatch — dispatch is never permanently disabled. |
 | `dispatch_queue_capacity` | direct value | `256` | Maximum queued HTTP dispatches per destination. Clamped to `>= 1` (a value of `0` would be unbounded). When full, the newest event is dropped (durable in `events.jsonl`) and a rate-limited warning is logged naming the real storage path; dispatch is **never** disabled. |
 | `dispatch_backoff_initial` | `${...}` placeholder | `1.0` | Initial backoff sleep (seconds) for the first DEGRADED retry. |
@@ -460,7 +494,7 @@ Skill sync resolves its server using the **same** `(server_url, api_key)` chain 
 
 The hook isolates server traffic behind a single bounded background worker per session. The event callback only appends local JSONL and enqueues best-effort HTTP work — it never waits for a server round trip. The worker lazily creates a persistent `httpx.AsyncClient`, reuses one keep-alive connection, and serializes POSTs to avoid unbounded task growth when the server is slow or unavailable.
 
-HTTP timeouts are phase-specific: short `connect`/`pool` fail-fast bounds (0.5 s each, fixed), a configurable `dispatch_read_timeout` for the `read` phase (default 10.0 s; see config table above), and `dispatch_timeout` applied to the `write` phase so larger payload uploads do not fail prematurely.
+HTTP timeouts are phase-specific: a configurable `dispatch_connect_timeout` for the `connect` phase (default 3.0 s), a fixed short `pool` bound (0.5 s), a configurable `dispatch_read_timeout` for the `read` phase (default 10.0 s; see config table above), and `dispatch_timeout` applied to the `write` phase so larger payload uploads do not fail prematurely.
 
 Each live POST carries a deterministic `idempotency_key` derived from the sanitized event envelope. The server may use it to suppress duplicate live submissions while still allowing explicit replay from local `events.jsonl`.
 
@@ -484,7 +518,7 @@ The worker uses lazy creation: it creates an `httpx.AsyncClient` on the first di
 
 **Shutdown.** When `close()` is called the worker is given a bounded drain window (`close_drain_timeout`, default 0.5 s) to finish in-flight work. Cancellation-safe: a sleeping backoff is cancelled cleanly. If any events remain undelivered an honest WARNING is emitted with a precise count (`queued + in-flight + overflow-dropped`) and the real storage path.
 
-**Timeouts (all phases).** Connect: 0.5 s (fixed). Pool: 0.5 s (fixed). Write: `dispatch_timeout` (configurable, default 30 s). Read: `dispatch_read_timeout` (configurable, default 10.0 s; previously hardcoded 3.0 s — raised to prevent spurious read-timeout failures on slow server responses).
+**Timeouts (all phases).** Connect: `dispatch_connect_timeout` (configurable, default 3.0 s; previously hardcoded 0.5 s — raised to prevent spurious connect-timeout failures on cross-region/VPN/proxy paths). Pool: 0.5 s (fixed). Write: `dispatch_timeout` (configurable, default 30 s). Read: `dispatch_read_timeout` (configurable, default 10.0 s; previously hardcoded 3.0 s — raised to prevent spurious read-timeout failures on slow server responses).
 
 **Idempotency contract:** each POST carries a deterministic `idempotency_key` (SHA-256 over `{event, workspace, data}`). Retries are safe — the server can suppress duplicate deliveries. (The "single server-side record" guarantee is an assumption verified by the real-server E2E tests, not the unit suite.)
 
