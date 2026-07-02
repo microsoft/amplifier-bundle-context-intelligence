@@ -204,6 +204,11 @@ class _DestinationDispatcher:
         self._last_permanent_log = float("-inf")
         self._last_auth_log = float("-inf")
         self._last_giveup_log = float("-inf")
+        # Dedicated rate-limit gate for auth-strategy (headers()) production
+        # failures -- see _post. Kept separate from _last_auth_log (which gates
+        # the genuine-HTTP-401 escalation warning) so the two unrelated failure
+        # modes don't share (and reset) each other's cooldown.
+        self._last_headers_error_log = float("-inf")
 
     def _ensure_worker(self) -> None:
         if self._worker_task is None or self._worker_task.done():
@@ -459,7 +464,58 @@ class _DestinationDispatcher:
 
         payload = build_payload(event, self._workspace, data)
         # Per-request header: Entra SDK returns cached token and refreshes near expiry.
-        auth_headers = self._strategy.headers()
+        try:
+            auth_headers = self._strategy.headers()
+        except Exception as exc:
+            # Auth-strategy failure producing the Authorization header -- e.g. an
+            # expired `az login` causes EntraTokenAuth.headers() -> get_token() to
+            # raise azure-identity's CredentialUnavailableError / ClientAuthenticationError
+            # (see context_intelligence/auth.py, which never caches a failure so the
+            # next attempt retries fresh). Catching broadly here is deliberate: this
+            # try block is scoped to ONLY the single, well-defined "produce auth
+            # headers" step, so any exception at this boundary means "couldn't
+            # authenticate this request" -- recoverable, not a reason to lose the
+            # event. Static ApiKeyAuth.headers() is a pure f-string that never
+            # raises, so this path is entra-only; static behavior is unchanged.
+            #
+            # HONESTY ABOUT THE BROAD CATCH: because we catch Exception (not the
+            # azure-specific types -- azure-identity is optional and not importable
+            # here), a masked PROGRAMMING bug inside headers() (TypeError,
+            # AttributeError, ...) would otherwise be silently reclassified as an
+            # expired login. We therefore name the caught exception's TYPE in the
+            # WARNING so such a bug is VISIBLE at the default log level, and attach
+            # the full traceback at DEBUG (exc_info) for diagnosis without spamming
+            # WARNING. Control flow is intentionally identical for every exception
+            # type: clearing _last_status and returning _TRANSIENT is the correct,
+            # council-approved recovery for "couldn't authenticate this request."
+            #
+            # This is NOT an HTTP response, so it carries no status code. Clear
+            # _last_status to None -- if left stale (e.g. a genuine 401 from a
+            # PRIOR event on this destination), the worker's
+            # `is_auth_401 = self._last_status == 401` check would miscount this
+            # unrelated failure toward the 401 give-up ceiling (_AUTH_GIVEUP_ATTEMPTS)
+            # and eventually PERMANENTLY SKIP the event -- exactly the silent loss
+            # this handling removes. Returning _TRANSIENT instead keeps it on the
+            # infinite retry-with-backoff path, so a mid-session `az login` recovers
+            # delivery on the next retry.
+            self._last_status = None
+            now = time.monotonic()
+            if now - self._last_headers_error_log >= _LOG_RATE_LIMIT_SECONDS:
+                self._last_headers_error_log = now
+                logger.warning(
+                    "%s could not produce an auth token (%s) -- run `az login` to"
+                    " refresh if your session expired; retrying with backoff, events"
+                    " remain durable in events.jsonl.",
+                    self._name,
+                    type(exc).__name__,
+                )
+                logger.debug(
+                    "%s auth-header production failed: %r",
+                    self._name,
+                    exc,
+                    exc_info=True,
+                )
+            return _TRANSIENT
 
         try:
             response = await self._client.post(
