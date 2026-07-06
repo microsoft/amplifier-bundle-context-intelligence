@@ -1,6 +1,6 @@
 """Tests for notification messages — Tasks 9 and 10.
 
-DEGRADED warning (once per episode), RECOVERY notice (on first delivery after degrade),
+DEGRADED notice (once per episode), RECOVERY notice (on first delivery after degrade),
 and auth-escalation (consecutive 401s after failure_threshold) emitted by _worker().
 
 Task 10 additions:
@@ -87,10 +87,10 @@ def _make_outcome_post(outcomes: list[str]) -> Any:
 
 
 class TestDegradedNotification:
-    """DEGRADED warning emitted once per episode, not on every retry."""
+    """DEGRADED notice emitted once per episode, not on every retry."""
 
     async def test_degraded_emitted_once_per_episode(self) -> None:
-        """3 failures then success -> exactly 1 DEGRADED warning."""
+        """3 failures then success -> exactly 1 DEGRADED notice."""
         d = _dispatcher()
         d._post = _make_outcome_post([_TRANSIENT, _TRANSIENT, _TRANSIENT, _DELIVERED])  # type: ignore[method-assign]
         d._sleep_backoff = AsyncMock()  # type: ignore[method-assign]
@@ -101,17 +101,17 @@ class TestDegradedNotification:
 
         degraded_calls = [
             c
-            for c in mock_logger.warning.call_args_list
+            for c in mock_logger.info.call_args_list
             if "delivery degraded, retrying with backoff" in str(c)
         ]
         assert len(degraded_calls) == 1, (
-            f"Expected exactly 1 DEGRADED warning, got {len(degraded_calls)}: "
-            f"{mock_logger.warning.call_args_list}"
+            f"Expected exactly 1 DEGRADED notice, got {len(degraded_calls)}: "
+            f"{mock_logger.info.call_args_list}"
         )
         await d.close()
 
     async def test_degraded_once_per_episode_when_flapping(self) -> None:
-        """fail->recover->fail->recover -> 2 DEGRADED warnings (one per episode)."""
+        """fail->recover->fail->recover -> 2 DEGRADED notices (one per episode)."""
         d = _dispatcher()
         d._post = _make_outcome_post([_TRANSIENT, _DELIVERED, _TRANSIENT, _DELIVERED])  # type: ignore[method-assign]
         d._sleep_backoff = AsyncMock()  # type: ignore[method-assign]
@@ -123,12 +123,12 @@ class TestDegradedNotification:
 
         degraded_calls = [
             c
-            for c in mock_logger.warning.call_args_list
+            for c in mock_logger.info.call_args_list
             if "delivery degraded, retrying with backoff" in str(c)
         ]
         assert len(degraded_calls) == 2, (
-            f"Expected exactly 2 DEGRADED warnings (one per episode), "
-            f"got {len(degraded_calls)}: {mock_logger.warning.call_args_list}"
+            f"Expected exactly 2 DEGRADED notices (one per episode), "
+            f"got {len(degraded_calls)}: {mock_logger.info.call_args_list}"
         )
         await d.close()
 
@@ -247,12 +247,12 @@ class TestRecoveryNotification:
 
         degraded_calls = [
             c
-            for c in mock_logger.warning.call_args_list
+            for c in mock_logger.info.call_args_list
             if "delivery degraded, retrying with backoff" in str(c)
         ]
         assert len(degraded_calls) == 2, (
-            f"Expected 2 DEGRADED warnings, got {len(degraded_calls)}: "
-            f"{mock_logger.warning.call_args_list}"
+            f"Expected 2 DEGRADED notices, got {len(degraded_calls)}: "
+            f"{mock_logger.info.call_args_list}"
         )
         assert sleep_calls == [1.0, 2.0, 1.0], (
             f"Expected sleeps [1.0, 2.0, 1.0] (backoff restarts from n=0 after recovery), "

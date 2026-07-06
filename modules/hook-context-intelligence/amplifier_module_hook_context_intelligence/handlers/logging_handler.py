@@ -293,7 +293,19 @@ class _DestinationDispatcher:
                             # State only what is true here; the specific preceding warning
                             # (auth -> run az login; genuine 401 -> check credentials)
                             # carries any cause-specific guidance.
-                            logger.warning(
+                            # Level: INFO, not WARNING. This is a TRANSIENT,
+                            # non-actionable state change -- events stay durable in
+                            # events.jsonl and delivery keeps retrying -- so it must NOT
+                            # surface on the default WARNING stream a user session sees
+                            # (log_level defaults to WARNING). Emitting it there is the
+                            # exact noise/confusion we want to avoid. It stays in the
+                            # durable/diagnostic log (visible at log_level=INFO) and
+                            # pairs symmetrically with the INFO "Reconnected ... resuming
+                            # delivery" recovery notice below. The LOUD, user-facing
+                            # WARNINGs are reserved for actionable/terminal points:
+                            # sustained auth rejection, the 401 give-up ("no more retries
+                            # for this event"), and _PERMANENT rejects -- all below.
+                            logger.info(
                                 "%s delivery degraded, retrying with backoff — events"
                                 " remain durable in events.jsonl.",
                                 self._name,
