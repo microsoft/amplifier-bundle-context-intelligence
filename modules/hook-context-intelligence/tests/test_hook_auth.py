@@ -658,7 +658,12 @@ class TestAuthExceptionWorkerIntegration:
         mock_client.post.return_value = MagicMock(status_code=200)
         d._client = mock_client  # type: ignore[attr-defined]
 
-        with caplog.at_level(logging.WARNING):
+        # Capture at INFO on the module logger so we see BOTH the actionable
+        # WARNING and the now-INFO transient degraded notice. Targeting the
+        # logger is required: the module logger's effective level is WARNING, so
+        # a bare caplog.at_level(INFO) on root would let the INFO notice be
+        # filtered before capture.
+        with caplog.at_level(logging.INFO, logger="amplifier_module_hook_context_intelligence"):
             d.enqueue("session:start", {"session_id": "s1"})
             await asyncio.wait_for(d._queue.join(), timeout=2.0)
             await d.close()
@@ -667,5 +672,21 @@ class TestAuthExceptionWorkerIntegration:
         assert "az login" in caplog.text
         # ... and the contradictory reassurance is GONE.
         assert "no action needed" not in caplog.text
-        # The reworded degraded warning is cause-agnostic.
+        # The degraded notice is cause-agnostic AND must be a diagnostic INFO,
+        # never a user-facing WARNING -- transient, non-actionable, events stay
+        # durable. Only "az login" should reach the default WARNING stream here.
         assert "delivery degraded, retrying with backoff" in caplog.text
+        degraded_records = [
+            r
+            for r in caplog.records
+            if "delivery degraded, retrying with backoff" in r.getMessage()
+        ]
+        assert degraded_records, "degraded notice should be emitted"
+        assert all(r.levelno == logging.INFO for r in degraded_records), (
+            "degraded notice must be INFO (off the default WARNING stream), got "
+            f"{[r.levelname for r in degraded_records]}"
+        )
+        az_login_records = [r for r in caplog.records if "az login" in r.getMessage()]
+        assert az_login_records and all(r.levelno == logging.WARNING for r in az_login_records), (
+            "the actionable 'az login' guidance must remain a WARNING"
+        )
