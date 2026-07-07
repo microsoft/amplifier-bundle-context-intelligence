@@ -142,34 +142,12 @@ If you're wondering what's worth trying after getting set up, [`docs/context-int
 
 ## Troubleshooting
 
-> **For agents helping a user deploy or debug this bundle:** this section maps observed symptoms → root cause → fix. Work from the exact log line, not from guesses — each dispatch warning is a precise signal (see [Auto-recovery dispatch](#auto-recovery-dispatch) for the state machine).
-
-### `team-shared unreachable, retrying with backoff — events still captured locally in events.jsonl, no action needed`
-
-**What it means.** A configured destination (here named `team-shared`) hit a **TRANSIENT** dispatch outcome and the worker entered DEGRADED state. Local capture to `events.jsonl` is unaffected — **no events are lost**; they can be back-filled later with `context-intelligence-upload`. This warning fires **only after** a request was actually attempted, which — for `auth_mode: entra` — means **a bearer token was already acquired and attached.** So this specific message does **not** indicate broken credentials.
-
-**Root causes, most to least common:**
-
-| Root cause | How to confirm | Fix |
-|---|---|---|
-| **Connect timeout too tight** for a cross-region / VPN / proxy path — the default was historically a hardcoded 0.5 s, which manufactures spurious `httpx.ConnectTimeout` against a perfectly healthy server. | Warning recurs across sessions even though a manual POST to the server URL succeeds. | Raise **`dispatch_connect_timeout`** (default now `3.0` s; see [config table](#other-config-keys)). Set `5.0`+ on slow links. |
-| **Transient network / server blip** (real timeout, 5xx, 429, or a 401 during token refresh). | Warning appears briefly then a `Reconnected — resuming delivery` INFO follows. | None needed — auto-recovery handles it. |
-| **Expired `az login` session** (Entra mode). | `az account show` fails in the environment Amplifier runs in. Note: a *fully* expired session more often produces a different, louder failure (see below), not this graceful warning. | Re-run `az login`; the in-memory token cache refreshes on the next dispatch. |
-| **Server not reachable at all** (wrong `url`, server down). | `curl -sS <url>` fails; DNS/route error. | Correct the destination `url`; confirm the server is up. |
-
-**Quick verification that the destination actually works** (rules out "credentials are broken" by construction):
-
-```bash
-az account show                         # Entra mode: confirms an active login
-az account get-access-token --resource <auth_resource>   # confirms a token can be minted
-# then POST a probe event to <url>/events with that Bearer token — a 202 proves network + auth + server are all healthy
-```
-
-If the probe returns **202** but sessions still log the warning, the cause is almost always the **connect timeout** — raise `dispatch_connect_timeout`.
-
-### Related symptom: `<dest> auth token unavailable (run \`az login\` to refresh) — retrying with backoff; events remain durable in events.jsonl.`
-
-If `auth_mode: entra` and your `az login` session is genuinely expired/absent, token acquisition can fail **before** the request is even sent (azure-identity raises rather than returning a token). This is **not** a silent drop — the dispatcher catches the failure, treats it as a transient outcome, and retries with the same capped backoff as a network blip. Because a fresh token is requested on every retry (nothing is cached on failure), simply **re-running `az login`** mid-session lets the very next retry succeed and resume delivery — no restart needed. Events queued in the meantime stay durable in `events.jsonl` regardless. See [Token caching & refresh (Entra)](#token-caching--refresh-entra).
+Forwarding warnings map to precise causes. See
+[`docs/troubleshooting.md`](docs/troubleshooting.md) for the symptom → cause → fix guide
+(degraded/retrying, `az login` token-unavailable, and the sustained-401 circuit breaker),
+and [`docs/remote-server-troubleshooting.md`](docs/remote-server-troubleshooting.md) for
+remote / Azure-deployed servers (APIM, Entra, tuning, the auth probe cookbook, and
+recovering undelivered events).
 
 ---
 
@@ -227,6 +205,12 @@ config = {
 
     # Storage (default: ~/.amplifier/projects)
     "base_path": "/var/data/amplifier/projects",
+
+    # Durable server-forwarding diagnostics log — a SEPARATE sink from events.jsonl.
+    # Per-day forwarding-YYYY-MM-DD.jsonl recording auth failures / give-ups /
+    # permanent rejects (with destination name + url + HTTP status + session id).
+    # Default: ~/.amplifier/context-intelligence-logs
+    "forwarding_log_dir": "/var/log/amplifier/context-intelligence-logs",
 
     # Tuning — all optional
     "log_level": "WARNING",
@@ -400,6 +384,7 @@ AMPLIFIER_CONTEXT_INTELLIGENCE_TOKEN_REFRESH_MARGIN_S=600
 | `workspace` | `${...}` placeholder, e.g. `${AMPLIFIER_CONTEXT_INTELLIGENCE_WORKSPACE}` | *(auto)* | Written into every `events.jsonl` record and `metadata.json`. Resolution: `config["workspace"]` → `coordinator.config["workspace"]` → `project_slug`. |
 | `log_level` | `${...}` placeholder | `INFO` | Hook logging level. |
 | `base_path` | direct value | `~/.amplifier/projects` | Root directory for local JSONL output. |
+| `forwarding_log_dir` | `${...}` placeholder, e.g. `${AMPLIFIER_HOME}/context-intelligence-logs` | `~/.amplifier/context-intelligence-logs` | Directory for the **durable server-forwarding diagnostics log** — a per-day `forwarding-YYYY-MM-DD.jsonl` recording auth failures, give-ups, permanent rejects, and auth-token-unavailable events (each with the destination **name AND url**, HTTP status, and session id). This is a **separate sink from `events.jsonl`** (which holds intercepted events and is itself forwarded — operational errors never go there). Consolidated across destinations and sessions; append-only; best-effort (a write failure never disrupts dispatch). Resolution mirrors `base_path`: `config` → `coordinator.config` → default; an unexpanded `${...}` placeholder falls back to the default silently. Use it to diagnose a stuck/misrouted destination after the session has ended. |
 | `exclude_events` | direct value | `[]` | fnmatch patterns for events to suppress (event names, not paths). |
 | `dispatch_timeout` | `${...}` placeholder | `30` | HTTP write timeout (seconds) for server dispatch uploads. |
 | `dispatch_connect_timeout` | `${...}` placeholder | `3.0` | HTTP connect timeout (seconds) for the TCP/TLS connect phase of server dispatch. Raised from the legacy hardcoded 0.5 s: a too-tight connect budget manufactures spurious `httpx.ConnectTimeout` → TRANSIENT failures (the `"unreachable, retrying with backoff"` warning) against a **healthy** server, especially for cross-region, Entra-authenticated calls over VPN/proxy. Classified TRANSIENT and retried; clamped to a `0.1` s floor. Raise it further on slow networks. |

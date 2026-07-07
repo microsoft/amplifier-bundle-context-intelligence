@@ -13,6 +13,7 @@ from context_intelligence.reconstruct.discover import workspace_slug
 log = logging.getLogger(__name__)
 
 _DEFAULT_BASE_PATH = "~/.amplifier/projects"
+_DEFAULT_FORWARDING_LOG_DIR = "~/.amplifier/context-intelligence-logs"
 _DEFAULT_PROJECT_SLUG = "default"
 
 # String values that a human operator would write to mean "False".
@@ -154,6 +155,7 @@ class HookConfigResolver:
         self._config = config
         self._coordinator = coordinator
         self._base_path: Path | None = None
+        self._forwarding_log_dir: Path | None = None
         self._project_slug: str | None = None
         self._workspace: str | None = None
         self._exclude_events: frozenset[str] | None = None
@@ -295,6 +297,51 @@ class HookConfigResolver:
                 else:
                     self._base_path = p
         return self._base_path
+
+    @property
+    def forwarding_log_dir(self) -> Path:
+        """Resolved directory for durable forwarding-diagnostics records.
+
+        Chain: config['forwarding_log_dir'] \u2192 coordinator.config['forwarding_log_dir']
+               \u2192 default. Result is cached after first access.
+
+        Mirrors ``base_path``'s canonicalisation rules exactly (\u00a7D.2 \u2014 identical
+        unexpanded-``${...}``-placeholder guard, ``expanduser``, absolute-path check).
+        This keeps the sink's directory resolution consistent with every other
+        writer-side path on this resolver, and preserves the D1 contract (no
+        ``import os``, no coupling to the ``context_intelligence`` reader package).
+
+        0. **Unexpanded-placeholder guard.** A value that still looks like a shell
+           placeholder (``${...}``) means the host app did NOT expand the binding
+           before mount \u2014 fall back to the default **silently** (no per-session
+           noise), same as ``base_path`` rule 0.
+        1. Strip whitespace from the raw string.
+        2. Empty string \u2192 ``_DEFAULT_FORWARDING_LOG_DIR``.
+        3. Expand ``~`` via :meth:`~pathlib.Path.expanduser`.
+        4. If the result is still relative \u2192 warn, fall back to default.
+        """
+        if self._forwarding_log_dir is None:
+            raw = (
+                self._config.get("forwarding_log_dir")
+                or self._coordinator_config_get("forwarding_log_dir")
+                or _DEFAULT_FORWARDING_LOG_DIR
+            )
+            s = str(raw).strip()
+            if not s or s.startswith("${"):
+                # Empty, OR an unexpanded ${VAR} placeholder \u2014 default, no noise.
+                self._forwarding_log_dir = Path(_DEFAULT_FORWARDING_LOG_DIR).expanduser()
+            else:
+                p = Path(s).expanduser()
+                if not p.is_absolute():
+                    log.warning(
+                        "forwarding_log_dir %r is not absolute; using default %s",
+                        s,
+                        _DEFAULT_FORWARDING_LOG_DIR,
+                    )
+                    self._forwarding_log_dir = Path(_DEFAULT_FORWARDING_LOG_DIR).expanduser()
+                else:
+                    self._forwarding_log_dir = p
+        return self._forwarding_log_dir
 
     @property
     def workspace(self) -> str:

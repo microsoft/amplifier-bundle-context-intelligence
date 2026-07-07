@@ -102,9 +102,34 @@ to raise this warning. Verify against the server rather than trusting the log:
    once when the session starts. If you fix/rotate the key mid-session, **restart the
    session** — the running process keeps sending the old key until it does.
 
-After a genuinely persistent `401`, the hook **gives up on that event after 10 attempts**
-(it stays durable in `events.jsonl`) and moves on, rather than looping forever — so a bad
-key no longer blocks the whole queue. Fix the key, restart, and replay if needed.
+After **sustained** `401`s (a high hard-failure rate over a rolling window, held for at
+least ~30 s — not one blip, not a brief token-rotation window), the hook trips a
+**circuit breaker** for that destination: it emits **one** warning naming the destination
+and its URL, then **pauses forwarding** to that destination and goes quiet (no more
+per-event spam). Every event still lands in `events.jsonl`. While paused it retries a
+**single probe roughly every 5 minutes**; the moment the destination recovers (you fix the
+key/URL), the probe succeeds and **forwarding auto-resumes with no restart** ("Reconnected
+… resuming delivery"). A `403` is treated as a per-event authorization skip and does **not**
+trip the breaker (it won't disable a destination that authenticates fine). Transient
+failures (network, timeout, 5xx, 429) never trip it — they retry forever.
+
+**Recovery has two parts:** fixing the credential/URL auto-resumes delivery of **new**
+events (no restart), but the **backlog** that accumulated while paused only drains when you
+replay it: `context-intelligence-upload --path <events.jsonl dir>` (see
+[Recovering undelivered events](#recovering-undelivered-events)).
+
+> **The warning names the URL — believe the URL, not the destination label.** A `401` can
+> come from a *misrouted* URL (an auth gateway, a reverse proxy, the wrong port) that is not
+> the CI server at all — the named server may have rejected nothing. The warning now prints
+> both the destination name **and** its `url`; confirm that `url` actually targets the CI
+> server before you touch credentials.
+>
+> **Look at the durable forwarding log for after-the-fact diagnosis.** These auth failures,
+> give-ups, permanent rejects, and token-unavailable events are also written — with URL, HTTP
+> status, and session id — to a per-day `forwarding-YYYY-MM-DD.jsonl` under
+> `forwarding_log_dir` (default `~/.amplifier/context-intelligence-logs`), a **separate sink
+> from `events.jsonl`**. Grep it once the noisy session has ended:
+> `jq 'select(.kind=="auth_failure")' ~/.amplifier/context-intelligence-logs/forwarding-*.jsonl`.
 
 ### `<dest> auth token unavailable (run \`az login\` to refresh) — retrying with backoff; events remain durable in events.jsonl.`
 

@@ -1,7 +1,7 @@
 """Tests for HookConfigResolver resolution chains."""
 
 from pathlib import Path
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import fnmatch
 import pytest
@@ -86,6 +86,91 @@ class TestBasePathResolution:
         resolver = ConfigResolver(config={"base_path": "/some/path"}, coordinator=coordinator)
 
         assert isinstance(resolver.base_path, Path)
+
+
+class TestForwardingLogDirResolution:
+    """forwarding_log_dir mirrors base_path's resolution chain exactly."""
+
+    def test_default_when_both_absent(self) -> None:
+        """When both config and coordinator lack forwarding_log_dir, uses default."""
+        coordinator = _make_coordinator(config={})
+        resolver = ConfigResolver(config={}, coordinator=coordinator)
+
+        assert (
+            resolver.forwarding_log_dir
+            == Path("~/.amplifier/context-intelligence-logs").expanduser()
+        )
+
+    def test_config_value_wins(self) -> None:
+        """Explicit hook config forwarding_log_dir wins over coordinator config."""
+        coordinator = _make_coordinator(config={"forwarding_log_dir": "/coordinator/logs"})
+        resolver = ConfigResolver(
+            config={"forwarding_log_dir": "/explicit/logs"}, coordinator=coordinator
+        )
+
+        assert resolver.forwarding_log_dir == Path("/explicit/logs")
+
+    def test_coordinator_fallback_when_config_absent(self) -> None:
+        """When config has no forwarding_log_dir, falls back to coordinator.config."""
+        coordinator = _make_coordinator(config={"forwarding_log_dir": "/coordinator/logs"})
+        resolver = ConfigResolver(config={}, coordinator=coordinator)
+
+        assert resolver.forwarding_log_dir == Path("/coordinator/logs")
+
+    def test_unexpanded_var_placeholder_falls_back_silently(self) -> None:
+        """An unexpanded ${VAR} placeholder falls back to the default, no warning."""
+        coordinator = _make_coordinator(config={})
+        resolver = ConfigResolver(
+            config={"forwarding_log_dir": "${AMPLIFIER_FORWARDING_LOG_DIR:}"},
+            coordinator=coordinator,
+        )
+
+        with patch("amplifier_module_hook_context_intelligence.config_resolver.log") as mock_log:
+            result = resolver.forwarding_log_dir
+
+        assert result == Path("~/.amplifier/context-intelligence-logs").expanduser()
+        mock_log.warning.assert_not_called()
+
+    def test_non_absolute_falls_back_with_warning(self) -> None:
+        """A non-absolute forwarding_log_dir falls back to default and warns."""
+        coordinator = _make_coordinator(config={})
+        resolver = ConfigResolver(
+            config={"forwarding_log_dir": "relative/logs"}, coordinator=coordinator
+        )
+
+        with patch("amplifier_module_hook_context_intelligence.config_resolver.log") as mock_log:
+            result = resolver.forwarding_log_dir
+
+        assert result == Path("~/.amplifier/context-intelligence-logs").expanduser()
+        mock_log.warning.assert_called_once()
+
+    def test_tilde_expanded(self) -> None:
+        """Tilde in forwarding_log_dir is expanded (no '~' in string result)."""
+        coordinator = _make_coordinator(config={})
+        resolver = ConfigResolver(
+            config={"forwarding_log_dir": "~/custom/logs"}, coordinator=coordinator
+        )
+
+        assert "~" not in str(resolver.forwarding_log_dir)
+
+    def test_cached_after_first_access(self) -> None:
+        """forwarding_log_dir returns the same object on repeated access (cached)."""
+        coordinator = _make_coordinator(config={})
+        resolver = ConfigResolver(config={}, coordinator=coordinator)
+
+        first = resolver.forwarding_log_dir
+        second = resolver.forwarding_log_dir
+
+        assert first is second
+
+    def test_returns_path_type(self) -> None:
+        """forwarding_log_dir always returns a Path instance."""
+        coordinator = _make_coordinator(config={})
+        resolver = ConfigResolver(
+            config={"forwarding_log_dir": "/some/logs"}, coordinator=coordinator
+        )
+
+        assert isinstance(resolver.forwarding_log_dir, Path)
 
 
 class TestProjectSlugResolution:
