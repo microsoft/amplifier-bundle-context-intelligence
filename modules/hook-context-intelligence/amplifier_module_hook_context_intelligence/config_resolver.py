@@ -450,10 +450,15 @@ class HookConfigResolver:
 
     @property
     def dispatch_failure_threshold(self) -> int:
-        """Number of consecutive dispatch failures before the circuit opens.
+        """Consecutive-401 count before the per-event "still rejecting auth" warning fires.
 
         Reads directly from config['dispatch_failure_threshold'], defaults to 3.
         No coordinator fallback.  Always returns an int.
+
+        NOTE: this does NOT control the circuit breaker. The breaker opens purely
+        on its own hardcoded constants (_BREAKER_HARD_RATIO / _BREAKER_MIN_SAMPLES /
+        _BREAKER_MIN_OPEN_SECONDS in logging_handler.py) and has no config knob;
+        this value only gates the earlier per-event auth-escalation warning.
         """
         return int(self._config.get("dispatch_failure_threshold", 3))
 

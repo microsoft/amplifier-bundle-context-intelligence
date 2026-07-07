@@ -259,6 +259,9 @@ class _DestinationDispatcher:
         # True = hard (deterministic auth) outcome, False = delivered.
         # Genuinely transient/permanent outcomes never enter this window.
         self._breaker_window: deque[bool] = deque(maxlen=_BREAKER_WINDOW)
+        # Start of the CURRENT sustained failing-regime (window ratio >=
+        # _BREAKER_HARD_RATIO with >= _BREAKER_MIN_SAMPLES samples), not the
+        # timestamp of the last hard outcome. See _update_regime_clock().
         self._first_hard_ts: float | None = None
         self._breaker_open: bool = False
         self._last_probe_ts: float = 0.0
@@ -351,26 +354,67 @@ class _DestinationDispatcher:
         """
         return self._last_status == 401 or self._auth_token_failed
 
+    def _update_regime_clock(self) -> None:
+        """Track the start of the CURRENT sustained failing-regime.
+
+        ``_first_hard_ts`` is the wall-clock timestamp the sustain gate in
+        ``_maybe_open_breaker`` measures against. It must mark when the
+        window ENTERED the failing regime -- ratio >= ``_BREAKER_HARD_RATIO``
+        with >= ``_BREAKER_MIN_SAMPLES`` samples -- not the timestamp of the
+        most recent hard outcome.
+
+        Call this after every window append (hard or delivered) and
+        recompute from the window's current state:
+
+        - Currently in the failing regime: set the timestamp ONLY if it
+          isn't already set (the regime just started; a hard outcome deep
+          inside an ongoing regime must not push the clock forward).
+        - Not in the failing regime: clear the timestamp. The regime ended
+          (or never started), so there is no sustain clock running.
+
+        This is what makes the design's "rate-over-a-window, not a streak"
+        promise hold at the wall-clock gate too: a single DELIVERED outcome
+        that doesn't drop the window ratio below threshold leaves the
+        window (and thus this destination) still in the failing regime, so
+        the sustain clock must keep running, not reset to None.
+        """
+        n = len(self._breaker_window)
+        in_regime = n >= _BREAKER_MIN_SAMPLES and (
+            sum(self._breaker_window) / n >= _BREAKER_HARD_RATIO
+        )
+        if in_regime:
+            if self._first_hard_ts is None:
+                self._first_hard_ts = time.monotonic()
+        else:
+            self._first_hard_ts = None
+
     def _breaker_record_hard(self) -> None:
         """Record a HARD outcome in the sliding window and maybe open."""
         self._breaker_window.append(True)
-        if self._first_hard_ts is None:
-            self._first_hard_ts = time.monotonic()
+        self._update_regime_clock()
         self._maybe_open_breaker()
 
     def _breaker_record_delivered(self) -> None:
         """Record a DELIVERED outcome -- the breaker's recovery signal.
 
-        Clears the sustained-failure timer. If the breaker was OPEN, this is
-        the successful half-open probe: close it, wipe the window (so the
-        next failure streak starts clean), and emit exactly one recovery
-        line (console + durable record).
+        Re-evaluates the sustained-failure regime clock (see
+        ``_update_regime_clock``) rather than unconditionally clearing it --
+        a lone success that leaves the window still >= the hard ratio must
+        NOT reset the sustain clock, or an interleaved mostly-failing
+        destination could never accumulate a continuous failing regime.
+
+        If the breaker was OPEN, this is the successful half-open probe:
+        close it, wipe the window (so the next failure streak starts
+        clean), and emit exactly one recovery line (console + durable
+        record). This closing path is unconditional on the ratio -- a
+        successful probe always closes, regardless of window state.
         """
         self._breaker_window.append(False)
-        self._first_hard_ts = None
+        self._update_regime_clock()
         if self._breaker_open:
             self._breaker_open = False
             self._breaker_window.clear()
+            self._first_hard_ts = None
             logger.info(
                 "Reconnected to %s (%s) \u2014 resuming delivery.",
                 self._name,
