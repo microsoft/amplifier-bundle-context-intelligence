@@ -558,3 +558,76 @@ class TestD3RateOverWindowAtRealFloor:
             " though ~10%% of the stream is interleaved successes"
         )
         await d.close()
+
+
+# ---------------------------------------------------------------------------
+# 12. D4: sink-write-failure console warning is rate-limited
+# ---------------------------------------------------------------------------
+#
+# _write_forwarding_record swallowing every sink-write failure to DEBUG meant
+# a full disk / bad perms on the configured forwarding_log_dir silently killed
+# the durable forwarding-diagnostics file operators are told to consult -- no
+# operator-visible signal at all. D4 surfaces a rate-limited console WARNING
+# (via the module logger, never a second sink write) when the sink write
+# itself raises. This must hold across MANY invocations of
+# _record_forwarding_issue -- not just one -- so the test drives the
+# destination through breaker_open -> breaker_close (probe) -> breaker_open
+# again, three separate call sites that each attempt (and fail) a durable
+# write against the same persistently-broken directory.
+
+
+class TestSinkWriteFailureConsoleWarning:
+    """D4: a persistently broken forwarding-diagnostics sink must surface a
+    rate-limited console WARNING instead of silently swallowing every write
+    failure to DEBUG (which previously masked a full disk / bad perms killing
+    the very diagnostics file operators are told to consult).
+
+    Drives ``_record_forwarding_issue`` through THREE separate call sites --
+    breaker_open, breaker_close (successful probe), breaker_open again -- all
+    against the same persistently-failing ``forwarding_log_dir``, and asserts
+    exactly ONE console WARNING is emitted despite three write failures (the
+    new ``_last_sink_fail_log`` rate-limit gate holds across invocations
+    regardless of ``kind``).
+    """
+
+    async def test_sink_failure_warning_rate_limited_across_repeated_failures(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        monkeypatch.setattr(logging_handler, "_BREAKER_MIN_OPEN_SECONDS", 0.0)
+        monkeypatch.setattr(logging_handler, "_BREAKER_PROBE_INTERVAL", 0.0)
+        blocker = tmp_path / "blocker"
+        blocker.write_text("not a directory")  # mkdir() against this raises
+
+        d = _dispatcher(forwarding_log_dir=blocker)
+        d._sleep_backoff = AsyncMock()  # type: ignore[method-assign]
+
+        # 10 hard failures -> breaker opens (_record_forwarding_issue #1: "breaker_open").
+        # 1 probe success -> breaker closes (_record_forwarding_issue #2: "breaker_close").
+        # 10 more hard failures -> breaker reopens (_record_forwarding_issue #3: "breaker_open").
+        responses = [_make_response(401)] * 10 + [_make_response(200)] + [_make_response(401)] * 10
+        d._client = _mock_client(responses)
+
+        with patch(LOGGER_PATH) as mock_logger:
+            await _drain(d, [f"e-open-{i}" for i in range(10)])
+            assert d._breaker_open is True, "breaker must open on the first hard-failure run"
+
+            await _drain(d, ["e-probe"])
+            assert d._breaker_open is False, "successful probe must close the breaker"
+
+            await _drain(d, [f"e-reopen-{i}" for i in range(10)])
+            assert d._breaker_open is True, "breaker must reopen on the second hard-failure run"
+
+            sink_fail_warnings = [
+                c for c in mock_logger.warning.call_args_list if "sink write failed" in str(c)
+            ]
+            assert len(sink_fail_warnings) == 1, (
+                "expected exactly 1 rate-limited sink-failure warning despite 3 separate"
+                f" _record_forwarding_issue invocations against the same persistently-broken"
+                f" sink, got {len(sink_fail_warnings)}: {mock_logger.warning.call_args_list}"
+            )
+            assert str(blocker) in str(sink_fail_warnings[0]), (
+                "sink-failure warning must name the configured forwarding_log_dir"
+            )
+
+        assert d._queue.qsize() == 0, "dispatch flow must complete despite the sink failures"
+        await d.close()

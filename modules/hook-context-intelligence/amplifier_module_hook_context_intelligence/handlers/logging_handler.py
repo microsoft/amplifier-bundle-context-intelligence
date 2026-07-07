@@ -147,21 +147,32 @@ def _sanitize_for_json(data: dict[str, Any]) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 # Forwarding-diagnostics sink (best-effort, durable JSONL)
 # ---------------------------------------------------------------------------
-def _write_forwarding_record(log_dir: Path | None, record: dict[str, Any]) -> None:
+def _write_forwarding_record(log_dir: Path | None, record: dict[str, Any]) -> bool:
     """Append *record* to the per-UTC-day forwarding-diagnostics JSONL file.
 
     Best-effort: a diagnostics write must NEVER raise into the dispatch path.
-    A ``None`` *log_dir* disables the sink entirely (no directory, no file).
+    A ``None`` *log_dir* disables the sink entirely (no directory, no file) --
+    that is not a failure, so it returns ``True`` (nothing to warn about).
+
+    Returns
+    -------
+    bool
+        ``True`` on a successful write, or when the sink is disabled
+        (``log_dir is None``). ``False`` ONLY when the write itself raised --
+        the caller uses this to surface a rate-limited console warning
+        without ever writing another diagnostics record about it.
     """
     if log_dir is None:
-        return
+        return True
     try:
         log_dir.mkdir(parents=True, exist_ok=True)
         day = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         with (log_dir / f"forwarding-{day}.jsonl").open("a") as f:
             f.write(_canonical_json(record) + "\n")
+        return True
     except Exception:
         logger.debug("forwarding-diagnostics write failed", exc_info=True)
+        return False
 
 
 # ---------------------------------------------------------------------------
@@ -252,6 +263,12 @@ class _DestinationDispatcher:
         # the genuine-HTTP-401 escalation warning) so the two unrelated failure
         # modes don't share (and reset) each other's cooldown.
         self._last_headers_error_log = float("-inf")
+        # Dedicated rate-limit gate for the forwarding-diagnostics SINK write
+        # itself failing (e.g. full disk, bad perms on self._forwarding_log_dir).
+        # Separate from every other _last_*_log sentinel above -- this one
+        # gates a console-only warning about the diagnostics sink, not about
+        # the destination's HTTP/auth behavior. See _record_forwarding_issue.
+        self._last_sink_fail_log = float("-inf")
         # --- circuit breaker state ---
         # OWNERSHIP: this destination's single worker task (_worker) is the
         # ONLY mutator of breaker state. No lock is needed -- there is exactly
@@ -312,13 +329,22 @@ class _DestinationDispatcher:
         Best-effort via ``_write_forwarding_record`` \u2014 never raises into the
         caller. ``session_id`` is pulled from the in-flight event held in
         ``self._current``, when available.
+
+        If the sink write itself fails (full disk, bad permissions on
+        ``self._forwarding_log_dir``, ...), that failure is otherwise only
+        ever logged at DEBUG \u2014 invisible by default, silently killing the
+        very diagnostics file operators are told to consult. Surface a
+        rate-limited console WARNING instead. This is console-only: it must
+        NOT recurse into ``_write_forwarding_record``/``_record_forwarding_issue``
+        (the sink is what's failing) and must NOT touch ``events.jsonl`` (that
+        path belongs solely to ``LoggingHandler``).
         """
         session_id = ""
         if self._current is not None:
             _evt, payload = self._current
             if isinstance(payload, dict):
                 session_id = str(payload.get("session_id", ""))
-        _write_forwarding_record(
+        wrote_ok = _write_forwarding_record(
             self._forwarding_log_dir,
             {
                 "ts": datetime.now(timezone.utc).isoformat(),
@@ -332,6 +358,18 @@ class _DestinationDispatcher:
                 "detail": detail,
             },
         )
+        if not wrote_ok:
+            now = time.monotonic()
+            if now - self._last_sink_fail_log >= _LOG_RATE_LIMIT_SECONDS:
+                self._last_sink_fail_log = now
+                logger.warning(
+                    "%s forwarding-diagnostics sink write failed for %s \u2014"
+                    " diagnostics records are being lost (see DEBUG log for the"
+                    " stack trace); captured events remain durable in"
+                    " events.jsonl.",
+                    self._name,
+                    self._forwarding_log_dir,
+                )
 
     # -- circuit breaker (v2 minimal) ---------------------------------------
     #
