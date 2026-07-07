@@ -11,6 +11,8 @@ import json
 import logging
 import random
 import time
+from collections import deque
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -46,16 +48,33 @@ _READ_TIMEOUT = 3.0
 _POOL_TIMEOUT = 0.5
 #: Minimum seconds between repeated overflow or permanent-skip log warnings.
 _LOG_RATE_LIMIT_SECONDS = 60.0
-#: Consecutive GENUINE 401 auth rejections on a single in-flight event before the
-#: worker STOPS retrying it. A rejected credential is deterministic -- a static key
-#: that is 401'd once is 401'd on every identical retry -- so retrying forever both
-#: spams warnings and blocks the single worker (and thus the whole queue) behind one
-#: doomed event. After this ceiling the event is skipped (it stays durable in
-#: events.jsonl) so the worker keeps draining; delivery resumes once the operator
-#: fixes credentials and restarts the session. NOTE: only GENUINE 401 responses
-#: count toward this ceiling -- timeouts/network errors do NOT (see _post, which
-#: clears _last_status on those paths).
-_AUTH_GIVEUP_ATTEMPTS: int = 10
+
+# ---------------------------------------------------------------------------
+# Circuit breaker constants (v2 minimal breaker)
+#
+# See forwarding-diagnostics-design.md Part 2. Replaces the old per-event
+# "give up after N consecutive 401s, reset, re-climb" behavior with a
+# destination-level breaker: warn once, go quiet, auto-recover via a slow
+# re-probe -- no restart needed. Deliberately minimal: no persistence, no
+# stored state-machine enum, no config knobs (hardcoded defaults).
+# ---------------------------------------------------------------------------
+#: Sliding window (attempt outcomes) used to compute the hard-failure ratio.
+#: True = hard (deterministic auth fault), False = delivered. Genuinely
+#: transient/permanent outcomes are never pushed into this window.
+_BREAKER_WINDOW: int = 20
+#: Hard-failure ratio (over the window) at/above which the breaker opens.
+_BREAKER_HARD_RATIO: float = 0.9
+#: Minimum number of window samples required before the breaker can open --
+#: prevents a handful of early failures (before the window is representative)
+#: from tripping it.
+_BREAKER_MIN_SAMPLES: int = 10
+#: Minimum sustained wall-clock seconds of hard failure before opening. A
+#: fast backoff curve can produce many attempts within a short token-rotation
+#: window (e.g. ~12s); this floor stops the breaker from opening on that
+#: alone -- it must be sustained, not just frequent.
+_BREAKER_MIN_OPEN_SECONDS: float = 30.0
+#: While OPEN, allow exactly one probe attempt at this cadence (seconds).
+_BREAKER_PROBE_INTERVAL: float = 300.0
 
 # ---------------------------------------------------------------------------
 # _post outcome constants (Task 4)
@@ -126,6 +145,26 @@ def _sanitize_for_json(data: dict[str, Any]) -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
+# Forwarding-diagnostics sink (best-effort, durable JSONL)
+# ---------------------------------------------------------------------------
+def _write_forwarding_record(log_dir: Path | None, record: dict[str, Any]) -> None:
+    """Append *record* to the per-UTC-day forwarding-diagnostics JSONL file.
+
+    Best-effort: a diagnostics write must NEVER raise into the dispatch path.
+    A ``None`` *log_dir* disables the sink entirely (no directory, no file).
+    """
+    if log_dir is None:
+        return
+    try:
+        log_dir.mkdir(parents=True, exist_ok=True)
+        day = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        with (log_dir / f"forwarding-{day}.jsonl").open("a") as f:
+            f.write(_canonical_json(record) + "\n")
+    except Exception:
+        logger.debug("forwarding-diagnostics write failed", exc_info=True)
+
+
+# ---------------------------------------------------------------------------
 # _DestinationDispatcher
 # ---------------------------------------------------------------------------
 class _DestinationDispatcher:
@@ -157,6 +196,7 @@ class _DestinationDispatcher:
         backoff_max: float = _DEFAULT_BACKOFF_MAX,
         backoff_jitter: bool = _DEFAULT_BACKOFF_JITTER,
         storage_path: str | Path = "",
+        forwarding_log_dir: str | Path = "",
     ) -> None:
         from context_intelligence.auth import AuthStrategy, build_auth_strategy  # noqa: PLC0415
 
@@ -173,6 +213,9 @@ class _DestinationDispatcher:
         self._backoff_max = backoff_max
         self._backoff_jitter = backoff_jitter
         self._storage_path = storage_path
+        self._forwarding_log_dir: Path | None = (
+            Path(forwarding_log_dir).expanduser() if forwarding_log_dir else None
+        )
         # Build the auth strategy ONCE at init; credential SDK handles token refresh internally.
         self._strategy: AuthStrategy = build_auth_strategy(
             auth_mode=auth_mode,
@@ -209,6 +252,21 @@ class _DestinationDispatcher:
         # the genuine-HTTP-401 escalation warning) so the two unrelated failure
         # modes don't share (and reset) each other's cooldown.
         self._last_headers_error_log = float("-inf")
+        # --- circuit breaker state ---
+        # OWNERSHIP: this destination's single worker task (_worker) is the
+        # ONLY mutator of breaker state. No lock is needed -- there is exactly
+        # one asyncio task per dispatcher processing events serially.
+        # True = hard (deterministic auth) outcome, False = delivered.
+        # Genuinely transient/permanent outcomes never enter this window.
+        self._breaker_window: deque[bool] = deque(maxlen=_BREAKER_WINDOW)
+        self._first_hard_ts: float | None = None
+        self._breaker_open: bool = False
+        self._last_probe_ts: float = 0.0
+        # Set True by _post's auth-header-production failure path for the
+        # CURRENT attempt only; cleared at the top of _post before every
+        # attempt so a stale value can never be inherited by an unrelated
+        # outcome.
+        self._auth_token_failed: bool = False
 
     def _ensure_worker(self) -> None:
         if self._worker_task is None or self._worker_task.done():
@@ -245,6 +303,124 @@ class _DestinationDispatcher:
                     self._storage_path,
                 )
 
+    def _record_forwarding_issue(self, kind: str, detail: str) -> None:
+        """Write a durable forwarding-diagnostics record for this destination.
+
+        Best-effort via ``_write_forwarding_record`` \u2014 never raises into the
+        caller. ``session_id`` is pulled from the in-flight event held in
+        ``self._current``, when available.
+        """
+        session_id = ""
+        if self._current is not None:
+            _evt, payload = self._current
+            if isinstance(payload, dict):
+                session_id = str(payload.get("session_id", ""))
+        _write_forwarding_record(
+            self._forwarding_log_dir,
+            {
+                "ts": datetime.now(timezone.utc).isoformat(),
+                "destination": self._name,
+                "url": self._url,
+                "kind": kind,
+                "http_status": self._last_status,
+                "auth_failures": self._auth_failures,
+                "session_id": session_id,
+                "workspace": self._workspace or "",
+                "detail": detail,
+            },
+        )
+
+    # -- circuit breaker (v2 minimal) ---------------------------------------
+    #
+    # OWNERSHIP: every method below is called ONLY from the worker loop
+    # (_worker), which is this destination's single asyncio task. No lock is
+    # needed -- there is exactly one task mutating breaker state, and it
+    # always does so serially between `await` points that matter.
+    def _is_hard_outcome(self) -> bool:
+        """True when the current ``_post`` outcome is a HARD (breaker-eligible)
+        auth fault.
+
+        HARD = a real HTTP 401 response, or a local auth-token-PRODUCTION
+        failure (``self._auth_token_failed``, set by ``_post``'s ``headers()``
+        exception path). Both are deterministic auth faults -- distinct from
+        genuine network errors/timeouts/5xx/429, which must never feed the
+        breaker, and distinct from 403 (authorization, often per-workspace),
+        which stays a per-event skip and must not feed the breaker either.
+
+        Only meaningful when the just-completed outcome was ``_TRANSIENT``.
+        """
+        return self._last_status == 401 or self._auth_token_failed
+
+    def _breaker_record_hard(self) -> None:
+        """Record a HARD outcome in the sliding window and maybe open."""
+        self._breaker_window.append(True)
+        if self._first_hard_ts is None:
+            self._first_hard_ts = time.monotonic()
+        self._maybe_open_breaker()
+
+    def _breaker_record_delivered(self) -> None:
+        """Record a DELIVERED outcome -- the breaker's recovery signal.
+
+        Clears the sustained-failure timer. If the breaker was OPEN, this is
+        the successful half-open probe: close it, wipe the window (so the
+        next failure streak starts clean), and emit exactly one recovery
+        line (console + durable record).
+        """
+        self._breaker_window.append(False)
+        self._first_hard_ts = None
+        if self._breaker_open:
+            self._breaker_open = False
+            self._breaker_window.clear()
+            logger.info(
+                "Reconnected to %s (%s) \u2014 resuming delivery.",
+                self._name,
+                self._url,
+            )
+            self._record_forwarding_issue("breaker_close", "auto-recovered on probe success")
+
+    def _maybe_open_breaker(self) -> None:
+        """Open the breaker when the sustained hard-failure rate crosses threshold.
+
+        Requires ALL of: enough samples in the window (``_BREAKER_MIN_SAMPLES``),
+        a hard-failure ratio at/above ``_BREAKER_HARD_RATIO``, and sustained
+        wall-clock time since the first hard failure of at least
+        ``_BREAKER_MIN_OPEN_SECONDS``. Rate-over-a-window (not a streak) means a
+        lone 200 no longer resets a half-broken destination; the wall-clock
+        floor means a fast backoff curve can't trip it inside one token-rotation
+        window.
+        """
+        if self._breaker_open:
+            return
+        n = len(self._breaker_window)
+        if n < _BREAKER_MIN_SAMPLES:
+            return
+        hard_ratio = sum(self._breaker_window) / n
+        if hard_ratio < _BREAKER_HARD_RATIO:
+            return
+        if (
+            self._first_hard_ts is None
+            or (time.monotonic() - self._first_hard_ts) < _BREAKER_MIN_OPEN_SECONDS
+        ):
+            return
+        self._breaker_open = True
+        self._last_probe_ts = time.monotonic()
+        logger.warning(
+            "%s (%s) forwarding paused after sustained auth failures (HTTP %s) \u2014 fix the"
+            " credential/URL; delivery auto-resumes when it recovers (no restart needed)."
+            " Events are safe in events.jsonl; replay the backlog with"
+            " context-intelligence-upload.",
+            self._name,
+            self._url,
+            self._last_status,
+        )
+        self._record_forwarding_issue(
+            "breaker_open", "forwarding paused after sustained auth failures"
+        )
+
+    def _breaker_probe_due(self) -> bool:
+        """True when OPEN and the slow-cadence probe interval has elapsed."""
+        return (time.monotonic() - self._last_probe_ts) >= _BREAKER_PROBE_INTERVAL
+
     async def _worker(self) -> None:
         """Process events from the queue with retry-on-transient backoff.
 
@@ -271,6 +447,36 @@ class _DestinationDispatcher:
             event, payload_data = await self._queue.get()
             self._current = (event, payload_data)
             try:
+                # --- circuit breaker gate -------------------------------
+                # OWNERSHIP: only this worker task reads/mutates breaker
+                # state (see the class-level note above the breaker
+                # methods) -- no lock needed.
+                if self._breaker_open:
+                    if not self._breaker_probe_due():
+                        # Already durable in events.jsonl (LoggingHandler
+                        # wrote it before fan-out) -- do not dispatch while
+                        # OPEN and not yet due for a probe.
+                        self._queue.task_done()
+                        self._current = None
+                        continue
+                    # Half-open PROBE: exactly one attempt, no inner retry.
+                    self._last_probe_ts = time.monotonic()
+                    outcome = await self._post(event, payload_data)
+                    if outcome == _DELIVERED:
+                        self._breaker_record_delivered()
+                        self._degraded_warned = False
+                    elif outcome == _TRANSIENT and self._is_hard_outcome():
+                        self._breaker_record_hard()
+                    # Genuinely transient/permanent while probing is
+                    # inconclusive -- leave the breaker OPEN and advance;
+                    # the event stays durable regardless.
+                    self._consecutive_failures = 0
+                    self._auth_failures = 0
+                    self._queue.task_done()
+                    self._current = None
+                    continue
+
+                # --- CLOSED: normal dispatch, retry-on-transient backoff
                 while True:
                     outcome = await self._post(event, payload_data)
                     if outcome == _TRANSIENT:
@@ -303,8 +509,8 @@ class _DestinationDispatcher:
                             # pairs symmetrically with the INFO "Reconnected ... resuming
                             # delivery" recovery notice below. The LOUD, user-facing
                             # WARNINGs are reserved for actionable/terminal points:
-                            # sustained auth rejection, the 401 give-up ("no more retries
-                            # for this event"), and _PERMANENT rejects -- all below.
+                            # sustained auth rejection, the breaker opening ("forwarding
+                            # paused"), and _PERMANENT rejects -- all below.
                             logger.info(
                                 "%s delivery degraded, retrying with backoff — events"
                                 " remain durable in events.jsonl.",
@@ -313,79 +519,116 @@ class _DestinationDispatcher:
                             self._degraded_warned = True
                         else:
                             logger.debug("server_dispatch_retry dest=%s", self._name)
-                        if is_auth_401 and self._auth_failures >= self._failure_threshold:
-                            now = time.monotonic()
-                            if now - self._last_auth_log >= _LOG_RATE_LIMIT_SECONDS:
-                                self._last_auth_log = now
-                                logger.warning(
-                                    "%s still rejecting auth (HTTP %s) after %d auth"
-                                    " failures on this event — this looks like an auth problem,"
-                                    " not a network blip. Check credentials.",
-                                    self._name,
-                                    self._last_status,
-                                    self._auth_failures,
-                                )
-                        # A persistent, GENUINE 401 will never succeed on retry (a static
-                        # key is deterministic). Stop blocking the single worker -- and thus
-                        # the whole queue -- on one doomed event: warn once, then skip it
-                        # (it stays durable in events.jsonl) and advance so delivery of
-                        # later events continues. Recovery = fix credentials + restart.
-                        #
-                        # KNOWN SCOPE LIMIT: this give-up path covers 401 ONLY. A server
-                        # that persistently returns a non-401 _TRANSIENT outcome (e.g. a
-                        # stuck 500 or a permanent 429) still retries forever and can block
-                        # the queue head -- the same shape of problem, deliberately left out
-                        # of this change because 401 was the observed incident. Generalising
-                        # the give-up to all persistent transients is a separate change.
-                        if is_auth_401 and self._auth_failures >= _AUTH_GIVEUP_ATTEMPTS:
-                            now = time.monotonic()
-                            if now - self._last_giveup_log >= _LOG_RATE_LIMIT_SECONDS:
-                                self._last_giveup_log = now
-                                logger.warning(
-                                    "%s giving up on event after %d consecutive auth"
-                                    " rejections (HTTP %s) — fix credentials and restart the"
-                                    " session to resume delivery; events remain durable in"
-                                    " events.jsonl.",
-                                    self._name,
-                                    self._auth_failures,
-                                    self._last_status,
-                                )
+
+                        is_hard = self._is_hard_outcome()
+                        if is_hard:
+                            # Feed the destination-level circuit breaker. This
+                            # may transition CLOSED -> OPEN right here.
+                            self._breaker_record_hard()
+                            # Only warn about sustained per-event auth rejection
+                            # while the breaker is still CLOSED -- once it opens,
+                            # the single breaker_open line (in _maybe_open_breaker)
+                            # is the only console output for this failure mode;
+                            # go quiet.
+                            if (
+                                not self._breaker_open
+                                and is_auth_401
+                                and self._auth_failures >= self._failure_threshold
+                            ):
+                                now = time.monotonic()
+                                if now - self._last_auth_log >= _LOG_RATE_LIMIT_SECONDS:
+                                    self._last_auth_log = now
+                                    logger.warning(
+                                        "%s (%s) still rejecting auth (HTTP %s) after %d auth"
+                                        " failures — check this destination's credentials AND"
+                                        " that its URL targets the CI server (a 401 can also"
+                                        " come from a misrouted URL such as an auth gateway).",
+                                        self._name,
+                                        self._url,
+                                        self._last_status,
+                                        self._auth_failures,
+                                    )
+                                    self._record_forwarding_issue(
+                                        "auth_failure",
+                                        "still rejecting auth after %d attempts"
+                                        % self._auth_failures,
+                                    )
+                            # A deterministic hard failure (401, or a local
+                            # auth-token-production failure) will never succeed
+                            # on an immediate retry. Stop blocking the single
+                            # worker -- and thus the whole queue -- on one doomed
+                            # event: skip it (it stays durable in events.jsonl)
+                            # and advance so delivery of later events continues.
+                            # The destination-level circuit breaker (above) is
+                            # what stops the sustained-failure hammering.
+                            #
+                            # _consecutive_failures resets (it only drives the
+                            # backoff sleep for genuinely transient outcomes,
+                            # which a hard failure never reaches). _auth_failures
+                            # is DELIBERATELY NOT reset here: with same-event
+                            # retries gone, a single doomed event can never
+                            # reach the escalation threshold by itself anymore
+                            # -- the counter must accumulate ACROSS consecutive
+                            # hard-skip events instead, so the rate-limited
+                            # "still rejecting auth" early-warning (below
+                            # threshold, before the breaker opens) remains
+                            # reachable for a destination that is 401'ing
+                            # across many different events. It resets only on
+                            # an actual DELIVERED/PERMANENT advance (bottom of
+                            # the loop below), matching a real recovery.
                             self._consecutive_failures = 0
-                            self._auth_failures = 0
                             self._queue.task_done()
                             self._current = None
                             break
+                        # Genuinely transient (network/5xx/429) -- never feeds
+                        # the breaker; retry the same event with backoff.
                         await self._sleep_backoff()
                         continue  # retry the same event
                     # _DELIVERED or _PERMANENT — advance to next event
-                    if outcome == _DELIVERED and self._degraded_warned:
-                        logger.info(
-                            "Reconnected to %s — resuming delivery.",
-                            self._name,
-                        )
-                        self._degraded_warned = False
+                    if outcome == _DELIVERED:
+                        self._breaker_record_delivered()
+                        if self._degraded_warned:
+                            logger.info(
+                                "Reconnected to %s — resuming delivery.",
+                                self._name,
+                            )
+                            self._degraded_warned = False
                     elif outcome == _PERMANENT:
                         now = time.monotonic()
                         if now - self._last_permanent_log >= _LOG_RATE_LIMIT_SECONDS:
                             self._last_permanent_log = now
                             if self._last_status is not None and 300 <= self._last_status < 400:
                                 logger.warning(
-                                    "%s returned an unexpected redirect (HTTP %d)"
+                                    "%s (%s) returned an unexpected redirect (HTTP %d)"
                                     " — destination URL likely misconfigured;"
                                     " not following redirects, event skipped.",
                                     self._name,
+                                    self._url,
                                     self._last_status,
+                                )
+                                self._record_forwarding_issue(
+                                    "permanent_reject",
+                                    "unexpected redirect (HTTP %s)" % self._last_status,
                                 )
                             elif self._last_status == 403:
                                 logger.warning(
-                                    "%s rejected event (HTTP 403) — check credentials.",
+                                    "%s (%s) rejected event (HTTP 403) — check credentials.",
                                     self._name,
+                                    self._url,
+                                )
+                                self._record_forwarding_issue(
+                                    "permanent_reject", "rejected event (HTTP 403)"
                                 )
                             else:
                                 logger.warning(
-                                    "%s rejected event (HTTP %d) — malformed event, skipped.",
+                                    "%s (%s) rejected event (HTTP %d) — malformed event, skipped.",
                                     self._name,
+                                    self._url,
                                     self._last_status,
+                                )
+                                self._record_forwarding_issue(
+                                    "permanent_reject",
+                                    "rejected event (HTTP %s) — malformed" % self._last_status,
                                 )
                     self._consecutive_failures = 0
                     self._auth_failures = 0
@@ -472,6 +715,11 @@ class _DestinationDispatcher:
         Unclassified exceptions (bare Exception, TypeError, etc.) are NOT caught here;
         they propagate so the worker supervisor (Task 6) can log loud and survive.
         """
+        # Reset the auth-token-failure sentinel at the top of every attempt so
+        # it can only ever reflect THIS attempt -- a stale True from a prior
+        # attempt must never be inherited by an unrelated outcome (mirrors why
+        # _last_status is cleared on the network-error path below).
+        self._auth_token_failed = False
         # Lazy client creation — no auth header baked in; header goes on each post.
         if self._client is None or self._client.is_closed:
             self._client = httpx.AsyncClient(
@@ -515,21 +763,31 @@ class _DestinationDispatcher:
             # _last_status to None -- if left stale (e.g. a genuine 401 from a
             # PRIOR event on this destination), the worker's
             # `is_auth_401 = self._last_status == 401` check would miscount this
-            # unrelated failure toward the 401 give-up ceiling (_AUTH_GIVEUP_ATTEMPTS)
-            # and eventually PERMANENTLY SKIP the event -- exactly the silent loss
-            # this handling removes. Returning _TRANSIENT instead keeps it on the
-            # infinite retry-with-backoff path, so a mid-session `az login` recovers
-            # delivery on the next retry.
+            # unrelated failure toward the destination's auth-failure counter.
+            # Returning _TRANSIENT keeps this on the retry-with-backoff path, so
+            # a mid-session `az login` recovers delivery on the next retry.
+            #
+            # This IS, however, a deterministic auth fault distinct from a
+            # genuine network blip: a locally-broken ability to mint a Bearer
+            # token will not resolve itself on the next network attempt any
+            # more than a real 401 would. Mark it HARD so the destination-level
+            # circuit breaker (see _worker) can still detect a persistent
+            # credential problem instead of retrying forever in silence.
             self._last_status = None
+            self._auth_token_failed = True
             now = time.monotonic()
             if now - self._last_headers_error_log >= _LOG_RATE_LIMIT_SECONDS:
                 self._last_headers_error_log = now
                 logger.warning(
-                    "%s could not produce an auth token (%s) -- run `az login` to"
+                    "%s (%s) could not produce an auth token (%s) -- run `az login` to"
                     " refresh if your session expired; retrying with backoff, events"
                     " remain durable in events.jsonl.",
                     self._name,
+                    self._url,
                     type(exc).__name__,
+                )
+                self._record_forwarding_issue(
+                    "auth_token_unavailable", "auth token production failed"
                 )
                 logger.debug(
                     "%s auth-header production failed: %r",

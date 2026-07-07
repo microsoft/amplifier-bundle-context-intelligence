@@ -20,7 +20,6 @@ import httpx
 import pytest
 
 from amplifier_module_hook_context_intelligence.handlers.logging_handler import (
-    _AUTH_GIVEUP_ATTEMPTS,
     _DELIVERED,  # noqa: F401 — imported for shared test use
     _PERMANENT,
     _TRANSIENT,
@@ -222,23 +221,36 @@ async def test_auth_escalation_fires_at_threshold_one() -> None:
 
 
 async def test_auth_escalation_rewarns_periodically() -> None:
-    """With time.monotonic advancing 61s per call, 3x 401s emit >= 2 'rejecting auth' warnings.
+    """With time.monotonic advancing 61s per call, 3 SEPARATE 401 events emit
+    >= 2 'rejecting auth' warnings.
 
     Regression for Bug C: the old code used strict == so the auth warning could fire at
     most once, ever. A rotated/dead key would retry forever with at most one warning —
     a silent multi-day outage. The fix uses >= and rate-limits with _LOG_RATE_LIMIT_SECONDS
     (60s), re-emitting periodically as long as 401s continue.
+
+    v2 (circuit breaker) note: a hard failure (genuine 401) is no longer retried
+    within the SAME event -- it is skipped immediately -- so "401s continue" is now
+    modeled as three separate queued events, each hard-rejected, rather than three
+    retries of one event (the old ``_auth_then_deliver`` helper's shape).
     """
     d = _dispatcher(failure_threshold=1)
-    _auth_then_deliver(d, 3)
     d._sleep_backoff = AsyncMock()
+
+    async def always_401(event: str, data: dict) -> str:  # type: ignore[type-arg]
+        d._last_status = 401
+        return _TRANSIENT
+
+    d._post = always_401  # type: ignore[method-assign]
 
     # Monotonic ticks advance by 61s per call — always >= _LOG_RATE_LIMIT_SECONDS (60s).
     ticks = iter(range(61, 100000, 61))
 
     with patch(f"{MOD}.time.monotonic", side_effect=ticks):
         with patch(LOGGER_PATH) as mock_logger:
-            d._queue.put_nowait(("test:event", {"session_id": "s1"}))
+            d._queue.put_nowait(("e1", {"session_id": "s1"}))
+            d._queue.put_nowait(("e2", {"session_id": "s2"}))
+            d._queue.put_nowait(("e3", {"session_id": "s3"}))
             task = asyncio.create_task(d._worker())
             await d._queue.join()
             task.cancel()
@@ -510,94 +522,18 @@ async def test_timeouts_after_401_do_not_refire_auth_warning() -> None:
     )
 
 
-async def test_persistent_401_gives_up_and_unblocks_queue() -> None:
+async def test_persistent_401_is_skipped_immediately_and_unblocks_queue() -> None:
     """A never-succeeding genuine 401 must be bounded so the queue keeps draining.
 
-    Before the fix, a 401 was retried forever (_TRANSIENT) -- the inner loop never
-    broke, so one doomed event blocked the single worker and every later event
-    behind it. After the fix, after _AUTH_GIVEUP_ATTEMPTS consecutive 401s the event
-    is skipped (durable in events.jsonl) and the worker advances. If the fix were
-    absent, queue.join() would never complete and asyncio.wait_for would time out.
-    """
-    d = _dispatcher()  # failure_threshold=3 default; give-up ceiling is 10
-    d._sleep_backoff = AsyncMock()
-
-    async def always_401(event: str, data: dict) -> str:  # type: ignore[type-arg]
-        d._last_status = 401
-        return _TRANSIENT
-
-    d._post = always_401  # type: ignore[method-assign]
-
-    with patch(LOGGER_PATH) as mock_logger:
-        d._queue.put_nowait(("e1", {"session_id": "s1"}))
-        d._queue.put_nowait(("e2", {"session_id": "s2"}))
-        task = asyncio.create_task(d._worker())
-        # Without bounded give-up this join() never returns -> TimeoutError -> fail.
-        await asyncio.wait_for(d._queue.join(), timeout=5.0)
-        task.cancel()
-        try:
-            await task
-        except asyncio.CancelledError:
-            pass
-
-    assert d._queue.qsize() == 0, "both doomed 401 events must drain; the queue must unblock"
-    giveup_warnings = [c for c in mock_logger.warning.call_args_list if "giving up" in _rendered(c)]
-    assert len(giveup_warnings) >= 1, (
-        f"expected a 'giving up' warning after {_AUTH_GIVEUP_ATTEMPTS} consecutive 401s, "
-        f"got: {[_rendered(c) for c in mock_logger.warning.call_args_list]}"
-    )
-
-
-async def test_delivery_resets_auth_counter_so_events_never_reach_giveup() -> None:
-    """A success (202) must zero _auth_failures so 401s can't accumulate across events.
-
-    Council (tester-breaker/crusty): if a 202 did not reset the counter, N non-consecutive
-    401s spread over a healthy-most-of-the-time server would eventually trip the give-up
-    ceiling and skip a deliverable event. Two events, each with (_AUTH_GIVEUP_ATTEMPTS - 2)
-    genuine 401s then a 202, must BOTH deliver and produce NO give-up.
-    """
-    per_event_401 = _AUTH_GIVEUP_ATTEMPTS - 2
-    d = _dispatcher()
-    d._sleep_backoff = AsyncMock()
-
-    state: dict[str, int] = {"idx": 0, "n_this_event": 0}
-
-    async def fake_post(event: str, data: dict) -> str:  # type: ignore[type-arg]
-        if state["n_this_event"] < per_event_401:
-            state["n_this_event"] += 1
-            d._last_status = 401
-            return _TRANSIENT
-        state["n_this_event"] = 0  # reset for the next event
-        d._last_status = 202
-        return _DELIVERED
-
-    d._post = fake_post  # type: ignore[method-assign]
-
-    with patch(LOGGER_PATH) as mock_logger:
-        d._queue.put_nowait(("e1", {"session_id": "s1"}))
-        d._queue.put_nowait(("e2", {"session_id": "s2"}))
-        task = asyncio.create_task(d._worker())
-        await asyncio.wait_for(d._queue.join(), timeout=5.0)
-        task.cancel()
-        try:
-            await task
-        except asyncio.CancelledError:
-            pass
-
-    assert d._auth_failures == 0, "delivery must reset the auth-failure counter"
-    giveup = [c for c in mock_logger.warning.call_args_list if "giving up" in _rendered(c)]
-    assert giveup == [], (
-        "a delivered event between 401s must prevent give-up; "
-        f"got give-up warnings: {[_rendered(c) for c in giveup]}"
-    )
-
-
-async def test_giveup_fires_on_exactly_the_nth_genuine_401() -> None:
-    """Give-up must trigger on exactly the _AUTH_GIVEUP_ATTEMPTS-th genuine 401 (boundary pin).
-
-    Council (tester-breaker): pin the off-by-one. The increment precedes the >= check, so
-    _post is called exactly _AUTH_GIVEUP_ATTEMPTS times for one never-succeeding event
-    before the worker gives up and advances -- not one fewer, not one more.
+    v2 (circuit breaker) design: a deterministic hard failure (genuine 401) is no
+    longer retried within the same event at all -- it is classified HARD, fed to
+    the destination-level circuit breaker, and the event is skipped immediately
+    (durable in events.jsonl) so the worker advances to the next event. This
+    replaces the old "retry up to N times then give up" ceiling: with only two
+    events and a default failure_threshold/breaker sample count well above 2,
+    neither the per-event escalation warning nor the breaker opens -- the
+    property under test is purely that the queue keeps draining, and that each
+    doomed event costs exactly ONE _post attempt (no tight retry loop).
     """
     d = _dispatcher()
     d._sleep_backoff = AsyncMock()
@@ -612,7 +548,10 @@ async def test_giveup_fires_on_exactly_the_nth_genuine_401() -> None:
 
     with patch(LOGGER_PATH):
         d._queue.put_nowait(("e1", {"session_id": "s1"}))
+        d._queue.put_nowait(("e2", {"session_id": "s2"}))
         task = asyncio.create_task(d._worker())
+        # Without the immediate hard-skip this join() would retry forever ->
+        # TimeoutError -> fail.
         await asyncio.wait_for(d._queue.join(), timeout=5.0)
         task.cancel()
         try:
@@ -620,17 +559,18 @@ async def test_giveup_fires_on_exactly_the_nth_genuine_401() -> None:
         except asyncio.CancelledError:
             pass
 
-    assert calls["n"] == _AUTH_GIVEUP_ATTEMPTS, (
-        f"give-up must fire on exactly the {_AUTH_GIVEUP_ATTEMPTS}th genuine 401, "
-        f"but _post was called {calls['n']} times"
+    assert d._queue.qsize() == 0, "both doomed 401 events must drain; the queue must unblock"
+    assert calls["n"] == 2, (
+        f"each doomed event must cost exactly ONE _post attempt (no same-event retry"
+        f" loop for a hard failure), got {calls['n']} calls for 2 events"
     )
 
 
-async def test_worker_delivers_next_event_after_giving_up_on_a_doomed_one() -> None:
-    """After give-up on a doomed 401 event, the worker must still DELIVER the next event.
+async def test_worker_delivers_next_event_after_skipping_a_doomed_one() -> None:
+    """After skipping a doomed 401 event, the worker must still DELIVER the next event.
 
-    Council (tester-breaker/ROB): prove the give-up `break` exits only the retry loop, not
-    the worker -- a following, healthy event must be delivered, not stranded.
+    Prove the hard-failure `break` exits only the retry loop, not the worker --
+    a following, healthy event must be delivered, not stranded.
     """
     d = _dispatcher()
     d._sleep_backoff = AsyncMock()

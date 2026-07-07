@@ -554,16 +554,26 @@ class TestAuthExceptionEventLoss:
 
 class TestAuthExceptionWorkerIntegration:
     """End-to-end proof through the REAL _worker() loop (ROB's gate): an event
-    whose first auth-header attempt fails (expired `az login`) is retried with
-    backoff and ultimately DELIVERED once the credential recovers -- NOT dropped
-    via the worker's 'poisoned event dropped' unclassified-exception path.
+    whose auth-header attempt fails (expired `az login`) is skipped (durable in
+    events.jsonl, feeding the destination-level circuit breaker as a HARD
+    outcome) -- NOT dropped via the worker's 'poisoned event dropped'
+    unclassified-exception path, and NOT retried forever in silence.
 
-    This proves the _TRANSIENT returned from the headers() failure actually
-    round-trips through the worker's retry loop to eventual delivery, not just
-    at the _post() boundary.
+    v2 (circuit breaker) note: this was originally written when a headers()
+    failure was treated as an ordinary retry-forever _TRANSIENT -- the SAME
+    event would round-trip the worker's backoff loop until the credential
+    recovered. Per the council-reviewed breaker design (see
+    forwarding-diagnostics-design.md Part 2, detector fix #4), a persistent
+    local inability to mint a Bearer token is a deterministic auth fault, not a
+    network blip -- it is now classified HARD and the doomed event is skipped
+    immediately (one attempt, no same-event retry loop) so it cannot block the
+    queue behind it. This test now proves: (1) the failing event is skipped
+    cleanly (not via the unclassified-exception path), (2) it feeds the
+    breaker's hard-failure window, and (3) a SEPARATE, later event delivers
+    normally once the credential has recovered.
     """
 
-    async def test_event_survives_headers_failure_through_worker_to_delivery(self) -> None:
+    async def test_headers_failure_is_skipped_cleanly_and_next_event_delivers(self) -> None:
         from context_intelligence.auth import EntraTokenAuth
 
         from amplifier_module_hook_context_intelligence.handlers.logging_handler import (
@@ -604,20 +614,33 @@ class TestAuthExceptionWorkerIntegration:
         ) as mock_logger:
             d.enqueue("session:start", {"session_id": "s1"})
             # Condition-based wait (NOT a fixed sleep): queue.join() returns once
-            # the worker has called task_done() -- i.e. the event left the queue
-            # via the DELIVERED path.
+            # the worker has called task_done() -- i.e. the doomed event was
+            # skipped (hard-failure path), not stranded.
+            await asyncio.wait_for(d._queue.join(), timeout=2.0)
+
+            # get_token was called exactly ONCE and raised -- the worker did NOT
+            # retry the same event (no same-event retry loop for a hard failure).
+            assert cred.calls == 1
+            # No POST was ever attempted -- header production failed first.
+            assert mock_client.post.await_count == 0
+            # The event was NOT dropped via the unclassified-exception handler.
+            assert mock_logger.exception.call_count == 0
+            # Queue fully drained; the doomed event was skipped, not stranded.
+            assert d._queue.qsize() == 0
+            assert d._current is None  # type: ignore[attr-defined]
+            # It fed the breaker's hard-failure window (not silently swallowed).
+            assert list(d._breaker_window) == [True]  # type: ignore[attr-defined]
+            assert d._breaker_open is False  # type: ignore[attr-defined]  # single sample, well below threshold
+
+            # A SEPARATE, later event -- now that the credential has recovered
+            # (cred.calls > fail_times=1) -- delivers normally.
+            d.enqueue("session:end", {"session_id": "s2"})
             await asyncio.wait_for(d._queue.join(), timeout=2.0)
             await d.close()
 
-        # Delivered exactly once, after the credential recovered.
         assert mock_client.post.await_count == 1
-        # get_token called twice: first raised, second succeeded.
         assert cred.calls == 2
-        # The event was NOT dropped via the unclassified-exception handler.
-        assert mock_logger.exception.call_count == 0
-        # Queue fully drained; no in-flight event stranded.
-        assert d._queue.qsize() == 0
-        assert d._current is None  # type: ignore[attr-defined]
+        assert list(d._breaker_window) == [True, False]  # type: ignore[attr-defined]
 
     async def test_auth_path_degraded_warning_does_not_contradict_az_login_guidance(
         self, caplog: pytest.LogCaptureFixture

@@ -257,6 +257,7 @@ async def on_session_ready(coordinator: Any) -> None:
             backoff_max=resolver.dispatch_backoff_max,
             backoff_jitter=resolver.dispatch_backoff_jitter,
             storage_path=str(resolver.base_path),
+            forwarding_log_dir=resolver.forwarding_log_dir,
             auth_mode=d.auth_mode,
             auth_resource=d.auth_resource,
         )
