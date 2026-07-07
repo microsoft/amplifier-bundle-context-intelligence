@@ -147,7 +147,11 @@ Forwarding warnings map to precise causes. See
 (degraded/retrying, `az login` token-unavailable, and the sustained-401 circuit breaker),
 and [`docs/remote-server-troubleshooting.md`](docs/remote-server-troubleshooting.md) for
 remote / Azure-deployed servers (APIM, Entra, tuning, the auth probe cookbook, and
-recovering undelivered events).
+recovering undelivered events). When a session runs **inside a DTU / Incus container** and
+can't reach the server at all, see
+[`docs/container-dns-troubleshooting.md`](docs/container-dns-troubleshooting.md) for the
+container-networking layer (the `localhost`→gateway rewrite and the tailnet-name / MagicDNS
+LAN floor).
 
 ---
 

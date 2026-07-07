@@ -7,7 +7,10 @@ state machine and [Server dispatch](../README.md#server-dispatch) in the README)
 
 For **remote / Azure-deployed** servers (APIM, Entra, cross-region tuning, the auth probe
 cookbook, and recovering undelivered events), see
-[`remote-server-troubleshooting.md`](remote-server-troubleshooting.md).
+[`remote-server-troubleshooting.md`](remote-server-troubleshooting.md). If the session runs
+**inside a DTU / Incus container** and can't reach the server at all (name won't resolve, or
+resolves only via a flaky MagicDNS path), that's the container-networking layer — see
+[`container-dns-troubleshooting.md`](container-dns-troubleshooting.md).
 
 ---
 
