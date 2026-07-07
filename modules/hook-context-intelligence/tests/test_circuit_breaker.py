@@ -79,6 +79,29 @@ async def _drain(d: _DestinationDispatcher, events: list[str], timeout: float = 
     await asyncio.wait_for(d._queue.join(), timeout=timeout)
 
 
+class _FakeClock:
+    """Deterministic stand-in for the ``time`` module inside ``logging_handler``.
+
+    ``logging_handler`` only ever calls ``time.monotonic()`` (verified by
+    grepping the module) so this is the entire surface that needs faking.
+    It is installed via ``monkeypatch.setattr(logging_handler, "time", ...)``,
+    which rebinds ONLY the ``time`` name in ``logging_handler``'s own module
+    namespace -- it does not touch the real stdlib ``time`` module object,
+    so asyncio's internal clock (which holds its own independent reference
+    to the genuine module) is completely unaffected. Advancing this clock
+    therefore cannot desynchronize ``asyncio.wait_for`` / queue timeouts.
+    """
+
+    def __init__(self, start: float = 0.0) -> None:
+        self._now = start
+
+    def monotonic(self) -> float:
+        return self._now
+
+    def advance(self, seconds: float) -> None:
+        self._now += seconds
+
+
 class _FakeResolver:
     """Minimal resolver for LoggingHandler (mirrors test_logging_handler_fanout.py)."""
 
@@ -431,3 +454,107 @@ class TestEventsJsonlDurabilityIndependentOfBreaker:
         # enqueue is still called -- the breaker gate lives in the worker, not
         # in enqueue/fan-out.
         mock_d.enqueue.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# 11. D3 regression: real production floor, rate-over-window at the wall clock
+# ---------------------------------------------------------------------------
+#
+# Every test above monkeypatches _BREAKER_MIN_OPEN_SECONDS to 0.0 (or a tiny
+# value) to keep the suite fast -- which means none of them exercise the
+# wall-clock sustain gate against the REAL production floor (30.0s) combined
+# with an interleaved (non-streak) failing stream. That combination is
+# exactly where D3 lived:
+#
+#   _breaker_record_delivered() used to set ``self._first_hard_ts = None``
+#   UNCONDITIONALLY on every DELIVERED outcome. ``_first_hard_ts`` is the
+#   start of the sustained-failure clock that ``_maybe_open_breaker``'s
+#   wall-clock gate checks. A destination that is ~90% failing but whose
+#   successes arrive more often than every 30s would have its sustain clock
+#   wiped by every success -- so it could NEVER accumulate a continuous 30s
+#   failing run, and the breaker would never open in production. This
+#   directly contradicts the design's promise: "rate-over-a-window (not a
+#   streak); a lone 200 no longer resets a half-broken destination."
+#
+# This test pins the fix by holding the floor at its real value and mocking
+# the clock instead (so time can be advanced deterministically without a
+# real 30-second sleep).
+
+
+class TestD3RateOverWindowAtRealFloor:
+    async def test_interleaved_90pct_failing_opens_only_after_real_30s_floor(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Interleaved ~90%-failing stream ([401]*9 + [200], repeated) against
+        the REAL production ``_BREAKER_MIN_OPEN_SECONDS`` (30.0, NOT
+        monkeypatched) with a mocked clock.
+
+        Math (period 10, window maxlen 20 -- see ``_BREAKER_WINDOW`` /
+        ``_BREAKER_MIN_SAMPLES`` / ``_BREAKER_HARD_RATIO`` asserted below):
+
+        - The window enters the failing regime (ratio >= 0.9, samples >= 10)
+          at event #10 (9 hard + 1 delivered => ratio exactly 0.9). Because
+          20 is an exact multiple of the 10-event period, ANY full window
+          thereafter contains exactly 18 hard / 2 delivered -- ratio pinned
+          at 0.9 forever. The regime, once entered, never exits.
+        - Clock advances 1.0s per event, so the regime is entered at
+          t=10s. The sustain gate requires (now - first_hard_ts) >= 30s, so
+          it must NOT open until t=40s, and only a HARD outcome re-checks
+          the gate (delivered outcomes never call ``_maybe_open_breaker``) --
+          the next hard outcome after t=40s is event #41 (t=41s, delta=31s).
+
+        Pre-fix trace (why this test FAILS on the buggy code): the old
+        ``_breaker_record_delivered`` set ``_first_hard_ts = None``
+        unconditionally on every delivered outcome -- i.e. every 10th event
+        (t=10, 20, 30, 40, ...). Each reset is immediately followed by a
+        fresh ``_first_hard_ts`` on the very next hard outcome (1s later),
+        so the clock is alive for at most ~9 continuous seconds before being
+        wiped again -- it can never reach the 30s floor. The breaker would
+        stay CLOSED forever on this exact stream, even after hundreds of
+        events -- confirmed by running this scenario against the pre-fix
+        ``_breaker_record_delivered`` (unconditional ``self._first_hard_ts =
+        None``): ``d._breaker_open`` remained ``False`` through 60 events.
+        Post-fix, it opens at event #41 as computed above.
+        """
+        # Real production values -- deliberately NOT monkeypatched to 0.
+        assert logging_handler._BREAKER_MIN_OPEN_SECONDS == 30.0
+        assert logging_handler._BREAKER_WINDOW == 20
+        assert logging_handler._BREAKER_MIN_SAMPLES == 10
+        assert logging_handler._BREAKER_HARD_RATIO == 0.9
+
+        clock = _FakeClock(start=0.0)
+        monkeypatch.setattr(logging_handler, "time", clock)
+
+        d = _dispatcher()
+        d._sleep_backoff = AsyncMock()  # type: ignore[method-assign]
+
+        cycle = [401] * 9 + [200]  # 9 hard, 1 delivered -- period 10
+        total_events = 41
+        statuses = (cycle * ((total_events // len(cycle)) + 1))[:total_events]
+        d._client = _mock_client([_make_response(s) for s in statuses])
+
+        with patch(LOGGER_PATH):
+            # Events 1..39: clock reaches t=39s (delta=29s since regime
+            # entry at t=10s) -- must NOT open, despite the sustained ~90%
+            # hard ratio and successes arriving every ~10s.
+            for i in range(39):
+                clock.advance(1.0)
+                await _drain(d, [f"e{i}"])
+
+            assert d._breaker_open is False, (
+                "must not open before 30s of sustained failing-regime time"
+                " has elapsed, even with the real production floor and"
+                " interleaved successes every ~10s"
+            )
+
+            # Events 40-41: t=40s (delivered -- no open check performed) then
+            # t=41s (hard -- delta=31s since regime entry >= 30s => opens).
+            for i in range(39, 41):
+                clock.advance(1.0)
+                await _drain(d, [f"e{i}"])
+
+        assert d._breaker_open is True, (
+            "a real 30s sustained failing-regime must open the breaker even"
+            " though ~10%% of the stream is interleaved successes"
+        )
+        await d.close()
