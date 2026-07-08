@@ -165,7 +165,7 @@ async def _apply_offline_skill_bodies(coordinator: object, tool: object) -> None
         )
         return
 
-    server_url, _api_key, _workspace = tool._resolve_server_config(coordinator)  # type: ignore[attr-defined]
+    server_url, _api_key, _workspace, _auth_strategy = tool._resolve_server_config(coordinator)  # type: ignore[attr-defined]
     server_configured = bool(server_url)
 
     for skill_name in WATCHED_SKILLS:
@@ -305,7 +305,9 @@ async def _resync_all_watched(coordinator: object) -> None:
         skill_path = Path(meta.path)
 
         if tool is not None:
-            server_url, api_key, _workspace = tool._resolve_server_config(coordinator)
+            server_url, api_key, _workspace, _auth_strategy = tool._resolve_server_config(
+                coordinator
+            )
         else:
             server_url, api_key = None, None
 
