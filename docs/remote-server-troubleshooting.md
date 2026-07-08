@@ -151,8 +151,9 @@ dispatch outcome and retried with the same capped backoff.
 
 | Situation | Use |
 |-----------|-----|
-| Non-interactive: CI/CD pipeline or a cloud-hosted service that cannot run `az login` | `auth_mode: static` with an `api_key` |
-| Interactive developer against an Entra-protected server | `auth_mode: entra` + `auth_resource: api://<server-app-client-id>` (uses your `az login` identity) |
+| Interactive developer against an Entra-protected server | `auth_mode: entra` + `auth_resource: api://<server-app-client-id>` (`DefaultAzureCredential` falls through to your `az login` identity) |
+| Non-interactive app-to-app: a hosted service with a managed identity / workload identity / service principal | `auth_mode: entra` + `auth_resource: api://<server-app-client-id>`. The hosted identity must hold an **application** app-role (e.g. `Contributor`) on the server's App Registration. `DefaultAzureCredential` picks up the ambient credential — no `az login` needed. |
+| A host with no Azure identity at all (e.g. a locked-down CI runner) | `auth_mode: static` with an `api_key` |
 
 A misconfigured target fails loud at mount (naming the offending target): `entra` with an
 empty `auth_resource`, or `static` with an empty `api_key` — evaluated **after** `${VAR}`

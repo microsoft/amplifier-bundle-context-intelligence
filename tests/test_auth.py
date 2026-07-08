@@ -283,3 +283,71 @@ class TestStaticModeNoAzureIdentityImport:
         monkeypatch.delitem(sys.modules, "azure", raising=False)
         monkeypatch.delitem(sys.modules, "azure.identity", raising=False)
         importlib.reload(auth_mod)
+
+
+# ---------------------------------------------------------------------------
+# Non-interactive credential seam (DefaultAzureCredential)
+# ---------------------------------------------------------------------------
+
+
+class TestNonInteractiveCredentialSeam:
+    """The lazy credential seam builds ``DefaultAzureCredential``.
+
+    ``DefaultAzureCredential`` walks azure-identity's own chain (env-var service
+    principal -> managed identity -> workload identity -> shared cache -> az CLI),
+    so the same ``auth_mode='entra'`` works BOTH interactively for a developer
+    (falls through to ``az login``) AND non-interactively for a hosted app like
+    Resolve (managed identity / workload identity) with no code change. That is
+    the whole point of app-to-app (M2M) auth: no human in the loop.
+    """
+
+    def _install_fake_azure_identity(
+        self, monkeypatch: pytest.MonkeyPatch, cred_attr: str
+    ) -> dict[str, Any]:
+        """Install a fake ``azure.identity`` exposing only *cred_attr*.
+
+        Returns a dict that records whether the fake credential was constructed.
+        Because the fake module exposes ONLY *cred_attr*, importing any other
+        credential name raises ImportError — which is exactly how we prove the
+        seam imports the intended symbol.
+        """
+        import types
+
+        constructed: dict[str, Any] = {"built": False}
+
+        class _FakeCred:
+            def __init__(self, *args: Any, **kwargs: Any) -> None:
+                constructed["built"] = True
+
+        fake_azure = types.ModuleType("azure")
+        fake_identity = types.ModuleType("azure.identity")
+        setattr(fake_identity, cred_attr, _FakeCred)
+        fake_azure.identity = fake_identity  # type: ignore[attr-defined]
+        monkeypatch.setitem(sys.modules, "azure", fake_azure)
+        monkeypatch.setitem(sys.modules, "azure.identity", fake_identity)
+        constructed["cls"] = _FakeCred
+        return constructed
+
+    def test_seam_constructs_default_azure_credential(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """_make_cli_credential() imports+builds DefaultAzureCredential (not AzureCliCredential)."""
+        from context_intelligence.auth import _make_cli_credential
+
+        constructed = self._install_fake_azure_identity(monkeypatch, "DefaultAzureCredential")
+        cred = _make_cli_credential()
+        assert isinstance(cred, constructed["cls"])
+        assert constructed["built"] is True
+
+    def test_seam_does_not_use_azure_cli_credential(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """If only AzureCliCredential is available, the seam FAILS.
+
+        This locks in the switch away from the interactive-only credential: a
+        fake azure.identity that exposes ONLY AzureCliCredential must make the
+        seam raise ImportError, proving it no longer imports that symbol.
+        """
+        from context_intelligence.auth import _make_cli_credential
+
+        self._install_fake_azure_identity(monkeypatch, "AzureCliCredential")
+        with pytest.raises(ImportError):
+            _make_cli_credential()

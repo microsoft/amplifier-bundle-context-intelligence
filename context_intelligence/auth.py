@@ -11,13 +11,20 @@ Design notes
 ------------
 - ``AuthStrategy`` is a typing.Protocol — any object with ``headers() -> dict[str, str]``
   satisfies it without inheritance.
-- ``build_auth_strategy`` imports ``AzureCliCredential`` LAZILY (inside the entra branch)
-  so static-mode callers never need ``azure-identity`` installed.
-- CACHING: ``AzureCliCredential`` has NO in-process token cache — every ``get_token()``
-  call shells out to ``az`` (~487–553 ms, measured).  This module caches the returned
-  ``AccessToken`` until ``expires_on − _SAFETY_MARGIN_S`` so the ``az`` subprocess runs
-  at most once per token lifetime (~67 min) rather than on every request.
-- SINGLETON: A single ``AzureCliCredential`` instance is shared across all in-process
+- ``build_auth_strategy`` imports ``DefaultAzureCredential`` LAZILY (inside the entra
+  branch) so static-mode callers never need ``azure-identity`` installed.
+- NON-INTERACTIVE BY DEFAULT: the entra path uses ``DefaultAzureCredential``, which walks
+  azure-identity's own chain (env-var service principal -> managed identity -> workload
+  identity/federated OIDC -> shared cache -> ``az login``).  The SAME ``auth_mode='entra'``
+  therefore works interactively for a developer (falls through to ``az login``, yields a
+  delegated *user* token) AND non-interactively for a hosted app such as Resolve (managed
+  identity / workload identity, yields an app-only *service* token with the ``roles``
+  claim).  No separate mode is needed — the server's dual user/service path accepts either.
+- CACHING: credentials in the chain may perform a network call or subprocess per
+  ``get_token()`` (e.g. the ``az`` CLI shells out, ~487–553 ms measured).  This module
+  caches the returned ``AccessToken`` until ``expires_on − _SAFETY_MARGIN_S`` so
+  acquisition runs at most once per token lifetime (~67 min) rather than per request.
+- SINGLETON: A single ``DefaultAzureCredential`` instance is shared across all in-process
   sessions via ``_get_singleton_credential()``.  ``build_auth_strategy``/mount performs
   ~zero expensive work: no credential construction, no token acquisition.
 - CONCURRENCY: the refresh path serialises via a ``threading.Lock``.  The hot path is
@@ -191,10 +198,11 @@ class EntraTokenAuth:
 
     CACHING RATIONALE
     -----------------
-    ``AzureCliCredential`` has no in-process cache — every ``get_token()`` call shells
-    out to ``az`` (~487–553 ms, measured).  This class caches the ``AccessToken`` until
-    ``expires_on − _SAFETY_MARGIN_S`` so the ``az`` subprocess runs at most once per
-    token lifetime (~67 min).
+    A credential's ``get_token()`` may perform a network call or subprocess per
+    invocation (e.g. ``DefaultAzureCredential`` falling through to the ``az`` CLI shells
+    out ~487–553 ms; a managed-identity probe is an IMDS round-trip).  This class caches
+    the ``AccessToken`` until ``expires_on − _SAFETY_MARGIN_S`` so acquisition runs at
+    most once per token lifetime (~67 min).
 
     HOT PATH (cache hit)
     --------------------
@@ -230,7 +238,7 @@ class EntraTokenAuth:
         Parameters
         ----------
         credential:
-            Any azure-identity ``TokenCredential`` (e.g. ``AzureCliCredential``).
+            Any azure-identity ``TokenCredential`` (e.g. ``DefaultAzureCredential``).
         resource:
             The Entra resource URI (e.g. ``api://<client_id>``).  The scope
             ``<resource>/.default`` is passed to ``get_token()``.
@@ -312,19 +320,35 @@ def reset() -> None:
 
 
 def _make_cli_credential() -> Any:
-    """Lazily import and instantiate ``AzureCliCredential``.
+    """Lazily import and instantiate ``DefaultAzureCredential``.
 
-    Isolated in its own function so unit tests can patch
-    ``context_intelligence.auth._make_cli_credential`` without requiring the
-    ``azure-identity`` package at import time.
+    ``DefaultAzureCredential`` walks azure-identity's own credential chain:
+    environment-variable service principal -> managed identity -> workload
+    identity (federated OIDC) -> shared token cache -> Azure CLI (``az login``)
+    -> etc.  This single credential therefore serves BOTH:
+
+    - **interactive/dev use** \u2014 falls through to the developer's ``az login``
+      session and yields a *delegated* (user) token; and
+    - **non-interactive app-to-app (M2M) use** \u2014 a hosted app such as Resolve,
+      running with a managed identity / workload identity / env-var service
+      principal, yields an *app-only* token carrying the ``roles`` claim.
+
+    The server accepts either shape (its dual user/service path keys on the
+    presence of ``scp``), so the SAME ``auth_mode='entra'`` works hosted or
+    local with no code change \u2014 which is the whole point of this credential.
+
+    The function name ``_make_cli_credential`` is retained (rather than renamed)
+    because it is the stable seam that hook/query/upload unit tests patch to
+    inject a fake ``TokenCredential`` without requiring ``azure-identity`` at
+    import time.  The name is historical; the behaviour is DefaultAzureCredential.
     """
-    from azure.identity import AzureCliCredential  # noqa: PLC0415
+    from azure.identity import DefaultAzureCredential  # noqa: PLC0415
 
-    return AzureCliCredential()
+    return DefaultAzureCredential()
 
 
 def _get_singleton_credential() -> Any:
-    """Return the process-level singleton ``AzureCliCredential``, creating it once.
+    """Return the process-level singleton ``DefaultAzureCredential``, creating it once.
 
     All in-process sessions and subsessions share this single instance so that
     ``build_auth_strategy()`` (the mount equivalent) performs ~zero work: no new
@@ -354,7 +378,10 @@ def build_auth_strategy(
     ----------
     auth_mode:
         ``"static"`` — use a pre-issued API key.
-        ``"entra"``  — acquire a delegated token via ``az login`` (V1: AzureCliCredential).
+        ``"entra"``  — acquire an Entra token via ``DefaultAzureCredential``.  Works
+        both interactively (developer's ``az login`` → delegated *user* token) and
+        non-interactively (hosted app's managed identity / workload identity →
+        app-only *service* token with ``roles``) with no mode change.
     api_key:
         Required when ``auth_mode == "static"``.
     auth_resource:
@@ -363,7 +390,7 @@ def build_auth_strategy(
         Optional pre-built ``TokenCredential``.
 
         - When ``None`` and ``auth_mode == "entra"``: the process-level singleton
-          ``AzureCliCredential`` is used (one instance shared by all sessions; this
+          ``DefaultAzureCredential`` is used (one instance shared by all sessions; this
           call performs ~zero expensive work) and the module-level ``_MODULE_CACHE``
           is shared across all callers — this is the production path.
         - When non-``None`` (e.g. a fake in tests): the injected credential is used

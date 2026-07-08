@@ -3,7 +3,7 @@
 //
 // Shows the complete per-request auth path for hook dispatch (LoggingHandler)
 // and tool queries.  The in-process _TokenCache is the design pivot: it makes
-// AzureCliCredential (~487–913 ms az subprocess) a ≤-once-per-67-min cost
+// DefaultAzureCredential chain (managed identity / workload id / az CLI); token cached ≤-once-per-67-min
 // rather than a per-request cost.
 //
 // Shape vocabulary
@@ -99,7 +99,7 @@ digraph AuthFlow {
             fontname="Helvetica Bold";
 
             singleton_cred [
-                label="AzureCliCredential  (SINGLETON)\n─────────────────────────────────\n_get_singleton_credential()\nOne instance per process.\nNO token acquired at mount / strategy build.",
+                label="DefaultAzureCredential (SINGLETON)\n─────────────────────────────────\n_get_singleton_credential()\nOne instance per process.\nNO token acquired at mount / strategy build.",
                 shape=box, style="rounded,filled", penwidth=1.5,
                 fillcolor="#B39DDB", color="#4527A0"
             ];
@@ -204,17 +204,17 @@ digraph AuthFlow {
         node [shape=box, style="rounded,filled", penwidth=1.5];
 
         ci_server [
-            label="CI server  validates  bearer\n─────────────────────────────────\nchecks  scp  =  access_as_user\n(delegated  flow  only)",
+            label="CI server  validates  bearer\n─────────────────────────────────\ndual path: scp present -> user;\nscp absent -> service (roles claim)",
             fillcolor="#B2EBF2", color="#00838F"
         ];
 
         resp_ok [
-            label="202  (write)  /  200  (read)\n─────────────────────────────────\nscp = access_as_user  ✓\ndelegated  token  accepted",
+            label="202  (write)  /  200  (read)\n─────────────────────────────────\nuser: scp=access_as_user  ✓\nservice: roles has Contributor/Reader  ✓",
             fillcolor="#E8F5E9", color="#2E7D32"
         ];
 
         resp_401 [
-            label="401  Unauthorized\n─────────────────────────────────\napp / roles  token  rejected\n(not a delegated scp= token)",
+            label="401  Unauthorized\n─────────────────────────────────\ninvalid token: bad signature / aud /\niss, or ambiguous scp+idtyp=app",
             fillcolor="#FFEBEE", color="#C62828"
         ];
 
