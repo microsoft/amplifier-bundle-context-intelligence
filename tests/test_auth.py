@@ -41,13 +41,54 @@ class TestApiKeyAuth:
         assert isinstance(result, dict)
         assert all(isinstance(k, str) and isinstance(v, str) for k, v in result.items())
 
-    def test_empty_key_still_works(self) -> None:
-        """ApiKeyAuth with empty string returns Bearer with empty token (guard is in builder)."""
+    def test_empty_key_raises(self) -> None:
+        """ApiKeyAuth.headers() refuses to send an unusable (empty) key as a Bearer token.
+
+        This is the point-of-use guard (defense in depth alongside the
+        build_auth_strategy() builder guard): a redacted/unexpanded/empty
+        api_key must never reach the wire as ``Bearer <value>``.
+        """
         from context_intelligence.auth import ApiKeyAuth
 
         auth = ApiKeyAuth("")
-        result = auth.headers()
-        assert result == {"Authorization": "Bearer "}
+        with pytest.raises(ValueError, match="unusable"):
+            auth.headers()
+
+    def test_redacted_sentinel_key_raises(self) -> None:
+        """ApiKeyAuth.headers() refuses the '[REDACTED]' sentinel value.
+
+        A resumed sub-session can mount its config from a persisted,
+        redacted metadata.json snapshot (amplifier-core's redact_secrets()),
+        landing the literal string "[REDACTED]" where a real key belongs.
+        """
+        from context_intelligence.auth import ApiKeyAuth
+
+        auth = ApiKeyAuth("[REDACTED]")
+        with pytest.raises(ValueError, match="unusable"):
+            auth.headers()
+
+    def test_unexpanded_placeholder_key_raises(self) -> None:
+        """ApiKeyAuth.headers() refuses an unexpanded ${VAR} placeholder."""
+        from context_intelligence.auth import ApiKeyAuth
+
+        auth = ApiKeyAuth("${AMPLIFIER_CONTEXT_INTELLIGENCE_API_KEY}")
+        with pytest.raises(ValueError, match="unusable"):
+            auth.headers()
+
+    def test_unusable_key_warns_once_not_per_call(self, caplog: pytest.LogCaptureFixture) -> None:
+        """The unusable-key WARNING is logged once per instance, not once per call."""
+        import logging
+
+        from context_intelligence.auth import ApiKeyAuth
+
+        auth = ApiKeyAuth("[REDACTED]")
+        with caplog.at_level(logging.WARNING, logger="context_intelligence.auth"):
+            for _ in range(3):
+                with pytest.raises(ValueError):
+                    auth.headers()
+
+        warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+        assert len(warnings) == 1
 
 
 # ---------------------------------------------------------------------------

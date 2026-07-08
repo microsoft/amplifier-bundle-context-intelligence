@@ -23,7 +23,25 @@ class TestValidateDestinations:
 
     def test_missing_api_key_raises_value_error(self) -> None:
         r = _resolver({"destinations": {"broken": {"url": "http://x:8000", "api_key": ""}}})
-        with pytest.raises(ValueError, match="broken.*missing api_key"):
+        with pytest.raises(ValueError, match="broken.*api_key is unusable"):
+            r.validate_destinations()
+
+    def test_redacted_sentinel_api_key_raises_value_error(self) -> None:
+        """A '[REDACTED]' api_key (e.g. mounted from a resumed session's persisted,
+        redacted metadata.json) is treated the same as a missing key: dispatch
+        disabled for that destination, named in the error."""
+        r = _resolver(
+            {"destinations": {"broken": {"url": "http://x:8000", "api_key": "[REDACTED]"}}}
+        )
+        with pytest.raises(ValueError, match="broken.*api_key is unusable"):
+            r.validate_destinations()
+
+    def test_unexpanded_placeholder_api_key_raises_value_error(self) -> None:
+        """An unexpanded ${VAR} api_key placeholder is treated as unusable."""
+        r = _resolver(
+            {"destinations": {"broken": {"url": "http://x:8000", "api_key": "${SOME_VAR}"}}}
+        )
+        with pytest.raises(ValueError, match="broken.*api_key is unusable"):
             r.validate_destinations()
 
     def test_both_missing_raises_with_both_listed(self) -> None:
@@ -32,7 +50,7 @@ class TestValidateDestinations:
             r.validate_destinations()
         msg = str(exc_info.value)
         assert "missing url" in msg
-        assert "missing api_key" in msg
+        assert "api_key is unusable" in msg
 
     def test_legacy_url_missing_api_key_degrades_to_local_only(self) -> None:
         """Legacy url WITHOUT api_key must NOT raise — it degrades to local-only.

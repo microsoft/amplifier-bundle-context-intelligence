@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from context_intelligence.auth import is_unusable_secret
 from context_intelligence.reconstruct.discover import workspace_slug
 
 log = logging.getLogger(__name__)
@@ -707,11 +708,14 @@ class HookConfigResolver:
         dests = self.destinations
         problems: list[str] = []
         for name, dest in dests.items():
-            if not dest.url:
+            if is_unusable_secret(dest.url):
                 problems.append(f"{name}: missing url")
             if dest.auth_mode == "static":
-                if not dest.api_key:
-                    problems.append(f"{name}: missing api_key")
+                if is_unusable_secret(dest.api_key):
+                    problems.append(
+                        f"{name}: api_key is unusable (redacted/unexpanded/empty) "
+                        f"\u2014 dispatch disabled, local JSONL only"
+                    )
             elif dest.auth_mode == "entra":
                 if not dest.auth_resource:
                     problems.append(f"{name}: missing auth_resource (required for auth_mode=entra)")

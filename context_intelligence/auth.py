@@ -32,10 +32,14 @@ Design notes
 
 from __future__ import annotations
 
+import logging
 import os
+import re
 import threading
 import time
 from typing import Any, Protocol
+
+log = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -48,6 +52,43 @@ try:
     )
 except ValueError:
     _SAFETY_MARGIN_S = 300.0
+
+# ---------------------------------------------------------------------------
+# Credential/URL usability guard
+# ---------------------------------------------------------------------------
+
+_UNEXPANDED_ENV = re.compile(r"^\$\{.*\}$")
+
+
+def is_unusable_secret(value: str | None) -> bool:
+    """True if *value* is unusable as a credential or URL.
+
+    Three distinct failure modes all look like "a string is present" but are
+    not actually usable:
+
+    - ``None`` or empty/whitespace-only \u2014 never configured.
+    - the literal sentinel ``"[REDACTED]"`` \u2014 amplifier-core's
+      ``redact_secrets()`` overwrites sensitive config keys with this string
+      when persisting session metadata to disk. A *resumed* sub-session can
+      mount its config from that persisted, redacted snapshot rather than the
+      live in-memory config, so a resumed session can end up with the literal
+      string ``"[REDACTED]"`` where a real key/url belongs.
+    - an unexpanded ``${VAR}`` placeholder \u2014 the app layer is responsible
+      for expanding ``${VAR}`` before mount; if that didn't happen, the
+      literal placeholder text must never be sent as a credential or used as
+      a URL.
+    """
+    if value is None:
+        return True
+    v = value.strip()
+    if not v:
+        return True
+    if v == "[REDACTED]":  # amplifier-core redact_secrets() sentinel
+        return True
+    if _UNEXPANDED_ENV.match(v):
+        return True
+    return False
+
 
 # ---------------------------------------------------------------------------
 # Protocol
@@ -72,8 +113,43 @@ class ApiKeyAuth:
 
     def __init__(self, api_key: str) -> None:
         self._api_key = api_key
+        self._warned_unusable = False
 
     def headers(self) -> dict[str, str]:
+        if is_unusable_secret(self._api_key):
+            # Ground-truth, point-of-use guard: the last line of defense before
+            # an unusable value (redaction sentinel, unexpanded ${VAR}, or an
+            # empty string) would be sent as a Bearer token. build_auth_strategy()
+            # already rejects an unusable api_key at construction time, but this
+            # instance may have been built earlier (before a config was
+            # re-mounted/redacted) or constructed directly -- so this is the
+            # definitive, wire-adjacent check.
+            #
+            # Warn ONCE per instance (not per-request/per-retry) so a
+            # long-lived dispatcher calling headers() on every POST doesn't
+            # spam the log. Never log the value itself.
+            if not self._warned_unusable:
+                self._warned_unusable = True
+                log.warning(
+                    "context-intelligence: refusing to send an unusable API key "
+                    "(empty/redacted/unexpanded) as a Bearer token -- the mounted "
+                    "credential is not a real key (likely a resumed session "
+                    "mounting redacted on-disk config). Dispatch is disabled for "
+                    "this destination; events remain durable in local JSONL."
+                )
+            # Raise the SAME exception type build_auth_strategy() raises for an
+            # unusable static api_key. _DestinationDispatcher._post() already
+            # catches broad exceptions from strategy.headers() and treats them
+            # as a deterministic ("hard") auth fault -- see logging_handler.py's
+            # _post(): the request is never sent, _auth_token_failed is marked,
+            # and the caller retries with backoff instead of hammering the
+            # server with a request that is guaranteed to be rejected. Reusing
+            # that existing path avoids adding a new one.
+            raise ValueError(
+                "ApiKeyAuth: api_key is unusable (empty, the '[REDACTED]' "
+                "sentinel, or an unexpanded ${VAR} placeholder) -- refusing to "
+                "send it as a Bearer token."
+            )
         return {"Authorization": f"Bearer {self._api_key}"}
 
 
@@ -301,9 +377,10 @@ def build_auth_strategy(
         *auth_resource* (entra).  **No silent fallbacks.**
     """
     if auth_mode == "static":
-        if not api_key.strip():
+        if is_unusable_secret(api_key):
             raise ValueError(
-                "auth_mode=static requires a non-empty api_key. "
+                "auth_mode=static requires a usable api_key (got empty, the "
+                "'[REDACTED]' sentinel, or an unexpanded ${VAR} placeholder). "
                 "Pass --api-key or set AMPLIFIER_CONTEXT_INTELLIGENCE_API_KEY."
             )
         return ApiKeyAuth(api_key)
