@@ -320,7 +320,7 @@ Each **target** chooses its authentication mode **independently** — every hook
 | Mode | Selected by | Credential |
 |------|-------------|------------|
 | **`static`** | `auth_mode: static` — the **default**, unchanged | the target's `api_key`, sent as `Authorization: Bearer <api_key>` |
-| **`entra`** | `auth_mode: entra` | a Microsoft Entra bearer token from your developer `az login` session, requested for the audience named by `auth_resource` |
+| **`entra`** | `auth_mode: entra` | a Microsoft Entra bearer token via `DefaultAzureCredential`, requested for the audience named by `auth_resource`. Works both interactively (developer `az login`) and non-interactively (managed identity / workload identity / service principal) with no config change |
 
 Two new per-target keys (valid on both `destinations` entries and `sources` entries):
 
@@ -358,11 +358,11 @@ overrides:
 
 **Fail-loud.** A misconfigured target is a **mount error** (fail-fast, naming the offending target): `entra` with an empty `auth_resource`, or `static` with an empty `api_key` — evaluated after `${VAR}` expansion. The hook never silently sends an empty or blank bearer.
 
-> **Scope of Entra mode in this version.** Entra mode provides **parity with your existing `az login` identity** — it uses your developer `az login` session to obtain the bearer token. It is the **interactive-login** path, not a full enterprise non-interactive auth system.
+> **Entra mode works both interactively and non-interactively.** It acquires the bearer token via azure-identity's `DefaultAzureCredential`, which walks a credential chain: environment-variable service principal → managed identity → workload identity (federated OIDC) → shared token cache → `az login`. So the **same** `auth_mode: entra` serves a developer (falls through to `az login`, yielding a *delegated user* token) **and** a hosted app such as Resolve (managed identity / workload identity, yielding an *app-only service* token with a `roles` claim) — with no config change.
 >
-> **Non-interactive environments are not yet served by Entra mode.** CI/CD pipelines and cloud-hosted services that cannot run `az login` should use a static `api_key` for now — if you are a pipeline author, reach for `auth_mode: static` to avoid surprises. Non-interactive credential support (managed identity / OIDC / service principal) is a planned follow-up.
+> **Non-interactive (app-to-app / M2M) prerequisite.** A hosted identity must be granted an **application** app-role (e.g. `Contributor` for write, `Reader` for read) on the server's Entra App Registration — the server authorizes app-only tokens on the `roles` claim. Ensure the runtime environment exposes a non-interactive credential `DefaultAzureCredential` can find (managed identity, workload identity, or `AZURE_*` env vars). CI/CD or hosts that have *no* Azure identity at all can still use a static `api_key`.
 >
-> **Server-side prerequisite.** Entra mode requires the **server** to be configured to validate Entra tokens. Against a server that only accepts static keys, use `auth_mode: static`.
+> **Server-side prerequisite.** Entra mode requires the **server** to be configured to validate Entra tokens (`auth_mode=entra`). Against a server that only accepts static keys, use `auth_mode: static`.
 
 #### Token caching & refresh (Entra)
 

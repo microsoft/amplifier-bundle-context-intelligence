@@ -358,7 +358,8 @@ def _build_parser() -> argparse.ArgumentParser:
         dest="auth_mode",
         help=(
             "Authentication mode: 'static' (default) uses --api-key; "
-            "'entra' acquires a delegated token via 'az login' (AzureCliCredential)."
+            "'entra' acquires an Entra token via DefaultAzureCredential (managed "
+            "identity / workload identity / service principal / 'az login')."
         ),
     )
     parser.add_argument(

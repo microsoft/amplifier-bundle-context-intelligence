@@ -105,9 +105,9 @@ context-intelligence-upload --server-url https://ci.example.com \
   --auth-mode entra --auth-resource api://<server-app-client-id>
 ```
 
-> **Scope of Entra mode in this version.** Entra mode provides **parity with your existing `az login` identity** — it uses your developer `az login` session to obtain the bearer token. It is the **interactive-login** path, not a full enterprise non-interactive auth system.
+> **Entra mode works both interactively and non-interactively.** It acquires the bearer token via `DefaultAzureCredential`, which walks a credential chain (env-var service principal → managed identity → workload identity → shared cache → `az login`). The same `--auth-mode entra` therefore works for a developer (`az login`) and for a hosted/service caller (managed identity / workload identity / service principal) with no flag change.
 >
-> **Non-interactive environments are not yet served by Entra mode.** CI/CD pipelines and cloud-hosted services that cannot run `az login` should keep using a static `--api-key` for now — if you are scripting this in a pipeline, use `--auth-mode static` to avoid surprises. Non-interactive credential support (managed identity / OIDC / service principal) is a planned follow-up.
+> **Non-interactive (app-to-app) prerequisite.** The hosted identity must be granted an **application** app-role (e.g. `Contributor`) on the server's Entra App Registration, and the environment must expose a credential `DefaultAzureCredential` can find. A host with *no* Azure identity at all can still use a static `--api-key`.
 >
 > **Server-side prerequisite.** Entra mode requires the **server** to be configured to validate Entra tokens. Against a server that only accepts static keys, use `--auth-mode static`.
 
