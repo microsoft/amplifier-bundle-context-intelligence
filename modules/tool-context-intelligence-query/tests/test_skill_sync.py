@@ -154,7 +154,7 @@ class TestSyncSkill:
 
 def _make_tool(server_url: str, api_key: str = "k", workspace: str = "ws") -> MagicMock:
     tool = MagicMock()
-    tool._resolve_server_config = MagicMock(return_value=(server_url, api_key, workspace))
+    tool._resolve_server_config = MagicMock(return_value=(server_url, api_key, workspace, None))
     return tool
 
 
