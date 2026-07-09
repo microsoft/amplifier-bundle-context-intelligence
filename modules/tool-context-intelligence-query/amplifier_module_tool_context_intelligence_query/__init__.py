@@ -11,10 +11,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from .skill_sync import _GRAPH_QUERY_TOOL_CAPABILITY, on_session_ready
-
 __amplifier_module_type__ = "tool"
-__all__ = ["mount", "on_session_ready"]
+__all__ = ["mount"]
 
 
 async def mount(coordinator: Any, config: Any) -> None:
@@ -27,11 +25,8 @@ async def mount(coordinator: Any, config: Any) -> None:
     The hook resolver is NOT fetched here; each tool fetches it lazily at
     first execute() because tools mount before hooks (kernel phase order is
     orchestrator → context → providers → tools → hooks — CONTRACTS.md §Module
-    Lifecycle Methods).  on_session_ready() IS now used, SAFELY, via the
-    module-level callback + capability indirection: it holds no cross-callback
-    instance reference because it re-fetches the GraphQueryTool from the
-    coordinator at call time (via get_capability).  The execute-time lazy
-    hook-resolver fetch remains untouched.
+    Lifecycle Methods).  The execute-time lazy hook-resolver fetch remains
+    untouched.
     """
     from context_intelligence.tool_resolver import ToolConfigResolver
 
@@ -41,7 +36,6 @@ async def mount(coordinator: Any, config: Any) -> None:
     resolver = ToolConfigResolver(config or {}, coordinator)  # built ONCE
     resolver.validate_sources()  # fail-loud on misconfigured sources (mirrors hook validate_destinations)
     gq = GraphQueryTool(coordinator, resolver)
-    coordinator.register_capability(_GRAPH_QUERY_TOOL_CAPABILITY, gq)
     br = BlobReadTool(coordinator, resolver)
     await coordinator.mount("tools", gq, name=gq.name)  # "graph_query"
     await coordinator.mount("tools", br, name=br.name)  # "blob_read"

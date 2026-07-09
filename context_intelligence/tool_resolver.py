@@ -424,34 +424,3 @@ class ToolConfigResolver:
                 f"overrides.tool-context-intelligence-query.config.sources.<name>."
             )
         return srcs
-
-    @property
-    def skill_sync_enabled(self) -> bool:
-        """Whether the analytics path syncs watched skills on session start.
-
-        Default ``False`` — opt-in; headless / single-command-series workflows
-        pay zero skill traffic per turn unless explicitly enabled.  Set to
-        ``true`` to restore the full per-session sync (``GET /version`` ping +
-        conditional skill fetch + ``skill:unloaded`` reload handler).
-
-        Resolution order (first *definite* value wins; empty / placeholder /
-        unrecognized values are treated as *absent* and fall through):
-        1. config['skill_sync_enabled']                       — mount() config dict
-        2. coordinator.config['skill_sync_enabled']           — app-level override
-        3. AMPLIFIER_CONTEXT_INTELLIGENCE_SKILL_SYNC_ENABLED   — env var
-        4. False                                              — default (opt-in)
-
-        Accepted string forms (case-insensitive): true/1/yes/on and
-        false/0/no/off.  An unexpanded YAML placeholder that resolves to an
-        empty string resolves to the default (``False``), never ``True`` — it
-        cannot silently enable sync for everyone.
-        """
-        for raw in (
-            _expand(self._config.get("skill_sync_enabled")),
-            _expand(self._coordinator_config_get("skill_sync_enabled")),
-            _env("SKILL_SYNC_ENABLED"),
-        ):
-            resolved = _coerce_bool(raw)
-            if resolved is not None:
-                return resolved
-        return False

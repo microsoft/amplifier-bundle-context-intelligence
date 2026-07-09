@@ -454,26 +454,13 @@ overrides:
 
 > **Most users configure nothing here.** A single hook `destinations` entry already powers both upload and query. `sources` exists only for the read-replica / split-endpoint case.
 
-#### Skill body sync — `skill_sync_enabled` (opt-in)
+#### Graph-query skill — vendored statically (no configuration)
 
-The `graph-analyst` agent uses a `context-intelligence-graph-query` skill that documents the Cypher patterns it issues. The bundle ships a **SHA-pinned vendored copy** of that skill body (`bundled_skill/context-intelligence-graph-query.md`, inside the `tool-context-intelligence-query` module), so the skill works fully offline with **zero network traffic** for skill acquisition. The optional `skill_sync_enabled` knob controls whether — at session start — the skill body is *refreshed from a Context Intelligence server* instead of using the vendored copy. It lives in the same namespace as `sources` (`overrides.tool-context-intelligence-query.config`).
+The `graph-analyst` agent uses a `context-intelligence-graph-query` skill that documents the Cypher patterns it issues. That skill is **vendored statically** in this repo at `skills/context-intelligence-graph-query/SKILL.md` (sourced from the [Context Intelligence Server](https://github.com/microsoft/amplifier-context-intelligence) repo's `main` branch). The bundle's behaviors deliver it at compose time — there is **no runtime skill fetching, syncing, or configuration knob**.
 
-| Key | Source | Default | Description |
-|-----|--------|---------|-------------|
-| `skill_sync_enabled` | tool config → `coordinator.config` → env `AMPLIFIER_CONTEXT_INTELLIGENCE_SKILL_SYNC_ENABLED` → default | **`false`** | When **`false`** (default): no skill network traffic at all. If a server source is resolved, the vendored offline body is swapped in (still zero network); if none is resolved, the shipped stub is retained. When **`true`** and a server source resolves: the skill body is version-gated and conditionally fetched from the server at session start (a `skill:unloaded` reload handler is also registered). When `true` but the server is offline, the agent degrades gracefully (no crash). |
+The vendored file carries its own leading **no-server guidance block**: when no graph server is configured for the session, the skill instructs the agent to delegate to `session-navigator` rather than attempt Cypher against an unreachable server.
 
-```yaml
-# ~/.amplifier/settings.yaml — opt IN to refreshing the graph-query skill body from the server.
-# Default is OFF: the bundled, SHA-pinned skill body is used and NO skill traffic occurs.
-overrides:
-  tool-context-intelligence-query:
-    config:
-      skill_sync_enabled: true        # default false — leave unset for the zero-network path
-```
-
-Skill sync resolves its server using the **same** `(server_url, api_key)` chain as the query tools above (`sources` → hook `destinations` → env). The vendored-body install **fails loud** if the on-disk body's SHA does not match the pin. See [`docs/context-intelligence-skill-sync-flow.png`](docs/context-intelligence-skill-sync-flow.png) for the full enabled/disabled decision flow.
-
-> **Telemetry hook does not fetch skills.** Skill acquisition belongs entirely to the query tool (above) and is opt-in. The `hook-context-intelligence` module is **pure telemetry** — event capture and `destinations` fan-out only — and performs no skill loading.
+> **Telemetry hook does not load skills.** The `hook-context-intelligence` module is **pure telemetry** — event capture and `destinations` fan-out only — and performs no skill loading.
 
 ---
 
@@ -650,21 +637,17 @@ amplifier-bundle-context-intelligence/
 │   └── jsonl-event-schema.md               ← events.jsonl schema contract
 ├── modules/
 │   ├── hook-context-intelligence/      ← the Python hook module — PURE TELEMETRY
-│   │                                     (no skill_fetcher.py / legacy_content/ — skills moved out)
-│   └── tool-context-intelligence-query/ ← graph_query + blob_read tools + opt-in skill sync
+│   └── tool-context-intelligence-query/ ← graph_query + blob_read tools
 │       └── amplifier_module_tool_context_intelligence_query/
-│           ├── graph_query_tool.py     ← skill_sync_enabled knob (default false)
-│           ├── skill_sync.py           ← on_session_ready orchestration (opt-in)
-│           ├── skill_fetcher.py        ← server version-gate + conditional fetch (only when enabled)
-│           └── bundled_skill/
-│               └── context-intelligence-graph-query.md  ← SHA-pinned vendored offline body
+│           ├── graph_query_tool.py     ← Cypher query tool
+│           └── blob_read_tool.py       ← ci-blob:// resolution tool
 ├── docs/
 │   ├── context-intelligence-exploration-guide.md   ← what to explore and how to test
-│   ├── context-intelligence-skill-sync-flow.dot    ← skill-sync enabled/disabled decision flow
+│   ├── SEAM-INVENTORY.md               ← integration-boundary reference (PERSIST vs ELIMINATED seams)
 │   ├── dispatch-circuit-breaker.dot    ← dispatch flow and circuit breaker state machine
 │   └── logging-handler-flow.dot        ← thin forwarder architecture
 ├── skills/
-│   ├── context-intelligence-graph-query/
+│   ├── context-intelligence-graph-query/  ← vendored statically (real body + no-server block)
 │   ├── context-intelligence-session-navigation/
 │   └── …                               ← additional graph/design skills
 └── tests/

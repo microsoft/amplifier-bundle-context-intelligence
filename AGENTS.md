@@ -51,6 +51,31 @@ is skipped (no `pip wheel` in the venv); the wheels build cleanly under `uv buil
 
 This bundle ships **layered, composable behaviours** — `context-intelligence-navigation` ⊂
 `-analysis` ⊂ `-design`, plus an orthogonal `-logging` (the telemetry hook only) and the umbrella
-`context-intelligence`. The telemetry hook is **pure telemetry** (it does not fetch skills); skill
-acquisition lives on `tool-context-intelligence-query` behind the `skill_sync_enabled` knob
-(**default `false`** — opt-in). See `docs/context-intelligence-skill-sync-flow.dot` and the README.
+`context-intelligence`. The telemetry hook is **pure telemetry** (it does not load skills). The
+`context-intelligence-graph-query` skill is **vendored statically** at
+`skills/context-intelligence-graph-query/SKILL.md` (sourced from the server repo's `main`) and
+carries its own leading no-server guidance block — there is **no runtime skill fetching, syncing,
+or configuration knob**. See the README.
+
+## Seam Awareness
+
+This bundle has **seams** — integration boundaries where one module's wiring touches the rest of
+the bundle (kernel lifecycle, config resolution, the skill↔server bridge, the served-skill↔loader
+delivery path). These seams have **regressed before** (e.g. issue #283), which is why they are
+documented rather than left implicit.
+
+**Before changing any tool / skill / config wiring, read [`docs/SEAM-INVENTORY.md`](docs/SEAM-INVENTORY.md).**
+It names each seam individually, what crosses it, and how to verify it.
+
+Two rules govern how you treat a seam:
+
+- **Know PERSIST vs ELIMINATED.** A **PERSIST** seam is part of the bundle's real function — you
+  must **cross it and test the real crossing** (not a stand-in). An **ELIMINATED** seam existed
+  only because of removed machinery (the old `skill_sync`) — it must **stay gone**; its removal was
+  proven **once** at cutover, and the standing guard against reintroduction is the residue grep,
+  **not** a permanent test asserting a deleted feature stays deleted (that is testing a ghost).
+- **Never trust a mock on a seam until it's reconciled to the real thing.** A double that records
+  what our code *calls* (outbound spy) is fine. A double that *fabricates the boundary's response*
+  (inbound fake — e.g. a mock server returning canned rows) is **not a gate** until it has been
+  compared against real behaviour and kept in sync. An unreconciled mock sitting on the very
+  boundary it claims to verify is banned.
