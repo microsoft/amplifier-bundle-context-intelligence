@@ -140,15 +140,28 @@ RETURN tc.tool_name, tc.result_success ORDER BY tc.started_at LIMIT 25
 
 ## Section 1: Graph-Powered Analysis
 
-### Load the Graph Query Skill
+### ⛔ MANDATORY FIRST STEP — Load your graph-navigation skills
 
-Before writing Cypher queries, load the patterns skill for examples:
+Make sure to use the right set of skills that let you navigate this graph storage
+**efficiently and correctly** — load them BEFORE you write or run a single `graph_query`.
+This is required, not "for examples."
+
+**Why this is not optional:** this graph's schema *shapes* (the labels and edges you get
+from `db.labels()`) do **not** reveal their *domain meaning*. Improvising Cypher from the
+raw schema produces confidently-wrong answers — for example, `HAS_SUBSESSION` looks like
+the delegation tree but is only a single hop (real lineage lives elsewhere). The
+graph-query skill is the authoritative source for this graph's schema semantics, the
+scoping levers, the query traps, blob handling, and verified Cypher patterns. If you write
+Cypher before loading it, STOP and load it.
+
+Your FIRST action on any graph task MUST be:
 
 ```
 Load skill: context-intelligence-graph-query
 ```
 
-For event type reference (all 41 canonical event types, payload structures, and safe extraction sizes), load:
+If the task touches raw event payloads, also load the event-type reference (canonical
+event types, payload structures, safe extraction sizes) before extracting:
 
 ```
 Load skill: context-intelligence-session-navigation
