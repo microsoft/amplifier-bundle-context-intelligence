@@ -151,6 +151,111 @@ class TestMountRegistersExactlyTwoTools:
 
 
 # ---------------------------------------------------------------------------
+# TestSeam1SkillSyncLifecycleCutover
+#
+# Seam 1 (docs/skill-sync-removal-plan.md §4.5): kernel <-> module lifecycle
+# via on_session_ready + the orphaned _GRAPH_QUERY_TOOL_CAPABILITY registration.
+# ELIMINATED seam — this is a cutover check (false-before/true-after), not a
+# standing test: it proves the seam is GONE after skill_sync's removal, then
+# retires. The standing guard against reintroduction is the residue grep
+# (plan §7 item 1), not this test living on forever.
+# ---------------------------------------------------------------------------
+
+
+class TestSeam1SkillSyncLifecycleCutover:
+    """mount() exposes no on_session_ready and makes no register_capability call.
+
+    Both halves flip with the skill_sync removal: before, the module imported
+    on_session_ready and mount() registered `_GRAPH_QUERY_TOOL_CAPABILITY` for
+    it to consume; after, neither exists. This test cannot pass against the
+    pre-change code.
+    """
+
+    async def test_mount_registers_both_tools_by_name(self) -> None:
+        from amplifier_module_tool_context_intelligence_query import mount
+
+        coordinator = _make_coordinator()
+        await mount(coordinator, config={})
+
+        registered_names = {call.kwargs["name"] for call in coordinator.mount.call_args_list}
+        assert registered_names == {"graph_query", "blob_read"}
+
+    async def test_module_has_no_on_session_ready(self) -> None:
+        import amplifier_module_tool_context_intelligence_query as module
+
+        assert getattr(module, "on_session_ready", None) is None
+
+    async def test_mount_makes_no_register_capability_call(self) -> None:
+        from amplifier_module_tool_context_intelligence_query import mount
+
+        coordinator = _make_coordinator()
+        await mount(coordinator, config={})
+
+        # skill_sync's only consumer of this capability is gone; mount() must
+        # not register it (or any capability) any more.
+        coordinator.register_capability.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# TestSeam2SkillSyncEnabledCutover
+#
+# Seam 2 (docs/skill-sync-removal-plan.md §4.5): the skill_sync_enabled config
+# path through ToolConfigResolver / GraphQueryTool. ELIMINATED seam, SILENT by
+# accepted decision (plan §11) — cutover check only, no standing test. The
+# residue grep is the standing guard.
+# ---------------------------------------------------------------------------
+
+
+class TestSeam2SkillSyncEnabledCutover:
+    """skill_sync_enabled is gone from both the resolver and the tool.
+
+    Both attributes were `True`-hasattr before this removal (the draft's
+    "mount doesn't raise" assertion was a proven false green — mount() never
+    read skill_sync_enabled, only on_session_ready did). Asserting hasattr is
+    False is the one check that actually flips.
+    """
+
+    def test_resolver_has_no_skill_sync_enabled_attribute(self) -> None:
+        from context_intelligence.tool_resolver import ToolConfigResolver
+
+        coordinator = _make_coordinator()
+        resolver = ToolConfigResolver({}, coordinator)
+
+        assert hasattr(resolver, "skill_sync_enabled") is False
+
+    def test_graph_query_tool_has_no_skill_sync_enabled_attribute(self) -> None:
+        from amplifier_module_tool_context_intelligence_query.graph_query_tool import GraphQueryTool
+        from context_intelligence.tool_resolver import ToolConfigResolver
+
+        coordinator = _make_coordinator()
+        resolver = ToolConfigResolver({}, coordinator)
+        tool = GraphQueryTool(coordinator, resolver)
+
+        assert hasattr(tool, "skill_sync_enabled") is False
+
+    async def test_stale_skill_sync_enabled_key_is_inert_at_mount(self) -> None:
+        """A stale skill_sync_enabled key in config must not raise on mount.
+
+        The key is functionally inert (the behavior it toggled is gone) but
+        silently ignored per the accepted, recorded decision in plan §11 —
+        not a bug, an explicit choice not to add deprecation-warning machinery
+        for a feature with no known live consumers.
+        """
+        from amplifier_module_tool_context_intelligence_query import mount
+
+        coordinator = _make_coordinator()
+        config = {
+            "skill_sync_enabled": True,
+            "sources": {
+                "primary": {"url": "http://read.example.com", "api_key": "shared-key"},
+            },
+        }
+
+        # Must complete without raising — that's the whole assertion.
+        await mount(coordinator, config=config)
+
+
+# ---------------------------------------------------------------------------
 # TestSharedResolverInvariant
 # ---------------------------------------------------------------------------
 
