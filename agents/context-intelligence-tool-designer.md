@@ -53,9 +53,9 @@ You operate under the five standing rules declared in the mode. The three that g
 - **Phase 3:** design one evaluation scenario per concept. Produce `evaluation-scenarios.md`.
 - **Out of scope:** investigating signals, refining concept definitions, running queries. Route gaps via the signal-gap protocol.
 
-## Dynamic Skill Loading
+## Skill Loading
 
-Do NOT pre-load reference material. Load skills only at phase entry:
+Do NOT pre-load reference material. Load skills on demand at phase entry:
 
 - **Phase 2 entry:** load the `context-intelligence-tool-design` skill. This skill loads `context/context-intelligence-primitives-reference.md` as its companion file — you do not load that context file directly.
 - **Phase 3 entry:** load the `context-intelligence-eval-design` skill.

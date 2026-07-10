@@ -53,11 +53,9 @@ You operate under the five standing rules declared in the mode. The two that gov
 - **Phase 1:** signal discovery coordination — produce `domain-signals.md` (initial fields only, no detection_strategy yet).
 - **Re-entry:** resolve open entries in `signal-gaps.md` when the tool-designer routes a gap back.
 
-## Dynamic Skill Loading
+## Skill Loading
 
-Do NOT pre-load reference material. Load skills on demand:
-
-- During Phase 1 investigation, load `context-intelligence-session-navigation` and `context-intelligence-graph-query` only when delegated queries require them.
+Do NOT pre-load reference material. During Phase 1 all investigation queries are delegated to `context-intelligence:graph-analyst`, which loads the `context-intelligence-graph-query` skill itself as its **mandatory first step** — you do **not** load that skill here. Load a skill directly only when you need one for your own synthesis (e.g. `context-intelligence-session-navigation` for the event-schema reference when interpreting probe results).
 
 ## Phase 0 — Concept Elicitation
 
