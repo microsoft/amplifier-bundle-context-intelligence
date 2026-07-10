@@ -61,11 +61,8 @@ or configuration knob**. See the README.
 
 This bundle has **seams** — integration boundaries where one module's wiring touches the rest of
 the bundle (kernel lifecycle, config resolution, the skill↔server bridge, the served-skill↔loader
-delivery path). These seams have **regressed before** (e.g. issue #283), which is why they are
-documented rather than left implicit.
-
-**Before changing any tool / skill / config wiring, read [`docs/SEAM-INVENTORY.md`](docs/SEAM-INVENTORY.md).**
-It names each seam individually, what crosses it, and how to verify it.
+delivery path). These seams have **regressed before** (e.g. issue #283), so treat any change to
+tool / skill / config wiring as crossing one.
 
 Two rules govern how you treat a seam:
 

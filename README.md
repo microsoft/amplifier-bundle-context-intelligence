@@ -643,7 +643,6 @@ amplifier-bundle-context-intelligence/
 │           └── blob_read_tool.py       ← ci-blob:// resolution tool
 ├── docs/
 │   ├── context-intelligence-exploration-guide.md   ← what to explore and how to test
-│   ├── SEAM-INVENTORY.md               ← integration-boundary reference (PERSIST vs ELIMINATED seams)
 │   ├── dispatch-circuit-breaker.dot    ← dispatch flow and circuit breaker state machine
 │   └── logging-handler-flow.dot        ← thin forwarder architecture
 ├── skills/
