@@ -202,13 +202,37 @@ RETURN t.tool_name AS tool, count(*) AS n
 ORDER BY n DESC LIMIT 12
 ```
 
-### Trap 4 — Self-delegation is a flag, never an inference
+### Trap 4 — `self` is a self-delegation marker, never a real agent
 
 Self-delegation is recorded explicitly as **`Delegation.is_self_delegation = true`**
-(equivalently `agent = 'self'` — both resolve to the same set). Never infer it by
-string-matching `"agent":"self"` in `tool_input` or by comparing agent names.
+(equivalently the child `Session.agent = 'self'`). Never infer it by string-matching
+`tool_input` or comparing names.
+
+**`'self'` is a marker, not an identity** — it means "this session spawned a fresh
+sub-context of *itself*," so `self` is never the real actor. Before any per-agent stat
+(centrality, counts, durations), **resolve it up the fork chain** to the nearest ancestor
+whose `agent <> 'self'`. That actor is often the **root/main session** (`agent IS NULL` —
+the user's top-level session, not a named sub-agent); occasionally a named agent that
+self-delegated. Empirically the chain is a single hop (no `self`→`self`→…).
 
 ```cypher
+// Resolve every self-session to the actor that actually spawned it
+MATCH (s:Session {workspace: $workspace, agent: 'self'})
+OPTIONAL MATCH pth = (anc:Session)-[:FORKED*1..20]->(s)
+WHERE anc.agent IS NULL OR anc.agent <> 'self'
+WITH s, anc, pth ORDER BY length(pth) ASC
+WITH s, head(collect(coalesce(anc.agent, 'root/main session'))) AS actor
+RETURN coalesce(actor, 'unresolved') AS real_actor, count(*) AS self_delegations
+ORDER BY self_delegations DESC
+```
+
+Self-delegation is itself a **first-class signal** (an actor extending its own context —
+continuation / context management): count it *as* self-delegation when that is the
+question, and *resolve* it when you need the real actor. A raw `self` bucket in a
+per-agent aggregate is a bug — it attributes real work to a non-existent agent.
+
+```cypher
+// The plain self-delegation split (the signal itself)
 MATCH (d:Delegation {workspace: $workspace})
 RETURN d.is_self_delegation AS self_delegation, count(*) AS n
 ORDER BY n DESC
@@ -532,6 +556,19 @@ Probe availability: `CALL apoc.help('path')`, `RETURN gds.version()` (or `CALL g
   RETURN componentId, count(*) AS size ORDER BY size DESC LIMIT 20;
 
   CALL gds.graph.drop('g') YIELD graphName;   // always release the projection
+  ```
+
+  **Agent-level, not session-level — and resolve `self` first (Trap 4).** "Which *agent*
+  is a hub" ≠ "which *session* is a hub": a single session can be highly central while its
+  agent is not, and vice-versa. Roll the per-session score up by `Session.agent`, and treat
+  `self` as a marker to resolve, never a bucket:
+
+  ```cypher
+  CALL gds.pageRank.stream('g') YIELD nodeId, score
+  WITH gds.util.asNode(nodeId) AS s, score
+  WHERE s.agent IS NOT NULL AND s.agent <> 'self'   // resolve 'self' per Trap 4 to attribute it
+  RETURN s.agent AS agent, round(sum(score), 2) AS agent_influence, count(*) AS sessions
+  ORDER BY agent_influence DESC LIMIT 20
   ```
 
   Skip GDS for a simple count or grouping that one plain Cypher statement already does —
