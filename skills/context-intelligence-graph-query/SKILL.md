@@ -494,20 +494,48 @@ Work as a funnel:
 
 ---
 
-## Section 8 — APOC / GDS: Probe, Then Reach
+## Section 8 — Push Work to the Database (APOC / GDS)
 
-APOC and GDS are installed on the live target, but reach for them only when a plain
-Cypher expression won't do. Probe availability first (`CALL apoc.help('convert')`,
-`CALL gds.list()`), then use the narrowest procedure:
+**Prefer one server-side computation over many client round-trips.** When an analysis
+needs a deep or variable-length traversal, path-finding, centrality/influence, community
+structure, or a multi-step aggregation that would otherwise mean pulling rows to the
+client and iterating, do the work **inside the graph**. It is faster and keeps the
+protocol un-chatty — fewer tool calls, less context churn. Both plugins are installed and
+**run on the live target** (Neo4j Community here — GDS works). Rule of thumb: **if
+answering the question the naive way means many round-trips or a large client-side pull,
+push that computation into the database.** Probe once, compute server-side, and still
+**bound the RETURNED result** (count / aggregate / `LIMIT`).
 
-- **`apoc.convert.fromJsonMap(e.data)`** — parse a `data` JSON string into a map inside
-  Cypher (the in-graph alternative to piping through `jq`). Still bound your output.
-- **`apoc.path.expandConfig(...)`** — configurable in-graph tree walks, subject to the
-  **same 1-hop caveat as `HAS_SUBSESSION`** (Trap 1): for delegation depth beyond hop 1,
-  use `FORKED`/`Session.parent_id`, not an edge-expand over `HAS_SUBSESSION`.
-- **GDS** — installed but **not needed** for the analyses in this skill. Reach for it
-  only for genuine graph algorithms (centrality, community detection, pathfinding at
-  scale) — not for counts, groupings, or ancestry, which plain Cypher handles.
+Probe availability: `CALL apoc.help('path')`, `RETURN gds.version()` (or `CALL gds.list()`).
+
+- **APOC — in-graph helpers.** `apoc.convert.fromJsonMap(e.data)` parses a `data` JSON
+  string into a map without a client `jq` hop. `apoc.path.expandConfig(...)` runs
+  configurable in-graph traversals — subject to the **same 1-hop caveat as
+  `HAS_SUBSESSION`** (Trap 1): for delegation depth, expand over `FORKED`/`parent_id`.
+  Still bound your output.
+- **GDS — real graph analytics in one pass.** For centrality/influence, community/cluster
+  detection, or pathfinding **across many sessions**, project once and run the algorithm
+  server-side instead of reconstructing the graph client-side. Always `gds.graph.drop`
+  the projection when done:
+
+  ```cypher
+  CALL gds.graph.project('g', 'Session', 'FORKED')
+  YIELD nodeCount, relationshipCount;
+
+  CALL gds.pageRank.stream('g')          // or gds.degree / gds.betweenness (influence)
+  YIELD nodeId, score
+  RETURN gds.util.asNode(nodeId).node_id AS session, score
+  ORDER BY score DESC LIMIT 20;
+
+  CALL gds.wcc.stream('g')               // or gds.louvain (community structure)
+  YIELD componentId
+  RETURN componentId, count(*) AS size ORDER BY size DESC LIMIT 20;
+
+  CALL gds.graph.drop('g') YIELD graphName;   // always release the projection
+  ```
+
+  Skip GDS for a simple count or grouping that one plain Cypher statement already does —
+  reach for it when the naive alternative is iterative client-side fetching.
 
 ---
 
