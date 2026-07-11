@@ -15,6 +15,21 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from amplifier_module_tool_context_intelligence_upload.session_graph import UploadScope
+
+
+def _fake_scope(sessions: list) -> UploadScope:
+    """Build an UploadScope fixture for mocking resolve_upload_sessions in CLI tests."""
+    root_ids = [meta["session_id"] for _, meta in sessions]
+    return UploadScope(
+        sessions=sessions,
+        mode="whole",
+        selected_root_ids=root_ids,
+        total_discovered=len(sessions),
+        selected_count=len(sessions),
+        dangling_parent_ids=[],
+    )
+
 
 # ---------------------------------------------------------------------------
 # Helpers (reused from test_uploader pattern)
@@ -282,8 +297,8 @@ class TestCliMainEntraMode:
                 ],
             ),
             patch(
-                "amplifier_module_tool_context_intelligence_upload.cli.discover_and_sort",
-                return_value=fake_sessions,
+                "amplifier_module_tool_context_intelligence_upload.cli.resolve_upload_sessions",
+                return_value=_fake_scope(fake_sessions),
             ),
             patch(
                 "amplifier_module_tool_context_intelligence_upload.cli.run_upload",
@@ -344,8 +359,8 @@ class TestCliMainEntraMode:
                 ],
             ),
             patch(
-                "amplifier_module_tool_context_intelligence_upload.cli.discover_and_sort",
-                return_value=fake_sessions,
+                "amplifier_module_tool_context_intelligence_upload.cli.resolve_upload_sessions",
+                return_value=_fake_scope(fake_sessions),
             ),
             patch(
                 "amplifier_module_tool_context_intelligence_upload.cli.run_upload",
@@ -402,8 +417,8 @@ class TestCliMainEntraMode:
                 ],
             ),
             patch(
-                "amplifier_module_tool_context_intelligence_upload.cli.discover_and_sort",
-                return_value=fake_sessions,
+                "amplifier_module_tool_context_intelligence_upload.cli.resolve_upload_sessions",
+                return_value=_fake_scope(fake_sessions),
             ),
             patch(
                 "amplifier_module_tool_context_intelligence_upload.cli.run_upload",
