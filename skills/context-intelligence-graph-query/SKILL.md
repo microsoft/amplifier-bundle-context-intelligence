@@ -8,8 +8,9 @@ description: >
   verified Cypher patterns.
 license: MIT
 metadata:
-  version: "2.0.1"
+  version: "2.1.0"
   changelog:
+    - "2.1.0: Reporting guidance — agent-level / self-delegation answers must STATE the resolved self→actor breakdown (root/main vs named) as an explicit standalone finding, not fold it into a blended statistic. Tightened the Section 8 agent-rollup: project Session/FORKED (the labels that exist) and roll up by the Session.agent property; agents are NOT a projectable Agent graph."
     - "2.0.1: Schema accuracy fix: corrected Prompt/SkillLoad/Orchestrator property names, RecipeStep/RecipeRun property placement, RecipeStep→RecipeRun edge (SPAWNED), removed phantom L1 edges, fixed example queries — all validated against the live graph."
 ---
 
@@ -230,6 +231,17 @@ Self-delegation is itself a **first-class signal** (an actor extending its own c
 continuation / context management): count it *as* self-delegation when that is the
 question, and *resolve* it when you need the real actor. A raw `self` bucket in a
 per-agent aggregate is a bug — it attributes real work to a non-existent agent.
+
+**Report the resolved breakdown as an explicit finding — do not bury it in a blended
+stat.** The resolve-self join above only pays off if its result reaches the answer as
+its *own stated fact*. For any agent-level or self-delegation question, **lead with the
+resolved `self`→actor split as a standalone sentence** — how many, and what percent, of
+self-delegations resolve to the **root/main session continuing itself** (`agent IS NULL`)
+versus to **named agents** — *before* any roll-up or combined figure. Computing the
+number correctly but folding it into a mixed "X% of all delegations are root-launched"
+statistic hides the very fact the question asked for. This is a general output-shape
+principle: surface the load-bearing breakdown first, then add supporting context — state
+it, don't just compute it.
 
 ```cypher
 // The plain self-delegation split (the signal itself)
@@ -558,18 +570,30 @@ Probe availability: `CALL apoc.help('path')`, `RETURN gds.version()` (or `CALL g
   CALL gds.graph.drop('g') YIELD graphName;   // always release the projection
   ```
 
-  **Agent-level, not session-level — and resolve `self` first (Trap 4).** "Which *agent*
-  is a hub" ≠ "which *session* is a hub": a single session can be highly central while its
-  agent is not, and vice-versa. Roll the per-session score up by `Session.agent`, and treat
-  `self` as a marker to resolve, never a bucket:
+  **Agent-level, not session-level — agents are a PROPERTY, not a projectable graph.**
+  "Which *agent* is a hub" ≠ "which *session* is a hub": one session can be highly central
+  while its agent is not. There is **no `Agent` node to project** — do NOT
+  `gds.graph.project.cypher(...)` an agent-level graph; it returns an empty projection and
+  is a dead end. Instead **project the labels that exist** — `Session` (nodes) and `FORKED`
+  (relationships) — run the algorithm over *sessions*, then **roll the per-session scores up
+  by the `Session.agent` property in the `RETURN`**. For the named-agent-hub ranking, drop
+  the `self` marker and the root/main session (`agent IS NULL`) — a "which named agent"
+  question is about named agents:
 
   ```cypher
+  // 'g' is the Session / FORKED projection from above — agents are NOT projected;
+  // agent-level results come from aggregating session scores by the s.agent PROPERTY.
   CALL gds.pageRank.stream('g') YIELD nodeId, score
   WITH gds.util.asNode(nodeId) AS s, score
-  WHERE s.agent IS NOT NULL AND s.agent <> 'self'   // resolve 'self' per Trap 4 to attribute it
+  WHERE s.agent IS NOT NULL AND s.agent <> 'self'   // named agents only (see Trap 4 for 'self')
   RETURN s.agent AS agent, round(sum(score), 2) AS agent_influence, count(*) AS sessions
   ORDER BY agent_influence DESC LIMIT 20
   ```
+
+  Excluding `self` here answers "which *named* agent is a hub" — it does **not** make `self`
+  vanish from the story. If the question also touches self-delegation, resolve `self` up the
+  `FORKED` chain (Trap 4) and **state that root/main-vs-named breakdown as its own finding**;
+  don't let the exclusion above silently drop it.
 
   Skip GDS for a simple count or grouping that one plain Cypher statement already does —
   reach for it when the naive alternative is iterative client-side fetching.
