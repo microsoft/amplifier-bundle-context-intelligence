@@ -16,7 +16,7 @@ import uuid
 from pathlib import Path
 
 from .progress import ProgressTracker, progress_file_path
-from .session_graph import discover_and_sort
+from .session_graph import ScopeError, resolve_upload_sessions
 from .uploader import run_upload
 
 # ---------------------------------------------------------------------------
@@ -166,9 +166,10 @@ event so that external readers always see a consistent snapshot.
 
 EXIT CODES
 ----------
-  0   Success — all sessions uploaded, or no sessions found.
+  0   Success — all sessions uploaded.
   1   Failure — at least one HTTP error occurred during upload.
-  2   Invalid invocation — missing required argument or PATH does not exist.
+  2   Invalid invocation — missing required argument, PATH does not exist, or
+      no context-intelligence sessions could be found/resolved under PATH.
 
 FINDING SERVER_URL AND API_KEY
 ------------------------------
@@ -442,10 +443,32 @@ def main() -> None:
         )
         sys.exit(2)
 
-    # 3. Discover and sort sessions
-    sessions = discover_and_sort(target_path)
+    # 3. Resolve upload scope: descendants-only closure of sub-sessions.
+    #    Fails loud (exit 2) if nothing is discovered or the selected session
+    #    (single-session mode) cannot be identified.
+    try:
+        scope = resolve_upload_sessions(target_path)
+    except ScopeError as e:
+        print(f"error: {e}", file=sys.stderr)
+        sys.exit(2)
 
-    # 4. Handle no sessions found
+    sessions = scope.sessions
+
+    print(
+        f"scope: mode={scope.mode} root(s)={','.join(scope.selected_root_ids)} "
+        f"uploading {scope.selected_count} of {scope.total_discovered} discovered session(s)",
+        file=sys.stderr,
+    )
+    if scope.dangling_parent_ids:
+        print(
+            f"note: {len(scope.dangling_parent_ids)} parent session(s) not included "
+            f"will appear as placeholders until uploaded: {','.join(scope.dangling_parent_ids)}",
+            file=sys.stderr,
+        )
+
+    # 4. Handle no sessions found (fallback guard; resolve_upload_sessions
+    #    already raises ScopeError on empty discovery, but keep this as a
+    #    defensive no-op path in case that ever changes).
     if not sessions:
         print(
             "No sessions found under the given path — nothing to upload.",

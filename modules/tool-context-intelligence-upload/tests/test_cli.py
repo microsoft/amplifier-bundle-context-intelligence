@@ -8,6 +8,28 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from amplifier_module_tool_context_intelligence_upload.session_graph import (
+    ScopeError,
+    UploadScope,
+)
+
+
+def _fake_scope(
+    sessions: list,
+    mode: str = "whole",
+    dangling_parent_ids: list | None = None,
+) -> UploadScope:
+    """Build an UploadScope fixture for mocking resolve_upload_sessions in CLI tests."""
+    root_ids = [meta["session_id"] for _, meta in sessions]
+    return UploadScope(
+        sessions=sessions,
+        mode=mode,
+        selected_root_ids=root_ids,
+        total_discovered=len(sessions),
+        selected_count=len(sessions),
+        dangling_parent_ids=dangling_parent_ids or [],
+    )
+
 
 # ---------------------------------------------------------------------------
 # -h compact help
@@ -200,8 +222,8 @@ class TestJobIdAutoGeneration:
                 ],
             ),
             patch(
-                "amplifier_module_tool_context_intelligence_upload.cli.discover_and_sort",
-                return_value=[],
+                "amplifier_module_tool_context_intelligence_upload.cli.resolve_upload_sessions",
+                side_effect=ScopeError("no sessions found"),
             ),
             pytest.raises(SystemExit),
         ):
@@ -233,8 +255,8 @@ class TestJobIdAutoGeneration:
                 ],
             ),
             patch(
-                "amplifier_module_tool_context_intelligence_upload.cli.discover_and_sort",
-                return_value=[],
+                "amplifier_module_tool_context_intelligence_upload.cli.resolve_upload_sessions",
+                side_effect=ScopeError("no sessions found"),
             ),
             pytest.raises(SystemExit),
         ):
@@ -276,7 +298,9 @@ class TestCliEndToEnd:
         captured = capsys.readouterr()
         assert "does not exist" in captured.err
 
-    def test_no_sessions_found(self, tmp_path, capsys):
+    def test_no_sessions_found_exits_2_with_error(self, tmp_path, capsys):
+        """Scope resolution fails loud (ScopeError) when nothing is discovered
+        under PATH \u2014 this supersedes the old graceful exit-0 behavior."""
         from amplifier_module_tool_context_intelligence_upload.cli import main
 
         with (
@@ -293,18 +317,16 @@ class TestCliEndToEnd:
                 ],
             ),
             patch(
-                "amplifier_module_tool_context_intelligence_upload.cli.discover_and_sort",
-                return_value=[],
+                "amplifier_module_tool_context_intelligence_upload.cli.resolve_upload_sessions",
+                side_effect=ScopeError(f"no context-intelligence sessions found under {tmp_path}"),
             ),
             pytest.raises(SystemExit) as exc_info,
         ):
             main()
-        assert exc_info.value.code == 0
+        assert exc_info.value.code == 2
         captured = capsys.readouterr()
-        assert "no sessions found" in captured.err.lower()
-        result = json.loads(captured.out)
-        assert result["status"] == "completed"
-        assert result["sessions_uploaded"] == 0
+        assert "error:" in captured.err.lower()
+        assert captured.out == ""
 
     def test_successful_upload(self, tmp_path, capsys):
         from amplifier_module_tool_context_intelligence_upload.cli import main
@@ -332,8 +354,8 @@ class TestCliEndToEnd:
                 ],
             ),
             patch(
-                "amplifier_module_tool_context_intelligence_upload.cli.discover_and_sort",
-                return_value=fake_sessions,
+                "amplifier_module_tool_context_intelligence_upload.cli.resolve_upload_sessions",
+                return_value=_fake_scope(fake_sessions),
             ),
             patch(
                 "amplifier_module_tool_context_intelligence_upload.cli.run_upload",
@@ -377,8 +399,8 @@ class TestCliEndToEnd:
                 ],
             ),
             patch(
-                "amplifier_module_tool_context_intelligence_upload.cli.discover_and_sort",
-                return_value=fake_sessions,
+                "amplifier_module_tool_context_intelligence_upload.cli.resolve_upload_sessions",
+                return_value=_fake_scope(fake_sessions),
             ),
             patch(
                 "amplifier_module_tool_context_intelligence_upload.cli.run_upload",
@@ -421,8 +443,8 @@ class TestCliEndToEnd:
                 ],
             ),
             patch(
-                "amplifier_module_tool_context_intelligence_upload.cli.discover_and_sort",
-                return_value=fake_sessions,
+                "amplifier_module_tool_context_intelligence_upload.cli.resolve_upload_sessions",
+                return_value=_fake_scope(fake_sessions),
             ),
             patch(
                 "amplifier_module_tool_context_intelligence_upload.cli.run_upload",
@@ -478,8 +500,8 @@ class TestEnvVarConfigResolution:
                 ],
             ),
             patch(
-                "amplifier_module_tool_context_intelligence_upload.cli.discover_and_sort",
-                return_value=fake_sessions,
+                "amplifier_module_tool_context_intelligence_upload.cli.resolve_upload_sessions",
+                return_value=_fake_scope(fake_sessions),
             ),
             patch(
                 "amplifier_module_tool_context_intelligence_upload.cli.run_upload",
@@ -528,8 +550,8 @@ class TestEnvVarConfigResolution:
                 ],
             ),
             patch(
-                "amplifier_module_tool_context_intelligence_upload.cli.discover_and_sort",
-                return_value=fake_sessions,
+                "amplifier_module_tool_context_intelligence_upload.cli.resolve_upload_sessions",
+                return_value=_fake_scope(fake_sessions),
             ),
             patch(
                 "amplifier_module_tool_context_intelligence_upload.cli.run_upload",
@@ -590,3 +612,113 @@ class TestEnvVarConfigResolution:
             pytest.raises(SystemExit),
         ):
             main()
+
+
+# ---------------------------------------------------------------------------
+# main() \u2014 scope resolution wiring (loud scope line, dangling note, ScopeError)
+# ---------------------------------------------------------------------------
+
+
+class TestScopeResolutionWiring:
+    """CLI must emit a loud resolved-scope line and handle ScopeError \u2192 exit 2."""
+
+    def _run(self, tmp_path, scope, mock_result=None):
+        from amplifier_module_tool_context_intelligence_upload.cli import main
+
+        if mock_result is None:
+            mock_result = MagicMock()
+            mock_result.success = True
+            mock_result.to_dict.return_value = {
+                "status": "completed",
+                "sessions_uploaded": scope.selected_count,
+                "events_uploaded": 0,
+            }
+
+        with (
+            patch(
+                "sys.argv",
+                [
+                    "context-intelligence-upload",
+                    "--path",
+                    str(tmp_path),
+                    "--server-url",
+                    "http://localhost",
+                    "--api-key",
+                    "key",
+                ],
+            ),
+            patch(
+                "amplifier_module_tool_context_intelligence_upload.cli.resolve_upload_sessions",
+                return_value=scope,
+            ),
+            patch(
+                "amplifier_module_tool_context_intelligence_upload.cli.run_upload",
+                return_value=mock_result,
+            ),
+            patch("amplifier_module_tool_context_intelligence_upload.cli.ProgressTracker"),
+            pytest.raises(SystemExit) as exc_info,
+        ):
+            main()
+        return exc_info
+
+    def test_scope_line_printed_to_stderr(self, tmp_path, capsys):
+        fake_sessions = [(tmp_path, {"session_id": "root"}), (tmp_path, {"session_id": "child"})]
+        scope = _fake_scope(fake_sessions, mode="single")
+
+        self._run(tmp_path, scope)
+
+        captured = capsys.readouterr()
+        assert "scope:" in captured.err
+        assert "mode=single" in captured.err
+        assert "root(s)=root" in captured.err
+        assert "uploading 2 of 2" in captured.err
+
+    def test_dangling_parent_note_printed_when_present(self, tmp_path, capsys):
+        fake_sessions = [(tmp_path, {"session_id": "mid"}), (tmp_path, {"session_id": "leaf"})]
+        scope = _fake_scope(fake_sessions, mode="single", dangling_parent_ids=["root"])
+
+        self._run(tmp_path, scope)
+
+        captured = capsys.readouterr()
+        assert "note:" in captured.err
+        assert "root" in captured.err
+        assert "placeholder" in captured.err.lower()
+
+    def test_no_dangling_note_when_absent(self, tmp_path, capsys):
+        fake_sessions = [(tmp_path, {"session_id": "root"})]
+        scope = _fake_scope(fake_sessions, mode="whole")
+
+        self._run(tmp_path, scope)
+
+        captured = capsys.readouterr()
+        assert "note:" not in captured.err
+
+    def test_scope_error_exits_2_with_error_message(self, tmp_path, capsys):
+        from amplifier_module_tool_context_intelligence_upload.cli import main
+
+        with (
+            patch(
+                "sys.argv",
+                [
+                    "context-intelligence-upload",
+                    "--path",
+                    str(tmp_path),
+                    "--server-url",
+                    "http://localhost",
+                    "--api-key",
+                    "key",
+                ],
+            ),
+            patch(
+                "amplifier_module_tool_context_intelligence_upload.cli.resolve_upload_sessions",
+                side_effect=ScopeError(f"no context-intelligence sessions found under {tmp_path}"),
+            ),
+            pytest.raises(SystemExit) as exc_info,
+        ):
+            main()
+
+        assert exc_info.value.code == 2
+        captured = capsys.readouterr()
+        assert "error:" in captured.err
+        assert "no context-intelligence sessions found" in captured.err
+        assert captured.out == ""
