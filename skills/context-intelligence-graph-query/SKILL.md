@@ -8,8 +8,9 @@ description: >
   verified Cypher patterns.
 license: MIT
 metadata:
-  version: "2.1.0"
+  version: "2.2.0"
   changelog:
+    - "2.2.0: Corrected the Section 2 workspace/working_dir claims — workspace is a lifted, reliable (~100%) scoping slug, not the literal working directory; working_dir is a sparsely-populated (~7%, 238/3,259 sessions) payload-only field with no canonical per-session source, and must never be used to scope a population. Consolidated one visible+correct in-graph APOC payload-parse pattern: dot-access on a JSON-string field (e.g. e.data.working_dir) raises a type error, not a silent null — parse in-graph with apoc.convert.fromJsonMap and return only the scalar needed. De-duplicated the Section 6 copy into a pointer at this pattern."
     - "2.1.0: Reporting guidance — agent-level / self-delegation answers must STATE the resolved self→actor breakdown (root/main vs named) as an explicit standalone finding, not fold it into a blended statistic. Tightened the Section 8 agent-rollup: project Session/FORKED (the labels that exist) and roll up by the Session.agent property; agents are NOT a projectable Agent graph."
     - "2.0.1: Schema accuracy fix: corrected Prompt/SkillLoad/Orchestrator property names, RecipeStep/RecipeRun property placement, RecipeStep→RecipeRun edge (SPAWNED), removed phantom L1 edges, fixed example queries — all validated against the live graph."
 ---
@@ -109,10 +110,15 @@ Both live as first-class properties on nodes — confirm them by sampling:
 
 - **`created_by`** — *who* produced the data (present on every node; the data is
   typically single-user).
-- **`workspace`** — *where*: a **dash-slugified filesystem path** that IS the working
-  directory (e.g. `-mnt-linuxdata-workspaces-...-dashboard-ui`). There is no separate
-  directory property. The `/cypher` request's own `workspace` scope is a second,
-  orthogonal server-side filter layered on top.
+- **`workspace`** — *where*: a **lifted, dash-slugified label/slug** (e.g.
+  `-mnt-linuxdata-workspaces-...-dashboard-ui`), reliable at ~100% coverage. It is a **label,
+  not the literal working directory**: the true directory lives in the event `data` payload as
+  `working_dir`, and the **same `working_dir`** (`/home/user/project`) can map to **different**
+  `workspace` slugs (`myproject`, `proj`, `multi`). Treat `workspace` as the reliable scoping
+  slug; treat `working_dir` as a **payload field, sparsely populated (~7% of sessions)** with no
+  canonical per-session source — read it via the APOC parse in Section 8, but do **not** scope by
+  it. The `/cypher` request's own `workspace` scope is a second, orthogonal server-side filter
+  layered on top.
 
 **Always anchor scope on the first `MATCH`** so the workspace index is used:
 
@@ -394,11 +400,11 @@ LIMIT 25
 
 ### The `data` field is a JSON string, not a Cypher map
 
-`:Event.data` is a serialized JSON string. Dot notation (`e.data.tool_name`) does not
-work in Cypher. Prefer **lifted properties** (`tool_name`, `tool_call_id`, `model`,
-`provider`, …) extracted at ingest as first-class node properties. When you need a raw
-field that is not lifted, parse the JSON — inside Cypher with APOC
-(`apoc.convert.fromJsonMap(e.data)`, Section 8) or outside with `jq` — always bounded.
+`:Event.data` is a serialized JSON string. Dot notation (`e.data.tool_name`) does **not**
+work in Cypher — it raises a type-mismatch error, not a silent null. Prefer **lifted
+properties** (`tool_name`, `tool_call_id`, `model`, `provider`, …) when they exist; when you
+need a raw field that is **only** in the payload, parse it **in-graph with APOC** — see the
+one authoritative pattern **"Lift payload fields in-graph with APOC" in Section 8**. Always bounded.
 
 **Inline vs blob — know which you have.** Some payloads live inline; some are offloaded.
 For example, orchestrator steering text lives **inline** at
@@ -597,6 +603,43 @@ Probe availability: `CALL apoc.help('path')`, `RETURN gds.version()` (or `CALL g
 
   Skip GDS for a simple count or grouping that one plain Cypher statement already does —
   reach for it when the naive alternative is iterative client-side fetching.
+
+---
+
+### Lift payload fields in-graph with APOC (the one authoritative pattern)
+
+**Problem.** `Event.data` (and nested payloads) is a serialized JSON **string**, not a Cypher
+map. Dot-access like `e.data.working_dir` **fails loudly** — Neo4j raises:
+
+```
+Neo.ClientError.Statement.TypeError: Type mismatch: expected a map but was String(...)
+```
+
+You **must** parse the string before reading a field. (Do **not** confuse this with the
+silent-null trap in **Trap 5** — that one is comparing a *zoned datetime to a string literal*,
+which returns `null` with no error. This APOC case is a *loud* error, a different failure mode.)
+
+**Pattern — parse in-graph, project only the scalar you need:**
+
+```cypher
+WITH apoc.convert.fromJsonMap(e.data) AS d
+RETURN d.working_dir AS working_dir      // one scalar, not the whole payload
+```
+
+Use `apoc.convert.fromJsonList(...)` for arrays. **Never** pull the full `data` string to the
+client to parse with `jq`.
+
+**Two wins:**
+- **Correctness** — dot-access on the string errors out; parsing with APOC is the *only* way to
+  read the real value.
+- **Leanness** — the parse **and** the field-selection happen server-side; the payload never
+  crosses the wire or enters context — same discipline as Section 6 ("never return full text").
+
+**Rule.** Prefer lifted first-class properties when they exist; when a field is **only** in the
+payload, lift it in-graph with APOC and return just the scalar. (`working_dir` is the worked
+example here — proven, and the whole point of the pattern — but per Section 2, it is **not**
+a scoping lever: it is sparsely populated (~7% of sessions) with no canonical per-session
+source, so use it to read one session's directory, never to scope a population.)
 
 ---
 
