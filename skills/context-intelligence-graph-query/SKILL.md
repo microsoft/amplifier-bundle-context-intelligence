@@ -160,8 +160,10 @@ The true delegation/fork lineage is carried by the **`FORKED` edge** together wi
 ancestry. Verified live: the fork lineage reaches **max depth 3**.
 
 ```cypher
-// Authoritative lineage depth via the FORKED edge
-MATCH path = (root:Session {workspace: $workspace})-[:FORKED*]->(leaf:Session)
+// Authoritative lineage depth via the FORKED edge.
+// Bound the path (never bare `*` — Section 7): *1..20 is generous headroom over the
+// observed max depth of 3, and the RETURN is aggregate-only (no rows materialized).
+MATCH path = (root:Session {workspace: $workspace})-[:FORKED*1..20]->(leaf:Session)
 WHERE root.parent_id IS NULL
 RETURN max(length(path)) AS max_fork_depth, count(path) AS lineages
 ```
@@ -173,6 +175,7 @@ is inconvenient (each child names its parent):
 MATCH (child:Session {workspace: $workspace})
 WHERE child.parent_id IS NOT NULL
 RETURN child.node_id, child.parent_id
+ORDER BY child.node_id LIMIT 200   // bounded (Section 7); anchor on a node_id to walk one specific chain
 ```
 
 **Two known undercounts — do NOT trust either for depth:**
@@ -576,9 +579,11 @@ Probe availability: `CALL apoc.help('path')`, `RETURN gds.version()` (or `CALL g
   CALL gds.graph.drop('g') YIELD graphName;   // always release the projection
   ```
 
-  **Agent-level, not session-level — agents are a PROPERTY, not a projectable graph.**
+  **Agent-level, not session-level — agents are a PROPERTY to roll up by, not a projectable graph.**
   "Which *agent* is a hub" ≠ "which *session* is a hub": one session can be highly central
-  while its agent is not. There is **no `Agent` node to project** — do NOT
+  while its agent is not. `Agent` concept nodes *do* exist (Section 1; Gotcha 4), but they
+  carry only inbound `HAS_AGENT` edges from sessions — there is **no Agent→Agent edge
+  structure to project**, so GDS centrality has nothing to traverse at the agent level. Do NOT
   `gds.graph.project.cypher(...)` an agent-level graph; it returns an empty projection and
   is a dead end. Instead **project the labels that exist** — `Session` (nodes) and `FORKED`
   (relationships) — run the algorithm over *sessions*, then **roll the per-session scores up
