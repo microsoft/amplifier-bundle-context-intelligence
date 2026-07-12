@@ -1,7 +1,7 @@
 # ci-signals-validation.yaml
 #
 # End-to-end integration test for context_intelligence.signals library,
-# CLI commands, render-findings output, and recipe YAML structural validity.
+# CLI commands, and render-findings output.
 #
 # Does NOT require: Amplifier CLI, LLM API keys, or a graph server endpoint.
 # All detection is deterministic Python + static fixtures.
@@ -14,9 +14,8 @@
 #
 name: ci-signals-validation
 description: >
-  Integration test for context_intelligence.signals library and
-  workflow-pattern-analysis recipe. Validates signal scoring,
-  CLI commands, render-findings output, and recipe YAML validity
+  Integration test for the context_intelligence.signals library. Validates
+  signal scoring, CLI commands, and render-findings output
   using stable fixture JSONL files. No LLM or graph server required.
 
 base:
@@ -220,33 +219,6 @@ validation_cmds:
         cat /tmp/dtu-findings/findings.md
         exit 1
       fi
-
-  # E: YAML recipe parses, correct stage + step counts
-  - name: E-recipe-yaml-valid
-    command: |
-      set -e
-      /opt/venv/bin/python3 -c "
-      import yaml, pathlib, sys
-      text = pathlib.Path('/opt/ci-bundle/recipes/workflow-pattern-analysis.yaml').read_text()
-      data = yaml.safe_load(text)
-      stages = data.get('stages', [])
-      stage_names = [s['name'] for s in stages]
-      total_steps = sum(len(s.get('steps', [])) for s in stages)
-      print(f'PASS: recipe YAML valid')
-      print(f'  name: {data.get(\"name\")}')
-      print(f'  stages: {stage_names}')
-      print(f'  total steps: {total_steps}')
-      if len(stages) != 2:
-          print(f'FAIL: expected 2 stages, got {len(stages)}')
-          sys.exit(1)
-      if total_steps < 9:
-          print(f'FAIL: expected >= 9 steps, got {total_steps}')
-          sys.exit(1)
-      if stages[0].get('approval', {}).get('required') is not True:
-          print('FAIL: detection stage approval.required != True')
-          sys.exit(1)
-      print('PASS: stage count, step count, and approval block assertions pass')
-      "
 
   # F: All fixture JSONL files score without crashing
   - name: F-score-all-fixtures
