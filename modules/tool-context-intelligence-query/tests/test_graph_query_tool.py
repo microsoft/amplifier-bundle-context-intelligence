@@ -547,10 +547,25 @@ class TestConfigFallback:
         assert call_kwargs["server_url"] == "http://dest.example.com"
         assert call_kwargs["api_key"] == "dest-key"
 
-    # --- Case #3: per-field independence ---
+    # --- Case #3: a partially-configured single source is now a hard per-entry error ---
+    #
+    # BEHAVIOR CHANGE (criterion 4, workstream-1-multi-source-query-tools.md §2.3/§2.5):
+    # resolve_query_endpoint() now calls tool_resolver.validate_source(read.name)
+    # unconditionally on whatever source is selected -- even the sole configured entry.
+    # A source with url="" is "missing url" per _collect_source_problems (this rule
+    # predates workstream-1; it's what validate_sources() always enforced at mount()
+    # time). Previously this validation was ONLY invoked at mount(), so a unit test
+    # that never calls mount() could construct an invalid partial source and still
+    # observe pure per-field _pick() fallback behavior. Now that validation runs at
+    # every resolve, that partial-field configuration is caught immediately as
+    # source_misconfigured rather than silently falling through field-by-field --
+    # both url AND api_key are documented as required for a `sources` entry (README
+    # §"Sub-key" table), so this was never a supported configuration to begin with.
 
-    async def test_case3_read_config_url_empty_falls_to_destination_for_url(self) -> None:
-        """Case #3: sources url="" → url falls to destination; api_key stays at tier 1."""
+    async def test_case3_partial_source_url_empty_is_now_source_misconfigured(self) -> None:
+        """A configured source with url="" is invalid (both fields required) --
+        the single selected entry fails validate_source() and returns
+        source_misconfigured rather than silently falling through per field."""
         from amplifier_module_tool_context_intelligence_query.graph_query_tool import GraphQueryTool
 
         dest_resolver = _make_hook_resolver_with_dests(
@@ -559,10 +574,31 @@ class TestConfigFallback:
         coordinator = _make_coordinator(resolver=dest_resolver)
         config = {
             "sources": {
-                "default": {"url": "", "api_key": "read-key"},  # url is empty
+                "default": {"url": "", "api_key": "read-key"},  # url is empty -- invalid
             }
         }
         resolver = _tool_resolver_with_config(config)
+        tool = GraphQueryTool(coordinator, resolver)
+
+        result = await tool.execute({"query": "MATCH (n) RETURN n"})
+
+        assert result.success is False
+        assert result.error is not None
+        assert result.error["type"] == "source_misconfigured"
+        assert "default" in result.error["message"]
+
+    async def test_case3_per_field_independence_still_applies_across_tiers(self) -> None:
+        """Per-field independence is still real -- but at the TIER level (source vs
+        destination vs env), not for a single internally-incomplete source entry.
+        A fully-valid single source always wins both fields over the destination."""
+        from amplifier_module_tool_context_intelligence_query.graph_query_tool import GraphQueryTool
+
+        dest_resolver = _make_hook_resolver_with_dests(
+            destinations={"default": _make_dest("http://dest.example.com", "dest-key")}
+        )
+        coordinator = _make_coordinator(resolver=dest_resolver)
+        # No `sources` key at all -- tier 1 is genuinely empty, not partially configured.
+        resolver = _tool_resolver_with_config({})
         tool = GraphQueryTool(coordinator, resolver)
 
         _, mock_cls = _make_mock_async_ci_client()
@@ -574,10 +610,9 @@ class TestConfigFallback:
 
         assert result.success is True
         call_kwargs = mock_cls.call_args.kwargs
-        # url falls through from tier 1 (empty) to tier 2 (destination)
+        # tier 1 absent entirely -> both fields fall to tier 2 (destination)
         assert call_kwargs["server_url"] == "http://dest.example.com"
-        # api_key stays at tier 1
-        assert call_kwargs["api_key"] == "read-key"
+        assert call_kwargs["api_key"] == "dest-key"
 
     # --- Case #4: explicit-first precedence assertion ---
 
@@ -708,10 +743,45 @@ class TestConfigFallback:
         assert result.error is not None
         assert result.error["type"] == "configuration_error"
 
-    # --- Case #7: multi-entry ordering determinism ---
+    # --- Case #7: multi-entry ordering / selection determinism ---
+    #
+    # BEHAVIOR CHANGE (criterion 3, workstream-1-multi-source-query-tools.md): with 2+
+    # sources configured and NO `source` argument, the tool no longer silently picks
+    # "first by insertion order" -- it now raises ambiguous_source_selection. Insertion
+    # order is only used when allow_implicit_default=True (the skill_sync.py carve-out,
+    # tested separately in test_skill_sync.py). See §4.1 in README.md.
 
-    async def test_case7_multi_entry_ordering_first_read_entry_wins(self) -> None:
-        """Case #7: first entry in sources (insertion order) wins."""
+    async def test_case7_two_sources_no_selector_now_raises_ambiguous(self) -> None:
+        """2+ sources + no `source` argument -> ambiguous_source_selection (no more
+        implicit 'first entry wins' for real query tool calls)."""
+        from amplifier_module_tool_context_intelligence_query.graph_query_tool import GraphQueryTool
+
+        dest_resolver = _make_hook_resolver_with_dests(
+            destinations={
+                "d1": SimpleNamespace(name="d1", url="http://d1.example.com", api_key="d1-key"),
+                "d2": SimpleNamespace(name="d2", url="http://d2.example.com", api_key="d2-key"),
+            }
+        )
+        coordinator = _make_coordinator(resolver=dest_resolver)
+        config = {
+            "sources": {
+                "alpha": {"url": "http://alpha.example.com", "api_key": "alpha-key"},
+                "beta": {"url": "http://beta.example.com", "api_key": "beta-key"},
+            }
+        }
+        resolver = _tool_resolver_with_config(config)
+        tool = GraphQueryTool(coordinator, resolver)
+
+        result = await tool.execute({"query": "MATCH (n) RETURN n"})
+
+        assert result.success is False
+        assert result.error is not None
+        assert result.error["type"] == "ambiguous_source_selection"
+        assert result.error["valid_sources"] == ["alpha", "beta"]
+
+    async def test_case7_explicit_source_selection_is_deterministic_across_calls(self) -> None:
+        """With 2+ sources configured, an explicit `source` argument resolves
+        deterministically on every call (repeated executes give the same endpoint)."""
         from amplifier_module_tool_context_intelligence_query.graph_query_tool import GraphQueryTool
 
         dest_resolver = _make_hook_resolver_with_dests(
@@ -735,16 +805,22 @@ class TestConfigFallback:
             "amplifier_module_tool_context_intelligence_query.graph_query_tool.AsyncCIClient",
             mock_cls,
         ):
-            result = await tool.execute({"query": "MATCH (n) RETURN n"})
+            r1 = await tool.execute({"query": "MATCH (n) RETURN n", "source": "alpha"})
+            r2 = await tool.execute({"query": "MATCH (n) RETURN n", "source": "alpha"})
 
-        assert result.success is True
-        call_kwargs = mock_cls.call_args.kwargs
-        # First sources entry ("alpha") wins
-        assert call_kwargs["server_url"] == "http://alpha.example.com"
-        assert call_kwargs["api_key"] == "alpha-key"
+        assert r1.success is True
+        assert r2.success is True
+        calls = mock_cls.call_args_list
+        assert (
+            calls[0].kwargs["server_url"]
+            == calls[1].kwargs["server_url"]
+            == "http://alpha.example.com"
+        )
+        assert calls[0].kwargs["api_key"] == calls[1].kwargs["api_key"] == "alpha-key"
 
     async def test_case7_second_execute_same_result_deterministic(self) -> None:
-        """Case #7: repeated executes give the same endpoint (deterministic order)."""
+        """Case #7: repeated executes give the same endpoint (deterministic order)
+        for the single-source case (no selector needed -- no ambiguity possible)."""
         from amplifier_module_tool_context_intelligence_query.graph_query_tool import GraphQueryTool
 
         dest_resolver = _make_hook_resolver_with_dests(
@@ -840,3 +916,132 @@ class TestConfigFallback:
         # No synthesis → sources={} → falls through to tier 2
         assert call_kwargs["server_url"] == "http://upload.example.com"
         assert call_kwargs["api_key"] == "upload-key"
+
+
+# ---------------------------------------------------------------------------
+# TestGraphQuerySourceSelection — workstream-1-multi-source-query-tools.md §6
+# ---------------------------------------------------------------------------
+
+
+class TestGraphQuerySourceSelection:
+    """execute() with an explicit `source` — matching / not matching / omitted-with-2+."""
+
+    def _two_source_config(self) -> dict:
+        return {
+            "sources": {
+                "alpha": {"url": "http://alpha.example.com", "api_key": "alpha-key"},
+                "beta": {"url": "http://beta.example.com", "api_key": "beta-key"},
+            }
+        }
+
+    async def test_input_schema_has_optional_source_property(self) -> None:
+        from amplifier_module_tool_context_intelligence_query.graph_query_tool import GraphQueryTool
+
+        tool = GraphQueryTool(_make_coordinator())
+        props = tool.input_schema["properties"]
+        assert "source" in props
+        assert props["source"]["type"] == "string"
+        assert "source" not in tool.input_schema["required"]
+
+    async def test_source_matching_name_selects_that_source(self) -> None:
+        from amplifier_module_tool_context_intelligence_query.graph_query_tool import GraphQueryTool
+
+        resolver = _tool_resolver_with_config(self._two_source_config())
+        coordinator = _make_coordinator(resolver=_make_hook_resolver_with_dests(destinations={}))
+        tool = GraphQueryTool(coordinator, resolver)
+
+        _, mock_cls = _make_mock_async_ci_client()
+        with patch(
+            "amplifier_module_tool_context_intelligence_query.graph_query_tool.AsyncCIClient",
+            mock_cls,
+        ):
+            result = await tool.execute({"query": "MATCH (n) RETURN n", "source": "beta"})
+
+        assert result.success is True
+        call_kwargs = mock_cls.call_args.kwargs
+        assert call_kwargs["server_url"] == "http://beta.example.com"
+        assert call_kwargs["api_key"] == "beta-key"
+
+    async def test_source_not_matching_returns_unknown_source_error(self) -> None:
+        from amplifier_module_tool_context_intelligence_query.graph_query_tool import GraphQueryTool
+
+        resolver = _tool_resolver_with_config(self._two_source_config())
+        coordinator = _make_coordinator(resolver=_make_hook_resolver_with_dests(destinations={}))
+        tool = GraphQueryTool(coordinator, resolver)
+
+        result = await tool.execute({"query": "MATCH (n) RETURN n", "source": "gamma"})
+
+        assert result.success is False
+        assert result.error is not None
+        assert result.error["type"] == "unknown_source"
+        assert result.error["valid_sources"] == ["alpha", "beta"]
+
+    async def test_source_omitted_with_two_configured_returns_ambiguous_error(self) -> None:
+        from amplifier_module_tool_context_intelligence_query.graph_query_tool import GraphQueryTool
+
+        resolver = _tool_resolver_with_config(self._two_source_config())
+        coordinator = _make_coordinator(resolver=_make_hook_resolver_with_dests(destinations={}))
+        tool = GraphQueryTool(coordinator, resolver)
+
+        result = await tool.execute({"query": "MATCH (n) RETURN n"})
+
+        assert result.success is False
+        assert result.error is not None
+        assert result.error["type"] == "ambiguous_source_selection"
+        assert result.error["valid_sources"] == ["alpha", "beta"]
+
+    async def test_source_omitted_with_one_configured_still_succeeds(self) -> None:
+        """Safe to omit source with exactly one configured (backward compatible)."""
+        from amplifier_module_tool_context_intelligence_query.graph_query_tool import GraphQueryTool
+
+        config = {
+            "sources": {
+                "default": {"url": "http://only.example.com", "api_key": "only-key"},
+            }
+        }
+        resolver = _tool_resolver_with_config(config)
+        coordinator = _make_coordinator(resolver=_make_hook_resolver_with_dests(destinations={}))
+        tool = GraphQueryTool(coordinator, resolver)
+
+        _, mock_cls = _make_mock_async_ci_client()
+        with patch(
+            "amplifier_module_tool_context_intelligence_query.graph_query_tool.AsyncCIClient",
+            mock_cls,
+        ):
+            result = await tool.execute({"query": "MATCH (n) RETURN n"})
+
+        assert result.success is True
+        call_kwargs = mock_cls.call_args.kwargs
+        assert call_kwargs["server_url"] == "http://only.example.com"
+
+    async def test_selected_source_misconfigured_returns_source_misconfigured_error(
+        self,
+    ) -> None:
+        """Criterion 4: a misconfigured selected source only blocks queries targeting IT."""
+        from amplifier_module_tool_context_intelligence_query.graph_query_tool import GraphQueryTool
+
+        config = {
+            "sources": {
+                "good": {"url": "http://good.example.com", "api_key": "good-key"},
+                "bad": {"url": "", "api_key": ""},
+            }
+        }
+        resolver = _tool_resolver_with_config(config)
+        coordinator = _make_coordinator(resolver=_make_hook_resolver_with_dests(destinations={}))
+        tool = GraphQueryTool(coordinator, resolver)
+
+        result = await tool.execute({"query": "MATCH (n) RETURN n", "source": "bad"})
+
+        assert result.success is False
+        assert result.error is not None
+        assert result.error["type"] == "source_misconfigured"
+        assert "bad" in result.error["message"]
+
+        # The OTHER, correctly configured source is unaffected (criterion 4).
+        _, mock_cls = _make_mock_async_ci_client()
+        with patch(
+            "amplifier_module_tool_context_intelligence_query.graph_query_tool.AsyncCIClient",
+            mock_cls,
+        ):
+            good_result = await tool.execute({"query": "MATCH (n) RETURN n", "source": "good"})
+        assert good_result.success is True

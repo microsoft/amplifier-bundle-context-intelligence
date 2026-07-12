@@ -134,12 +134,20 @@ class TestSourceAuthFieldExpansion:
 
 
 class TestValidateSourcesXOR:
-    """Per-source XOR: entra requires auth_resource, static requires api_key."""
+    """Per-source XOR: entra requires auth_resource, static requires api_key.
+
+    BREAKING CHANGE (criterion 4, workstream-1-multi-source-query-tools.md §2.5):
+    validate_sources() is now a WARN-only diagnostic pass over the whole map that
+    returns a list of problem strings and never raises. Hard, fail-loud validation
+    of a SINGLE named source is now validate_source(name), which raises ValueError
+    naming only that one entry.
+    """
 
     def test_static_valid_passes(self) -> None:
         r = _tool_resolver({"sources": {"local": {"url": "http://ci:8000", "api_key": "sk"}}})
-        result = r.validate_sources()  # type: ignore[attr-defined]
-        assert "local" in result
+        problems = r.validate_sources()  # type: ignore[attr-defined]
+        assert problems == []
+        assert r.validate_source("local").name == "local"  # type: ignore[attr-defined]
 
     def test_entra_valid_passes(self) -> None:
         r = _tool_resolver(
@@ -153,10 +161,22 @@ class TestValidateSourcesXOR:
                 }
             }
         )
-        result = r.validate_sources()  # type: ignore[attr-defined]
-        assert "azure" in result
+        problems = r.validate_sources()  # type: ignore[attr-defined]
+        assert problems == []
+        assert r.validate_source("azure").name == "azure"  # type: ignore[attr-defined]
 
-    def test_entra_missing_auth_resource_raises(self) -> None:
+    def test_entra_missing_auth_resource_warns_not_raises(self) -> None:
+        r = _tool_resolver(
+            {
+                "sources": {
+                    "azure": {"url": "http://ci:8000", "auth_mode": "entra"},
+                }
+            }
+        )
+        problems = r.validate_sources()  # type: ignore[attr-defined]
+        assert any("azure" in p and "missing auth_resource" in p for p in problems)
+
+    def test_entra_missing_auth_resource_raises_via_validate_source(self) -> None:
         r = _tool_resolver(
             {
                 "sources": {
@@ -165,7 +185,7 @@ class TestValidateSourcesXOR:
             }
         )
         with pytest.raises(ValueError, match="azure.*missing auth_resource"):
-            r.validate_sources()  # type: ignore[attr-defined]
+            r.validate_source("azure")  # type: ignore[attr-defined]
 
     def test_entra_does_not_require_api_key(self) -> None:
         r = _tool_resolver(
@@ -180,10 +200,21 @@ class TestValidateSourcesXOR:
                 }
             }
         )
-        result = r.validate_sources()  # type: ignore[attr-defined]
-        assert "azure" in result
+        problems = r.validate_sources()  # type: ignore[attr-defined]
+        assert problems == []
 
-    def test_unknown_auth_mode_raises(self) -> None:
+    def test_unknown_auth_mode_warns_not_raises(self) -> None:
+        r = _tool_resolver(
+            {
+                "sources": {
+                    "weird": {"url": "http://ci:8000", "auth_mode": "kerberos", "api_key": "k"},
+                }
+            }
+        )
+        problems = r.validate_sources()  # type: ignore[attr-defined]
+        assert any("kerberos" in p for p in problems)
+
+    def test_unknown_auth_mode_raises_via_validate_source(self) -> None:
         r = _tool_resolver(
             {
                 "sources": {
@@ -192,13 +223,13 @@ class TestValidateSourcesXOR:
             }
         )
         with pytest.raises(ValueError, match="kerberos"):
-            r.validate_sources()  # type: ignore[attr-defined]
+            r.validate_source("weird")  # type: ignore[attr-defined]
 
     def test_empty_sources_passes_with_no_error(self) -> None:
         """Empty sources (no explicit read-config) is valid — fallback to hook/env."""
         r = _tool_resolver({})
-        result = r.validate_sources()  # type: ignore[attr-defined]
-        assert result == {}
+        problems = r.validate_sources()  # type: ignore[attr-defined]
+        assert problems == []
 
     def test_mixed_sources_validate_independently(self) -> None:
         r = _tool_resolver(
@@ -213,8 +244,28 @@ class TestValidateSourcesXOR:
                 }
             }
         )
-        result = r.validate_sources()  # type: ignore[attr-defined]
-        assert set(result.keys()) == {"local", "azure"}
+        problems = r.validate_sources()  # type: ignore[attr-defined]
+        assert problems == []
+
+    def test_one_bad_one_good_does_not_block_the_good_one(self) -> None:
+        """Criterion 4: a misconfigured entry never blocks validate_source() for a sibling."""
+        r = _tool_resolver(
+            {
+                "sources": {
+                    "good": {"url": "http://good:8000", "api_key": "sk"},
+                    "bad": {"url": "http://bad:8000", "auth_mode": "kerberos"},
+                }
+            }
+        )
+        problems = r.validate_sources()  # type: ignore[attr-defined]
+        assert any("bad" in p for p in problems)
+        assert not any(p.startswith("good:") for p in problems)
+        # The good sibling validates cleanly...
+        assert r.validate_source("good").name == "good"  # type: ignore[attr-defined]
+        # ...while the bad one raises, naming only itself.
+        with pytest.raises(ValueError, match="bad") as excinfo:
+            r.validate_source("bad")  # type: ignore[attr-defined]
+        assert "good" not in str(excinfo.value)
 
 
 # ---------------------------------------------------------------------------

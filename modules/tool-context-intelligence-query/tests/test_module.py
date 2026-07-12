@@ -520,8 +520,14 @@ class TestMalformedDestinationInputs:
         call_kwargs = mock_cls.call_args.kwargs
         assert call_kwargs["server_url"] == "http://fallback.example.com"
 
-    async def test_entry_with_empty_url_falls_through_url_field(self) -> None:
-        """Entry with url: '' → url is falsy → _pick skips it → tier 2 wins for url."""
+    async def test_entry_with_empty_url_is_now_source_misconfigured(self) -> None:
+        """BEHAVIOR CHANGE (criterion 4, workstream-1-multi-source-query-tools.md §2.3):
+        an entry with url: '' is "missing url" per _collect_source_problems (both url
+        and api_key are documented-required for a `sources` entry). Previously this
+        validation only ran at mount() time, so a unit test bypassing mount() could
+        exercise pure per-field _pick() fallback on an internally-incomplete source.
+        Now resolve_query_endpoint() validates the selected source on every call, so
+        this configuration is caught immediately as source_misconfigured."""
         from amplifier_module_tool_context_intelligence_query.graph_query_tool import GraphQueryTool
         from context_intelligence.tool_resolver import ToolConfigResolver
 
@@ -538,21 +544,12 @@ class TestMalformedDestinationInputs:
         coordinator = _make_coordinator(hook_resolver=hook_resolver)
         tool = GraphQueryTool(coordinator, resolver)
 
-        mock_client = MagicMock()
-        mock_client.cypher = AsyncMock(return_value=[])
-        mock_cls = MagicMock(return_value=mock_client)
-        with patch(
-            "amplifier_module_tool_context_intelligence_query.graph_query_tool.AsyncCIClient",
-            mock_cls,
-        ):
-            result = await tool.execute({"query": "MATCH (n) RETURN n"})
+        result = await tool.execute({"query": "MATCH (n) RETURN n"})
 
-        assert result.success is True
-        call_kwargs = mock_cls.call_args.kwargs
-        # url is empty in tier 1 → falls through to tier 2 (hook destination)
-        assert call_kwargs["server_url"] == "http://fallback.example.com"
-        # api_key stays at tier 1 (non-empty "read-key")
-        assert call_kwargs["api_key"] == "read-key"
+        assert result.success is False
+        assert result.error is not None
+        assert result.error["type"] == "source_misconfigured"
+        assert "primary" in result.error["message"]
 
     async def test_all_tiers_miss_returns_loud_configuration_error(self) -> None:
         """No config, no destinations, no env → configuration_error (loud, not silent empty)."""
@@ -622,3 +619,60 @@ class TestMalformedDestinationInputs:
         assert result.success is True
         call_kwargs = mock_cls.call_args.kwargs
         assert call_kwargs["server_url"] == "http://hook.example.com"
+
+
+# ---------------------------------------------------------------------------
+# TestMountWithMisconfiguredSource — criterion 4 (workstream-1-multi-source-query-tools.md §6)
+# ---------------------------------------------------------------------------
+
+
+class TestMountWithMisconfiguredSource:
+    """mount() with one bad + one good source entry no longer raises (criterion 4)."""
+
+    async def test_mount_does_not_raise_with_one_bad_source(self) -> None:
+        from amplifier_module_tool_context_intelligence_query import mount
+
+        config = {
+            "sources": {
+                "good": {"url": "http://good.example.com", "api_key": "good-key"},
+                "bad": {"url": "", "api_key": ""},
+            }
+        }
+        coordinator = _make_coordinator()
+        # Must not raise.
+        result = await mount(coordinator, config=config)
+        assert result is None
+
+    async def test_mount_registers_both_tools_with_one_bad_source(self) -> None:
+        from amplifier_module_tool_context_intelligence_query import mount
+
+        config = {
+            "sources": {
+                "good": {"url": "http://good.example.com", "api_key": "good-key"},
+                "bad": {"url": "", "api_key": ""},
+            }
+        }
+        coordinator = _make_coordinator()
+        await mount(coordinator, config=config)
+
+        assert coordinator.mount.call_count == 2
+        registered_names = {call.kwargs["name"] for call in coordinator.mount.call_args_list}
+        assert registered_names == {"graph_query", "blob_read"}
+
+    async def test_mount_logs_warning_with_one_bad_source(self, caplog: Any) -> None:
+        import logging
+
+        from amplifier_module_tool_context_intelligence_query import mount
+
+        config = {
+            "sources": {
+                "good": {"url": "http://good.example.com", "api_key": "good-key"},
+                "bad": {"url": "", "api_key": ""},
+            }
+        }
+        coordinator = _make_coordinator()
+        with caplog.at_level(logging.WARNING, logger="context_intelligence.tool_resolver"):
+            await mount(coordinator, config=config)
+
+        assert any("misconfigured" in r.message for r in caplog.records)
+        assert any("bad" in r.message for r in caplog.records)
