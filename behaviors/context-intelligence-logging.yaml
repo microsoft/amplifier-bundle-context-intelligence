@@ -42,8 +42,8 @@ hooks:
         - delegate:error
       # base_path — relocation root for ALL captures.
       #
-      # This binding is how relocation reaches the readers too: discover.py, the
-      # workflow recipe, and the navigation skills resolve their root ONLY from
+      # This binding is how relocation reaches the readers too: discover.py and
+      # the navigation skills resolve their root ONLY from
       # the AMPLIFIER_CONTEXT_INTELLIGENCE_BASE_PATH env var. Binding base_path to
       # the same var keeps the writer and readers in lock-step.
       #
