@@ -106,6 +106,23 @@ class Source(NamedTuple):
     auth_resource: str = ""
 
 
+class SourceSelectionError(ValueError):
+    """Raised when a caller-supplied (or absent) `source` selector cannot be resolved
+    unambiguously against the configured `sources` map.
+
+    Always a ValueError subclass so existing `except ValueError` call sites (if any)
+    still catch it, but carries structured data so tool execute() methods can build a
+    precise ToolResult error without re-parsing the message string.
+    """
+
+    def __init__(self, message: str, *, error_type: str, valid_names: list[str]) -> None:
+        super().__init__(message)
+        #: "unknown_source" | "ambiguous_source_selection" -- mirrors ToolResult.error["type"].
+        self.error_type = error_type
+        #: Sorted list of configured source names, for the caller to echo back verbatim.
+        self.valid_names = valid_names
+
+
 # ---------------------------------------------------------------------------
 # Resolution helpers (free functions — shared by both tools)
 # ---------------------------------------------------------------------------
@@ -122,6 +139,86 @@ def _first_entry(mapping: Any) -> Any | None:
     if not isinstance(mapping, dict) or not mapping:
         return None
     return next(iter(mapping.values()), None)
+
+
+def _select_source(
+    sources: dict[str, Source],
+    requested_name: str | None,
+    *,
+    allow_implicit_default: bool = False,
+) -> Source | None:
+    """Select which configured ``sources`` entry a caller wants (criteria 1-3).
+
+    Parameters
+    ----------
+    sources:
+        ``tool_resolver.sources`` -- the parsed, name-keyed map.
+    requested_name:
+        The caller's explicit ``source`` input (``input.get("source")``), or ``None``
+        if the caller didn't pass one.
+    allow_implicit_default:
+        When ``True``, restores the OLD (pre-fix) "silently use the first
+        insertion-order entry, never raise" behavior for the 2+-sources/no-name case.
+        This flag exists for exactly ONE caller: ``skill_sync.py``'s internal
+        server-reachability lookups, which fetch session-agnostic *documentation*
+        (the graph-query skill body) rather than session-specific graph data, so an
+        arbitrary configured source is a safe pick there. Every other caller (the
+        ``graph_query`` / ``blob_read`` tools' ``execute()`` paths) MUST leave this
+        ``False`` (the default) so criterion 3's fail-loud rule applies to real
+        queries. See docs/designs/workstream-1-multi-source-query-tools.md sec 2.5.
+
+    Returns
+    -------
+    Source | None
+        - ``None`` only when ``sources`` is empty AND ``requested_name`` is ``None``
+          -- unchanged legacy behavior: caller falls through to tier 2 (hook
+          destination) / tier 3 (env).
+        - The matching ``Source`` in every other case.
+
+    Raises
+    ------
+    SourceSelectionError
+        - ``error_type="unknown_source"``: ``requested_name`` is not ``None`` and is
+          not a key in ``sources`` (whether ``sources`` is empty or non-empty). An
+          explicit request is NEVER silently redirected to a different endpoint
+          (criterion 2) -- not even the hook's upload destination.
+        - ``error_type="ambiguous_source_selection"``: ``requested_name`` is ``None``,
+          2+ sources are configured, and ``allow_implicit_default`` is ``False``
+          (criterion 3).
+    """
+    if requested_name is not None:
+        if requested_name not in sources:
+            raise SourceSelectionError(
+                f"context-intelligence: unknown source {requested_name!r}. "
+                f"Configured sources: "
+                f"{', '.join(sorted(sources)) if sources else '(none configured)'}.",
+                error_type="unknown_source",
+                valid_names=sorted(sources),
+            )
+        return sources[requested_name]
+
+    if not sources:
+        return None  # unchanged: tier 1 empty -> fall through to tier 2 / tier 3
+
+    if len(sources) == 1:
+        return next(iter(sources.values()))  # single entry -- no ambiguity, no selector needed
+
+    if allow_implicit_default:
+        log.debug(
+            "CI source selection: %d sources configured, no selector given, "
+            "allow_implicit_default=True (skill-sync path) -- using first: %s",
+            len(sources),
+            next(iter(sources)),
+        )
+        return next(iter(sources.values()))
+
+    raise SourceSelectionError(
+        f"context-intelligence: {len(sources)} sources are configured "
+        f"({', '.join(sorted(sources))}) but no `source` was specified. "
+        f"Pass source=<name> to select one.",
+        error_type="ambiguous_source_selection",
+        valid_names=sorted(sources),
+    )
 
 
 def _first_destination(hook_resolver: Any | None) -> Any | None:
@@ -143,11 +240,15 @@ def resolve_query_auth_strategy(
     hook_resolver: Any | None,
     tool_resolver: "ToolConfigResolver",
     api_key: str = "",
+    *,
+    source_name: str | None = None,
+    allow_implicit_default: bool = False,
 ) -> Any:
     """Build an AuthStrategy for query tool requests.
 
     Lookup priority (mirrors resolve_query_endpoint field-by-field):
-      1. first entry of tool_resolver.sources  (auth_mode / auth_resource)
+      1. selected entry of tool_resolver.sources  (auth_mode / auth_resource) --
+         selection is via _select_source(), not "always first" (criteria 1-3).
       2. first upload destination on the hook resolver (auth_mode / auth_resource)
       3. env AMPLIFIER_CONTEXT_INTELLIGENCE_AUTH_MODE / _AUTH_RESOURCE (tier-3 fallback)
 
@@ -162,15 +263,34 @@ def resolve_query_auth_strategy(
         The tool's ToolConfigResolver.
     api_key:
         Resolved API key (from resolve_query_endpoint). Used for static mode.
+    source_name / allow_implicit_default:
+        Same contract as resolve_query_endpoint(). Re-runs selection independently
+        (mirrors this module's existing "each field/each function resolves
+        independently" design -- see the module docstring) rather than threading a
+        pre-selected Source object through; the extra dict lookup is negligible and
+        this keeps the two functions decoupled and independently testable, exactly
+        as _pick()/_first_entry() already are.
 
     Returns
     -------
     AuthStrategy
         A built auth strategy (``ApiKeyAuth`` or ``EntraTokenAuth``).
+
+    Raises
+    ------
+    SourceSelectionError, ValueError
+        Same as resolve_query_endpoint() -- if called after resolve_query_endpoint()
+        already succeeded for the same (tool_resolver, source_name), this call is
+        guaranteed not to raise (selection and validation are deterministic and
+        idempotent over the same inputs).
     """
     from context_intelligence.auth import ApiKeyAuth, build_auth_strategy  # noqa: PLC0415
 
-    read = _first_entry(tool_resolver.sources)
+    read = _select_source(
+        tool_resolver.sources, source_name, allow_implicit_default=allow_implicit_default
+    )
+    if read is not None:
+        tool_resolver.validate_source(read.name)
     dest = _first_destination(hook_resolver)
 
     # auth_mode / auth_resource: first non-empty source wins
@@ -202,18 +322,44 @@ def resolve_query_auth_strategy(
 def resolve_query_endpoint(
     hook_resolver: Any | None,
     tool_resolver: "ToolConfigResolver",
+    *,
+    source_name: str | None = None,
+    allow_implicit_default: bool = False,
 ) -> tuple[str | None, str | None]:
     """Resolve (server_url, api_key) for the query path. Per-field independent.
 
     Explicit-first order (each field, first non-empty wins):
-      1. first entry of tool_resolver.sources (.url / .api_key)
+      1. selected entry of tool_resolver.sources (.url / .api_key) -- selection is now
+         via _select_source(), not "always first" (criteria 1-3). The selected entry
+         is validated (criterion 4: per-entry, not whole-map) before its fields are read.
       2. first upload destination on the hook resolver (.url / .api_key)
       3. AMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_URL / AMPLIFIER_CONTEXT_INTELLIGENCE_API_KEY
     Returns (None, None)-able per field; each is None only if all three miss.
 
+    Parameters
+    ----------
+    source_name:
+        Caller's explicit ``source`` selector (from tool input), or ``None``.
+    allow_implicit_default:
+        Passed straight through to ``_select_source`` -- see its docstring. Only
+        ``skill_sync.py`` sets this ``True``.
+
+    Raises
+    ------
+    SourceSelectionError
+        Selection is ambiguous or names an unconfigured source (criteria 2-3).
+    ValueError
+        The *selected* source itself fails per-field validation (criterion 4) --
+        message names ONLY that one source, never the whole map.
+
     Emits one DEBUG line naming which tier supplied each field.
     """
-    read = _first_entry(tool_resolver.sources)
+    read = _select_source(
+        tool_resolver.sources, source_name, allow_implicit_default=allow_implicit_default
+    )
+    if read is not None:
+        tool_resolver.validate_source(read.name)  # raises ValueError naming only `read.name` if bad
+
     dest = _first_destination(hook_resolver)
 
     url, url_src = _pick(
@@ -232,6 +378,20 @@ def resolve_query_endpoint(
         url_src or "none",
         key_src or "none",
     )
+
+    # Criterion 7 (cheap variant only): note untouched sibling sources.
+    if read is not None and len(tool_resolver.sources) >= 2:
+        others = sorted(name for name in tool_resolver.sources if name != read.name)
+        log.info(
+            "CI query dispatched to source %r; %d other configured source(s) not "
+            "queried: %s. Cross-source existence checking is not implemented -- if "
+            "the same session_id may exist in another source, query it explicitly "
+            "via source=<name>.",
+            read.name,
+            len(others),
+            ", ".join(others),
+        )
+
     return (url or None, api_key or None)
 
 
@@ -386,23 +546,74 @@ class ToolConfigResolver:
             self._sources = {}
         return self._sources
 
-    def validate_sources(self) -> dict[str, Source]:
-        """Validate and return all configured sources. Fail-fast (mirrors validate_destinations).
+    def validate_sources(self) -> list[str]:
+        """Best-effort validation pass over ALL configured sources -- WARN, never raise.
 
-        Per-source XOR auth validation:
+        BREAKING CHANGE (criterion 4, docs/designs/workstream-1-multi-source-query-tools.md):
+        previously this method raised ValueError naming EVERY problem across the WHOLE
+        sources map, and was called unconditionally at mount() time -- one bad entry
+        blocked ALL queries, including ones the caller never intended to touch. It is now
+        a non-fatal diagnostic pass: still runs at mount() (so operators still see typos
+        immediately in logs), but only WARNS. Hard, fail-loud validation of the specific
+        source a query actually targets now happens per-query via validate_source(name)
+        (below), called from resolve_query_endpoint()/resolve_query_auth_strategy() only
+        for the ONE selected entry.
+
+        Per-source XOR auth rules (unchanged from before):
         - auth_mode="static" (default): api_key must be non-empty.
         - auth_mode="entra":           auth_resource must be non-empty; api_key is not required.
-        - unknown auth_mode:           always raises.
+        - unknown auth_mode:           always a problem.
         - url must always be non-empty for explicitly configured sources.
 
         Empty sources dict is valid (no explicit read-config; fallback to hook destinations / env).
 
-        Raises:
-            ValueError: naming the offending source(s) and the empty field(s).
         Returns:
-            The validated sources dict (possibly empty -> fallback to hook resolver / env, OK).
+            The list of problem strings found (possibly empty). Never raises.
         """
-        srcs = self.sources
+        problems = self._collect_source_problems(self.sources)
+        if problems:
+            log.warning(
+                "context-intelligence sources misconfigured (mount-time diagnostic only "
+                "-- queries against OTHER, correctly configured sources are unaffected; "
+                "hard validation is now per-source at query time): %s. "
+                "Set url and api_key (static) or auth_resource (entra) under "
+                "overrides.tool-context-intelligence-query.config.sources.<name>.",
+                ", ".join(problems),
+            )
+        return problems
+
+    def validate_source(self, name: str) -> Source:
+        """Validate and return exactly ONE named source. Fail-fast for JUST this entry.
+
+        This is the hard, query-time gate (criterion 4): a misconfigured entry only ever
+        blocks queries that target IT, never its siblings.
+
+        Raises
+        ------
+        KeyError
+            `name` is not in ``self.sources``. (Callers should always pass a name that
+            already came from ``_select_source`` / ``self.sources``, so this should be
+            unreachable in practice -- it is not the caller-facing "unknown source"
+            error, which is ``SourceSelectionError`` and is raised earlier, in
+            ``_select_source``, before this method is ever called.)
+        ValueError
+            The named source fails per-field validation. Message names ONLY `name`.
+        """
+        src = self.sources[name]
+        problems = self._collect_source_problems({name: src})
+        if problems:
+            raise ValueError(
+                f"context-intelligence source {name!r} misconfigured: {', '.join(problems)}. "
+                f"Set url and api_key (static) or auth_resource (entra) under "
+                f"overrides.tool-context-intelligence-query.config.sources.{name}."
+            )
+        return src
+
+    @staticmethod
+    def _collect_source_problems(srcs: dict[str, Source]) -> list[str]:
+        """Shared per-field XOR check, extracted so validate_sources()/validate_source()
+        apply IDENTICAL rules to the whole map vs. a single entry (criterion 4 requires
+        they diverge only in *scope* -- whole-map vs one-entry -- never in *rule*)."""
         problems: list[str] = []
         for name, src in srcs.items():
             if not src.url:
@@ -417,10 +628,35 @@ class ToolConfigResolver:
                 problems.append(
                     f"{name}: unknown auth_mode {src.auth_mode!r} (valid: 'static', 'entra')"
                 )
-        if problems:
-            raise ValueError(
-                f"context-intelligence sources misconfigured: {', '.join(problems)}. "
-                f"Set url and api_key (static) or auth_resource (entra) under "
-                f"overrides.tool-context-intelligence-query.config.sources.<name>."
-            )
-        return srcs
+        return problems
+
+    @property
+    def skill_sync_enabled(self) -> bool:
+        """Whether the analytics path syncs watched skills on session start.
+
+        Default ``False`` — opt-in; headless / single-command-series workflows
+        pay zero skill traffic per turn unless explicitly enabled.  Set to
+        ``true`` to restore the full per-session sync (``GET /version`` ping +
+        conditional skill fetch + ``skill:unloaded`` reload handler).
+
+        Resolution order (first *definite* value wins; empty / placeholder /
+        unrecognized values are treated as *absent* and fall through):
+        1. config['skill_sync_enabled']                       — mount() config dict
+        2. coordinator.config['skill_sync_enabled']           — app-level override
+        3. AMPLIFIER_CONTEXT_INTELLIGENCE_SKILL_SYNC_ENABLED   — env var
+        4. False                                              — default (opt-in)
+
+        Accepted string forms (case-insensitive): true/1/yes/on and
+        false/0/no/off.  An unexpanded YAML placeholder that resolves to an
+        empty string resolves to the default (``False``), never ``True`` — it
+        cannot silently enable sync for everyone.
+        """
+        for raw in (
+            _expand(self._config.get("skill_sync_enabled")),
+            _expand(self._coordinator_config_get("skill_sync_enabled")),
+            _env("SKILL_SYNC_ENABLED"),
+        ):
+            resolved = _coerce_bool(raw)
+            if resolved is not None:
+                return resolved
+        return False

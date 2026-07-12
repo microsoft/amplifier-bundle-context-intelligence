@@ -52,7 +52,7 @@ def _make_hook_resolver(server_url: str | None, api_key: str | None = None) -> M
     return resolver
 
 
-def _make_tool_resolver(config: dict = None) -> Any:
+def _make_tool_resolver(config: dict | None = None) -> Any:
     """Build a real ToolConfigResolver from config for injection."""
     from context_intelligence.tool_resolver import ToolConfigResolver
 
@@ -460,7 +460,7 @@ def _make_dest_br(url: str, api_key: str) -> SimpleNamespace:
     return SimpleNamespace(name="default", url=url, api_key=api_key)
 
 
-def _tool_resolver_br(config: dict = None) -> Any:
+def _tool_resolver_br(config: dict | None = None) -> Any:
     """Build a ToolConfigResolver for blob-read config-fallback tests."""
     from context_intelligence.tool_resolver import ToolConfigResolver
 
@@ -604,3 +604,119 @@ class TestBlobReadConfigFallback:
         assert result.success is False
         assert result.error is not None
         assert result.error["type"] == "configuration_error"
+
+
+# ---------------------------------------------------------------------------
+# TestBlobReadSourceSelection — workstream-1-multi-source-query-tools.md §6
+# ---------------------------------------------------------------------------
+
+
+class TestBlobReadSourceSelection:
+    """execute() with an explicit `source` — same matrix as GraphQueryTool (parity)."""
+
+    def _two_source_config(self) -> dict:
+        return {
+            "sources": {
+                "alpha": {"url": "http://alpha.example.com", "api_key": "alpha-key"},
+                "beta": {"url": "http://beta.example.com", "api_key": "beta-key"},
+            }
+        }
+
+    def test_input_schema_has_optional_source_property(self) -> None:
+        from amplifier_module_tool_context_intelligence_query.blob_read_tool import BlobReadTool
+
+        tool = BlobReadTool(_make_coordinator(None))
+        props = tool.input_schema["properties"]
+        assert "source" in props
+        assert props["source"]["type"] == "string"
+        assert "source" not in tool.input_schema["required"]
+
+    async def test_source_matching_name_selects_that_source(self) -> None:
+        from amplifier_module_tool_context_intelligence_query.blob_read_tool import BlobReadTool
+
+        resolver = _tool_resolver_br(self._two_source_config())
+        coordinator = _make_coordinator(_make_hook_resolver_br(destinations={}))
+        tool = BlobReadTool(coordinator, resolver)
+
+        with _patch_async_client(fetch_blob_return={"ok": True}) as (mock_cls, _):
+            result = await tool.execute({"uri": "ci-blob://my-session/my-key", "source": "beta"})
+
+        assert result.success is True
+        call_kwargs = mock_cls.call_args.kwargs
+        assert call_kwargs["server_url"] == "http://beta.example.com"
+        assert call_kwargs["api_key"] == "beta-key"
+
+    async def test_source_not_matching_returns_unknown_source_error(self) -> None:
+        from amplifier_module_tool_context_intelligence_query.blob_read_tool import BlobReadTool
+
+        resolver = _tool_resolver_br(self._two_source_config())
+        coordinator = _make_coordinator(_make_hook_resolver_br(destinations={}))
+        tool = BlobReadTool(coordinator, resolver)
+
+        result = await tool.execute({"uri": "ci-blob://my-session/my-key", "source": "gamma"})
+
+        assert result.success is False
+        assert result.error is not None
+        assert result.error["type"] == "unknown_source"
+        assert result.error["valid_sources"] == ["alpha", "beta"]
+
+    async def test_source_omitted_with_two_configured_returns_ambiguous_error(self) -> None:
+        from amplifier_module_tool_context_intelligence_query.blob_read_tool import BlobReadTool
+
+        resolver = _tool_resolver_br(self._two_source_config())
+        coordinator = _make_coordinator(_make_hook_resolver_br(destinations={}))
+        tool = BlobReadTool(coordinator, resolver)
+
+        result = await tool.execute({"uri": "ci-blob://my-session/my-key"})
+
+        assert result.success is False
+        assert result.error is not None
+        assert result.error["type"] == "ambiguous_source_selection"
+        assert result.error["valid_sources"] == ["alpha", "beta"]
+
+    async def test_source_omitted_with_one_configured_still_succeeds(self) -> None:
+        from amplifier_module_tool_context_intelligence_query.blob_read_tool import BlobReadTool
+
+        config = {
+            "sources": {
+                "default": {"url": "http://only.example.com", "api_key": "only-key"},
+            }
+        }
+        resolver = _tool_resolver_br(config)
+        coordinator = _make_coordinator(_make_hook_resolver_br(destinations={}))
+        tool = BlobReadTool(coordinator, resolver)
+
+        with _patch_async_client(fetch_blob_return={"ok": True}) as (mock_cls, _):
+            result = await tool.execute({"uri": "ci-blob://my-session/my-key"})
+
+        assert result.success is True
+        call_kwargs = mock_cls.call_args.kwargs
+        assert call_kwargs["server_url"] == "http://only.example.com"
+
+    async def test_selected_source_misconfigured_returns_source_misconfigured_error(
+        self,
+    ) -> None:
+        from amplifier_module_tool_context_intelligence_query.blob_read_tool import BlobReadTool
+
+        config = {
+            "sources": {
+                "good": {"url": "http://good.example.com", "api_key": "good-key"},
+                "bad": {"url": "", "api_key": ""},
+            }
+        }
+        resolver = _tool_resolver_br(config)
+        coordinator = _make_coordinator(_make_hook_resolver_br(destinations={}))
+        tool = BlobReadTool(coordinator, resolver)
+
+        result = await tool.execute({"uri": "ci-blob://my-session/my-key", "source": "bad"})
+
+        assert result.success is False
+        assert result.error is not None
+        assert result.error["type"] == "source_misconfigured"
+        assert "bad" in result.error["message"]
+
+        with _patch_async_client(fetch_blob_return={"ok": True}) as (mock_cls, _):
+            good_result = await tool.execute(
+                {"uri": "ci-blob://my-session/my-key", "source": "good"}
+            )
+        assert good_result.success is True

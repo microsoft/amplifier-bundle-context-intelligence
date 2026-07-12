@@ -66,11 +66,22 @@ class BlobReadTool:
                     "type": "string",
                     "description": "A ci-blob:// URI to fetch (e.g. ci-blob://session_id/key).",
                 },
+                "source": {
+                    "type": "string",
+                    "description": (
+                        "Optional name of a specific configured read source to fetch the blob from "
+                        "(see overrides.tool-context-intelligence-query.config.sources). Required "
+                        "when 2 or more sources are configured and none was implied -- omitting it "
+                        "in that case raises an error listing the valid names."
+                    ),
+                },
             },
             "required": ["uri"],
         }
 
     async def execute(self, input: dict[str, Any]) -> ToolResult:  # noqa: A002
+        from context_intelligence.tool_resolver import SourceSelectionError  # noqa: PLC0415
+
         # (1) Lazy hook resolver resolution
         if self._hook_resolver is None:
             self._hook_resolver = self._coordinator.get_capability(
@@ -78,10 +89,32 @@ class BlobReadTool:
             )
 
         # (2) Resolve server_url + api_key + auth strategy via three-tier chain
-        server_url, api_key = resolve_query_endpoint(self._hook_resolver, self._tool_resolver)
-        auth_strategy = resolve_query_auth_strategy(
-            self._hook_resolver, self._tool_resolver, api_key=api_key or ""
-        )
+        source_name = input.get("source")
+        try:
+            server_url, api_key = resolve_query_endpoint(
+                self._hook_resolver, self._tool_resolver, source_name=source_name
+            )
+            auth_strategy = resolve_query_auth_strategy(
+                self._hook_resolver,
+                self._tool_resolver,
+                api_key=api_key or "",
+                source_name=source_name,
+            )
+        except SourceSelectionError as exc:
+            return ToolResult(
+                success=False,
+                error={
+                    "message": str(exc),
+                    "type": exc.error_type,
+                    "valid_sources": exc.valid_names,
+                },
+            )
+        except ValueError as exc:
+            return ToolResult(
+                success=False,
+                error={"message": str(exc), "type": "source_misconfigured"},
+            )
+
         if not server_url:
             return ToolResult(
                 success=False,

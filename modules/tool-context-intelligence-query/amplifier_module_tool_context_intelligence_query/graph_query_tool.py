@@ -86,12 +86,45 @@ class GraphQueryTool:
                         'Pass "*" to query across all workspaces.'
                     ),
                 },
+                "source": {
+                    "type": "string",
+                    "description": (
+                        "Optional name of a specific configured read source to query (see "
+                        "overrides.tool-context-intelligence-query.config.sources). Required when "
+                        "2 or more sources are configured and you have not already been told which "
+                        "one to use -- omitting it in that case raises an error listing the valid "
+                        "names. Safe to omit when 0 or 1 source is configured."
+                    ),
+                },
             },
             "required": ["query"],
         }
 
-    def _resolve_server_config(self, coordinator: Any) -> tuple[str | None, str | None, str, Any]:
+    @property
+    def skill_sync_enabled(self) -> bool:
+        """Pass-through to the resolver's skill_sync_enabled knob.
+
+        Consumed by skill_sync.on_session_ready via the coordinator capability;
+        returning False (the resolver default) makes the sync path a complete
+        no-op (zero GET /version, zero skill fetch, no reload handler).
+        """
+        return self._tool_resolver.skill_sync_enabled
+
+    def _resolve_server_config(
+        self,
+        coordinator: Any,
+        source_name: str | None = None,
+        *,
+        allow_implicit_default: bool = False,
+    ) -> tuple[str | None, str | None, str, Any]:
         """Resolve (server_url, api_key, workspace, auth_strategy) using the three-tier fallback chain.
+
+        source_name / allow_implicit_default: forwarded to resolve_query_endpoint() /
+        resolve_query_auth_strategy() unchanged -- see their docstrings and
+        docs/designs/workstream-1-multi-source-query-tools.md sec 2.2 for the selection
+        contract (criteria 1-3). Raises SourceSelectionError / ValueError on ambiguous
+        or misconfigured selection; callers (execute(), skill_sync) are responsible for
+        catching these and degrading appropriately for their own context.
 
         Late-mount upgrade: retries hook capability lookup on every call while
         _hook_resolver is None (hook may mount after the tool).
@@ -100,9 +133,18 @@ class GraphQueryTool:
             self._hook_resolver = coordinator.get_capability(
                 "context_intelligence.hook_config_resolver"
             )
-        url, api_key = resolve_query_endpoint(self._hook_resolver, self._tool_resolver)
+        url, api_key = resolve_query_endpoint(
+            self._hook_resolver,
+            self._tool_resolver,
+            source_name=source_name,
+            allow_implicit_default=allow_implicit_default,
+        )
         auth_strategy = resolve_query_auth_strategy(
-            self._hook_resolver, self._tool_resolver, api_key=api_key or ""
+            self._hook_resolver,
+            self._tool_resolver,
+            api_key=api_key or "",
+            source_name=source_name,
+            allow_implicit_default=allow_implicit_default,
         )
         workspace = (
             self._hook_resolver.workspace
@@ -112,9 +154,28 @@ class GraphQueryTool:
         return url, api_key, workspace, auth_strategy
 
     async def execute(self, input: dict[str, Any]) -> ToolResult:  # noqa: A002
-        server_url, api_key, workspace, auth_strategy = self._resolve_server_config(
-            self._coordinator
-        )
+        from context_intelligence.tool_resolver import SourceSelectionError  # noqa: PLC0415
+
+        source_name = input.get("source")
+        try:
+            server_url, api_key, workspace, auth_strategy = self._resolve_server_config(
+                self._coordinator, source_name
+            )
+        except SourceSelectionError as exc:
+            return ToolResult(
+                success=False,
+                error={
+                    "message": str(exc),
+                    "type": exc.error_type,  # "unknown_source" | "ambiguous_source_selection"
+                    "valid_sources": exc.valid_names,
+                },
+            )
+        except ValueError as exc:
+            # The selected source itself is misconfigured (criterion 4) -- names only it.
+            return ToolResult(
+                success=False,
+                error={"message": str(exc), "type": "source_misconfigured"},
+            )
 
         if not server_url:
             return ToolResult(
