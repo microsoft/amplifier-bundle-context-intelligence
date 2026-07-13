@@ -284,6 +284,98 @@ def _build_headers(api_key: str) -> dict[str, str]:
 
 
 # ---------------------------------------------------------------------------
+# Blob-key parsing (shared by sync + async list_blob_keys so they AGREE)
+# ---------------------------------------------------------------------------
+
+
+def _bare_blob_key(value: str) -> str | None:
+    """Normalize *value* to a BARE blob key.
+
+    The real server returns each blob as a full ``ci-blob://<session_id>/<key>``
+    URI, but ``fetch_blob(session_id, key)`` composes ``/blobs/{session_id}/{key}``
+    -- so it needs the BARE ``<key>``, not the URI (passing the URI would build
+    ``/blobs/{sid}/ci-blob://{sid}/{key}`` -> 404). This mirrors the URI parse in
+    ``reconstruct/transcript.py``: strip the ``ci-blob://`` scheme, then split ONCE
+    on ``/`` (the key itself may contain ``/``) and take the key segment.
+
+    - Full ``ci-blob://<sid>/<key>`` URI -> ``<key>``.
+    - Already-bare key string -> returned as-is.
+    - Empty (or a URI with no ``/`` after the scheme) -> ``None`` (skip).
+    """
+    if not value:
+        return None
+    if value.startswith(_CI_BLOB_SCHEME):
+        rest = value[len(_CI_BLOB_SCHEME) :]
+        parts = rest.split("/", 1)  # split ONCE: [session_id, key]; key may contain '/'
+        if len(parts) == 2 and parts[1]:
+            return parts[1]
+        return None  # malformed URI (no key segment) -> skip
+    return value
+
+
+def _extract_blob_key(item: Any) -> str | None:
+    """Extract one BARE blob key string from a single ``blobs`` list item.
+
+    An item may be:
+    - a key **string** -- either a full ``ci-blob://<sid>/<key>`` URI (normalized to
+      ``<key>``) or an already-bare key (used as-is); or
+    - a **dict** carrying the key under the most key-like field -> pull ``key``,
+      else ``name``, else ``id`` (first present, non-empty string), then apply the
+      same URI-normalization to that value.
+
+    Returns ``None`` when no usable key is present (empty string, malformed URI,
+    unknown dict shape, or any other type), so the caller can skip it.
+    """
+    if isinstance(item, str):
+        return _bare_blob_key(item)
+    if isinstance(item, dict):
+        for field in ("key", "name", "id"):
+            value = item.get(field)
+            if isinstance(value, str) and value:
+                return _bare_blob_key(value)
+    return None
+
+
+def _parse_blob_keys(result: Any) -> set[str]:
+    """Parse a ``GET /blobs/{session_id}`` 200 body into a set of blob key strings.
+
+    Accepts BOTH shapes the context-intelligence server returns:
+    - the real dict **envelope** ``{"session_id": ..., "blobs": [...]}`` -> the
+      ``blobs`` list is parsed, and
+    - a bare **list** ``[...]`` (back-compat with older/simpler responses).
+
+    Each list item may be a key string (a full ``ci-blob://<sid>/<key>`` URI OR an
+    already-bare key) or a dict (``{"key"/"name"/"id": ...}``); see
+    ``_extract_blob_key``. Returns BARE keys (``s__llm_request__123__raw``): a
+    full URI has its ``ci-blob://<sid>/`` prefix stripped so the result is what
+    ``fetch_blob(session_id, key)`` and ``reconstruct/metadata.py``'s ``_find_*``
+    finders consume -- passing a full URI back to ``fetch_blob`` would compose
+    ``/blobs/{sid}/ci-blob://{sid}/{key}`` -> 404. (An earlier version filtered on
+    the ``ci-blob://`` prefix, silently dropping every real key; this normalizes
+    instead.)
+
+    A well-formed-but-unrecognized 200 body (dict without a list ``blobs``, or any
+    non-list/non-dict), an envelope with ``"blobs": []``, or a bare ``[]`` all yield
+    an EMPTY SET -- an intentional empty SUCCESS, never an error. Genuine transport /
+    HTTP / decode failures are raised as ``CIClientError`` upstream, before this runs.
+    """
+    if isinstance(result, dict):
+        blobs = result.get("blobs")
+    elif isinstance(result, list):
+        blobs = result
+    else:
+        blobs = None
+    if not isinstance(blobs, list):
+        return set()
+    keys: set[str] = set()
+    for item in blobs:
+        key = _extract_blob_key(item)
+        if key is not None:
+            keys.add(key)
+    return keys
+
+
+# ---------------------------------------------------------------------------
 # CIClient
 # ---------------------------------------------------------------------------
 
@@ -370,14 +462,17 @@ class CIClient:
         return []
 
     def list_blob_keys(self, session_id: str) -> set[str]:
-        """Return the set of ``ci-blob://`` URI keys for *session_id*.
+        """Return the set of blob keys for *session_id*.
 
-        Calls ``GET /blobs/{session_id}`` and parses the response list of
-        ``ci-blob://`` URIs.
+        Calls ``GET /blobs/{session_id}`` and parses the 200 body. Both server
+        response shapes are accepted (see ``_parse_blob_keys``): the real dict
+        envelope ``{"session_id": ..., "blobs": [...]}`` AND a bare list (back-compat);
+        list items may be plain key strings or dicts. Server blob keys are bare
+        identifiers (``s__llm_request__123__raw``), returned verbatim.
 
-        A genuine 200 response with no blob URIs (empty list, or a body that is
-        not a list) returns an empty set -- that is an intentional empty SUCCESS,
-        NOT an error, mirroring ``cypher()``'s empty-200 handling.
+        A genuine 200 with no blobs (envelope ``"blobs": []``, a bare ``[]``, or an
+        unrecognized-but-well-formed body) returns an empty set -- an intentional
+        empty SUCCESS, NOT an error, mirroring ``cypher()``'s empty-200 handling.
 
         Parameters
         ----------
@@ -387,7 +482,7 @@ class CIClient:
         Returns
         -------
         set[str]
-            Set of ``ci-blob://`` URI strings (possibly empty).
+            Set of blob key strings (possibly empty).
 
         Raises
         ------
@@ -399,12 +494,7 @@ class CIClient:
         """
         url = f"{self._server_url}/blobs/{session_id}"
         result = _http_get_strict(url, self._auth_headers())
-        # Genuine empty / non-list 200 -> empty success (NOT an error).
-        if not isinstance(result, list):
-            return set()
-        return {
-            item for item in result if isinstance(item, str) and item.startswith(_CI_BLOB_SCHEME)
-        }
+        return _parse_blob_keys(result)
 
     def fetch_blob(self, session_id: str, key: str) -> Any | None:
         """Fetch a blob from the server.
@@ -625,14 +715,18 @@ class AsyncCIClient:
             ) from exc
 
     async def list_blob_keys(self, session_id: str) -> set[str]:
-        """Return the set of ``ci-blob://`` URI keys for *session_id* (async).
+        """Return the set of blob keys for *session_id* (async).
 
-        Calls ``GET /blobs/{session_id}`` and parses the response list of
-        ``ci-blob://`` URIs.
+        Calls ``GET /blobs/{session_id}`` and parses the 200 body with the SAME
+        shared parser as the sync client (``_parse_blob_keys``), so the two agree:
+        both the real dict envelope ``{"session_id": ..., "blobs": [...]}`` AND a
+        bare list (back-compat) are accepted; list items may be plain key strings or
+        dicts. Server blob keys are bare identifiers (``s__llm_request__123__raw``),
+        returned verbatim.
 
-        A genuine 200 response with no blob URIs (empty list, or a body that is
-        not a list) returns an empty set -- an intentional empty SUCCESS, NOT an
-        error, mirroring ``cypher()``'s empty-200 handling.
+        A genuine 200 with no blobs (envelope ``"blobs": []``, a bare ``[]``, or an
+        unrecognized-but-well-formed body) returns an empty set -- an intentional
+        empty SUCCESS, NOT an error, mirroring ``cypher()``'s empty-200 handling.
 
         Parameters
         ----------
@@ -642,7 +736,7 @@ class AsyncCIClient:
         Returns
         -------
         set[str]
-            Set of ``ci-blob://`` URI strings (possibly empty).
+            Set of blob key strings (possibly empty).
 
         Raises
         ------
@@ -677,12 +771,7 @@ class AsyncCIClient:
                 f"connection error to {url}: {exc}", error_type="connection_error", url=url
             ) from exc
 
-        # Genuine empty / non-list 200 -> empty success (NOT an error).
-        if not isinstance(result, list):
-            return set()
-        return {
-            item for item in result if isinstance(item, str) and item.startswith(_CI_BLOB_SCHEME)
-        }
+        return _parse_blob_keys(result)
 
     async def health_check(self) -> dict[str, Any]:
         """Check server health by running a simple count query (async).

@@ -214,10 +214,10 @@ class TestCIClientCypher:
 
 
 class TestCIClientListBlobKeys:
-    """CIClient.list_blob_keys() must return set[str] of ci-blob:// URIs."""
+    """CIClient.list_blob_keys() must return set[str] of BARE blob keys."""
 
     def test_list_blob_keys_returns_set(self):
-        """list_blob_keys() returns a set of ci-blob:// URI strings."""
+        """list_blob_keys() returns a set of BARE keys (ci-blob:// scheme stripped)."""
         from context_intelligence.client import CIClient
 
         client = CIClient("http://localhost:8000", "key")
@@ -231,27 +231,26 @@ class TestCIClientListBlobKeys:
             result = client.list_blob_keys("session1")
 
         assert isinstance(result, set)
-        assert "ci-blob://session1/key1" in result
-        assert "ci-blob://session1/key2" in result
+        # Full URIs are normalized to bare keys (what fetch_blob(session_id, key) needs).
+        assert result == {"key1", "key2"}
 
-    def test_list_blob_keys_filters_non_ci_blob_uris(self):
-        """list_blob_keys() returns only ci-blob:// URIs."""
+    def test_list_blob_keys_normalizes_uris_and_keeps_bare(self):
+        """A full ci-blob:// URI is stripped to its bare key; a non-URI string is
+        already-bare and kept as-is (no scheme filtering)."""
         from context_intelligence.client import CIClient
 
         client = CIClient("http://localhost:8000", "key")
         mock_response = [
-            "ci-blob://session1/key1",
-            "http://other.example.com/data",
-            "ci-blob://session1/key2",
+            "ci-blob://session1/key1",  # full URI -> bare "key1"
+            "already_bare_key",  # already bare -> as-is
+            "ci-blob://session1/key2",  # full URI -> bare "key2"
         ]
 
         with patch("context_intelligence.client._http_get_strict") as mock_get:
             mock_get.return_value = mock_response
             result = client.list_blob_keys("session1")
 
-        # Should include ci-blob URIs; non-ci-blob may or may not be included
-        assert "ci-blob://session1/key1" in result
-        assert "ci-blob://session1/key2" in result
+        assert result == {"key1", "already_bare_key", "key2"}
 
     def test_list_blob_keys_empty_response(self):
         """list_blob_keys() returns empty set when server returns empty list.
@@ -684,10 +683,10 @@ class TestAsyncCIClientFetchBlob:
 
 
 class TestAsyncCIClientListBlobKeys:
-    """AsyncCIClient.list_blob_keys() must return set[str] of ci-blob:// URIs."""
+    """AsyncCIClient.list_blob_keys() must return set[str] of BARE blob keys."""
 
     async def test_async_list_blob_keys_returns_set(self):
-        """list_blob_keys() returns a set of ci-blob:// URI strings."""
+        """list_blob_keys() returns a set of BARE keys (ci-blob:// scheme stripped)."""
         from context_intelligence.client import AsyncCIClient
 
         blob_uris = ["ci-blob://session1/key1", "ci-blob://session1/key2"]
@@ -699,17 +698,22 @@ class TestAsyncCIClientListBlobKeys:
             result = await client.list_blob_keys("session1")
 
         assert isinstance(result, set)
-        assert "ci-blob://session1/key1" in result
-        assert "ci-blob://session1/key2" in result
+        # Full URIs are normalized to bare keys (what fetch_blob(session_id, key) needs).
+        assert result == {"key1", "key2"}
 
-    async def test_async_list_blob_keys_filters_non_ci_blob_uris(self):
-        """list_blob_keys() returns only ci-blob:// URIs, filtering out others."""
+    async def test_async_list_blob_keys_returns_all_string_keys_verbatim(self):
+        """list_blob_keys() returns every string key VERBATIM -- no ci-blob:// filtering.
+
+        Server blob keys are bare identifiers (e.g. ``s__llm_request__123__raw``),
+        not ci-blob:// URIs; filtering by that scheme was the silent-empty defect.
+        Every non-empty string item is a key.
+        """
         from context_intelligence.client import AsyncCIClient
 
         mixed = [
-            "ci-blob://session1/key1",
-            "http://other.example.com/data",
-            "ci-blob://session1/key2",
+            "s__llm_request__1__raw",
+            "s__tool__2__raw",
+            "s__session_start__3__raw",
         ]
         mock_resp = _make_async_mock_response(mixed)
         mock_http = _make_async_httpx_client(mock_resp)
@@ -718,9 +722,11 @@ class TestAsyncCIClientListBlobKeys:
             client = AsyncCIClient("http://localhost:8000", "testkey")
             result = await client.list_blob_keys("session1")
 
-        assert "ci-blob://session1/key1" in result
-        assert "ci-blob://session1/key2" in result
-        assert "http://other.example.com/data" not in result
+        assert result == {
+            "s__llm_request__1__raw",
+            "s__tool__2__raw",
+            "s__session_start__3__raw",
+        }
 
     async def test_async_list_blob_keys_empty_response(self):
         """list_blob_keys() returns empty set when server returns empty list."""
@@ -802,6 +808,7 @@ class _BlobsBehavior:
     def __init__(self) -> None:
         self.status_code: int = 200
         self.body: bytes = b"[]"
+        self.paths: list[str] = []  # every request path the server was asked for
 
 
 def _find_free_port() -> int:
@@ -817,6 +824,7 @@ def _make_blobs_handler(behavior: "_BlobsBehavior"):
 
     class _Handler(BaseHTTPRequestHandler):
         def do_GET(self):  # noqa: N802
+            behavior.paths.append(self.path)  # record every requested path
             if not self.path.startswith("/blobs/"):
                 self.send_error(404)
                 return
@@ -885,10 +893,15 @@ class TestSyncListBlobKeysFailLoudRealSocket:
         assert result == set()
 
     def test_populated_200_returns_keys(self):
+        """(c) Back-compat bare list of key strings -> those keys, verbatim.
+
+        Server blob keys are bare identifiers, NOT ci-blob:// URIs, so they are
+        returned as-is (no scheme filtering).
+        """
         from context_intelligence.client import CIClient
 
         behavior = _BlobsBehavior()
-        behavior.body = b'["ci-blob://session1/a", "not-a-blob", "ci-blob://session1/b"]'
+        behavior.body = b'["s__llm_request__123__raw", "s__tool__456__raw"]'
         server, base_url = _start_blobs_server(behavior)
         client = CIClient(base_url, "key")
         try:
@@ -896,7 +909,114 @@ class TestSyncListBlobKeysFailLoudRealSocket:
         finally:
             server.shutdown()
             server.server_close()
-        assert result == {"ci-blob://session1/a", "ci-blob://session1/b"}
+        assert result == {"s__llm_request__123__raw", "s__tool__456__raw"}
+
+    def test_dict_envelope_full_uri_items_returns_bare_keys(self):
+        """(a) REAL server shape: dict envelope whose blobs are FULL ci-blob:// URIs
+        -> BARE keys (scheme + leading session segment stripped).
+
+        Regression 1 (silent-empty): a 163-blob session came back empty because the
+        old parser only handled a bare list and dropped the envelope.
+        Regression 2 (this fix): items are full ``ci-blob://S/<key>`` URIs; returning
+        them verbatim made ``fetch_blob(S, uri)`` build ``/blobs/S/ci-blob://S/<key>``
+        -> 404. We must return the BARE ``<key>``.
+        """
+        from context_intelligence.client import CIClient
+
+        behavior = _BlobsBehavior()
+        behavior.body = (
+            b'{"session_id": "S", "blobs": ['
+            b'"ci-blob://S/S__llm_request__123__raw", '
+            b'"ci-blob://S/S__session_start__1__raw"]}'
+        )
+        server, base_url = _start_blobs_server(behavior)
+        client = CIClient(base_url, "key")
+        try:
+            result = client.list_blob_keys("S")
+        finally:
+            server.shutdown()
+            server.server_close()
+        assert result == {"S__llm_request__123__raw", "S__session_start__1__raw"}
+
+    def test_key_containing_slash_split_once(self):
+        """A key that itself contains '/' is preserved -- scheme split is ONCE only."""
+        from context_intelligence.client import CIClient
+
+        behavior = _BlobsBehavior()
+        behavior.body = b'{"session_id": "S", "blobs": ["ci-blob://S/dir/sub__x__1__raw"]}'
+        server, base_url = _start_blobs_server(behavior)
+        client = CIClient(base_url, "key")
+        try:
+            result = client.list_blob_keys("S")
+        finally:
+            server.shutdown()
+            server.server_close()
+        assert result == {"dir/sub__x__1__raw"}
+
+    def test_dict_envelope_with_dict_items_returns_keys(self):
+        """(b) Envelope whose blobs are DICT items -> pull key/name/id per item, and
+        strip the ci-blob:// scheme when the pulled value is a full URI."""
+        from context_intelligence.client import CIClient
+
+        behavior = _BlobsBehavior()
+        behavior.body = (
+            b'{"session_id": "S", "blobs": ['
+            b'{"key": "ci-blob://S/S__a__1__raw"}, '  # dict + full URI -> stripped
+            b'{"name": "S__b__2__raw"}, '  # dict + already-bare -> as-is
+            b'{"id": "S__c__3__raw"}]}'
+        )
+        server, base_url = _start_blobs_server(behavior)
+        client = CIClient(base_url, "key")
+        try:
+            result = client.list_blob_keys("S")
+        finally:
+            server.shutdown()
+            server.server_close()
+        assert result == {"S__a__1__raw", "S__b__2__raw", "S__c__3__raw"}
+
+    def test_dict_envelope_empty_blobs_returns_empty_set(self):
+        """(d) Envelope with "blobs": [] -> empty set (genuine-empty SUCCESS, not error)."""
+        from context_intelligence.client import CIClient
+
+        behavior = _BlobsBehavior()
+        behavior.body = b'{"session_id": "s", "blobs": []}'
+        server, base_url = _start_blobs_server(behavior)
+        client = CIClient(base_url, "key")
+        try:
+            result = client.list_blob_keys("s")
+        finally:
+            server.shutdown()
+            server.server_close()
+        assert result == set()
+
+    def test_list_then_fetch_composes_clean_path_no_doubled_scheme(self):
+        """Consumption pattern: keys from list_blob_keys() feed fetch_blob(session_id, key)
+        and compose a CLEAN ``/blobs/{sid}/{key}`` path -- NO doubled ``ci-blob://``.
+
+        This is the exact metadata.py flow (list -> _find_*_blob_key -> fetch_blob) and
+        the regression guard: if list_blob_keys returned the full URI, fetch_blob would
+        request ``/blobs/S/ci-blob://S/<key>`` -> 404.
+        """
+        from context_intelligence.client import CIClient
+
+        behavior = _BlobsBehavior()
+        behavior.body = b'{"session_id": "S", "blobs": ["ci-blob://S/S__session_start__1__raw"]}'
+        server, base_url = _start_blobs_server(behavior)
+        client = CIClient(base_url, "key")
+        try:
+            keys = client.list_blob_keys("S")
+            assert keys == {"S__session_start__1__raw"}
+            (key,) = keys
+            # Feed the bare key straight back into fetch_blob, as metadata.py does.
+            client.fetch_blob("S", key)
+        finally:
+            server.shutdown()
+            server.server_close()
+
+        # The fetch path must be exactly /blobs/S/<bare key> -- no ci-blob:// anywhere.
+        fetch_paths = [p for p in behavior.paths if p != "/blobs/S"]
+        assert fetch_paths == ["/blobs/S/S__session_start__1__raw"]
+        assert all("ci-blob://" not in p for p in behavior.paths)
 
 
 class TestAsyncListBlobKeysFailLoudRealSocket:
@@ -937,6 +1057,92 @@ class TestAsyncListBlobKeysFailLoudRealSocket:
         client = AsyncCIClient(base_url, "key")
         try:
             result = await client.list_blob_keys("session1")
+        finally:
+            server.shutdown()
+            server.server_close()
+        assert result == set()
+
+    async def test_dict_envelope_full_uri_items_returns_bare_keys(self):
+        """(a) REAL server shape: dict envelope whose blobs are FULL ci-blob:// URIs
+        -> BARE keys. Async must parse identically to sync (shared _parse_blob_keys)."""
+        from context_intelligence.client import AsyncCIClient
+
+        behavior = _BlobsBehavior()
+        behavior.body = (
+            b'{"session_id": "S", "blobs": ['
+            b'"ci-blob://S/S__llm_request__123__raw", '
+            b'"ci-blob://S/S__session_start__1__raw"]}'
+        )
+        server, base_url = _start_blobs_server(behavior)
+        client = AsyncCIClient(base_url, "key")
+        try:
+            result = await client.list_blob_keys("S")
+        finally:
+            server.shutdown()
+            server.server_close()
+        assert result == {"S__llm_request__123__raw", "S__session_start__1__raw"}
+
+    async def test_key_containing_slash_split_once(self):
+        """A key that itself contains '/' is preserved -- scheme split is ONCE only."""
+        from context_intelligence.client import AsyncCIClient
+
+        behavior = _BlobsBehavior()
+        behavior.body = b'{"session_id": "S", "blobs": ["ci-blob://S/dir/sub__x__1__raw"]}'
+        server, base_url = _start_blobs_server(behavior)
+        client = AsyncCIClient(base_url, "key")
+        try:
+            result = await client.list_blob_keys("S")
+        finally:
+            server.shutdown()
+            server.server_close()
+        assert result == {"dir/sub__x__1__raw"}
+
+    async def test_dict_envelope_with_dict_items_returns_keys(self):
+        """(b) Envelope whose blobs are DICT items -> pull key/name/id per item, and
+        strip the ci-blob:// scheme when the pulled value is a full URI."""
+        from context_intelligence.client import AsyncCIClient
+
+        behavior = _BlobsBehavior()
+        behavior.body = (
+            b'{"session_id": "S", "blobs": ['
+            b'{"key": "ci-blob://S/S__a__1__raw"}, '  # dict + full URI -> stripped
+            b'{"name": "S__b__2__raw"}, '  # dict + already-bare -> as-is
+            b'{"id": "S__c__3__raw"}]}'
+        )
+        server, base_url = _start_blobs_server(behavior)
+        client = AsyncCIClient(base_url, "key")
+        try:
+            result = await client.list_blob_keys("S")
+        finally:
+            server.shutdown()
+            server.server_close()
+        assert result == {"S__a__1__raw", "S__b__2__raw", "S__c__3__raw"}
+
+    async def test_bare_list_returns_keys(self):
+        """(c) Back-compat bare list of key strings -> those keys, verbatim."""
+        from context_intelligence.client import AsyncCIClient
+
+        behavior = _BlobsBehavior()
+        behavior.body = b'["s__llm_request__123__raw", "s__tool__456__raw"]'
+        server, base_url = _start_blobs_server(behavior)
+        client = AsyncCIClient(base_url, "key")
+        try:
+            result = await client.list_blob_keys("s")
+        finally:
+            server.shutdown()
+            server.server_close()
+        assert result == {"s__llm_request__123__raw", "s__tool__456__raw"}
+
+    async def test_dict_envelope_empty_blobs_returns_empty_set(self):
+        """(d) Envelope with "blobs": [] -> empty set (genuine-empty SUCCESS, not error)."""
+        from context_intelligence.client import AsyncCIClient
+
+        behavior = _BlobsBehavior()
+        behavior.body = b'{"session_id": "s", "blobs": []}'
+        server, base_url = _start_blobs_server(behavior)
+        client = AsyncCIClient(base_url, "key")
+        try:
+            result = await client.list_blob_keys("s")
         finally:
             server.shutdown()
             server.server_close()
