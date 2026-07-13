@@ -8,7 +8,7 @@ digraph context_intelligence {
     nodesep=0.6
     ranksep=0.7
     bgcolor="white"
-    source_hash="18e3046d9999d7c21d8a948dbb2f0e83ae35c8b72a73e2e2793227571f9c088c"
+    source_hash="0758d63959ef34f091dbe8fc6e27bc712f154503c829bb35474423dd213c2c27"
 
     node [fontname="Helvetica", fontsize=11, style="filled,rounded"]
     edge [fontname="Helvetica", fontsize=9]
@@ -23,7 +23,7 @@ digraph context_intelligence {
 
         beh_context_intelligence_analysis_behavior [label="context-intelligence-analysis-behavior\n1 tools\n~864 tok", shape=box, fillcolor="#e0f2f1", style="filled,rounded"]
         beh_context_intelligence_design_behavior [label="context-intelligence-design-behavior\n1 tools\n~331 tok", shape=box, fillcolor="#e0f2f1", style="filled,rounded"]
-        beh_context_intelligence_logging_behavior [label="context-intelligence-logging-behavior\n1 tools\n~1661 tok", shape=box, fillcolor="#e0f2f1", style="filled,rounded"]
+        beh_context_intelligence_logging_behavior [label="context-intelligence-logging-behavior\n1 tools\n~1656 tok", shape=box, fillcolor="#e0f2f1", style="filled,rounded"]
         beh_context_intelligence_navigation_behavior [label="context-intelligence-navigation-behavior\n2 tools\n~617 tok", shape=box, fillcolor="#e0f2f1", style="filled,rounded"]
         beh_context_intelligence_behavior [label="context-intelligence-behavior\n~236 tok", shape=box, fillcolor="#e0f2f1", style="filled,rounded"]
     }
