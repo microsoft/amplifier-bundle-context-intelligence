@@ -8,15 +8,40 @@ the floor, not proof. Any change that crosses a **seam** — the client↔server
 networking, auth, or any agent / skill / mode / tool / hook / config edit — must be
 proven with a **real DTU run**, not a mock. These profiles are that harness.
 
-## Prerequisites
+## How these DTUs verify (the principle)
 
-| Need | Check | Install |
-|------|-------|---------|
-| DTU CLI | `which amplifier-digital-twin` | `uv tool install git+https://github.com/microsoft/amplifier-bundle-digital-twin-universe@main` |
-| Incus (all profiles) | `incus version` | load the `digital-twin-universe` skill → `docs/installing-incus.md` |
-| Docker (server sidecar / Gitea) | `docker version` | load the skill → `docs/installing-docker.md` |
-| Gitea (local-branch profiles) | — | load the `gitea` skill; mirror this repo, pass `--var gitea_host=...` |
-| `ANTHROPIC_API_KEY`, `GH_TOKEN` | env | for any profile that runs a real Amplifier session |
+**Structural and behavioural checks load the bundle through the Amplifier CLI — they do
+NOT run code artefacts.** A real DTU test does what a user does: `amplifier bundle add`
+the bundle, activate `/context-intelligence`, and drive the tools / agents / skills / mode
+through an actual `amplifier` session, then assert the *loaded* behaviour. Running
+`pytest` (or importing modules) inside a container is **not** an end-to-end test — it's a
+unit test in a different directory. The unit/integration suites already run via
+`uv run pytest` and `scripts/validate-full.sh`; DTUs exist to prove the *installed,
+CLI-loaded* bundle actually works.
+
+Consequence: any profile that verifies loading or behaviour **installs via
+`amplifier bundle add`** (see the mode profiles' `install.command`) and, for local-branch
+work, resolves that install to your branch through **Gitea** (`url_rewrites` +
+`--var gitea_host=...`).
+
+## Dev dependencies & setup
+
+To run these DTUs during development you need the following on your host. Add them once:
+
+| Dependency | Why | Check | Add it |
+|------------|-----|-------|--------|
+| **`amplifier-digital-twin` CLI** | launches/manages DTU environments | `amplifier-digital-twin --version` | `uv tool install git+https://github.com/microsoft/amplifier-bundle-digital-twin-universe@main` |
+| **Incus** | the container runtime every profile uses | `incus version` | in an Amplifier session load the `digital-twin-universe` skill → `read_file("@digital-twin-universe:docs/installing-incus.md")` |
+| **Docker** | Gitea + any server sidecar | `docker version` | load the `digital-twin-universe` skill → `read_file("@digital-twin-universe:docs/installing-docker.md")` |
+| **Gitea** | serves *your local branch* so `amplifier bundle add` installs your code, not `main` — **required for the mode / seam profiles that test uncommitted changes** | `docker ps \| grep gitea` | in an Amplifier session load the `gitea` skill; mirror this repo, then pass the endpoint via `--var gitea_host=http://<gitea-host>:3000` (profiles carry the `url_rewrites` that redirect `@main` → the mirror) |
+| **`GH_TOKEN`** | clone the bundle inside the container | `echo $GH_TOKEN` | `export GH_TOKEN=$(gh auth token)` |
+| **A real LLM key** (`ANTHROPIC_API_KEY`) | any profile that drives an actual `amplifier` session (all behavioural scenarios) | `echo $ANTHROPIC_API_KEY` | export a real key — placeholder/short values will not run a session |
+
+**Which profiles need what:** the `signals` profile needs only Incus (deterministic
+library). Everything that loads the bundle to check mode/agents/skills/tools/config or runs
+a session needs **Incus + Gitea mirror + a real LLM key** (and the CI server for
+server-backed read/write seams — see below). There is no way to prove the CLI-loaded
+seams without those; that is the point of an end-to-end test.
 
 ## Profile inventory (what each really tests)
 

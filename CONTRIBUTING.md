@@ -75,6 +75,21 @@ If your change altered bundle structure, regenerate the diagram and commit it
 # regenerate bundle.dot / bundle.png via the generate-bundle-docs recipe
 ```
 
+## End-to-end (DTU) testing — dev dependencies
+
+Seam changes (mode / agent / skill / tool / hook / config / networking / auth) must be
+proven with a **real Digital Twin Universe (DTU) run**, and DTU structural/behavioural
+checks **load the bundle through the Amplifier CLI** (`amplifier bundle add` → activate
+`/context-intelligence` → drive a real session) — **not** by running `pytest` inside a
+container (that is a unit test in a different directory, not end-to-end).
+
+The extra host dependencies for this — the `amplifier-digital-twin` CLI, Incus, Docker,
+**Gitea** (to serve your local branch so the bundle install resolves to *your* code), and a
+real LLM key for behavioural scenarios — plus exact install pointers and which profile needs
+what, are documented in
+[`.amplifier/digital-twin-universe/profiles/README.md`](.amplifier/digital-twin-universe/profiles/README.md).
+Add them once before running the mode/seam profiles.
+
 ## Pull requests
 
 Open PRs against `main` and **populate every item in the PR template** from real
