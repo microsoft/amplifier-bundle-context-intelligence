@@ -11,7 +11,7 @@
 #     --name ci-contributes-migration \
 #     --var gitea_host=http://localhost:10110
 #
-# `readiness` RUNS ON LAUNCH (structural proof, no LLM). `validation_cmds` documents
+# `readiness` RUNS ON LAUNCH (structural proof, no LLM). `manual_validation_steps` documents
 # the full check-suite; run each via `amplifier-digital-twin exec <id> -- <command>`.
 #
 # WHAT THIS PROFILE FOCUSES ON (the contributes.agents migration):
@@ -117,7 +117,7 @@ readiness:
       && ! echo "$OUT" | grep -q "context-intelligence-tool-designer"
       && echo "ready: specialists gated (contributes.agents), baseline intact"
 
-validation_cmds:
+manual_validation_steps:
   # ---- STRUCTURAL ----
   - name: S1-inactive-baseline-and-gating
     command: |

@@ -83,7 +83,7 @@ readiness:
       /opt/venv/bin/python3 -c
       "from context_intelligence.signals import score_session; print('ready')"
 
-validation_cmds:
+manual_validation_steps:
   # A: All public symbols importable
   - name: A-library-import
     command: |

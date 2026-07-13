@@ -145,7 +145,7 @@ readiness:
       curl -sf "$AMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_URL/status"
       | python3 -c "import sys,json;d=json.load(sys.stdin);assert d['status']=='ok' and d['neo4j_connected'];print('ready: server reachable, neo4j_connected')"
 
-validation_cmds:
+manual_validation_steps:
   # ---- BEHAVIOURAL step 0: ensure the server has events for this workspace to read back ----
   - name: B0-log-events-first
     command: |

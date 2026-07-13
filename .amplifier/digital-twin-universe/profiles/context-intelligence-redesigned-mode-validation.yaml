@@ -14,10 +14,10 @@
 #
 # The `readiness` checks below RUN ON LAUNCH and gate the environment: they prove
 # (deterministically, no LLM) that the bundle loaded from the mirror and that the
-# mode-gating surface is correct when the mode is INACTIVE. The `validation_cmds`
+# mode-gating surface is correct when the mode is INACTIVE. The `manual_validation_steps`
 # block documents the full structural + behavioural check-suite; run each step via
 #   amplifier-digital-twin exec <id> -- <command>
-# (`validation_cmds` is not auto-executed by launch -- it is the documented,
+# (`manual_validation_steps` is not auto-executed by launch -- it is the documented,
 # reproducible evidence procedure, incl. the interactive-TTY behavioural steps).
 #
 # WHAT IS PROVABLE VIA THE CLI (discovered empirically -- see notes per step):
@@ -136,7 +136,7 @@ readiness:
       && ! echo "$OUT" | grep -q "context-intelligence-tool-designer"
       && echo "ready: baseline agents present, specialists gated when mode inactive"
 
-validation_cmds:
+manual_validation_steps:
   # ---- STRUCTURAL (deterministic; run via `amplifier-digital-twin exec <id> -- ...`) ----
   - name: S1-mirror-provenance
     command: |
