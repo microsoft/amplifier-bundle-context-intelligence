@@ -858,3 +858,80 @@ class TestExtractMetadata:
 
         for call in mock_client.cypher.call_args_list:
             assert "my-workspace" in str(call)
+
+
+# ---------------------------------------------------------------------------
+# Risk 2: reconstruct metadata must SURFACE a genuine blob-store failure, not
+# silently emit partial metadata that looks complete.
+# ---------------------------------------------------------------------------
+
+
+class TestBuildRootMetadataFailLoud:
+    """_build_root_metadata() propagates CIClientError from list_blob_keys()
+    instead of swallowing it to partial (enrichment-less) metadata."""
+
+    def test_ciclienterror_from_list_blob_keys_propagates(self):
+        import pytest
+
+        from context_intelligence.client import CIClientError
+        from context_intelligence.reconstruct.metadata import _build_root_metadata
+
+        client = MagicMock()
+        client.list_blob_keys.side_effect = CIClientError(
+            "server down", error_type="connection_error", url="http://x/blobs/s1"
+        )
+
+        # A genuine transport failure must NOT be swallowed into "no enrichment".
+        with pytest.raises(CIClientError) as excinfo:
+            _build_root_metadata(
+                client=client,
+                session_id="s1",
+                started_at="2024-01-01T00:00:00Z",
+                turn_count=3,
+                session_data={},
+            )
+        assert excinfo.value.error_type == "connection_error"
+        # fetch_blob must never be reached once listing already failed loud.
+        client.fetch_blob.assert_not_called()
+
+    def test_http_status_from_list_blob_keys_propagates(self):
+        import pytest
+
+        from context_intelligence.client import CIClientError
+        from context_intelligence.reconstruct.metadata import _build_root_metadata
+
+        client = MagicMock()
+        client.list_blob_keys.side_effect = CIClientError(
+            "boom", error_type="http_status", url="http://x/blobs/s1", status_code=500
+        )
+        with pytest.raises(CIClientError) as excinfo:
+            _build_root_metadata(
+                client=client,
+                session_id="s1",
+                started_at="2024-01-01T00:00:00Z",
+                turn_count=1,
+                session_data={},
+            )
+        assert excinfo.value.error_type == "http_status"
+
+    def test_genuine_empty_blob_keys_still_builds_metadata(self):
+        """A session with NO blobs (genuine empty) is not an error: metadata is
+        built without enrichment fields, no exception."""
+        from context_intelligence.reconstruct.metadata import _build_root_metadata
+
+        client = MagicMock()
+        client.list_blob_keys.return_value = set()  # legitimately empty
+
+        metadata = _build_root_metadata(
+            client=client,
+            session_id="s1",
+            started_at="2024-01-01T00:00:00Z",
+            turn_count=5,
+            session_data={},
+        )
+        assert metadata["session_id"] == "s1"
+        assert metadata["turn_count"] == 5
+        # No enrichment blobs -> those fields are simply absent (not fabricated).
+        assert "bundle" not in metadata
+        assert "model" not in metadata
+        client.fetch_blob.assert_not_called()

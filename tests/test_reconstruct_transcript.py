@@ -692,3 +692,57 @@ class TestExtractTranscript:
         # Every cypher call should use "my_workspace"
         for c in client.cypher.call_args_list:
             assert c[1].get("workspace") == "my_workspace" or c[0][1] == "my_workspace"
+
+
+# ---------------------------------------------------------------------------
+# Risk 2: reconstruct transcript must SURFACE a genuine blob-store failure, not
+# silently emit a transcript missing its content while looking complete.
+# ---------------------------------------------------------------------------
+
+
+class TestExtractTranscriptFailLoud:
+    """extract_transcript() propagates CIClientError from list_blob_keys()
+    instead of swallowing it to an empty (content-less) transcript."""
+
+    def test_ciclienterror_from_list_blob_keys_propagates(self):
+        import pytest
+
+        from context_intelligence.client import CIClientError
+        from context_intelligence.reconstruct.transcript import extract_transcript
+
+        client = MagicMock()
+        client.list_blob_keys.side_effect = CIClientError(
+            "server down", error_type="connection_error", url="http://x/blobs/s1"
+        )
+
+        with pytest.raises(CIClientError) as excinfo:
+            extract_transcript(client, "s1", "ws")
+        assert excinfo.value.error_type == "connection_error"
+        # Listing failed loud BEFORE any graph traversal -> cypher never reached.
+        client.cypher.assert_not_called()
+
+    def test_http_status_from_list_blob_keys_propagates(self):
+        import pytest
+
+        from context_intelligence.client import CIClientError
+        from context_intelligence.reconstruct.transcript import extract_transcript
+
+        client = MagicMock()
+        client.list_blob_keys.side_effect = CIClientError(
+            "boom", error_type="http_status", url="http://x/blobs/s1", status_code=500
+        )
+        with pytest.raises(CIClientError) as excinfo:
+            extract_transcript(client, "s1", "ws")
+        assert excinfo.value.error_type == "http_status"
+
+    def test_genuine_empty_blob_keys_still_builds_transcript(self):
+        """A session with NO blobs (genuine empty) is not an error: extract_transcript
+        proceeds (returns whatever the graph yields), no exception."""
+        from context_intelligence.reconstruct.transcript import extract_transcript
+
+        client = MagicMock()
+        client.list_blob_keys.return_value = set()  # legitimately empty
+        client.cypher.return_value = []  # no runs -> empty transcript, but no error
+
+        messages = extract_transcript(client, "s1", "ws")
+        assert messages == []

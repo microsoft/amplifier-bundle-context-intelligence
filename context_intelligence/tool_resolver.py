@@ -7,8 +7,10 @@ properties mirror HookConfigResolver for the shared config keys.
 
 When ``hook-context-intelligence`` IS mounted it registers a
 ``HookConfigResolver`` as ``context_intelligence.hook_config_resolver``; the
-tools then use ``resolve_query_endpoint(hook_resolver, tool_resolver)`` which
-prefers the explicit read-config over the hook's upload destinations.
+tools then use ``resolve_query_connection(hook_resolver, tool_resolver)`` which
+resolves a SINGLE endpoint from the connectable pool (``sources`` ∪ hook
+``destinations``), preferring the explicit read-config over the hook's upload
+destinations.
 
 Resolution priority for every scalar property (mirrors HookConfigResolver for
 the shared config keys):
@@ -23,7 +25,8 @@ workspace resolution differs from HookConfigResolver by design:
     ToolConfigResolver.workspace falls back to the env var then ``"default"``
     because there is no session.working_dir in analytics-only mode.
 
-See resolve_query_endpoint() for the full three-tier fallback used by the tools.
+See resolve_query_connection() for the full connectable-pool resolution +
+provenance contract used by the tools (docs/multi-source-build-spec-v5.md §4-5).
 """
 
 from __future__ import annotations
@@ -156,29 +159,54 @@ class SourceSelectionError(ValueError):
         self.valid_names = valid_names
 
 
+class PoolEntry(NamedTuple):
+    """One entry in the connectable pool (a tool ``source`` or a hook ``destination``).
+
+    See ``_connectable_pool()`` -- the pool is ``sources`` union hook ``destinations``,
+    used ONLY for explicit selection (``source=<name>``) and listing
+    (``list_sources: true``). It never widens the DEFAULT (no-pointer) resolution
+    path -- see ``resolve_query_connection()``.
+    """
+
+    name: str
+    url: str
+    api_key: str
+    auth_mode: str
+    auth_resource: str
+    kind: str  # "source" | "destination"
+
+
+class EndpointOrigin(NamedTuple):
+    """Provenance of a resolved connection -- surfaced to the user.
+
+    ``name``: the entry name ("prod" / "default" / "" when resolved purely from env).
+    ``url``:  the resolved server URL (matches the endpoint that actually answers).
+    ``kind``: "source" | "destination" | "env".
+    """
+
+    name: str
+    url: str
+    kind: str
+
+
+class ResolvedConnection(NamedTuple):
+    """Result of ``resolve_query_connection()`` -- a SINGLE resolved endpoint,
+    its auth strategy, and its provenance."""
+
+    url: str | None
+    api_key: str | None
+    auth_strategy: Any
+    origin: EndpointOrigin | None  # None only when url is None
+
+
 # ---------------------------------------------------------------------------
 # Resolution helpers (free functions — shared by both tools)
 # ---------------------------------------------------------------------------
 
 
-def _first_entry(mapping: Any) -> Any | None:
-    """First value of an insertion-ordered ``dict``, or None.
-
-    Defensive: returns None when *mapping* is not a non-empty dict (e.g. a test
-    double, or an unset attribute). Used for BOTH the tool's own ``sources``
-    mapping and the hook's destinations so the 'first' rule is identical on
-    both sides.
-    """
-    if not isinstance(mapping, dict) or not mapping:
-        return None
-    return next(iter(mapping.values()), None)
-
-
 def _select_source(
     sources: dict[str, Source],
     requested_name: str | None,
-    *,
-    allow_implicit_default: bool = False,
 ) -> Source | None:
     """Select which configured ``sources`` entry a caller wants (criteria 1-3).
 
@@ -189,16 +217,6 @@ def _select_source(
     requested_name:
         The caller's explicit ``source`` input (``input.get("source")``), or ``None``
         if the caller didn't pass one.
-    allow_implicit_default:
-        When ``True``, restores the OLD (pre-fix) "silently use the first
-        insertion-order entry, never raise" behavior for the 2+-sources/no-name case.
-        This flag exists for exactly ONE caller: ``skill_sync.py``'s internal
-        server-reachability lookups, which fetch session-agnostic *documentation*
-        (the graph-query skill body) rather than session-specific graph data, so an
-        arbitrary configured source is a safe pick there. Every other caller (the
-        ``graph_query`` / ``blob_read`` tools' ``execute()`` paths) MUST leave this
-        ``False`` (the default) so criterion 3's fail-loud rule applies to real
-        queries. See docs/designs/workstream-1-multi-source-query-tools.md sec 2.5.
 
     Returns
     -------
@@ -215,9 +233,9 @@ def _select_source(
           not a key in ``sources`` (whether ``sources`` is empty or non-empty). An
           explicit request is NEVER silently redirected to a different endpoint
           (criterion 2) -- not even the hook's upload destination.
-        - ``error_type="ambiguous_source_selection"``: ``requested_name`` is ``None``,
-          2+ sources are configured, and ``allow_implicit_default`` is ``False``
-          (criterion 3).
+        - ``error_type="ambiguous_source_selection"``: ``requested_name`` is ``None``
+          and 2+ sources are configured (criterion 3). This is unconditional -- there
+          is no implicit "use the first entry" fallback for any caller.
     """
     if requested_name is not None:
         if requested_name not in sources:
@@ -236,15 +254,6 @@ def _select_source(
     if len(sources) == 1:
         return next(iter(sources.values()))  # single entry -- no ambiguity, no selector needed
 
-    if allow_implicit_default:
-        log.debug(
-            "CI source selection: %d sources configured, no selector given, "
-            "allow_implicit_default=True (skill-sync path) -- using first: %s",
-            len(sources),
-            next(iter(sources)),
-        )
-        return next(iter(sources.values()))
-
     raise SourceSelectionError(
         f"context-intelligence: {len(sources)} sources are configured "
         f"({', '.join(sorted(sources))}) but no `source` was specified. "
@@ -254,178 +263,183 @@ def _select_source(
     )
 
 
-def _first_destination(hook_resolver: Any | None) -> Any | None:
-    """First upload Destination on the hook resolver, or None."""
-    if hook_resolver is None:
+def _origin_dict(origin: EndpointOrigin | None) -> dict[str, str] | None:
+    """Render an ``EndpointOrigin`` as the JSON-safe ``source`` field callers put on
+    every ``ToolResult`` (success AND failure) so the endpoint that answered / was
+    attempted is always visible to the user -- see spec §5."""
+    if origin is None:
         return None
-    return _first_entry(getattr(hook_resolver, "destinations", None))
+    return {"name": origin.name, "url": origin.url, "origin": origin.kind}
 
 
-def _pick(*candidates: tuple[str | None, str | None]) -> tuple[str | None, str | None]:
-    """Return (value, source-label) for the first non-empty candidate, else (None, None)."""
-    for value, source in candidates:
-        if value:
-            return value, source
-    return None, None
-
-
-def resolve_query_auth_strategy(
-    hook_resolver: Any | None,
+def _connectable_pool(
     tool_resolver: "ToolConfigResolver",
-    api_key: str = "",
-    *,
-    source_name: str | None = None,
-    allow_implicit_default: bool = False,
-) -> Any:
-    """Build an AuthStrategy for query tool requests.
+    hook_resolver: Any | None,
+) -> dict[str, PoolEntry]:
+    """Ordered pool: tool ``sources`` (config order) THEN hook ``destinations``
+    (config order). SOURCE WINS on name collision (both the tool's legacy
+    synthesis and the hook's D10 synthesis mint an entry literally named
+    ``"default"`` -- the source-side one shadows the destination-side one,
+    consistent with the source-outranks-destination precedence below).
 
-    Lookup priority (mirrors resolve_query_endpoint field-by-field):
-      1. selected entry of tool_resolver.sources  (auth_mode / auth_resource) --
-         selection is via _select_source(), not "always first" (criteria 1-3).
-      2. first upload destination on the hook resolver (auth_mode / auth_resource)
-      3. env AMPLIFIER_CONTEXT_INTELLIGENCE_AUTH_MODE / _AUTH_RESOURCE (tier-3 fallback)
+    Tolerates ``hook_resolver is None`` (pre-hook-mount) -> sources only.
 
-    The returned strategy always calls ``headers()`` per-request, so Entra tokens
-    are refreshed by the azure-identity SDK when they near expiry.
-
-    Parameters
-    ----------
-    hook_resolver:
-        The hook's HookConfigResolver (may be None).
-    tool_resolver:
-        The tool's ToolConfigResolver.
-    api_key:
-        Resolved API key (from resolve_query_endpoint). Used for static mode.
-    source_name / allow_implicit_default:
-        Same contract as resolve_query_endpoint(). Re-runs selection independently
-        (mirrors this module's existing "each field/each function resolves
-        independently" design -- see the module docstring) rather than threading a
-        pre-selected Source object through; the extra dict lookup is negligible and
-        this keeps the two functions decoupled and independently testable, exactly
-        as _pick()/_first_entry() already are.
-
-    Returns
-    -------
-    AuthStrategy
-        A built auth strategy (``ApiKeyAuth`` or ``EntraTokenAuth``).
-
-    Raises
-    ------
-    SourceSelectionError, ValueError
-        Same as resolve_query_endpoint() -- if called after resolve_query_endpoint()
-        already succeeded for the same (tool_resolver, source_name), this call is
-        guaranteed not to raise (selection and validation are deterministic and
-        idempotent over the same inputs).
+    This is the connectable SET used for explicit selection (``source=<name>``,
+    which can now name a destination) and listing (``list_sources: true``). It
+    is NEVER used to widen the default (no-pointer) resolution path -- see
+    ``resolve_query_connection()``.
     """
-    from context_intelligence.auth import ApiKeyAuth, build_auth_strategy  # noqa: PLC0415
-
-    read = _select_source(
-        tool_resolver.sources, source_name, allow_implicit_default=allow_implicit_default
-    )
-    if read is not None:
-        tool_resolver.validate_source(read.name)
-    dest = _first_destination(hook_resolver)
-
-    # auth_mode / auth_resource: first non-empty source wins
-    auth_mode: str = (
-        (read.auth_mode if read else "")
-        or (getattr(dest, "auth_mode", "") if dest else "")
-        or _env("AUTH_MODE")
-        or "static"
-    )
-    auth_resource: str = (
-        (read.auth_resource if read else "")
-        or (getattr(dest, "auth_resource", "") if dest else "")
-        or _env("AUTH_RESOURCE")
-        or ""
-    )
-
-    if auth_mode == "static":
-        # Return an ApiKeyAuth even for empty key — same graceful-degrade behaviour as before.
-        return ApiKeyAuth(api_key)
-
-    # For entra (and any future mode), delegate to build_auth_strategy which raises loudly.
-    return build_auth_strategy(
-        auth_mode=auth_mode,
-        api_key=api_key,
-        auth_resource=auth_resource,
-    )
+    pool: dict[str, PoolEntry] = {}
+    for s in tool_resolver.sources.values():  # sources first
+        pool[s.name] = PoolEntry(s.name, s.url, s.api_key, s.auth_mode, s.auth_resource, "source")
+    dests = getattr(hook_resolver, "destinations", None) if hook_resolver is not None else None
+    if isinstance(dests, dict):
+        for d in dests.values():
+            if d.name in pool:  # SOURCE WINS -- do not overwrite
+                continue
+            pool[d.name] = PoolEntry(
+                d.name,
+                d.url,
+                d.api_key,
+                getattr(d, "auth_mode", "") or "static",
+                getattr(d, "auth_resource", "") or "",
+                "destination",
+            )
+    return pool
 
 
-def resolve_query_endpoint(
-    hook_resolver: Any | None,
-    tool_resolver: "ToolConfigResolver",
-    *,
-    source_name: str | None = None,
-    allow_implicit_default: bool = False,
-) -> tuple[str | None, str | None]:
-    """Resolve (server_url, api_key) for the query path. Per-field independent.
+def _select_from_pool(
+    pool: dict[str, PoolEntry],
+    requested_name: str | None,
+) -> PoolEntry | None:
+    """Explicit name -> resolve against the WHOLE pool (source OR destination).
 
-    Explicit-first order (each field, first non-empty wins):
-      1. selected entry of tool_resolver.sources (.url / .api_key) -- selection is now
-         via _select_source(), not "always first" (criteria 1-3). The selected entry
-         is validated (criterion 4: per-entry, not whole-map) before its fields are read.
-      2. first upload destination on the hook resolver (.url / .api_key)
-      3. AMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_URL / AMPLIFIER_CONTEXT_INTELLIGENCE_API_KEY
-    Returns (None, None)-able per field; each is None only if all three miss.
-
-    Parameters
-    ----------
-    source_name:
-        Caller's explicit ``source`` selector (from tool input), or ``None``.
-    allow_implicit_default:
-        Passed straight through to ``_select_source`` -- see its docstring. Only
-        ``skill_sync.py`` sets this ``True``.
+    No name -> returns ``None``; the caller applies default (no-pointer) semantics,
+    which never widen to the pool (see ``resolve_query_connection()``).
 
     Raises
     ------
     SourceSelectionError
-        Selection is ambiguous or names an unconfigured source (criteria 2-3).
+        ``error_type="unknown_source"`` -- *requested_name* is not ``None`` and is
+        not a key in *pool*. Lists the WHOLE pool (source + destination names),
+        not just the tool's own sources, since a caller can now name either.
+    """
+    if requested_name is not None:
+        if requested_name not in pool:
+            raise SourceSelectionError(
+                f"context-intelligence: unknown source {requested_name!r}. "
+                f"Connectable set: {', '.join(sorted(pool)) if pool else '(none configured)'}.",
+                error_type="unknown_source",
+                valid_names=sorted(pool),
+            )
+        return pool[requested_name]
+    return None
+
+
+def resolve_query_connection(
+    hook_resolver: Any | None,
+    tool_resolver: "ToolConfigResolver",
+    *,
+    source_name: str | None = None,
+) -> ResolvedConnection:
+    """Select ONE endpoint, build its auth strategy, and report its provenance.
+
+    SINGLE-HIT -- never queries more than one endpoint. Replaces the pair
+    ``resolve_query_endpoint`` / ``resolve_query_auth_strategy`` (each of which
+    re-ran selection independently and discarded the origin); this consolidates
+    selection into one pass and returns the origin the caller needs to surface
+    provenance to the user (docs/multi-source-build-spec-v5.md §4-5).
+
+    Resolution:
+      1. ``source_name`` given -> resolve against the WHOLE connectable pool
+         (``sources`` union hook ``destinations`` -- §4.1/4.2). Unknown name fails
+         loud, listing the whole pool.
+      2. No name -> DEFAULT semantics, UNCHANGED from #67 (no tightening):
+         - 1 source configured -> use it.
+         - 2+ sources configured -> fail loud (``ambiguous_source_selection``,
+           names sources). This is the ONLY default-path ambiguity that fails
+           loud (Brian's #67 rule).
+         - 0 sources, N destinations -> use the FIRST destination in config order
+           (the established read-fallback pool; destinations are the read pool
+           when no sources are configured). This does NOT fail loud regardless of
+           how many destinations exist -- source provenance (origin="destination")
+           makes the pick visible to the user, so there is no silent-selection
+           concern. Read-only: only reads ``hook_resolver.destinations``.
+         - 0 sources, 0 destinations -> fall through to env (tier 3).
+
+    RATIFIED RULE (user override of spec §4.4): the earlier "tightening" that
+    failed loud on 0 sources + 2+ destinations was reverted -- destinations-as-
+    fallback keeps first-destination-wins; only 2+ SOURCES fails loud.
+      3. Selected ``source``-kind entry is validated via
+         ``tool_resolver.validate_source()`` (criterion 4, per-entry fail-loud).
+         Selected ``destination``-kind entry is consumed as-is (the hook owns
+         destination validation on its own write path; we do not call it).
+      4. url/api_key/auth_mode/auth_resource each fall back to env
+         (``AMPLIFIER_CONTEXT_INTELLIGENCE_*``) only when the selected entry's own
+         field is empty (tier-3 preserved per-field).
+
+    Raises
+    ------
+    SourceSelectionError
+        Selection is ambiguous or names an unconfigured/unknown entry.
     ValueError
         The *selected* source itself fails per-field validation (criterion 4) --
         message names ONLY that one source, never the whole map.
-
-    Emits one DEBUG line naming which tier supplied each field.
     """
-    read = _select_source(
-        tool_resolver.sources, source_name, allow_implicit_default=allow_implicit_default
-    )
-    if read is not None:
-        tool_resolver.validate_source(read.name)  # raises ValueError naming only `read.name` if bad
+    from context_intelligence.auth import ApiKeyAuth, build_auth_strategy  # noqa: PLC0415
 
-    dest = _first_destination(hook_resolver)
+    pool = _connectable_pool(tool_resolver, hook_resolver)
+    entry = _select_from_pool(pool, source_name)
 
-    url, url_src = _pick(
-        ((read.url if read else None), f"source:{read.name}" if read else None),
-        ((dest.url if dest else None), f"destination:{dest.name}" if dest else None),
-        (_env("SERVER_URL"), "env:SERVER_URL"),
-    )
-    api_key, key_src = _pick(
-        ((read.api_key if read else None), f"source:{read.name}" if read else None),
-        ((dest.api_key if dest else None), f"destination:{dest.name}" if dest else None),
-        (_env("API_KEY"), "env:API_KEY"),
-    )
+    if entry is None and source_name is None:
+        selected_source = _select_source(tool_resolver.sources, None)
+        if selected_source is not None:
+            entry = pool.get(selected_source.name)
+        else:
+            # 0 sources configured -- destinations are the established read-fallback
+            # pool: pick the FIRST destination in config order (RATIFIED RULE, user
+            # override of spec §4.4). This does NOT fail loud regardless of how many
+            # destinations exist -- provenance (origin="destination") makes the pick
+            # visible. Read-only: only reads hook_resolver.destinations via the pool.
+            entry = next(
+                (e for e in pool.values() if e.kind == "destination"),
+                None,  # 0 destinations too -> entry stays None -> pure env tier below.
+            )
 
-    log.debug(
-        "CI query endpoint resolved: url<-%s api_key<-%s",
-        url_src or "none",
-        key_src or "none",
-    )
+    if entry is not None:
+        if entry.kind == "source":
+            tool_resolver.validate_source(entry.name)  # raises ValueError naming only this entry
+        # destination-kind: consumed as-is -- the hook owns destination validation
+        # on its own write path (validate_destinations); we never call it (read-only).
+        url = entry.url or _env("SERVER_URL")
+        api_key = entry.api_key or _env("API_KEY")
+        auth_mode = entry.auth_mode or _env("AUTH_MODE") or "static"
+        auth_resource = entry.auth_resource or _env("AUTH_RESOURCE") or ""
+        origin = EndpointOrigin(entry.name, url, entry.kind) if url else None
+    else:
+        url = _env("SERVER_URL")
+        api_key = _env("API_KEY")
+        auth_mode = _env("AUTH_MODE") or "static"
+        auth_resource = _env("AUTH_RESOURCE") or ""
+        origin = EndpointOrigin("", url, "env") if url else None
 
-    # Criterion 7 (cheap variant only): note untouched sibling sources.
-    if read is not None and len(tool_resolver.sources) >= 2:
-        others = sorted(name for name in tool_resolver.sources if name != read.name)
-        log.info(
-            "CI query dispatched to source %r; %d other configured source(s) not "
-            "queried: %s. Cross-source existence checking is not implemented -- if "
-            "the same session_id may exist in another source, query it explicitly "
-            "via source=<name>.",
-            read.name,
-            len(others),
-            ", ".join(others),
+    if auth_mode == "static":
+        # Return an ApiKeyAuth even for empty key — same graceful-degrade behaviour as before.
+        auth_strategy: Any = ApiKeyAuth(api_key or "")
+    else:
+        # For entra (and any future mode), delegate to build_auth_strategy which raises loudly.
+        auth_strategy = build_auth_strategy(
+            auth_mode=auth_mode,
+            api_key=api_key or "",
+            auth_resource=auth_resource,
         )
 
-    return (url or None, api_key or None)
+    return ResolvedConnection(
+        url=url or None,
+        api_key=api_key or None,
+        auth_strategy=auth_strategy,
+        origin=origin,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -470,7 +484,7 @@ class ToolConfigResolver:
     def context_intelligence_server_url(self) -> str | None:
         """Server URL: config → coordinator.config → env → settings.yaml.
 
-        Note: the query path (resolve_query_endpoint) does NOT use this property
+        Note: the query path (resolve_query_connection) does NOT use this property
         for env resolution. Env is consulted only at tier 3 via _env("SERVER_URL").
         Kept for PR #27 API parity.
         """
@@ -486,7 +500,7 @@ class ToolConfigResolver:
     def context_intelligence_api_key(self) -> str | None:
         """API key: config → coordinator.config → env → settings.yaml.
 
-        Note: the query path (resolve_query_endpoint) does NOT use this property
+        Note: the query path (resolve_query_connection) does NOT use this property
         for env resolution. Env is consulted only at tier 3 via _env("API_KEY").
         Kept for PR #27 API parity.
         """
@@ -521,10 +535,20 @@ class ToolConfigResolver:
 
         Resolution: config['request_timeout'] -> coordinator.config -> env
         (``AMPLIFIER_CONTEXT_INTELLIGENCE_QUERY_TIMEOUT``) -> default 30.0.
-        Bad/unparseable/non-finite/<=0 values fall back to the default (never
-        raises) -- see ``_coerce_positive_float``. Not cached: cheap to compute
-        and mirrors the other scalar properties reading fresh each access
-        except workspace (which caches by design).
+
+        Coercion (never raises -- see ``_coerce_positive_float``), and note the
+        two distinct fallbacks, which are deliberate:
+        - Missing / unparseable / non-finite (None, "", "abc", inf, nan) -> the
+          30.0s DEFAULT.
+        - A parseable but non-positive value (0, negative) -> CLAMPED UP to the
+          0.1s floor (``minimum=0.1``), NOT the 30.0s default. So configuring
+          ``request_timeout: 0`` yields 0.1s, not 30s -- a deliberate, documented
+          behavior (a positive number the operator wrote is honored as "as small
+          as allowed" rather than silently reset to the default), and the 0.1s
+          floor still prevents a zero/negative timeout from disabling the guard.
+
+        Not cached: cheap to compute and mirrors the other scalar properties
+        reading fresh each access except workspace (which caches by design).
         """
         raw = (
             self._config.get("request_timeout")
@@ -585,7 +609,7 @@ class ToolConfigResolver:
 
         # Key absent: legacy synthesis from EXPLICIT config only.
         # env and settings.yaml are intentionally excluded — env is consulted only
-        # at tier 3 in resolve_query_endpoint() so it never outranks the hook
+        # at tier 3 in resolve_query_connection() so it never outranks the hook
         # destination (tier 2).
         legacy_url = self._config.get(
             "context_intelligence_server_url"
@@ -609,8 +633,7 @@ class ToolConfigResolver:
         a non-fatal diagnostic pass: still runs at mount() (so operators still see typos
         immediately in logs), but only WARNS. Hard, fail-loud validation of the specific
         source a query actually targets now happens per-query via validate_source(name)
-        (below), called from resolve_query_endpoint()/resolve_query_auth_strategy() only
-        for the ONE selected entry.
+        (below), called from resolve_query_connection() only for the ONE selected entry.
 
         Per-source XOR auth rules (unchanged from before):
         - auth_mode="static" (default): api_key must be non-empty.
@@ -682,34 +705,3 @@ class ToolConfigResolver:
                     f"{name}: unknown auth_mode {src.auth_mode!r} (valid: 'static', 'entra')"
                 )
         return problems
-
-    @property
-    def skill_sync_enabled(self) -> bool:
-        """Whether the analytics path syncs watched skills on session start.
-
-        Default ``False`` — opt-in; headless / single-command-series workflows
-        pay zero skill traffic per turn unless explicitly enabled.  Set to
-        ``true`` to restore the full per-session sync (``GET /version`` ping +
-        conditional skill fetch + ``skill:unloaded`` reload handler).
-
-        Resolution order (first *definite* value wins; empty / placeholder /
-        unrecognized values are treated as *absent* and fall through):
-        1. config['skill_sync_enabled']                       — mount() config dict
-        2. coordinator.config['skill_sync_enabled']           — app-level override
-        3. AMPLIFIER_CONTEXT_INTELLIGENCE_SKILL_SYNC_ENABLED   — env var
-        4. False                                              — default (opt-in)
-
-        Accepted string forms (case-insensitive): true/1/yes/on and
-        false/0/no/off.  An unexpanded YAML placeholder that resolves to an
-        empty string resolves to the default (``False``), never ``True`` — it
-        cannot silently enable sync for everyone.
-        """
-        for raw in (
-            _expand(self._config.get("skill_sync_enabled")),
-            _expand(self._coordinator_config_get("skill_sync_enabled")),
-            _env("SKILL_SYNC_ENABLED"),
-        ):
-            resolved = _coerce_bool(raw)
-            if resolved is not None:
-                return resolved
-        return False

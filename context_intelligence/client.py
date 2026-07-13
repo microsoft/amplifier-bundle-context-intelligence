@@ -12,6 +12,8 @@ from __future__ import annotations
 
 import json
 import logging
+import socket
+import urllib.error
 import urllib.request
 from typing import TYPE_CHECKING, Any
 
@@ -152,6 +154,102 @@ def _http_get(url: str, headers: dict[str, str]) -> Any:
         return None
 
 
+def _http_get_strict(url: str, headers: dict[str, str]) -> Any:
+    """GET *url* with *headers*, classifying-and-RAISING ``CIClientError`` on failure.
+
+    The fail-loud counterpart of ``_http_get`` (which swallows every error to
+    ``None``). A genuine transport/HTTP failure must never masquerade as an empty
+    result, consistent with ``AsyncCIClient.cypher()``/``fetch_blob()`` (Phase 0).
+
+    Library preference mirrors ``_http_get`` (requests -> httpx -> urllib.request)
+    so classification is correct regardless of which backend is installed. Returns
+    the parsed JSON body on a 2xx response; a well-formed empty body (e.g. ``[]``)
+    is returned as-is -- an empty SUCCESS, not an error.
+
+    Raises
+    ------
+    CIClientError
+        error_type one of: ``connection_error`` (refused/DNS/reset),
+        ``timeout``, ``http_status`` (non-2xx; ``status_code`` set), or
+        ``decode_error`` (body is not valid JSON).
+    """
+    if _requests is not None:
+        try:
+            resp = _requests.get(url, headers=headers, timeout=30)
+            resp.raise_for_status()
+            return resp.json()
+        except _requests.exceptions.Timeout as exc:
+            raise CIClientError(f"timeout listing {url}", error_type="timeout", url=url) from exc
+        except _requests.exceptions.HTTPError as exc:
+            status = getattr(getattr(exc, "response", None), "status_code", None)
+            raise CIClientError(
+                f"HTTP {status} from {url}",
+                error_type="http_status",
+                url=url,
+                status_code=status,
+            ) from exc
+        except (ValueError, json.JSONDecodeError) as exc:  # resp.json() failed
+            raise CIClientError(
+                f"malformed JSON from {url}", error_type="decode_error", url=url
+            ) from exc
+        except _requests.exceptions.RequestException as exc:  # ConnectionError, etc.
+            raise CIClientError(
+                f"connection error to {url}: {exc}", error_type="connection_error", url=url
+            ) from exc
+
+    if _httpx is not None:
+        try:
+            with _httpx.Client(timeout=30) as client:
+                resp = client.get(url, headers=headers)
+                resp.raise_for_status()
+                return resp.json()
+        except _httpx.TimeoutException as exc:
+            raise CIClientError(f"timeout listing {url}", error_type="timeout", url=url) from exc
+        except _httpx.HTTPStatusError as exc:
+            raise CIClientError(
+                f"HTTP {exc.response.status_code} from {url}",
+                error_type="http_status",
+                url=url,
+                status_code=exc.response.status_code,
+            ) from exc
+        except (ValueError, json.JSONDecodeError) as exc:  # resp.json() failed
+            raise CIClientError(
+                f"malformed JSON from {url}", error_type="decode_error", url=url
+            ) from exc
+        except _httpx.HTTPError as exc:  # ConnectError, transport, etc.
+            raise CIClientError(
+                f"connection error to {url}: {exc}", error_type="connection_error", url=url
+            ) from exc
+
+    # stdlib fallback
+    try:
+        req = urllib.request.Request(url, headers=headers, method="GET")
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            raw = resp.read().decode("utf-8")
+    except urllib.error.HTTPError as exc:  # subclass of URLError -- catch FIRST
+        raise CIClientError(
+            f"HTTP {exc.code} from {url}",
+            error_type="http_status",
+            url=url,
+            status_code=exc.code,
+        ) from exc
+    except (TimeoutError, socket.timeout) as exc:  # read timeout
+        raise CIClientError(f"timeout listing {url}", error_type="timeout", url=url) from exc
+    except urllib.error.URLError as exc:
+        # A URLError may wrap a socket timeout in .reason -- classify that as timeout.
+        if isinstance(exc.reason, (TimeoutError, socket.timeout)):
+            raise CIClientError(f"timeout listing {url}", error_type="timeout", url=url) from exc
+        raise CIClientError(
+            f"connection error to {url}: {exc}", error_type="connection_error", url=url
+        ) from exc
+    try:
+        return json.loads(raw)
+    except (ValueError, json.JSONDecodeError) as exc:
+        raise CIClientError(
+            f"malformed JSON from {url}", error_type="decode_error", url=url
+        ) from exc
+
+
 # ---------------------------------------------------------------------------
 # Safe JSON parse
 # ---------------------------------------------------------------------------
@@ -275,7 +373,11 @@ class CIClient:
         """Return the set of ``ci-blob://`` URI keys for *session_id*.
 
         Calls ``GET /blobs/{session_id}`` and parses the response list of
-        ``ci-blob://`` URIs.  Returns an empty set on any error.
+        ``ci-blob://`` URIs.
+
+        A genuine 200 response with no blob URIs (empty list, or a body that is
+        not a list) returns an empty set -- that is an intentional empty SUCCESS,
+        NOT an error, mirroring ``cypher()``'s empty-200 handling.
 
         Parameters
         ----------
@@ -285,12 +387,19 @@ class CIClient:
         Returns
         -------
         set[str]
-            Set of ``ci-blob://`` URI strings.
+            Set of ``ci-blob://`` URI strings (possibly empty).
+
+        Raises
+        ------
+        CIClientError
+            The request genuinely failed: connection error/refused, timeout,
+            non-2xx HTTP status, or a malformed (non-JSON) body. A down / slow /
+            rejecting server can never masquerade as "no blobs" -- see error_type
+            for the classification.
         """
         url = f"{self._server_url}/blobs/{session_id}"
-        result = _http_get(url, self._auth_headers())
-        if result is None:
-            return set()
+        result = _http_get_strict(url, self._auth_headers())
+        # Genuine empty / non-list 200 -> empty success (NOT an error).
         if not isinstance(result, list):
             return set()
         return {
@@ -516,14 +625,14 @@ class AsyncCIClient:
             ) from exc
 
     async def list_blob_keys(self, session_id: str) -> set[str]:
-        # NOTE (v5 Phase 0): off the tool execute() path -- no tool calls the async
-        # list_blob_keys; only reconstruct/*.py use the SYNC CIClient variant.
-        # Fail-loud deferred to a follow-up so the blast radius of this change
-        # stays on the query/blob-read tools. Left as `except Exception: return set()`.
         """Return the set of ``ci-blob://`` URI keys for *session_id* (async).
 
         Calls ``GET /blobs/{session_id}`` and parses the response list of
-        ``ci-blob://`` URIs. Returns an empty set on any error.
+        ``ci-blob://`` URIs.
+
+        A genuine 200 response with no blob URIs (empty list, or a body that is
+        not a list) returns an empty set -- an intentional empty SUCCESS, NOT an
+        error, mirroring ``cypher()``'s empty-200 handling.
 
         Parameters
         ----------
@@ -533,16 +642,42 @@ class AsyncCIClient:
         Returns
         -------
         set[str]
-            Set of ``ci-blob://`` URI strings.
+            Set of ``ci-blob://`` URI strings (possibly empty).
+
+        Raises
+        ------
+        CIClientError
+            The request genuinely failed: connection error/refused, timeout,
+            non-2xx HTTP status, or a malformed (non-JSON) body. A down / slow /
+            rejecting server can never masquerade as "no blobs" -- see error_type
+            for the classification. Honors ``self._timeout`` like ``cypher()`` /
+            ``fetch_blob()``.
         """
         url = f"{self._server_url}/blobs/{session_id}"
         try:
-            async with httpx.AsyncClient() as client:  # type: ignore[union-attr]
+            async with httpx.AsyncClient(timeout=self._timeout) as client:  # type: ignore[union-attr]
                 resp = await client.get(url, headers=self._strategy.headers())
                 resp.raise_for_status()
                 result = resp.json()
-        except Exception:
-            return set()
+        except httpx.TimeoutException as exc:  # type: ignore[union-attr]
+            raise CIClientError(f"timeout listing {url}", error_type="timeout", url=url) from exc
+        except httpx.HTTPStatusError as exc:  # type: ignore[union-attr]
+            raise CIClientError(
+                f"HTTP {exc.response.status_code} from {url}",
+                error_type="http_status",
+                url=url,
+                status_code=exc.response.status_code,
+            ) from exc
+        except (ValueError, json.JSONDecodeError) as exc:  # resp.json() failed
+            raise CIClientError(
+                f"malformed JSON from {url}", error_type="decode_error", url=url
+            ) from exc
+        except httpx.HTTPError as exc:  # type: ignore[union-attr]  # ConnectError, transport, etc.
+            raise CIClientError(
+                f"connection error to {url}: {exc}", error_type="connection_error", url=url
+            ) from exc
+
+        # Genuine empty / non-list 200 -> empty success (NOT an error).
         if not isinstance(result, list):
             return set()
         return {
