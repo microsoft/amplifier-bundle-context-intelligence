@@ -82,8 +82,8 @@ on unit tests alone.** An agent's delegation, a skill's guidance, a mode's gatin
 tool/networking/auth wiring behind them only prove out when *loaded and exercised in a real
 environment*. This repo ships the harnesses for exactly that — use them, don't reinvent them:
 
-- **DTU profiles** — `.amplifier/digital-twin-universe/profiles/` (e.g. `ci-bundle-smoke-test.yaml`,
-  `context-intelligence-redesigned-mode-validation.yaml`, `ci-signals-validation.yaml`). Launch the
+- **DTU profiles** — `.amplifier/digital-twin-universe/profiles/` (e.g. `context-intelligence-bundle-smoke-test.yaml`,
+  `context-intelligence-redesigned-mode-validation.yaml`, `context-intelligence-signals-validation.yaml`). Launch the
   change in a DTU and drive the real agent/skill/mode/tool path end-to-end.
 - **Evaluation methodology** — the `context-intelligence-eval-design` and
   `context-intelligence-evaluation-methodology` skills. Design/run the evaluation scenarios that

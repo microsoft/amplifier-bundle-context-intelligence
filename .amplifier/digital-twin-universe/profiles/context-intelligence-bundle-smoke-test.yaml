@@ -5,9 +5,9 @@
 #
 # Usage:
 #   export GH_TOKEN=$(gh auth token)
-#   amplifier-digital-twin launch .amplifier/digital-twin-universe/profiles/ci-bundle-smoke-test.yaml \
-#     --name ci-bundle-smoke-test
-name: ci-bundle-smoke-test
+#   amplifier-digital-twin launch .amplifier/digital-twin-universe/profiles/context-intelligence-bundle-smoke-test.yaml \
+#     --name context-intelligence-bundle-smoke-test
+name: context-intelligence-bundle-smoke-test
 description: >
   Smoke test for the context-intelligence bundle.  Validates library imports,
   upload CLI, hook additional_events config, and Amplifier bundle loading.
