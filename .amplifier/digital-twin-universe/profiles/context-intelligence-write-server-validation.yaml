@@ -1,0 +1,164 @@
+# context-intelligence-write-server-validation.yaml
+#
+# RUNNABLE amplifier-digital-twin profile (base + provision + readiness).
+# Proves the WRITE-TO-A-SINGLE-SERVER seam: the context-intelligence logging hook,
+# loaded via the Amplifier CLI from a Gitea mirror of the branch under test, POSTs
+# session events to ONE real Context-Intelligence server. NOT pytest/artefacts.
+#
+# TOPOLOGY
+#   host: a real Context-Intelligence server (Neo4j + API) stood up via docker compose,
+#         reachable from the DTU at the Incus host-gateway IP (e.g. http://10.67.103.1:18001).
+#   DTU:  amplifier + the branch bundle (full context-intelligence behavior = design + logging),
+#         with the hook configured (legacy single-destination path) to dispatch to that server,
+#         tagged with an explicit workspace so events are independently queryable.
+#
+# HOW TO RUN
+#   # 1. stand up the server on the host (see server repo microsoft/amplifier-context-intelligence
+#   #    docker-compose.yml -> start.sh generates credentials.yaml + prints the API token once).
+#   #    Bind it to the Incus gateway IP so the container can reach it, and confirm:
+#   #      curl -sf http://10.67.103.1:18001/status
+#   export GH_TOKEN=$(gh auth token)
+#   amplifier-digital-twin launch \
+#     .amplifier/digital-twin-universe/profiles/context-intelligence-write-server-validation.yaml \
+#     --name ci-write-single \
+#     --var gitea_host=http://localhost:10110 \
+#     --var server_url=http://10.67.103.1:18001 \
+#     --var server_token=<RAW_API_TOKEN> \
+#     --var workspace=ci-write-single
+#
+# WHAT IS PROVEN
+#   STRUCTURAL (deterministic; readiness gates, run on launch, no LLM):
+#     * bundle installed via `amplifier bundle add ... --app` resolved to the MIRROR.
+#     * the logging hook is present in the loaded bundle.
+#     * the server is reachable from the DTU and reports neo4j_connected:true.
+#   BEHAVIOURAL (real session, real Anthropic key; the exec step below):
+#     * a real `amplifier run` session emits events; the hook POSTs them to the server;
+#       the server's /status lists the session under this workspace with events_processed>0,
+#       AND a Cypher query (/cypher) returns >=1 node tagged workspace=<workspace>.
+#
+# NOTE ON write-to-FILE: local-JSONL capture is already covered by
+# context-intelligence-bundle-smoke-test.yaml -- not duplicated here.
+
+name: context-intelligence-write-server-validation
+description: >
+  Runnable proof of the write-to-a-single-server seam. Loads the branch bundle via the
+  Amplifier CLI from a Gitea mirror, wires the logging hook to ONE real Context-Intelligence
+  server, runs a real session, and proves the server received the events (tagged with the
+  workspace) via /status and a Cypher query.
+
+base:
+  image: ubuntu:24.04
+
+passthrough:
+  allow_external: true
+  services:
+    - name: anthropic
+      key_env: ANTHROPIC_API_KEY
+    - name: github
+      key_env: GH_TOKEN
+
+provision:
+  setup_cmds:
+    - apt-get update && apt-get install -y git curl python3 python3-venv jq
+
+    - curl -LsSf https://astral.sh/uv/install.sh | sh
+
+    - |
+      if [ -n "${GH_TOKEN:-}" ]; then
+        echo "machine github.com login x-token-auth password $GH_TOKEN" > /root/.netrc
+        chmod 600 /root/.netrc
+        git config --global credential.helper 'store'
+      fi
+
+    # Narrow rewrite: only the context-intelligence bundle self-references -> mirror.
+    - |
+      git config --global \
+        url."${gitea_host}/microsoft/amplifier-bundle-context-intelligence".insteadOf \
+        "https://github.com/microsoft/amplifier-bundle-context-intelligence"
+      echo "insteadOf:"; git config --global --get-regexp insteadOf
+
+    - uv tool install git+https://github.com/microsoft/amplifier@main
+
+    - |
+      mkdir -p /root/.amplifier
+      cat > /root/.amplifier/settings.yaml << 'EOF'
+      config:
+        providers:
+          - module: provider-anthropic
+            source: git+https://github.com/microsoft/amplifier-module-provider-anthropic@main
+            config:
+              api_key_env: ANTHROPIC_API_KEY
+      EOF
+
+    # Load the branch bundle THROUGH THE CLI (redirected to the mirror). FULL behavior
+    # => design (read/query tools) + logging hook (write).
+    - |
+      amplifier bundle add \
+        git+https://github.com/microsoft/amplifier-bundle-context-intelligence@main#subdirectory=behaviors/context-intelligence.yaml \
+        --app
+
+    # Wire the logging hook to the SINGLE server via the legacy single-destination env path
+    # (context_intelligence_server_url/api_key + workspace). This synthesizes one "default"
+    # destination matching all sessions -- the shipped single-server path.
+    - |
+      cat >> /etc/environment << ENVEOF
+      PATH=/root/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+      AMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_URL=${server_url}
+      AMPLIFIER_CONTEXT_INTELLIGENCE_API_KEY=${server_token}
+      AMPLIFIER_CONTEXT_INTELLIGENCE_WORKSPACE=${workspace}
+      ENVEOF
+      cat >> /root/.bashrc << 'BRC'
+      export PATH="/root/.local/bin:$PATH"
+      BRC
+      echo "export AMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_URL=${server_url}" >> /root/.bashrc
+      echo "export AMPLIFIER_CONTEXT_INTELLIGENCE_API_KEY=${server_token}" >> /root/.bashrc
+      echo "export AMPLIFIER_CONTEXT_INTELLIGENCE_WORKSPACE=${workspace}" >> /root/.bashrc
+
+    - amplifier --version
+
+readiness:
+  - name: amplifier-usable
+    command: "amplifier --version"
+
+  - name: bundle-loaded-from-mirror
+    command: >
+      C=$(find /root/.amplifier/cache -maxdepth 1 -type d -name 'amplifier-bundle-context-intelligence-*' | head -1);
+      git -C "$C" remote -v | grep -q "${gitea_host}/microsoft/amplifier-bundle-context-intelligence"
+      && git -C "$C" log -1 --pretty=%s | grep -qi "docs/contributing-and-pr-template"
+      && echo "ready: bundle resolved from mirror @ branch snapshot"
+
+  - name: logging-hook-present
+    command: >
+      amplifier bundle show context-intelligence-behavior 2>/dev/null
+      | grep -q "hook-context-intelligence"
+      && echo "ready: logging hook loaded via CLI"
+
+  - name: server-reachable-from-dtu
+    command: >
+      . /etc/environment;
+      curl -sf "$AMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_URL/status"
+      | python3 -c "import sys,json;d=json.load(sys.stdin);assert d['status']=='ok' and d['neo4j_connected'];print('ready: server reachable, neo4j_connected')"
+
+validation_cmds:
+  # ---- BEHAVIOURAL: run a real session, then prove the server received the events ----
+  # Run via: amplifier-digital-twin exec <id> -- bash -lc 'bash /root/run_write.sh'
+  - name: B1-emit-and-prove-received
+    command: |
+      # IMPORTANT: export the CI env so the child `amplifier` process (and its hook) see it.
+      set -a; . /etc/environment; set +a
+      mkdir -p /root/ci-write && cd /root/ci-write
+      echo "== emit events through a real session =="
+      amplifier run "Say hello in exactly one word." --output-format json > /root/write-run.json 2>/root/write-run.err || cat /root/write-run.err
+      sleep 3
+      echo "== server /status: sessions under workspace=$AMPLIFIER_CONTEXT_INTELLIGENCE_WORKSPACE =="
+      curl -sf "$AMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_URL/status" \
+        | jq '{active_sessions, sessions: [.sessions[]|{session_id, workspace, events_processed}], completed: [.completed_sessions[]?|{session_id, workspace, events_processed}]}'
+      echo "== Cypher: count nodes tagged with this workspace =="
+      # NOTE: this server's /cypher does NOT accept a `parameters` map -> inline the literal
+      # workspace (safe; we control it). Use WHERE n.workspace = "<ws>".
+      curl -sf -X POST "$AMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_URL/cypher" \
+        -H "Authorization: Bearer $AMPLIFIER_CONTEXT_INTELLIGENCE_API_KEY" \
+        -H 'Content-Type: application/json' \
+        -d "{\"query\":\"MATCH (n) WHERE n.workspace = \\\"$AMPLIFIER_CONTEXT_INTELLIGENCE_WORKSPACE\\\" RETURN count(n) AS n\"}" \
+        | jq .
+      echo "^ PASS iff a session with this workspace has events_processed>0 AND node count >= 1"
