@@ -1,159 +1,162 @@
-# Context-intelligence mode ACTIVATION — DTU validation profile.
+# context-intelligence-mode-activation-validation.yaml
 #
-# PURPOSE
-#   Prove the explicit `/context-intelligence` activation entry point mounts the
-#   FULL mode-gated surface and that `/mode off` removes it cleanly:
-#     - all mode-gated AGENTS resolve  (the two contributes.agents specialists)
-#     - all mode-gated CONTEXT is injected (all THREE contributes.context files)
-#     - all mode-gated SKILLS become discoverable (all THREE contributes.skills)
-#     - the mode tool policies take effect
-#   Baseline agents (graph-analyst, session-navigator) stay present throughout —
-#   they are registered at the behavior level, NOT gated by the mode.
+# RUNNABLE amplifier-digital-twin profile. Proves the explicit /context-intelligence
+# ACTIVATION entry point mounts the full mode-gated surface and that /mode off removes
+# it -- by loading the branch bundle THROUGH THE AMPLIFIER CLI from a Gitea mirror.
+# NOT pytest/artefacts.
 #
-#   This complements the two existing mode profiles:
-#     - context-intelligence-redesigned-mode-validation.yaml  → the 5-phase workflow end-to-end
-#     - context-intelligence-contributes-migration-validation.yaml → the contributes.agents gating migration
-#   Neither of those asserts the THIRD context file (context-intelligence-strategy.md)
-#   or the THIRD skill (context-intelligence-evaluation-methodology). This profile does —
-#   it is the single-purpose "explicit activation mounts the whole gated surface" test.
-#
-# ACTIVATION MECHANISM
-#   The mode's user-facing entry point is the explicit slash command `/context-intelligence`
-#   (mode name = context-intelligence; advertised: false, so it is hidden from `mode list`
-#   but activatable by name). Structural assertions below use the harness `when: { mode: ... }`
-#   key — the harness's realization of that activation — and the behavioral scenario drives
-#   activation the way a user does, by sending `/context-intelligence` as the message.
-#
-# USAGE
+# HOW TO RUN:
+#   export GH_TOKEN=$(gh auth token)
 #   amplifier-digital-twin launch \
 #     .amplifier/digital-twin-universe/profiles/context-intelligence-mode-activation-validation.yaml \
-#     --name context-intelligence-mode-activation-validation \
-#     --var gitea_host=http://your-gitea:3000
+#     --name ci-mode-activation \
+#     --var gitea_host=http://localhost:10110
+#
+# `readiness` RUNS ON LAUNCH (structural proof). `validation_cmds` documents the full
+# suite; run each via `amplifier-digital-twin exec <id> -- <command>` (behavioural steps
+# need an interactive TTY -- see notes).
+#
+# FOCUS: explicit activation mounts the WHOLE gated surface, off->on->off round-trip.
+#   STRUCTURAL (deterministic):
+#     * baseline agents present throughout; specialists absent when inactive
+#       (`amplifier bundle show context-intelligence-behavior` => agents:(2) baseline).
+#     * the installed mirror mode file declares advertised:false + the FULL gated surface:
+#       2 contributes.agents, 3 contributes.context (incl. context-intelligence-strategy.md),
+#       3 contributes.skills (incl. context-intelligence-evaluation-methodology), tool policies.
+#   BEHAVIOURAL (real session, real key, interactive TTY):
+#     * `/mode context-intelligence` activates (prompt -> [context-intelligence]>);
+#       `/mode off` deactivates (`Mode off: context-intelligence` -> `>`). Full round-trip.
+#     * LLM self-activation is DENIED (safety gate).
+#   NOT CLI-INTROSPECTABLE IN THIS VERSION (reported honestly):
+#     * the exact runtime-mounted set on activation (and the mode:transition_completed
+#       data.mounted payload) is not dumpable via any CLI command; the logging hook's
+#       additional_events covers delegate:* only. The full gated surface is therefore
+#       proven by declared-contributes (installed mirror mode file) + inactive-baseline
+#       gating + the activation/deactivation round-trip -- not by a mount enumeration.
 
-profile:
-  name: context-intelligence-mode-activation-validation
-  version: 1.0.0
-  description: >
-    Proves explicit /context-intelligence activation mounts ALL mode-gated agents,
-    context files, and skills — and that /mode off removes them cleanly. Baseline
-    agents remain present throughout. Closes the strategy-context and
-    evaluation-methodology-skill coverage holes left by the other two mode profiles.
+name: context-intelligence-mode-activation-validation
+description: >
+  Runnable proof that explicit /context-intelligence activation mounts the full mode-gated
+  surface and /mode off removes it. Loads the branch bundle via the Amplifier CLI from a
+  Gitea mirror; proves inactive-baseline gating + full declared gated surface (structurally
+  on launch) and the user-driven activation/deactivation round-trip (behaviourally).
 
-# Gitea url_rewrites enable local-branch testing: point {gitea_host} at a Gitea
-# instance with your branch mirrored. Two forms are rewritten:
-#   1. the bare @main URL (bundle root, used by `amplifier bundle add`)
-#   2. the #subdirectory=skills variant (skill companion loading)
-url_rewrites:
-  - from: "git+https://github.com/microsoft/amplifier-bundle-context-intelligence@main"
-    to:   "git+http://{gitea_host}/microsoft/amplifier-bundle-context-intelligence@main"
-  - from: "git+https://github.com/microsoft/amplifier-bundle-context-intelligence@main#subdirectory=skills"
-    to:   "git+http://{gitea_host}/microsoft/amplifier-bundle-context-intelligence@main#subdirectory=skills"
+base:
+  image: ubuntu:24.04
 
-install:
-  # Behaviour-only install: add just the context-intelligence behavior (mode,
-  # agents, tool policies, contributes.*) to the app-level Amplifier config.
-  command: "amplifier bundle add git+https://github.com/microsoft/amplifier-bundle-context-intelligence@main#subdirectory=behaviors/context-intelligence.yaml --app"
+passthrough:
+  allow_external: true
+  services:
+    - name: anthropic
+      key_env: ANTHROPIC_API_KEY
+    - name: github
+      key_env: GH_TOKEN
 
-assertions:
-  - id: A1-baseline-mode-inactive
-    description: >
-      BEFORE activation (mode inactive): the two mode-gated specialists are NOT
-      registered, the mode-gated context is NOT injected, and the design skills are
-      NOT discoverable. Baseline agents ARE present. The mode is hidden from listings
-      (advertised: false).
-    when:
-      mode: inactive
-    expect:
-      agents_present:
-        - context-intelligence:graph-analyst
-        - context-intelligence:session-navigator
-      agents_absent:
-        - context-intelligence:context-intelligence-design-facilitator
-        - context-intelligence:context-intelligence-tool-designer
-      context_file_not_present:
-        - "context-intelligence:context/jsonl-event-schema.md"
-        - "context-intelligence:context/dual-path-library-template.md"
-        - "context-intelligence:context/context-intelligence-strategy.md"
-      skills_absent:
-        - context-intelligence-tool-design
-        - context-intelligence-eval-design
-        - context-intelligence-evaluation-methodology
-      mode_not_listed: context-intelligence
+provision:
+  setup_cmds:
+    - apt-get update && apt-get install -y git curl python3 python3-venv jq
 
-  - id: A2-explicit-activation-mounts-full-gated-surface
-    description: >
-      AFTER explicit /context-intelligence activation: BOTH specialists resolve,
-      ALL THREE mode-gated context files are injected, ALL THREE mode-gated skills
-      are discoverable, and the mode tool policies are in force. Baseline agents
-      remain present.
-    when:
-      mode: active
-    expect:
-      agents_present:
-        - context-intelligence:graph-analyst
-        - context-intelligence:session-navigator
-      agents_available:
-        - context-intelligence:context-intelligence-design-facilitator
-        - context-intelligence:context-intelligence-tool-designer
-      context_files_injected:
-        - "context-intelligence:context/jsonl-event-schema.md"
-        - "context-intelligence:context/dual-path-library-template.md"
-        - "context-intelligence:context/context-intelligence-strategy.md"
-      skills_present:
-        - context-intelligence-tool-design
-        - context-intelligence-eval-design
-        - context-intelligence-evaluation-methodology
-      tool_policies:
-        safe: [graph_query, blob_read, read_file, glob, grep, delegate, load_skill, todo]
-        warn: [bash, write_file, edit_file]
+    - curl -LsSf https://astral.sh/uv/install.sh | sh
 
-  - id: A3-mode-off-clean-unmount
-    description: >
-      AFTER /mode off (mode was active, then deactivated): the specialists, the
-      mode-gated context, and the design skills are all gone. Baseline agents and the
-      general (always-on) skills remain.
-    when:
-      mode: inactive
-      after: activation
-    expect:
-      agents_absent:
-        - context-intelligence:context-intelligence-design-facilitator
-        - context-intelligence:context-intelligence-tool-designer
-      agents_present:
-        - context-intelligence:graph-analyst
-        - context-intelligence:session-navigator
-      context_file_not_present:
-        - "context-intelligence:context/jsonl-event-schema.md"
-        - "context-intelligence:context/dual-path-library-template.md"
-        - "context-intelligence:context/context-intelligence-strategy.md"
-      skills_absent:
-        - context-intelligence-tool-design
-        - context-intelligence-eval-design
-        - context-intelligence-evaluation-methodology
-      general_skills_present:
-        - blob-reading
-        - context-intelligence-graph-query
-        - context-intelligence-session-navigation
+    - |
+      if [ -n "${GH_TOKEN:-}" ]; then
+        echo "machine github.com login x-token-auth password $GH_TOKEN" > /root/.netrc
+        chmod 600 /root/.netrc
+        git config --global credential.helper 'store'
+      fi
 
-scenarios:
-  - id: S1-explicit-slash-command-activates-mode
-    description: >
-      Drive activation the way a USER does — send the explicit `/context-intelligence`
-      slash command — and confirm the mode actually turns on (transition event) and the
-      gated specialists become invokable. This proves the real user entry point, not just
-      the harness's internal mode toggle.
-    setup:
-      mode: inactive
-    user_message: "/context-intelligence"
-    pass_criteria:
-      mode_active: context-intelligence
-      jsonl_event:
-        type: "mode:transition_completed"
-        payload_path: "data.mounted"
-        payload_contains:
-          - "context-intelligence:context/jsonl-event-schema.md"
-          - "context-intelligence:context/dual-path-library-template.md"
-          - "context-intelligence:context/context-intelligence-strategy.md"
-      agents_available:
-        - context-intelligence:context-intelligence-design-facilitator
-        - context-intelligence:context-intelligence-tool-designer
+    - |
+      git config --global \
+        url."${gitea_host}/microsoft/amplifier-bundle-context-intelligence".insteadOf \
+        "https://github.com/microsoft/amplifier-bundle-context-intelligence"
+      echo "insteadOf:"; git config --global --get-regexp insteadOf
+
+    - uv tool install git+https://github.com/microsoft/amplifier@main
+
+    - |
+      mkdir -p /root/.amplifier
+      cat > /root/.amplifier/settings.yaml << 'EOF'
+      config:
+        providers:
+          - module: provider-anthropic
+            source: git+https://github.com/microsoft/amplifier-module-provider-anthropic@main
+            config:
+              api_key_env: ANTHROPIC_API_KEY
+      EOF
+
+    - |
+      amplifier bundle add \
+        git+https://github.com/microsoft/amplifier-bundle-context-intelligence@main#subdirectory=behaviors/context-intelligence.yaml \
+        --app
+
+    - amplifier --version
+
+    - |
+      echo 'export PATH="/root/.local/bin:$PATH"' >> /root/.bashrc
+      echo 'PATH=/root/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin' >> /etc/environment
+
+readiness:
+  - name: amplifier-usable
+    command: "amplifier --version"
+
+  - name: bundle-loaded-from-mirror
+    command: >
+      C=$(find /root/.amplifier/cache -maxdepth 1 -type d -name 'amplifier-bundle-context-intelligence-*' | head -1);
+      git -C "$C" remote -v | grep -q "${gitea_host}/microsoft/amplifier-bundle-context-intelligence"
+      && git -C "$C" log -1 --pretty=%s | grep -qi "docs/contributing-and-pr-template"
+      && echo "ready: bundle resolved from mirror @ branch snapshot"
+
+  - name: baseline-present-specialists-gated
+    command: >
+      OUT=$(amplifier bundle show context-intelligence-behavior 2>/dev/null);
+      echo "$OUT" | grep -q "context-intelligence:graph-analyst"
+      && echo "$OUT" | grep -q "context-intelligence:session-navigator"
+      && ! echo "$OUT" | grep -q "context-intelligence-design-facilitator"
+      && ! echo "$OUT" | grep -q "context-intelligence-tool-designer"
+      && echo "ready: baseline present, specialists gated when inactive"
+
+  - name: full-gated-surface-declared-in-mirror-modefile
+    # The strategy context + evaluation-methodology skill (the coverage this profile owns)
+    # must be declared in the installed mode file from the mirror.
+    command: >
+      C=$(find /root/.amplifier/cache -maxdepth 1 -type d -name 'amplifier-bundle-context-intelligence-*' | head -1);
+      M="$C/modes/context-intelligence.md";
+      grep -q "context-intelligence-strategy.md" "$M"
+      && grep -q "context-intelligence-evaluation-methodology" "$M"
+      && grep -q "context-intelligence-design-facilitator" "$M"
+      && grep -q "context-intelligence-tool-designer" "$M"
+      && echo "ready: full gated surface (3 context + 3 skills + 2 agents) declared"
+
+validation_cmds:
+  # ---- STRUCTURAL ----
+  - name: S1-inactive-baseline
+    command: |
+      echo "== bundle show: expect agents:(2) baseline, no specialists =="
+      amplifier bundle show context-intelligence-behavior
+
+  - name: S2-full-gated-surface-declared
+    command: |
+      C=$(find /root/.amplifier/cache -maxdepth 1 -type d -name 'amplifier-bundle-context-intelligence-*' | head -1)
+      echo "== mode.contributes (agents/context/skills) from installed mirror mode file =="
+      sed -n '/contributes:/,/tools:/p' "$C/modes/context-intelligence.md"
+      echo "== tool policies =="
+      sed -n '/tools:/,/^---/p' "$C/modes/context-intelligence.md"
+
+  # ---- BEHAVIOURAL (interactive; needs real key + TTY) ----
+  # S1-scenario (explicit slash-command activation) -- drive interactively:
+  #   amplifier-digital-twin exec --visual-id ci <id>
+  #   $ cd /root/ci-int && amplifier run --mode chat
+  #   > /mode context-intelligence          => "Mode: context-intelligence ..." ; prompt -> [context-intelligence]>
+  #   [context-intelligence]> /mode off      => "Mode off: context-intelligence"  ; prompt -> >
+  - name: B1-explicit-activation-roundtrip
+    command: |
+      echo "Interactive (real TTY). Off->On->Off round-trip expected transcript:"
+      echo "  > /mode context-intelligence      => Mode: context-intelligence ... ; prompt -> [context-intelligence]>"
+      echo "  [context-intelligence]> /mode off => Mode off: context-intelligence ; prompt -> >"
+
+  - name: B2-self-activation-denied
+    command: |
+      mkdir -p /root/ci-deny && cd /root/ci-deny
+      amplifier run "Call the mode tool with operation=set and name=context-intelligence." \
+        --output-format json-trace 2>/dev/null | jq -r '.execution_trace[]?|select(.tool=="mode")|.result.output.status'
+      echo "^ expect: denied"

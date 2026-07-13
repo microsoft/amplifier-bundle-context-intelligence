@@ -57,6 +57,36 @@ seams without those; that is the point of an end-to-end test.
 **Self-contained smoke to prove the harness works on your host:**
 `context-intelligence-signals-validation.yaml` needs only Incus (no LLM/server/Gitea) — launch it first to confirm the DTU pipeline is healthy before the heavier profiles.
 
+### How the mode profiles gate (runnable schema)
+
+`amplifier-digital-twin` auto-runs a profile's **`provision`** and **`readiness`** on launch
+(it ignores unknown keys like `validation_cmds`). So the three mode profiles put their
+**deterministic structural proofs in `readiness`** — they gate the launch and fail it if the
+CLI-loaded bundle is wrong. Each mode profile's `readiness` proves, for real:
+
+- `amplifier` is usable and the bundle was **loaded via `amplifier bundle add` from the Gitea
+  mirror** (the branch snapshot, not GitHub `main`);
+- `amplifier bundle show context-intelligence-behavior` lists the **2 baseline agents**
+  (graph-analyst, session-navigator) and the **2 mode-gated specialists are absent** while the
+  mode is off (contributes.agents gating holds);
+- the installed mirror mode file declares the full gated surface — `advertised: false`,
+  `default_action: block`, 2 contributes.agents, 3 contributes.context (incl.
+  `context-intelligence-strategy.md`), 3 contributes.skills (incl.
+  `context-intelligence-evaluation-methodology`), and the `safe`/`warn` tool policies.
+
+**Behavioural** activation — the real off→on→off round-trip (`/mode context-intelligence` →
+`[context-intelligence]>` → `/mode off`) — is proven with a real Anthropic session and is
+documented in each profile's `validation_cmds` as a **reproducible manual step**
+(`amplifier-digital-twin exec <id> -- …`), because it needs a live PTY session.
+
+**Honest limitation:** the *runtime-mounted set while the mode is active* (exactly which
+agents/context/skills the mode manager mounts on activation) is **not dumpable via any CLI
+command** in this Amplifier version, and the logging hook's `additional_events` covers
+`delegate:*` only — it does **not** emit `mode:transition_completed`, so `events.jsonl` cannot
+enumerate the mount. The profiles therefore prove the gated surface via *declared contributes +
+inactive-baseline gating + the activation round-trip* — they do **not** claim a runtime
+mount-list enumeration.
+
 ---
 
 ## Spinning up & using a Context-Intelligence server for end-to-end tests

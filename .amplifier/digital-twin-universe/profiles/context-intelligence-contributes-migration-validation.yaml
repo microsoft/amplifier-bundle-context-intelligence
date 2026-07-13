@@ -1,155 +1,152 @@
-# context-intelligence mode — contributes.agents validation profile.
+# context-intelligence-contributes-migration-validation.yaml
 #
-# Validates the specialist-behind-gate pattern:
-#   S1 — gated items invisible without mode (agents gated, not at behavior level)
-#   S2 — atomic mount + JSONL event proof on activation
-#   S3 — clean unmount, baseline intact on deactivation
-#   S4 — context USED at runtime (schema field question)
-#   S5 — facilitator USED via contributes.agents path + inner delegation works
-#   S6 — tool-designer USED via contributes.agents path + load_skill(search=) works
+# RUNNABLE amplifier-digital-twin profile. Validates the specialist-behind-gate
+# (contributes.agents) migration by loading the branch bundle THROUGH THE AMPLIFIER
+# CLI from a Gitea mirror -- NOT by running pytest/artefacts.
 #
-# Framework fixes (app-cli#178, bundle-skills#15, foundation#203) are merged to
-# their respective main branches — no Gitea redirects needed for framework repos.
-# Only the context-intelligence bundle itself is redirected (not yet on CI main).
+# HOW TO RUN:
+#   export GH_TOKEN=$(gh auth token)
+#   amplifier-digital-twin launch \
+#     .amplifier/digital-twin-universe/profiles/context-intelligence-contributes-migration-validation.yaml \
+#     --name ci-contributes-migration \
+#     --var gitea_host=http://localhost:10110
+#
+# `readiness` RUNS ON LAUNCH (structural proof, no LLM). `validation_cmds` documents
+# the full check-suite; run each via `amplifier-digital-twin exec <id> -- <command>`.
+#
+# WHAT THIS PROFILE FOCUSES ON (the contributes.agents migration):
+#   STRUCTURAL (deterministic):
+#     * specialists are GATED via contributes.agents -- NOT registered at behavior level.
+#       `amplifier bundle show context-intelligence-behavior` lists agents:(2) baseline
+#       ONLY (graph-analyst, session-navigator); the design-facilitator and tool-designer
+#       are absent while the mode is inactive.
+#     * the installed mode file (from the mirror) declares the specialists under
+#       mode.contributes.agents with fully-namespaced keys, and the 3 skills / 3 context.
+#   BEHAVIOURAL (real session, real key):
+#     * mode activates via the USER slash command in an interactive TTY (off->on->off).
+#     * LLM self-activation is DENIED (safety gate) -- proven via json-trace status:denied.
+#   NOT CLI-INTROSPECTABLE IN THIS VERSION (reported honestly):
+#     * the runtime mounted set on activation (which specialists/skills/context mount) and
+#       the mode:transition_completed JSONL payload are not dumpable: the logging hook's
+#       additional_events covers delegate:* only, not mode:transition_completed. The gate
+#       is therefore proven by declared-contributes + inactive-baseline + activation, not
+#       by a mount enumeration. Sub-session delegation / skill-search scenarios require an
+#       interactive mode session and are documented as manual behavioural steps.
 
-profile:
-  name: context-intelligence-contributes-migration-validation
-  version: 2.1.0
-  description: >
-    Validates the context-intelligence contributes.agents specialist-behind-gate pattern.
-    Proves specialists ARE gated behind the mode and that sub-session delegation +
-    skill search work correctly through the contributes.agents path.
+name: context-intelligence-contributes-migration-validation
+description: >
+  Runnable validation of the context-intelligence contributes.agents specialist-behind-gate
+  migration. Loads the branch bundle via the Amplifier CLI from a Gitea mirror and proves,
+  structurally on launch, that the specialists are gated (absent at behavior level while the
+  mode is inactive) and, behaviourally, the user-driven activation round-trip + denied
+  self-activation.
 
-# Only redirect amplifier-bundle-context-intelligence for development testing.
-url_rewrites:
-  - from: "git+https://github.com/microsoft/amplifier-bundle-context-intelligence@main"
-    to:   "git+http://{gitea_host}/microsoft/amplifier-bundle-context-intelligence@main"
-  - from: "git+https://github.com/microsoft/amplifier-bundle-context-intelligence@main#subdirectory=skills"
-    to:   "git+http://{gitea_host}/microsoft/amplifier-bundle-context-intelligence@main#subdirectory=skills"
+base:
+  image: ubuntu:24.04
 
-install:
-  command: "amplifier bundle add git+https://github.com/microsoft/amplifier-bundle-context-intelligence@main#subdirectory=behaviors/context-intelligence.yaml --app"
+passthrough:
+  allow_external: true
+  services:
+    - name: anthropic
+      key_env: ANTHROPIC_API_KEY
+    - name: github
+      key_env: GH_TOKEN
 
-assertions:
-  - id: S1-baseline-mode-inactive
-    description: >
-      With mode inactive: specialist agents NOT present (now gated via contributes.agents,
-      no longer registered at behavior level).  Baseline agents (graph-analyst,
-      session-navigator) ARE present.  Design skills NOT discoverable.
-      Context files NOT injected.  Mode NOT listed (advertised: false).
-    when:
-      mode: inactive
-    expect:
-      agents_present:
-        - context-intelligence:graph-analyst
-        - context-intelligence:session-navigator
-      agents_absent:
-        - context-intelligence:context-intelligence-design-facilitator
-        - context-intelligence:context-intelligence-tool-designer
-      skills_absent:
-        - context-intelligence-tool-design
-        - context-intelligence-eval-design
-      context_absent:
-        - "context-intelligence:context/jsonl-event-schema.md"
-        - "context-intelligence:context/dual-path-library-template.md"
-      mode_not_listed: context-intelligence
+provision:
+  setup_cmds:
+    - apt-get update && apt-get install -y git curl python3 python3-venv jq
 
-  - id: S2-activation-atomic-mount
-    description: >
-      After /context-intelligence activation: both specialists mount, both design
-      skills discoverable, both context files injected. JSONL mode:transition_completed
-      event records both context file paths in data.mounted array.
-    when:
-      mode: active
-    expect:
-      agents_present:
-        - context-intelligence:context-intelligence-design-facilitator
-        - context-intelligence:context-intelligence-tool-designer
-      skills_present:
-        - context-intelligence-tool-design
-        - context-intelligence-eval-design
-      jsonl_event:
-        type: "mode:transition_completed"
-        payload_path: "data.mounted"
-        payload_contains:
-          - "context-intelligence:context/jsonl-event-schema.md"
-          - "context-intelligence:context/dual-path-library-template.md"
+    - curl -LsSf https://astral.sh/uv/install.sh | sh
 
-  - id: S3-deactivation-clean-unmount
-    description: >
-      After /mode off: specialists gone, design skills gone, context files gone.
-      Baseline agents and general context-intelligence skills still present.
-    when:
-      mode: inactive
-      after: activation
-    expect:
-      agents_absent:
-        - context-intelligence:context-intelligence-design-facilitator
-        - context-intelligence:context-intelligence-tool-designer
-      agents_present:
-        - context-intelligence:graph-analyst
-        - context-intelligence:session-navigator
-      skills_absent:
-        - context-intelligence-tool-design
-        - context-intelligence-eval-design
-      general_skills_present:
-        - blob-reading
-        - context-intelligence-graph-query
-        - context-intelligence-session-navigation
+    - |
+      if [ -n "${GH_TOKEN:-}" ]; then
+        echo "machine github.com login x-token-auth password $GH_TOKEN" > /root/.netrc
+        chmod 600 /root/.netrc
+        git config --global credential.helper 'store'
+      fi
 
-scenarios:
-  - id: S4-context-used-at-runtime
-    description: >
-      With mode active, ask about tool:pre event fields. Answer must name specific
-      fields from jsonl-event-schema.md, proving injection and consultation.
-    when:
-      mode: active
-    user_message: "What fields are available on a tool:pre event in the context-intelligence JSONL schema?"
-    pass_criteria:
-      response_contains_all:
-        - "tool_name"
-        - "tool_input"
-        - "parallel_group_id"
+    # Narrow rewrite: only the context-intelligence bundle self-references -> mirror.
+    - |
+      git config --global \
+        url."${gitea_host}/microsoft/amplifier-bundle-context-intelligence".insteadOf \
+        "https://github.com/microsoft/amplifier-bundle-context-intelligence"
+      echo "insteadOf:"; git config --global --get-regexp insteadOf
 
-  - id: S5-facilitator-used-via-contributes-agents
-    description: >
-      With mode active, facilitator responds via the contributes.agents path AND
-      can internally delegate to graph-analyst (proving the sub-session agent
-      registry propagation fix in session_spawner.py is working).
-    when:
-      mode: active
-    user_message: "Investigate how testing sessions are performing."
-    pass_criteria:
-      agent_delegated_to: context-intelligence:context-intelligence-design-facilitator
-      response_type: goal_anchored_elicitation
-      forbidden_substrings:
-        - graph-analyst
-        - session-navigator
-        - context-intelligence-design-facilitator
-        - context-intelligence-tool-designer
-      # Proves inner delegation from facilitator sub-session to graph-analyst works
-      delegate_call_present:
-        agent: context-intelligence:graph-analyst
-        context_depth: none
+    - uv tool install git+https://github.com/microsoft/amplifier@main
 
-  - id: S6-tool-designer-skill-search-via-contributes
-    description: >
-      With minimal fixtures preloaded, tool-designer runs Phase 2 classification
-      and loads context-intelligence-tool-design skill via load_skill(search=...) —
-      proving the runtime_skill_overlay search fix in tool-skills is working.
-    when:
-      mode: active
-    setup:
-      preload_fixtures:
-        - ".context-intelligence-investigation/domain-concepts.md"
-        - ".context-intelligence-investigation/domain-signals.md"
-    user_message: "Run Phase 2 classification on the loaded signals using the tool-designer."
-    pass_criteria:
-      agent_delegated_to: context-intelligence:context-intelligence-tool-designer
-      # The tool-designer loads the skill via search= not source=
-      skill_loaded_via_search: context-intelligence-tool-design
-      response_contains_fields:
-        - detection_strategy
-        - ai_dependency
-        - reasoning_requirement
-        - suggested_primitive
+    - |
+      mkdir -p /root/.amplifier
+      cat > /root/.amplifier/settings.yaml << 'EOF'
+      config:
+        providers:
+          - module: provider-anthropic
+            source: git+https://github.com/microsoft/amplifier-module-provider-anthropic@main
+            config:
+              api_key_env: ANTHROPIC_API_KEY
+      EOF
+
+    - |
+      amplifier bundle add \
+        git+https://github.com/microsoft/amplifier-bundle-context-intelligence@main#subdirectory=behaviors/context-intelligence.yaml \
+        --app
+
+    - amplifier --version
+
+    - |
+      echo 'export PATH="/root/.local/bin:$PATH"' >> /root/.bashrc
+      echo 'PATH=/root/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin' >> /etc/environment
+
+readiness:
+  - name: amplifier-usable
+    command: "amplifier --version"
+
+  - name: bundle-loaded-from-mirror
+    command: >
+      C=$(find /root/.amplifier/cache -maxdepth 1 -type d -name 'amplifier-bundle-context-intelligence-*' | head -1);
+      git -C "$C" remote -v | grep -q "${gitea_host}/microsoft/amplifier-bundle-context-intelligence"
+      && git -C "$C" log -1 --pretty=%s | grep -qi "docs/contributing-and-pr-template"
+      && echo "ready: bundle resolved from mirror @ branch snapshot"
+
+  - name: specialists-gated-not-at-behavior-level
+    # The migration's core assertion: specialists NOT registered at behavior level.
+    command: >
+      OUT=$(amplifier bundle show context-intelligence-behavior 2>/dev/null);
+      echo "$OUT" | grep -q "context-intelligence:graph-analyst"
+      && echo "$OUT" | grep -q "context-intelligence:session-navigator"
+      && ! echo "$OUT" | grep -q "context-intelligence-design-facilitator"
+      && ! echo "$OUT" | grep -q "context-intelligence-tool-designer"
+      && echo "ready: specialists gated (contributes.agents), baseline intact"
+
+validation_cmds:
+  # ---- STRUCTURAL ----
+  - name: S1-inactive-baseline-and-gating
+    command: |
+      echo "== bundle show: expect agents:(2) baseline, no specialists =="
+      amplifier bundle show context-intelligence-behavior
+
+  - name: S2-contributes-agents-declared-in-mirror-modefile
+    command: |
+      C=$(find /root/.amplifier/cache -maxdepth 1 -type d -name 'amplifier-bundle-context-intelligence-*' | head -1)
+      echo "== mode.contributes.agents / skills / context (from installed mirror mode file) =="
+      sed -n '/contributes:/,/tools:/p' "$C/modes/context-intelligence.md"
+
+  # ---- BEHAVIOURAL (interactive; needs real key + TTY) ----
+  # S3/S4/S5 (context-used-at-runtime, facilitator sub-session delegation, tool-designer
+  # skill-search) require a live mode session and are driven interactively:
+  #   amplifier-digital-twin exec --visual-id ci <id>
+  #   $ cd /root/ci-int && amplifier run --mode chat
+  #   > /mode context-intelligence
+  #   [context-intelligence]> Investigate how testing sessions are performing.
+  #   ... (facilitator elicitation; observe delegate() to graph-analyst in the trace)
+  - name: B1-user-activation-roundtrip
+    command: |
+      echo "Interactive (real TTY). Expected transcript:"
+      echo "  > /mode context-intelligence      => prompt -> [context-intelligence]>"
+      echo "  [context-intelligence]> /mode off => Mode off: context-intelligence -> >"
+
+  - name: B2-self-activation-denied
+    command: |
+      mkdir -p /root/ci-deny && cd /root/ci-deny
+      amplifier run "Call the mode tool with operation=set and name=context-intelligence." \
+        --output-format json-trace 2>/dev/null | jq -r '.execution_trace[]?|select(.tool=="mode")|.result.output.status'
+      echo "^ expect: denied (agent self-activation is gated; user must confirm)"
