@@ -47,6 +47,53 @@ interpreter that has the deps → `validation_mode: full`.
 green, the lone mode "error" confirmed a false positive (name collision). Only the build *dry-run*
 is skipped (no `pip wheel` in the venv); the wheels build cleanly under `uv build`.
 
+## Testing & what "done" looks like
+
+Run these before calling anything done:
+
+```bash
+uv run pytest          # in modules/tool-context-intelligence-query   (module suite)
+uv run pytest          # in the repo root                             (tests/, top-level suite)
+uv run ruff check . && uv run ruff format --check . && uv run pyright
+scripts/validate-full.sh   # → validation_mode: full, overall PASS
+```
+
+**Green unit tests are the FLOOR, not proof of done.** This bundle wires **skills, modes,
+networking, tools, and auth** — capabilities whose real behaviour lives at **seams** (see
+*Seam Awareness* below), where a passing mock can hide a real break. Real, recent proof: two
+read-path bugs (a blob-envelope parse and a `ci-blob://` bare-key normalization) passed *every*
+unit test and were caught only against a **live server**.
+
+So **"done" for any change that touches a seam is not "units are green" — it is real,
+captured end-to-end evidence that the bundle works in production order.** A seam is any edit at
+the edges: skill / mode / tool / hook / config wiring, the client↔server boundary, networking,
+or auth. For those changes, done **requires**:
+
+- **A real end-to-end run — Digital Twin Universe (DTU) or an equivalent live run** — exercising
+  the ACTUAL code path a user hits: real server, real network, real auth. Not an inbound mock of
+  the boundary (which is *banned as a gate* until reconciled to real behaviour — see *Seam Awareness*).
+- **Captured evidence:** the real request/response, the identity/provenance of what actually
+  answered, and the **fail-loud** behaviour on a real failure (down / 5xx / timeout / bad auth).
+- If you crossed a seam without real evidence, it is **NOT done** — reconcile the mock to the real
+  thing first.
+
+**Agent, skill, and mode edits ALWAYS require a DTU run + the evaluation harness — never ship them
+on unit tests alone.** An agent's delegation, a skill's guidance, a mode's gating, and the
+tool/networking/auth wiring behind them only prove out when *loaded and exercised in a real
+environment*. This repo ships the harnesses for exactly that — use them, don't reinvent them:
+
+- **DTU profiles** — `.amplifier/digital-twin-universe/profiles/` (e.g. `ci-bundle-smoke-test.yaml`,
+  `context-intelligence-redesigned-mode-validation.yaml`, `ci-signals-validation.yaml`). Launch the
+  change in a DTU and drive the real agent/skill/mode/tool path end-to-end.
+- **Evaluation methodology** — the `context-intelligence-eval-design` and
+  `context-intelligence-evaluation-methodology` skills. Design/run the evaluation scenarios that
+  score the behaviour, and capture the results as the evidence of working order.
+
+Match the gate to the change: pure-internal logic → units + `validate-full.sh`; **a seam crossing —
+including ANY agent / skill / mode / tool / networking / auth edit → units + `validate-full.sh` + a
+real DTU run + the evaluation harness, with captured evidence.** Skipping the live run on a seam
+change is how a green build ships a broken bundle.
+
 ## Architecture note
 
 This bundle ships **layered, composable behaviours** — `context-intelligence-navigation` ⊂
