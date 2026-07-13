@@ -19,7 +19,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from context_intelligence.client import AsyncCIClient
+from context_intelligence.client import AsyncCIClient, CIClientError
 from context_intelligence.tool_resolver import (
     ToolConfigResolver,
     resolve_query_auth_strategy,
@@ -205,7 +205,24 @@ class GraphQueryTool:
             params = raw_params
 
         async_client = AsyncCIClient(
-            server_url=server_url, api_key=api_key or "", auth_strategy=auth_strategy
+            server_url=server_url,
+            api_key=api_key or "",
+            auth_strategy=auth_strategy,
+            timeout=self._tool_resolver.request_timeout,
         )
-        result = await async_client.cypher(query, effective_workspace, params=params)
+        try:
+            result = await async_client.cypher(query, effective_workspace, params=params)
+        except CIClientError as exc:
+            # success=False + output unset is safe: ToolResult.model_post_init
+            # back-fills output from error["message"] when output is None. Do NOT
+            # also set output= here or that back-fill is suppressed (matches the
+            # SourceSelectionError/ValueError handlers above).
+            return ToolResult(
+                success=False,
+                error={
+                    "message": f"query failed against {server_url}: {exc}",
+                    "type": exc.error_type,  # connection_error|timeout|http_status|decode_error
+                    **({"status_code": exc.status_code} if exc.status_code is not None else {}),
+                },
+            )
         return ToolResult(success=True, output=result)
