@@ -3,14 +3,16 @@
 //   HookConfigResolver  (write/upload side)  — owns workspace, paths, and the
 //                        `destinations` fan-out map.
 //   ToolConfigResolver  (read/query side)    — used by the graph_query and
-//                        blob_read tools; resolves the query endpoint via
-//                        resolve_query_endpoint(), EXPLICIT-READ-CONFIG FIRST,
-//                        then falling back to the first hook destination, then env.
+//                        blob_read tools; resolves ONE endpoint via
+//                        resolve_query_connection(), which selects from the
+//                        CONNECTABLE POOL (tool `sources` UNION hook
+//                        `destinations`) and returns provenance
+//                        {name, url, origin}.
 //
 // Each value is resolved on first access and cached. Empty strings are treated
 // as absent and fall through to the next source (or-chain falsy semantics).
 //
-// Render: dot -Tsvg config-resolution.dot -o config-resolution.svg
+// Render: dot -Tpng config-resolution.dot -o config-resolution.png
 
 digraph ConfigResolution {
     rankdir=TB;
@@ -99,7 +101,7 @@ digraph ConfigResolution {
 
         dst_legacy -> dst_map [label="synthesize", style=dashed];
         dst_map -> dst_fanout [label="route"];
-        dst_map -> dst_first [label="for queries"];
+        dst_map -> dst_first [label="read fallback\n(0 sources configured)"];
     }
 
     // --- Simple hook properties (no coordinator fallback) ---
@@ -124,22 +126,40 @@ digraph ConfigResolution {
         blob_root [label="blob_store_root\nbase_path / project_slug /\nsessions"];
     }
 
-    // --- Query endpoint resolution (read side, ToolConfigResolver) ---
-    // resolve_query_endpoint(hook_resolver, tool_resolver): per-field, EXPLICIT-FIRST.
+    // --- Query connection resolution (read side, ToolConfigResolver) ---
+    // resolve_query_connection(hook_resolver, tool_resolver, source_name=None):
+    // selects ONE endpoint from the connectable pool and returns its provenance.
     subgraph cluster_query {
-        label="resolve_query_endpoint()  (read side — per field, explicit-first)";
+        label="resolve_query_connection()  (read side —\nsingle endpoint from the connectable pool)";
         style=filled;
         fillcolor="#e0f2f1";
         color="#009688";
 
-        q1 [label="1. sources[first]\n.url / .api_key\n.auth_mode / .auth_resource\n(explicit read override;\n absent ⇒ synthesize default from\n tool's explicit scalars)"];
-        q2 [label="2. hook destinations[first]\n.url / .api_key\n(bug-fix bridge: destinations-only\n setups 'just work' for reads)"];
-        q3 [label="3. env\nAMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_URL /\n_API_KEY\n(single canonical last-resort fallback)"];
-        q_none [label="else → None\n→ configuration_error", shape=note, fillcolor="#ffcdd2"];
+        cq_pool [label="connectable pool =\ntool sources UNION hook destinations\n(merged by name;\nSOURCE WINS on name collision)", shape=component, fillcolor="#b2dfdb"];
+        cq_explicit [label="source=<name> given?"];
+        cq_found [label="found in pool\n-> resolved\n(origin: source | destination)"];
+        cq_unknown [label="not in pool -> fail loud\nunknown_source\n(lists the WHOLE\nconnectable set)", shape=note, fillcolor="#ffcdd2"];
+        cq_count [label="no name given:\ncount tool's own sources"];
+        cq_one [label="== 1 source\n-> use it (origin: source)"];
+        cq_many [label=">= 2 sources\n-> fail loud\nambiguous_source_selection\n(the ONLY default-path fail-loud)", shape=note, fillcolor="#ffcdd2"];
+        cq_zero [label="== 0 sources\n-> first destination\nin config order\n(origin: destination;\nNO fail-loud for any\ndestination count)"];
+        cq_env [label="0 sources AND\n0 destinations\n-> env\nAMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_URL /\n_API_KEY  (origin: env)"];
+        cq_none [label="still unresolved -> url=None\n-> configuration_error\n(no endpoint chosen)", shape=note, fillcolor="#ffcdd2"];
+        cq_provenance [label="provenance returned:\n{name, url, origin}\non EVERY success, and on\nfailures AFTER an endpoint\nis chosen (e.g. validation_error,\nuri_error) -- absent for\npre-resolution selection/\nconfig errors", shape=note, fillcolor="#e0f2f1", color="#00695c"];
 
-        q1 -> q2 [label="empty?"];
-        q2 -> q3 [label="empty?"];
-        q3 -> q_none [label="empty?"];
+        cq_pool -> cq_explicit;
+        cq_explicit -> cq_found [label="yes, in pool"];
+        cq_explicit -> cq_unknown [label="yes, not in pool"];
+        cq_explicit -> cq_count [label="no"];
+        cq_count -> cq_one [label="== 1"];
+        cq_count -> cq_many [label=">= 2"];
+        cq_count -> cq_zero [label="== 0"];
+        cq_zero -> cq_env [label="0 destinations too"];
+        cq_env -> cq_none [label="env empty too"];
+        cq_found -> cq_provenance;
+        cq_one -> cq_provenance;
+        cq_zero -> cq_provenance [label="destination found"];
+        cq_env -> cq_provenance [label="env resolved"];
     }
 
     // --- auth_mode / auth_resource annotation (Destination + Source) ---
@@ -161,11 +181,11 @@ digraph ConfigResolution {
     session_cap -> ps_working_dir [label="working_dir", style=dashed];
 
     // --- Edges from the tool resolver ---
-    tool_resolver -> q1 [lhead=cluster_query];
+    tool_resolver -> cq_pool [lhead=cluster_query];
     tool_config -> tool_resolver [label="config dict"];
     coord_config -> tool_resolver [label="coordinator"];
-    // tier 2 reads the hook's first destination (shared model)
-    dst_first -> q2 [style=dashed, label="first hook destination", color="#673ab7"];
+    // 0-sources default path reads the hook's first destination (shared model)
+    dst_first -> cq_zero [style=dashed, label="first hook destination\n(read fallback pool)", color="#673ab7"];
 
     // --- Derived path dependencies ---
     ps_default -> session_dir [style=dashed, label="project_slug", color="#999999"];
@@ -176,5 +196,5 @@ digraph ConfigResolution {
 
     // --- auth_note connections ---
     dst_map -> auth_note [style=dotted, arrowhead=none, color="#4527A0", label="auth fields"];
-    q1 -> auth_note [style=dotted, arrowhead=none, color="#4527A0", constraint=false];
+    cq_pool -> auth_note [style=dotted, arrowhead=none, color="#4527A0", constraint=false];
 }

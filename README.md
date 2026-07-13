@@ -421,7 +421,7 @@ The hook config above governs **where events are written** (the upload / fan-out
 
 | Order | Source | Notes |
 |-------|--------|-------|
-| **1** | The `source`-selected entry of `sources` on the tool's own config (`overrides.tool-context-intelligence-query.config`) — see [`sources`](#query-tools-graph-query-blob-read--read-side-endpoint) below for selection rules when 2+ are configured. | The explicit read override. Wins when set. Applies to both `graph_query` and `blob_read` — pass `source=<name>` per call when 2+ sources are configured. |
+| **1** | The `source`-selected entry, resolved across the **whole connectable pool** — the tool's own `sources` **and** the hook's `destinations`, merged by name (a `sources` entry wins on a name collision) — see [`sources`](#query-tools-graph-query-blob-read--read-side-endpoint) below for the full selection rules. | The explicit read override. Wins when set — `source=<name>` can name a `sources` entry **or** a hook `destination`. Applies to both `graph_query` and `blob_read` — pass `source=<name>` per call whenever the pool has 2+ configured sources. |
 | **2** | First entry of the hook's `destinations` block | **The common case** — queries follow the same server you upload to, with zero extra config. This is the bridge that makes a `destinations`-only setup "just work" for reads. |
 | **3** | Env `AMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_URL` / `AMPLIFIER_CONTEXT_INTELLIGENCE_API_KEY` | Single canonical last-resort fallback (reached via `${VAR}` placeholders in the shipped YAML, same convention as everywhere else). |
 | — | else | `configuration_error: "context-intelligence server URL not configured"`. |
@@ -436,11 +436,12 @@ order:
 
 | Configured sources | `source` argument passed | Result |
 |---|---|---|
-| 0 | (n/a) | Falls through to the hook's first `destination`, then env (unchanged). |
+| 0 | omitted | Falls through to the hook's first `destination` (no fail-loud, regardless of how many destinations are configured), then env if there are no destinations either. |
+| 0 | a name | You can still target a **specific destination** — `source=<destination-name>` resolves it from the connectable pool (`sources` ∪ `destinations`) even with zero `sources` configured. It is **not** an n/a case. Unknown name → error enumerating the whole connectable set. |
 | 1 | omitted | That one source is used — no selector needed. |
-| 1 | a name | Used if it matches; **error, naming the one valid name, if it doesn't.** |
-| 2+ | a name | The named source is used if configured; **error enumerating all valid names if not** — never silently substitutes a different source. |
-| 2+ | omitted | **Error enumerating all valid names.** With 2+ sources configured, a selector is required — there is no implicit "default" source chosen by insertion order. |
+| 1 | a name | Resolved across the whole connectable pool (the one configured source, or any hook `destination`). Used if the name matches; **error enumerating the whole connectable set (sources + destinations) if it doesn't.** |
+| 2+ | a name | Resolved across the whole connectable pool; the named entry (source or destination) is used if found; **error enumerating the whole connectable set if not** — never silently substitutes a different source. |
+| 2+ | omitted | **Error: `ambiguous_source_selection`.** With 2+ sources configured, a selector is required — there is no implicit "default" source chosen by insertion order. |
 
 A misconfigured source (missing `url`, missing `api_key`/`auth_resource`) only blocks queries that
 target **that** source by name — it does not block queries against other, correctly configured
@@ -484,32 +485,57 @@ With exactly one `sources` entry configured, `source` is optional on every call.
 
 > **Most users configure nothing here.** A single hook `destinations` entry already powers both upload and query. `sources` exists only for the read-replica / split-endpoint case.
 
-#### Skill body sync — `skill_sync_enabled` (opt-in)
+#### Read-path contract — success and failure envelopes
 
-The `graph-analyst` agent uses a `context-intelligence-graph-query` skill that documents the Cypher patterns it issues. The bundle ships a **SHA-pinned vendored copy** of that skill body (`bundled_skill/context-intelligence-graph-query.md`, inside the `tool-context-intelligence-query` module), so the skill works fully offline with **zero network traffic** for skill acquisition. The optional `skill_sync_enabled` knob controls whether — at session start — the skill body is *refreshed from a Context Intelligence server* instead of using the vendored copy. It lives in the same namespace as `sources` (`overrides.tool-context-intelligence-query.config`).
+Both `graph_query` and `blob_read` resolve their connection via `resolve_query_connection()`
+(the single-endpoint selection described above) and return a JSON-serializable result —
+they never raise. Every result names the resolved endpoint's provenance as a `source` block:
+`{"name": ..., "url": ..., "origin": "source" | "destination" | "env"}`.
 
-| Key | Source | Default | Description |
-|-----|--------|---------|-------------|
-| `skill_sync_enabled` | tool config → `coordinator.config` → env `AMPLIFIER_CONTEXT_INTELLIGENCE_SKILL_SYNC_ENABLED` → default | **`false`** | When **`false`** (default): no skill network traffic at all. If a server source is resolved, the vendored offline body is swapped in (still zero network); if none is resolved, the shipped stub is retained. When **`true`** and a server source resolves: the skill body is version-gated and conditionally fetched from the server at session start (a `skill:unloaded` reload handler is also registered). When `true` but the server is offline, the agent degrades gracefully (no crash). |
+**Success:**
 
-```yaml
-# ~/.amplifier/settings.yaml — opt IN to refreshing the graph-query skill body from the server.
-# Default is OFF: the bundled, SHA-pinned skill body is used and NO skill traffic occurs.
-overrides:
-  tool-context-intelligence-query:
-    config:
-      skill_sync_enabled: true        # default false — leave unset for the zero-network path
+```python
+# graph_query
+{"source": {"name": "default", "url": "...", "origin": "destination"}, "rows": [...]}
+
+# blob_read
+{"path": "/tmp/ci-blobs/<session_id>/<key>.json", "source": {"name": "default", "url": "...", "origin": "destination"}}
 ```
 
-Skill sync resolves its server using the **same** `(server_url, api_key)` chain as the query tools above (`sources` → hook `destinations` → env). The vendored-body install **fails loud** if the on-disk body's SHA does not match the pin. See [`docs/context-intelligence-skill-sync-flow.png`](docs/context-intelligence-skill-sync-flow.png) for the full enabled/disabled decision flow.
+**`list_sources: true`** (either tool) returns the whole connectable pool instead of
+running a query — no `api_key` is included:
 
-> When 2+ `sources` are configured, skill-body sync intentionally does **not** require a `source`
-> selector and will not error on ambiguity — it uses the first configured source by convention,
-> because the skill body it fetches is static, session-agnostic documentation (Cypher pattern
-> reference), not session-specific graph data. This is the one exception to the fail-loud selection
-> rule above, and applies only to skill-body sync, never to `graph_query`/`blob_read` query results.
+```python
+{"connectable_set": [{"name": "default", "url": "...", "origin": "destination"}, ...]}
+```
 
-> **Telemetry hook does not fetch skills.** Skill acquisition belongs entirely to the query tool (above) and is opt-in. The `hook-context-intelligence` module is **pure telemetry** — event capture and `destinations` fan-out only — and performs no skill loading.
+**Fail-loud read path.** A down, slow, or rejecting endpoint never returns a silent
+empty result — it returns `success: false` with a typed `error`:
+
+```python
+{"success": false, "error": {"type": "connection_error", "message": "...", "source": {...}}}
+```
+
+`error.type` is one of `connection_error | timeout | http_status | decode_error` for
+transport failures. A genuine empty `200` response still succeeds (empty rows / an
+empty-but-valid blob is not treated as an error). The `error` payload carries the resolved
+`source` block **only once an endpoint has actually been resolved** — post-resolution
+failures (the transport errors above, plus `validation_error` and `uri_error`) carry it;
+pre-resolution failures (an unknown `source=` name, `ambiguous_source_selection`,
+`configuration_error`) do not, since no endpoint was chosen.
+
+**Read timeout.** Configurable via `request_timeout` in the tool's config, or the env var
+`AMPLIFIER_CONTEXT_INTELLIGENCE_QUERY_TIMEOUT` — default **30s**. A non-positive value
+clamps up to a **0.1s floor** rather than disabling the timeout. This is distinct from the
+hook's `dispatch_*` timeouts in the config table above, which govern the write/upload path.
+
+#### Graph-query skill — vendored statically (no configuration)
+
+The `graph-analyst` agent uses a `context-intelligence-graph-query` skill that documents the Cypher patterns it issues. That skill is **vendored statically** in this repo at `skills/context-intelligence-graph-query/SKILL.md` (sourced from the [Context Intelligence Server](https://github.com/microsoft/amplifier-context-intelligence) repo's `main` branch). The bundle's behaviors deliver it at compose time — there is **no runtime skill fetching, syncing, or configuration knob**.
+
+The vendored file carries its own leading **no-server guidance block**: when no graph server is configured for the session, the skill instructs the agent to delegate to `session-navigator` rather than attempt Cypher against an unreachable server.
+
+> **Telemetry hook does not load skills.** The `hook-context-intelligence` module is **pure telemetry** — event capture and `destinations` fan-out only — and performs no skill loading.
 
 ---
 
@@ -686,21 +712,16 @@ amplifier-bundle-context-intelligence/
 │   └── jsonl-event-schema.md               ← events.jsonl schema contract
 ├── modules/
 │   ├── hook-context-intelligence/      ← the Python hook module — PURE TELEMETRY
-│   │                                     (no skill_fetcher.py / legacy_content/ — skills moved out)
-│   └── tool-context-intelligence-query/ ← graph_query + blob_read tools + opt-in skill sync
+│   └── tool-context-intelligence-query/ ← graph_query + blob_read tools
 │       └── amplifier_module_tool_context_intelligence_query/
-│           ├── graph_query_tool.py     ← skill_sync_enabled knob (default false)
-│           ├── skill_sync.py           ← on_session_ready orchestration (opt-in)
-│           ├── skill_fetcher.py        ← server version-gate + conditional fetch (only when enabled)
-│           └── bundled_skill/
-│               └── context-intelligence-graph-query.md  ← SHA-pinned vendored offline body
+│           ├── graph_query_tool.py     ← Cypher query tool
+│           └── blob_read_tool.py       ← ci-blob:// resolution tool
 ├── docs/
 │   ├── context-intelligence-exploration-guide.md   ← what to explore and how to test
-│   ├── context-intelligence-skill-sync-flow.dot    ← skill-sync enabled/disabled decision flow
 │   ├── dispatch-circuit-breaker.dot    ← dispatch flow and circuit breaker state machine
 │   └── logging-handler-flow.dot        ← thin forwarder architecture
 ├── skills/
-│   ├── context-intelligence-graph-query/
+│   ├── context-intelligence-graph-query/  ← vendored statically (real body + no-server block)
 │   ├── context-intelligence-session-navigation/
 │   └── …                               ← additional graph/design skills
 └── tests/
