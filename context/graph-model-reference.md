@@ -180,12 +180,14 @@ a `ci-blob://` URI stored in the `data` field or a dedicated blob property.
 **URI scheme:** `ci-blob://{session_id}/{key}`
 
 Use the `blob_read` tool to retrieve content — it writes to a local file and
-returns the path. Never pass the URI to `read_file` directly.
+returns a dict with the path. Never pass the URI to `read_file` directly.
 
 ```
 blob_read(uri="ci-blob://f881e0a0-c055-4ee4-84ed-ff44703150ea/events.jsonl")
-# → returns: /tmp/ci-blobs/events.jsonl
+# → returns: {"path": "/tmp/ci-blobs/f881e0a0-c055-4ee4-84ed-ff44703150ea/events.jsonl.json", "source": {"name": ..., "url": ..., "origin": ...}}
 ```
+
+The path takes the form `<session_id>/<key>.json` under the blob store root.
 
 > ⚠️ **Warning:** Blob files can contain lines with 100k+ tokens. Opening them with
 > `read_file` will overflow your context window. Use shell extraction tools only:

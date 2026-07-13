@@ -115,6 +115,33 @@ jq '{event, session_id, agent_name}' /path/to/blob/file
 
 ---
 
+## ⛔ CRITICAL: Always State the Source
+
+Every `graph_query` and `blob_read` **success** carries a `source` field
+(`{name, url, origin}`) naming the endpoint that answered — `origin` is
+`source`, `destination`, or `env`. You MUST state, in your user-facing answer,
+**which source produced the data** — e.g. "From source **prod**
+(`https://…`): 42 sessions." Never present graph data or a blob outcome
+without naming its source. If you queried a specific `source=<name>`, name it;
+if the tool selected the sole configured endpoint, name that.
+
+**On failure, state the source only when it is present.** An
+**endpoint-level** failure — a connection/timeout/HTTP-status/decode error, or
+an input-validation error (missing/invalid query, bad `uri`) that occurs *after*
+an endpoint was chosen — **carries** the `source` field: state which source
+failed and how. A **selection/configuration** failure that occurs *before* any
+endpoint is chosen — `ambiguous_source_selection`, `unknown_source`,
+`source_misconfigured`, `configuration_error` — has **no** `source` field
+(there is no single endpoint to name); do not invent one. Rule of thumb: if
+`error.source` is present, cite it; if it is absent, say the request failed
+during source selection/configuration.
+
+Call `graph_query` (or `blob_read`) with `list_sources: true` to see every
+endpoint you can reach (sources and hook destinations) before selecting one
+by name.
+
+---
+
 ## ⛔ CRITICAL: Query Result Size Management
 
 Apply to every query — unbounded results overflow context.
@@ -170,6 +197,10 @@ Load skill: context-intelligence-session-navigation
 ### Using graph_query
 
 The `graph_query` tool auto-injects `$workspace` — provide only the Cypher query.
+Results are returned as `{"source": {name, url, origin}, "rows": [...]}` — read
+your data from `rows` and ALWAYS report `source.name` in your answer (see
+"Always State the Source" above). Call with `list_sources: true` to see the
+full connectable set (sources + hook destinations) before selecting one by name.
 
 ---
 

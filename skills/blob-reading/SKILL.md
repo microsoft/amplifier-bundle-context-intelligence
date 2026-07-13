@@ -43,7 +43,21 @@ blob_read(uri="ci-blob://session_id/key")
 ```
 
 **Step 3 — Get the file path back**
-`blob_read` returns a local file path where the blob content has been written. The file is temporary and exists only for this session.
+`blob_read` returns `{"path": "...", "source": {"name", "url", "origin"}}` on
+success — a local file path where the blob content has been written, plus the
+endpoint that answered (`origin` is `source`, `destination`, or `env`). The file
+is temporary and exists only for this session. ALWAYS state which `source` a blob
+was fetched from when reporting.
+
+On **failure**, `source` is present only when an endpoint was actually chosen:
+**endpoint-level** errors (`connection_error`, `timeout`, `http_status`,
+`decode_error`, `http_error`, and input-validation errors like a missing/invalid
+`uri` that occur *after* selection) carry `error.source` — cite it.
+**Selection/config** errors before any endpoint is chosen
+(`ambiguous_source_selection`, `unknown_source`, `source_misconfigured`,
+`configuration_error`) have **no** `source`; report that selection failed rather
+than inventing one. Call `blob_read` with `list_sources: true` to see the
+connectable set before selecting one by name.
 
 **Step 4 — Read selectively**
 Use `jq`, `head`, or targeted shell commands to extract only the field(s) you need. Never read the full file into context.

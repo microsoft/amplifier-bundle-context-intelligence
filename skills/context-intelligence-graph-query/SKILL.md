@@ -81,6 +81,27 @@ entity points back to the layer-1 event(s) that produced it (Section 4). Use
 `db.schema.nodeTypeProperties()` to confirm exact property names before you rely on
 them — the sections below cover only the meaning the server cannot self-describe.
 
+### Reading results & citing the source (required)
+
+`graph_query` returns `{"source": {"name", "url", "origin"}, "rows": [...]}` on
+success. Read your data from `rows`. ALWAYS report `source.name` (its `origin` is
+`source`, `destination`, or `env`) in your answer — the user must know which
+endpoint the outcome came from.
+
+On **failure**, `source` is present only when an endpoint was actually chosen:
+**endpoint-level** errors (`connection_error`, `timeout`, `http_status`,
+`decode_error`, and input-validation errors like a missing/invalid `query` that
+occur *after* selection) carry `error.source` — cite it. **Selection/config**
+errors that occur *before* any endpoint is chosen (`ambiguous_source_selection`,
+`unknown_source`, `source_misconfigured`, `configuration_error`) have **no**
+`source` — there is no single endpoint to name, so report that selection failed
+rather than inventing one.
+
+To discover what you can reach, call `graph_query` with `list_sources: true` — it
+returns the connectable set (`{"connectable_set": [{name, url, origin}, ...]}`)
+without running a query. To target a specific endpoint (a configured read source
+OR a hook upload destination), pass `source: "<name>"`.
+
 ---
 
 ## Section 2 — Scoping (Mandatory, and Not Self-Describing)
@@ -422,7 +443,7 @@ endpoint (`GET {url}/blobs/{session_id}[/{key}]`), or the `blob_read` tool which
 returns a local **file path**, not content:
 
 ```python
-result = blob_read(uri="ci-blob://SESSION_ID/EVENT_KEY")  # -> {"file_path": "..."}
+result = blob_read(uri="ci-blob://SESSION_ID/EVENT_KEY")  # -> {"path": "...", "source": {name, url, origin}}
 ```
 
 Then extract only the fields you need with `jq` — never load a whole blob into context:
