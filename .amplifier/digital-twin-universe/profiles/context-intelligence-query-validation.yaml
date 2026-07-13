@@ -1,0 +1,203 @@
+# context-intelligence-query-validation.yaml
+#
+# RUNNABLE amplifier-digital-twin profile (base + provision + readiness).
+# Proves the READ / EXECUTE-QUERIES seam: after events are logged to a real
+# Context-Intelligence server, the CLI-loaded bundle's `graph_query` (Cypher) and
+# `blob_read` (ci-blob:// URI) return REAL data AND a `source` provenance block that
+# names the server that answered. Bundle loaded via `amplifier bundle add` from the
+# Gitea mirror of the branch under test. NOT pytest/artefacts.
+#
+# TOPOLOGY
+#   host: a real Context-Intelligence server (Neo4j + API) reachable from the DTU at the
+#         Incus host-gateway IP (e.g. http://10.67.103.1:18001).
+#   DTU:  amplifier + the branch bundle (full context-intelligence behavior). The read
+#         tools resolve (server_url, api_key) via ToolConfigResolver:
+#         explicit read-config -> hook `destinations` -> env AMPLIFIER_CONTEXT_INTELLIGENCE_*.
+#         Here the single-server env path is used, so the read side reuses the hook's
+#         destination as a read fallback (provenance origin = "destination").
+#
+# HOW THE READ TOOLS ARE INVOKED (important, empirically discovered)
+#   `graph_query` / `blob_read` are NOT mounted as top-level tools in a plain `amplifier run`
+#   session, and `amplifier tool invoke` cannot drive them (the context-intelligence behavior
+#   has no orchestrator by itself -> "Configuration must specify session.orchestrator").
+#   The real, shipped read path is the `context-intelligence:graph-analyst` AGENT: a session
+#   delegates to it, and the agent calls graph_query / blob_read in its sub-session. The
+#   validation step below drives exactly that path and captures the tool result (rows + the
+#   `source` provenance block) from the agent's response.
+#
+# HOW TO RUN
+#   # 1. stand up the server; 2. log some events to it first (e.g. run the write profile, or
+#   #    just run one session in THIS DTU -- the hook writes as we read). Then:
+#   export GH_TOKEN=$(gh auth token)
+#   amplifier-digital-twin launch \
+#     .amplifier/digital-twin-universe/profiles/context-intelligence-query-validation.yaml \
+#     --name ci-query \
+#     --var gitea_host=http://localhost:10110 \
+#     --var server_url=http://10.67.103.1:18001 \
+#     --var server_token=<RAW_API_TOKEN> \
+#     --var workspace=ci-query
+#
+# WHAT IS PROVEN
+#   STRUCTURAL (readiness gates, deterministic, no LLM):
+#     * bundle installed via the CLI, resolved to the MIRROR; graph-analyst agent present;
+#       the query-tool module (graph_query + blob_read) is in the loaded bundle.
+#     * the server is reachable from the DTU (neo4j_connected:true).
+#   BEHAVIOURAL (real session, real key; exec steps below):
+#     * graph_query returns >=1 row for a workspace-filtered Cypher query, and the tool
+#       result's `source` block names the server URL that answered.
+#     * blob_read resolves a ci-blob:// URI to real content, and its `source` block likewise
+#       names the answering server.
+
+name: context-intelligence-query-validation
+description: >
+  Runnable proof of the read/execute-queries seam. Loads the branch bundle via the Amplifier
+  CLI from a Gitea mirror, logs events to a real Context-Intelligence server, then drives
+  graph_query (Cypher) and blob_read (ci-blob://) through the graph-analyst agent and proves
+  real rows/content come back WITH a source provenance block naming the answering server.
+
+base:
+  image: ubuntu:24.04
+
+passthrough:
+  allow_external: true
+  services:
+    - name: anthropic
+      key_env: ANTHROPIC_API_KEY
+    - name: github
+      key_env: GH_TOKEN
+
+provision:
+  setup_cmds:
+    - apt-get update && apt-get install -y git curl python3 python3-venv jq
+
+    - curl -LsSf https://astral.sh/uv/install.sh | sh
+
+    - |
+      if [ -n "${GH_TOKEN:-}" ]; then
+        echo "machine github.com login x-token-auth password $GH_TOKEN" > /root/.netrc
+        chmod 600 /root/.netrc
+        git config --global credential.helper 'store'
+      fi
+
+    - |
+      git config --global \
+        url."${gitea_host}/microsoft/amplifier-bundle-context-intelligence".insteadOf \
+        "https://github.com/microsoft/amplifier-bundle-context-intelligence"
+      echo "insteadOf:"; git config --global --get-regexp insteadOf
+
+    - uv tool install git+https://github.com/microsoft/amplifier@main
+
+    - |
+      mkdir -p /root/.amplifier
+      cat > /root/.amplifier/settings.yaml << 'EOF'
+      config:
+        providers:
+          - module: provider-anthropic
+            source: git+https://github.com/microsoft/amplifier-module-provider-anthropic@main
+            config:
+              api_key_env: ANTHROPIC_API_KEY
+      EOF
+
+    - |
+      amplifier bundle add \
+        git+https://github.com/microsoft/amplifier-bundle-context-intelligence@main#subdirectory=behaviors/context-intelligence.yaml \
+        --app
+
+    # Wire the read tools (and the write hook) to the server via the single-server env path.
+    - |
+      cat >> /etc/environment << ENVEOF
+      PATH=/root/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+      AMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_URL=${server_url}
+      AMPLIFIER_CONTEXT_INTELLIGENCE_API_KEY=${server_token}
+      AMPLIFIER_CONTEXT_INTELLIGENCE_WORKSPACE=${workspace}
+      ENVEOF
+      echo 'export PATH="/root/.local/bin:$PATH"' >> /root/.bashrc
+      echo "export AMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_URL=${server_url}" >> /root/.bashrc
+      echo "export AMPLIFIER_CONTEXT_INTELLIGENCE_API_KEY=${server_token}" >> /root/.bashrc
+      echo "export AMPLIFIER_CONTEXT_INTELLIGENCE_WORKSPACE=${workspace}" >> /root/.bashrc
+
+    - amplifier --version
+
+readiness:
+  - name: amplifier-usable
+    command: "amplifier --version"
+
+  - name: bundle-loaded-from-mirror
+    command: >
+      C=$(find /root/.amplifier/cache -maxdepth 1 -type d -name 'amplifier-bundle-context-intelligence-*' | head -1);
+      git -C "$C" remote -v | grep -q "${gitea_host}/microsoft/amplifier-bundle-context-intelligence"
+      && git -C "$C" log -1 --pretty=%s | grep -qi "docs/contributing-and-pr-template"
+      && echo "ready: bundle resolved from mirror @ branch snapshot"
+
+  - name: graph-analyst-and-query-tools-loaded
+    # The read path is the graph-analyst agent; its module wiring must include the query tool
+    # (graph_query + blob_read) from the loaded (mirror) bundle.
+    command: >
+      C=$(find /root/.amplifier/cache -maxdepth 1 -type d -name 'amplifier-bundle-context-intelligence-*' | head -1);
+      test -f "$C/agents/graph-analyst.md"
+      && test -f "$C/modules/tool-context-intelligence-query/amplifier_module_tool_context_intelligence_query/graph_query_tool.py"
+      && test -f "$C/modules/tool-context-intelligence-query/amplifier_module_tool_context_intelligence_query/blob_read_tool.py"
+      && echo "ready: graph-analyst + graph_query + blob_read present in loaded bundle"
+
+  - name: server-reachable-from-dtu
+    command: >
+      . /etc/environment;
+      curl -sf "$AMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_URL/status"
+      | python3 -c "import sys,json;d=json.load(sys.stdin);assert d['status']=='ok' and d['neo4j_connected'];print('ready: server reachable, neo4j_connected')"
+
+validation_cmds:
+  # ---- BEHAVIOURAL step 0: ensure the server has events for this workspace to read back ----
+  - name: B0-log-events-first
+    command: |
+      set -a; . /etc/environment; set +a
+      mkdir -p /root/ci-query && cd /root/ci-query
+      amplifier run "Say hello in exactly one word." --output-format json > /root/q0-run.json 2>/root/q0-run.err || cat /root/q0-run.err
+      sleep 3
+      curl -sf "$AMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_URL/status" \
+        | jq "[.completed_sessions[]?|select(.workspace==\"$AMPLIFIER_CONTEXT_INTELLIGENCE_WORKSPACE\")|{workspace, events_processed}]"
+
+  # ---- BEHAVIOURAL step 1: graph_query rows + source provenance (via graph-analyst) ----
+  - name: B1-graph-query-rows-and-provenance
+    command: |
+      set -a; . /etc/environment; set +a
+      cd /root/ci-query
+      WS="$AMPLIFIER_CONTEXT_INTELLIGENCE_WORKSPACE"
+      PROMPT="Delegate to context-intelligence:graph-analyst to run this Cypher verbatim: MATCH (n) WHERE n.workspace = \"$WS\" RETURN labels(n) AS labels, count(n) AS c ORDER BY c DESC LIMIT 5 -- then quote the returned rows AND the full 'source' provenance block from the tool result."
+      amplifier run "$PROMPT" --output-format json-trace > /root/q1-trace.json 2>/root/q1.err || true
+      echo "== graph_query result (rows + source) extracted from the agent trace =="
+      python3 - <<'PY'
+      import json
+      raw=open('/root/q1-trace.json').read(); i=raw.find('{'); d=json.loads(raw[i:])
+      print("status:", d.get("status"))
+      for t in d.get("execution_trace",[]):
+          if t.get("type")=="tool_call" and t.get("tool")=="delegate":
+              out=t.get("result",{}); s=out if isinstance(out,str) else json.dumps(out)
+              print(s[:2000])
+      print("FINAL:", (d.get("response") or "")[:600])
+      PY
+      echo "^ PASS iff >=1 row returned AND source.url names $AMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_URL"
+
+  # ---- BEHAVIOURAL step 2: blob_read resolves a ci-blob:// URI + names the server ----
+  - name: B2-blob-read-and-provenance
+    command: |
+      set -a; . /etc/environment; set +a
+      cd /root/ci-query
+      WS="$AMPLIFIER_CONTEXT_INTELLIGENCE_WORKSPACE"
+      # discover a real ci-blob:// URI for this workspace directly from the server
+      BLOB=$(curl -sf -X POST "$AMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_URL/cypher" \
+        -H "Authorization: Bearer $AMPLIFIER_CONTEXT_INTELLIGENCE_API_KEY" -H 'Content-Type: application/json' \
+        -d "{\"query\":\"MATCH (n) WHERE n.workspace=\\\"$WS\\\" AND n.data CONTAINS \\\"ci-blob://\\\" WITH n.data AS d LIMIT 1 RETURN d\"}" \
+        | python3 -c "import sys,json,re;print((re.search(r'ci-blob://[^\"\\\\]+',json.dumps(json.load(sys.stdin))) or [''])[0] if True else '')" 2>/dev/null)
+      echo "discovered blob: $BLOB"
+      PROMPT="Use blob_read (delegate to context-intelligence:graph-analyst) to read this blob URI and report the full 'source' provenance block plus its top-level keys: $BLOB"
+      amplifier run "$PROMPT" --output-format json-trace > /root/q2-trace.json 2>/root/q2.err || true
+      python3 - <<'PY'
+      import json
+      raw=open('/root/q2-trace.json').read(); i=raw.find('{'); d=json.loads(raw[i:])
+      print("status:", d.get("status"))
+      for t in d.get("execution_trace",[]):
+          if t.get("type")=="tool_call" and t.get("tool")=="delegate":
+              out=t.get("result",{}); s=out if isinstance(out,str) else json.dumps(out)
+              print(s[:1800])
+      PY
+      echo "^ PASS iff blob content keys returned AND source.url names $AMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_URL"
