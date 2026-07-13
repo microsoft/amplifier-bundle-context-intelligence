@@ -171,7 +171,7 @@ readiness:
       curl -sf "$SRV_B_URL/status" | python3 -c "import sys,json;assert json.load(sys.stdin)['neo4j_connected']" &&
       echo "ready: both servers reachable, neo4j_connected"
 
-validation_cmds:
+manual_validation_steps:
   # ---- BEHAVIOURAL: run ONE session, prove BOTH servers received the events ----
   - name: B1-fanout-both-received
     command: |

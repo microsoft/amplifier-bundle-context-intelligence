@@ -63,7 +63,7 @@ seams without those; that is the point of an end-to-end test.
 ### How the mode profiles gate (runnable schema)
 
 `amplifier-digital-twin` auto-runs a profile's **`provision`** and **`readiness`** on launch
-(it ignores unknown keys like `validation_cmds`). So the three mode profiles put their
+(it ignores unknown keys like `manual_validation_steps`). So the three mode profiles put their
 **deterministic structural proofs in `readiness`** — they gate the launch and fail it if the
 CLI-loaded bundle is wrong. Each mode profile's `readiness` proves, for real:
 
@@ -79,7 +79,7 @@ CLI-loaded bundle is wrong. Each mode profile's `readiness` proves, for real:
 
 **Behavioural** activation — the real off→on→off round-trip (`/mode context-intelligence` →
 `[context-intelligence]>` → `/mode off`) — is proven with a real Anthropic session and is
-documented in each profile's `validation_cmds` as a **reproducible manual step**
+documented in each profile's `manual_validation_steps` as a **reproducible manual step**
 (`amplifier-digital-twin exec <id> -- …`), because it needs a live PTY session.
 
 **Honest limitation:** the *runtime-mounted set while the mode is active* (exactly which
