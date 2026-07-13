@@ -7,26 +7,29 @@
 # OBSERVES the existing hook fan-out behaviour -- it does NOT modify the hook code.
 # NOT pytest/artefacts.
 #
+# CONFIG PATH = THE DOCUMENTED USER PATH (README "Server forwarding -- destinations")
+#   `destinations` is a NAMED MAP under
+#     overrides.hook-context-intelligence.config.destinations   in ~/.amplifier/settings.yaml
+#   Two named destinations here -- `main` (server A) and `team` (server B) -- each with an
+#   api_key referenced as ${VAR} from ~/.amplifier/keys.env (MAIN_CI_KEY / TEAM_CI_KEY).
+#   The app-cli loads keys.env at startup and expands ${VAR} before it reaches the hook;
+#   each destination whose include-pattern matches the session's working dir receives the
+#   events -- true fan-out. This is the real user path -- NO direct patch of the loaded
+#   hook-config YAML, NO deprecated env scalars.
+#
+#   (Historical note: an earlier version patched the cached bundle's logging-behavior YAML
+#   because a PROJECT-scope `.amplifier/settings.yaml` override was a no-op. That project
+#   overlay is the amplifier-foundation configurator overlay "reserved for v1.1" -- the WRONG
+#   path. The USER-level ~/.amplifier/settings.yaml `overrides.<module>.config` path is
+#   applied by the app-cli's get_config_overrides() to providers/tools/hooks alike, and IS
+#   implemented. This profile uses only that -- the patch workaround is fully removed.)
+#
 # TOPOLOGY
 #   host: TWO real Context-Intelligence servers (each Neo4j + API), stood up via docker
 #         compose on distinct ports, reachable from the DTU at the Incus host-gateway IP
 #         (e.g. http://10.67.103.1:18001 and http://10.67.103.1:18002).
-#   DTU:  amplifier + the branch bundle; the logging hook's config carries TWO `destinations`
-#         (srv_a, srv_b), each include:["**"], so a single session fans out to both.
-#
-# HOW THE TWO DESTINATIONS ARE INJECTED (important, load-bearing finding)
-#   The hook reads fan-out `destinations` from ITS MODULE CONFIG in the logging behavior
-#   YAML. The documented "project .amplifier/settings.yaml -> overrides.hook-context-
-#   intelligence.config.destinations" path DOES NOT WORK on this amplifier-foundation build:
-#   the configurator overlay states "Phase 1 covers agents, context, skills. tools/config
-#   overrides reserved for v1.1" -- so a project/app config override for the hook is SILENTLY
-#   IGNORED (verified: with only the project override set, NEITHER server received events).
-#   Until config-overrides land, the working injection is to write the two destinations
-#   directly into the loaded bundle's logging-behavior hook config. This profile does that
-#   deterministically in provision (patch_destinations.py) AFTER `amplifier bundle add`, so
-#   the CLI-loaded hook actually resolves two destinations. The env single-destination path
-#   (context_intelligence_server_url/api_key) only ever yields ONE destination and cannot
-#   express fan-out -- hence the config patch.
+#   DTU:  amplifier + the branch bundle; the hook config carries TWO named destinations,
+#         each include:["**"], so a single session fans out to both.
 #
 # HOW TO RUN
 #   # stand up TWO servers on the host (server repo docker-compose.yml; distinct ports +
@@ -44,8 +47,9 @@
 # WHAT IS PROVEN
 #   STRUCTURAL (readiness gates, deterministic, no LLM):
 #     * bundle installed via the CLI, resolved to the MIRROR; logging hook present.
+#     * ~/.amplifier/settings.yaml declares exactly TWO named destinations (main, team), both
+#       include ["**"], each api_key a ${VAR} reference (never a literal); keys.env supplies both.
 #     * BOTH servers reachable from the DTU (neo4j_connected:true).
-#     * the loaded hook config resolves exactly TWO destinations (srv_a, srv_b), both include **.
 #   BEHAVIOURAL (real session, real key; exec step below):
 #     * ONE real `amplifier run` session fans out: BOTH servers' /status list the session
 #       under this workspace with events_processed>0, AND a Cypher count on EACH server
@@ -53,11 +57,11 @@
 
 name: context-intelligence-write-fanout-validation
 description: >
-  Runnable proof of the write fan-out seam. Loads the branch bundle via the Amplifier CLI
-  from a Gitea mirror, injects TWO real server destinations into the loaded logging hook
-  config, runs a single session, and proves BOTH servers received the events
-  (workspace-tagged) via /status and a per-server Cypher count. Observes existing hook
-  fan-out; does not modify hook code.
+  Runnable proof of the write fan-out seam via the DOCUMENTED config path (TWO named-map
+  destinations in ~/.amplifier/settings.yaml + ${VAR} api_keys from ~/.amplifier/keys.env).
+  Loads the branch bundle via the Amplifier CLI from a Gitea mirror, runs a single session,
+  and proves BOTH servers received the events (workspace-tagged) via /status and a per-server
+  Cypher count. Observes existing hook fan-out; does not modify hook code or patch loaded YAML.
 
 base:
   image: ubuntu:24.04
@@ -73,25 +77,6 @@ passthrough:
 provision:
   setup_cmds:
     - apt-get update && apt-get install -y git curl python3 python3-venv python3-yaml jq
-
-    # Deterministic patcher: inject two fan-out destinations into the LOADED logging-behavior
-    # hook config (written inline so the profile is self-contained). See header note for why
-    # the project/app config-override path is a no-op on this foundation build.
-    - |
-      cat > /root/patch_destinations.py << 'PYEOF'
-      import glob, sys, yaml
-      a_url, a_tok, b_url, b_tok = sys.argv[1:5]
-      c = glob.glob('/root/.amplifier/cache/amplifier-bundle-context-intelligence-*')[0]
-      f = c + '/behaviors/context-intelligence-logging.yaml'
-      d = yaml.safe_load(open(f))
-      cfg = d['hooks'][0]['config']
-      cfg['destinations'] = {
-          'srv_a': {'url': a_url, 'api_key': a_tok, 'include': ['**']},
-          'srv_b': {'url': b_url, 'api_key': b_tok, 'include': ['**']},
-      }
-      yaml.safe_dump(d, open(f, 'w'), sort_keys=False)
-      print('patched', f, '-> destinations:', list(cfg['destinations']))
-      PYEOF
 
     - curl -LsSf https://astral.sh/uv/install.sh | sh
 
@@ -110,40 +95,63 @@ provision:
 
     - uv tool install git+https://github.com/microsoft/amplifier@main
 
+    # ---- keys.env: SECRETS ONLY. Two bearer tokens, named MAIN_CI_KEY + TEAM_CI_KEY.
+    # DTU substitutes ${server_a_token}/${server_b_token} (--vars) to literals BEFORE the
+    # container shell runs; the quoted heredoc leaves them untouched thereafter.
     - |
       mkdir -p /root/.amplifier
-      cat > /root/.amplifier/settings.yaml << 'EOF'
+      cat > /root/.amplifier/keys.env << 'KEYSEOF'
+      MAIN_CI_KEY=${server_a_token}
+      TEAM_CI_KEY=${server_b_token}
+      KEYSEOF
+      chmod 600 /root/.amplifier/keys.env
+
+    # ---- settings.yaml: the DOCUMENTED config. Provider + TWO named-map destinations.
+    # api_key values are ${VAR} REFERENCES (literal text, NOT secrets) -- MAIN_CI_KEY/
+    # TEAM_CI_KEY are not DTU --vars, so DTU leaves them intact and the quoted heredoc keeps
+    # the shell from expanding them; the app-cli expands them from keys.env before mount.
+    # ${server_a_url}/${server_b_url}/${workspace} ARE --vars -> DTU substitutes them here.
+    - |
+      cat > /root/.amplifier/settings.yaml << 'SETTINGSEOF'
       config:
         providers:
           - module: provider-anthropic
             source: git+https://github.com/microsoft/amplifier-module-provider-anthropic@main
             config:
               api_key_env: ANTHROPIC_API_KEY
-      EOF
+      overrides:
+        hook-context-intelligence:
+          config:
+            workspace: "${workspace}"
+            destinations:
+              main:
+                url: "${server_a_url}"
+                api_key: "${MAIN_CI_KEY}"
+                include: ["**"]
+              team:
+                url: "${server_b_url}"
+                api_key: "${TEAM_CI_KEY}"
+                include: ["**"]
+      SETTINGSEOF
+      echo "== settings.yaml written =="; cat /root/.amplifier/settings.yaml
 
     - |
       amplifier bundle add \
         git+https://github.com/microsoft/amplifier-bundle-context-intelligence@main#subdirectory=behaviors/context-intelligence.yaml \
         --app
 
-    # Inject the two destinations into the loaded hook config (see header note on why the
-    # project/app config-override path is a no-op on this foundation build).
+    # ---- verification-only endpoints (NOT hook config): lets the readiness/manual steps curl
+    # both servers. The hook is configured EXCLUSIVELY by settings.yaml + keys.env above.
     - |
-      python3 /root/patch_destinations.py \
-        "${server_a_url}" "${server_a_token}" \
-        "${server_b_url}" "${server_b_token}"
-
-    - |
-      cat >> /etc/environment << ENVEOF
-      PATH=/root/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-      AMPLIFIER_CONTEXT_INTELLIGENCE_WORKSPACE=${workspace}
+      cat > /root/ci-verify.env << 'VERIFYEOF'
       SRV_A_URL=${server_a_url}
       SRV_A_TOKEN=${server_a_token}
       SRV_B_URL=${server_b_url}
       SRV_B_TOKEN=${server_b_token}
-      ENVEOF
+      WORKSPACE=${workspace}
+      VERIFYEOF
       echo 'export PATH="/root/.local/bin:$PATH"' >> /root/.bashrc
-      echo "export AMPLIFIER_CONTEXT_INTELLIGENCE_WORKSPACE=${workspace}" >> /root/.bashrc
+      echo 'PATH=/root/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin' >> /etc/environment
 
     - amplifier --version
 
@@ -158,35 +166,53 @@ readiness:
       && git -C "$C" log -1 --pretty=%s | grep -qi "docs/contributing-and-pr-template"
       && echo "ready: bundle resolved from mirror @ branch snapshot"
 
-  - name: two-destinations-in-loaded-hook-config
-    # Deterministic: the LOADED logging-behavior hook config must declare exactly srv_a + srv_b.
-    command: >
-      C=$(find /root/.amplifier/cache -maxdepth 1 -type d -name 'amplifier-bundle-context-intelligence-*' | head -1);
-      python3 -c "import yaml;d=yaml.safe_load(open('$C/behaviors/context-intelligence-logging.yaml'));dest=d['hooks'][0]['config']['destinations'];assert set(dest)=={'srv_a','srv_b'},dest;assert all(dest[k]['include']==['**'] for k in dest);print('ready: 2 destinations (srv_a, srv_b) in loaded hook config, both include **')"
+  - name: two-destinations-in-user-settings
+    # Deterministic proof of the DOCUMENTED config: ~/.amplifier/settings.yaml declares
+    # exactly two named destinations (main, team), both include ["**"], each api_key a ${VAR}
+    # reference (NOT a literal), and ~/.amplifier/keys.env supplies both referenced vars.
+    # NOTE: literal block scalar (|) -- a folded scalar (>) would collapse the heredoc newlines.
+    command: |
+      python3 - <<'PY'
+      import re, yaml
+      s = yaml.safe_load(open('/root/.amplifier/settings.yaml'))
+      dest = s['overrides']['hook-context-intelligence']['config']['destinations']
+      assert set(dest) == {'main', 'team'}, dest
+      env = open('/root/.amplifier/keys.env').read()
+      for name in ('main', 'team'):
+          api = dest[name]['api_key']
+          m = re.fullmatch(r'\$\{([A-Za-z_][A-Za-z0-9_]*)\}', api.strip())
+          assert m, f'{name}.api_key must be a ${{VAR}} reference, got literal: {api!r}'
+          var = m.group(1)
+          assert re.search(rf'(?m)^{var}=', env), f'{var} missing from keys.env'
+          assert dest[name]['include'] == ['**'], dest[name]
+      print('ready: 2 named destinations (main, team); api_keys are ${VAR} refs; keys.env supplies both')
+      PY
 
   - name: both-servers-reachable
     command: >
-      . /etc/environment;
+      . /root/ci-verify.env;
       curl -sf "$SRV_A_URL/status" | python3 -c "import sys,json;assert json.load(sys.stdin)['neo4j_connected']" &&
       curl -sf "$SRV_B_URL/status" | python3 -c "import sys,json;assert json.load(sys.stdin)['neo4j_connected']" &&
       echo "ready: both servers reachable, neo4j_connected"
 
 manual_validation_steps:
-  # ---- BEHAVIOURAL: run ONE session, prove BOTH servers received the events ----
+  # ---- BEHAVIOURAL: run ONE session (hook configured ONLY via settings.yaml + keys.env),
+  # prove BOTH servers received the events.
   - name: B1-fanout-both-received
     command: |
-      # export CI env so the child amplifier process + hook see it
-      set -a; . /etc/environment; set +a
-      cd /root
+      # No AMPLIFIER_CONTEXT_INTELLIGENCE_* env exports -- the hook is driven purely by the
+      # documented ~/.amplifier/settings.yaml + keys.env. ci-verify.env is only for the curls.
+      . /root/ci-verify.env
+      mkdir -p /root/ci-fanout && cd /root/ci-fanout
       echo "== emit events through a real session =="
       amplifier run "Say hello in exactly one word." --output-format json > /root/fanout-run.json 2>/root/fanout-run.err || cat /root/fanout-run.err
       sleep 3
       for pair in "A:$SRV_A_URL:$SRV_A_TOKEN" "B:$SRV_B_URL:$SRV_B_TOKEN"; do
         NAME=${pair%%:*}; REST=${pair#*:}; URL=${REST%:*}; TOK=${REST##*:}
-        echo "== server $NAME ($URL): completed sessions for workspace=$AMPLIFIER_CONTEXT_INTELLIGENCE_WORKSPACE =="
-        curl -sf "$URL/status" | jq -c "[.completed_sessions[]?|select(.workspace==\"$AMPLIFIER_CONTEXT_INTELLIGENCE_WORKSPACE\")|{workspace, events_processed}]"
+        echo "== server $NAME ($URL): completed sessions for workspace=$WORKSPACE =="
+        curl -sf "$URL/status" | jq -c "[.completed_sessions[]?|select(.workspace==\"$WORKSPACE\")|{workspace, events_processed}]"
         echo "== server $NAME Cypher node count for workspace =="
         curl -sf -X POST "$URL/cypher" -H "Authorization: Bearer $TOK" -H 'Content-Type: application/json' \
-          -d "{\"query\":\"MATCH (n) WHERE n.workspace = \\\"$AMPLIFIER_CONTEXT_INTELLIGENCE_WORKSPACE\\\" RETURN count(n) AS n\"}" | jq .
+          -d "{\"query\":\"MATCH (n) WHERE n.workspace = \\\"$WORKSPACE\\\" RETURN count(n) AS n\"}" | jq .
       done
       echo "^ PASS iff BOTH servers show the workspace session with events_processed>0 AND node count >= 1"
