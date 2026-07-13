@@ -206,12 +206,17 @@ tools (see the main `README.md` §"read side"). For multi-source, the connectabl
     **5 real rows** and `blob_read` resolved a real `ci-blob://…__raw` URI (44 KB, 8 top-level
     keys), each carrying the `source` provenance block naming the answering server
     (`{name:default, origin:destination, url:http://…:18001}`).
-  Instances + server stacks then destroyed. **Honest findings from the run:** (1) the documented
-  project-`settings.yaml` `overrides.hook-context-intelligence.config.destinations` path is a
-  **no-op on the current amplifier-foundation build** (tools/config overrides "reserved for
-  v1.1"), so the fan-out profile injects destinations directly into the loaded hook config; (2)
-  `graph_query`/`blob_read` are **not** top-level tools in a plain session — the shipped read
-  path is the `context-intelligence:graph-analyst` agent, which is what the query profile drives.
+  Instances + server stacks then destroyed. **Notes from the run:** (1) `destinations` must
+  follow the bundle README's format — a **named map** under
+  `overrides.hook-context-intelligence.config.destinations` (keyed by destination name), with
+  each `api_key` referenced as a `${VAR}` from `~/.amplifier/keys.env` (see the main `README.md`
+  §"Server forwarding — `destinations`"). An earlier run used a bare *list* of destinations
+  (wrong shape) and so did not dispatch; the fan-out profile's direct-injection of destinations
+  is a **test workaround for that misconfiguration and should be redone with the correct
+  named-map `settings.yaml` config + re-verified** — it is *not* evidence of a framework
+  limitation. (2) `graph_query`/`blob_read` are **not** top-level tools in a plain session — the
+  shipped read path is the `context-intelligence:graph-analyst` agent, which is what the query
+  profile drives.
 - **Runtime-green is per-launch**, per the AGENTS.md rule — capture the run evidence
   (real request/response, provenance, fail-loud on a down/500/timeout) when you exercise
   a seam. Start with `context-intelligence-signals-validation.yaml` (no external deps) to
