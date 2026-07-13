@@ -15,6 +15,8 @@ from __future__ import annotations
 
 from unittest.mock import patch, AsyncMock, MagicMock
 
+import pytest
+
 
 class TestImport:
     """Module must be importable."""
@@ -609,18 +611,37 @@ class TestAsyncCIClientFetchBlob:
         assert "my-session" in url
         assert "my-key" in url
 
-    async def test_async_fetch_blob_returns_none_on_404(self):
-        """fetch_blob() returns None when the server returns 404."""
-        from context_intelligence.client import AsyncCIClient
+    async def test_async_fetch_blob_raises_on_404(self):
+        """fetch_blob() raises CIClientError(error_type='http_status') on 404.
 
-        mock_resp = _make_async_mock_response(None, status_code=404)
+        Phase 0 (docs/multi-source-build-spec-v5.md §3): a non-2xx status is a
+        genuine failure and must never masquerade as an empty/None success. The
+        mock's raise_for_status() side effect is a plain Exception (not
+        httpx.HTTPStatusError), which the client's `except httpx.HTTPError` catch
+        (a real httpx.TransportError subclass check) does not match -- so this
+        also exercises real httpx.HTTPStatusError classification via a real
+        response object.
+        """
+        import httpx
+
+        from context_intelligence.client import AsyncCIClient, CIClientError
+
+        request = httpx.Request("GET", "http://localhost:8000/blobs/session1/missing-key")
+        real_response = httpx.Response(status_code=404, request=request)
+        mock_resp = MagicMock()
+        mock_resp.status_code = 404
+        mock_resp.raise_for_status.side_effect = httpx.HTTPStatusError(
+            "404", request=request, response=real_response
+        )
         mock_http = _make_async_httpx_client(mock_resp)
 
         with patch("context_intelligence.client.httpx.AsyncClient", return_value=mock_http):
             client = AsyncCIClient("http://localhost:8000", "testkey")
-            result = await client.fetch_blob("session1", "missing-key")
+            with pytest.raises(CIClientError) as exc_info:
+                await client.fetch_blob("session1", "missing-key")
 
-        assert result is None
+        assert exc_info.value.error_type == "http_status"
+        assert exc_info.value.status_code == 404
 
     async def test_async_fetch_blob_sends_auth_header(self):
         """fetch_blob() sends Authorization: Bearer header."""

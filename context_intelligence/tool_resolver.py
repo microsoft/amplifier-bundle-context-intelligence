@@ -29,6 +29,7 @@ See resolve_query_endpoint() for the full three-tier fallback used by the tools.
 from __future__ import annotations
 
 import logging
+import math
 from typing import Any, NamedTuple
 
 from context_intelligence.config import (
@@ -43,6 +44,38 @@ log = logging.getLogger(__name__)
 #: Case-insensitive string tokens accepted for boolean config knobs.
 _TRUE_TOKENS = frozenset({"true", "1", "yes", "on"})
 _FALSE_TOKENS = frozenset({"false", "0", "no", "off"})
+
+#: Default per-request HTTP timeout (seconds) for the read/query path -- matches
+#: the sync helpers' existing ``timeout=30`` (client.py _http_post/_http_get).
+_DEFAULT_REQUEST_TIMEOUT = 30.0
+
+
+def _coerce_positive_float(value: Any, *, default: float, minimum: float) -> float:
+    """Coerce *value* to a float >= *minimum*, tolerating bad operator input.
+
+    Resolution:
+    - None or unparseable strings ('', 'abc') -> *default* (never raises)
+    - valid numbers / numeric strings -> float(value)
+    - non-finite (inf/-inf/nan) -> *default* (an infinite/NaN timeout is a footgun:
+      it would let a slow/hung server stall a query forever, exactly the failure
+      mode Phase 0 exists to prevent)
+    - result is then clamped to max(minimum, parsed)
+
+    Deliberately duplicated from the hook's private
+    ``amplifier_module_hook_context_intelligence.config_resolver._coerce_positive_float``
+    (same discipline, e.g. ``dispatch_timeout``) rather than imported -- this
+    package must not depend on the hook module (read-side / fan-in only; see
+    docs/multi-source-build-spec-v5.md §1 guardrail 1).
+    """
+    if value is None:
+        return default
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return default
+    if not math.isfinite(parsed):
+        return default
+    return max(minimum, parsed)
 
 
 def _expand(value: Any) -> Any:
@@ -481,6 +514,26 @@ class ToolConfigResolver:
             )
             self._workspace = str(raw)
         return self._workspace
+
+    @property
+    def request_timeout(self) -> float:
+        """Per-request HTTP timeout (seconds) for the read/query path.
+
+        Resolution: config['request_timeout'] -> coordinator.config -> env
+        (``AMPLIFIER_CONTEXT_INTELLIGENCE_QUERY_TIMEOUT``) -> default 30.0.
+        Bad/unparseable/non-finite/<=0 values fall back to the default (never
+        raises) -- see ``_coerce_positive_float``. Not cached: cheap to compute
+        and mirrors the other scalar properties reading fresh each access
+        except workspace (which caches by design).
+        """
+        raw = (
+            self._config.get("request_timeout")
+            if self._config.get("request_timeout") is not None
+            else self._coordinator_config_get("request_timeout")
+        )
+        if raw is None:
+            raw = _env("QUERY_TIMEOUT")
+        return _coerce_positive_float(raw, default=_DEFAULT_REQUEST_TIMEOUT, minimum=0.1)
 
     # ------------------------------------------------------------------
     # Read-config mapping (the new explicit read-config model)

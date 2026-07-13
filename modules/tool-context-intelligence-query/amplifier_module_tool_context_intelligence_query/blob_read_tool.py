@@ -22,7 +22,7 @@ from typing import Any
 
 from amplifier_core import ToolResult
 
-from context_intelligence.client import AsyncCIClient
+from context_intelligence.client import AsyncCIClient, CIClientError
 from context_intelligence.tool_resolver import (
     ToolConfigResolver,
     resolve_query_auth_strategy,
@@ -154,13 +154,30 @@ class BlobReadTool:
 
         # (5) Construct AsyncCIClient with auth strategy
         async_client = AsyncCIClient(
-            server_url=server_url, api_key=api_key or "", auth_strategy=auth_strategy
+            server_url=server_url,
+            api_key=api_key or "",
+            auth_strategy=auth_strategy,
+            timeout=self._tool_resolver.request_timeout,
         )
 
         # (6) Fetch blob using original unsanitized values for the server request
-        data = await async_client.fetch_blob(session_id, key)
+        try:
+            data = await async_client.fetch_blob(session_id, key)
+        except CIClientError as exc:
+            # success=False + output unset is safe: ToolResult.model_post_init
+            # back-fills output from error["message"] when output is None. Do NOT
+            # also set output= here or that back-fill is suppressed.
+            return ToolResult(
+                success=False,
+                error={
+                    "message": f"blob fetch failed against {server_url}: {exc}",
+                    "type": exc.error_type,  # connection_error|timeout|http_status|decode_error
+                    **({"status_code": exc.status_code} if exc.status_code is not None else {}),
+                },
+            )
 
-        # (7) Return http_error if data is None
+        # (7) Return http_error if data is None (genuine JSON null body -- not a
+        # transport failure; transport failures now raise CIClientError above)
         if data is None:
             return ToolResult(
                 success=False,

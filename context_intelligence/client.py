@@ -49,6 +49,28 @@ except ImportError:
 _CI_BLOB_SCHEME = "ci-blob://"
 
 
+class CIClientError(Exception):
+    """A context-intelligence HTTP request genuinely failed (not an empty result).
+
+    Raised by AsyncCIClient.cypher()/fetch_blob() so a down / slow / rejecting
+    SELECTED source can never masquerade as an empty success.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        error_type: str,
+        url: str,
+        status_code: int | None = None,
+    ) -> None:
+        super().__init__(message)
+        #: One of "connection_error" | "timeout" | "http_status" | "decode_error".
+        self.error_type = error_type
+        self.url = url
+        self.status_code = status_code
+
+
 # ---------------------------------------------------------------------------
 # HTTP helpers
 # ---------------------------------------------------------------------------
@@ -337,6 +359,12 @@ class AsyncCIClient:
         Optional pre-built ``AuthStrategy``.  When provided, ``headers()`` is
         called PER REQUEST so that Entra tokens are refreshed automatically.
         When ``None``, an ``ApiKeyAuth(api_key)`` is built implicitly (backward compat).
+    timeout:
+        Per-request HTTP timeout (seconds) applied to every ``httpx.AsyncClient``
+        constructed by this instance (cypher, fetch_blob, list_blob_keys). Defaults
+        to 30.0, matching the sync helpers' existing ``timeout=30``. See
+        ``ToolConfigResolver.request_timeout`` for how callers resolve this value
+        from config/env.
     """
 
     def __init__(
@@ -344,6 +372,7 @@ class AsyncCIClient:
         server_url: str,
         api_key: str = "",
         auth_strategy: "AuthStrategy | None" = None,
+        timeout: float = 30.0,
     ) -> None:
         from context_intelligence.auth import ApiKeyAuth  # noqa: PLC0415
 
@@ -356,6 +385,7 @@ class AsyncCIClient:
         self._strategy: AuthStrategy = (  # type: ignore[assignment]
             auth_strategy if auth_strategy is not None else ApiKeyAuth(api_key)
         )
+        self._timeout: float = timeout
 
     # ------------------------------------------------------------------
     # Public API
@@ -382,7 +412,18 @@ class AsyncCIClient:
         Returns
         -------
         list[dict]
-            Rows returned by the server, or an empty list on failure.
+            Rows returned by the server. A genuine 200 response with no rows
+            (body ``None``, not a list, or a dict without a ``results`` list)
+            returns an empty list -- that is an intentional empty SUCCESS, not
+            an error.
+
+        Raises
+        ------
+        CIClientError
+            The request genuinely failed: connection error/refused, timeout,
+            non-2xx HTTP status, or a malformed (non-JSON) response body. A
+            down, slow, or rejecting SELECTED source can never masquerade as
+            an empty success -- see error_type for the classification.
         """
         url = f"{self._server_url}/cypher"
         body: dict[str, Any] = {
@@ -391,12 +432,30 @@ class AsyncCIClient:
             "workspace": workspace,
         }
         try:
-            async with httpx.AsyncClient() as client:  # type: ignore[union-attr]
+            async with httpx.AsyncClient(timeout=self._timeout) as client:  # type: ignore[union-attr]
                 resp = await client.post(url, json=body, headers=self._strategy.headers())
                 resp.raise_for_status()
                 result = resp.json()
-        except Exception:
-            return []
+        except httpx.TimeoutException as exc:  # type: ignore[union-attr]
+            raise CIClientError(f"timeout querying {url}", error_type="timeout", url=url) from exc
+        except httpx.HTTPStatusError as exc:  # type: ignore[union-attr]
+            raise CIClientError(
+                f"HTTP {exc.response.status_code} from {url}",
+                error_type="http_status",
+                url=url,
+                status_code=exc.response.status_code,
+            ) from exc
+        except (ValueError, json.JSONDecodeError) as exc:  # resp.json() failed
+            raise CIClientError(
+                f"malformed JSON from {url}", error_type="decode_error", url=url
+            ) from exc
+        except httpx.HTTPError as exc:  # type: ignore[union-attr]  # ConnectError, transport, etc.
+            raise CIClientError(
+                f"connection error to {url}: {exc}", error_type="connection_error", url=url
+            ) from exc
+
+        # --- GRACEFUL EMPTY (intentional, unchanged semantics) ---
+        # 200 OK, well-formed, simply no rows -> empty success, NOT an error.
         if result is None:
             return []
         if isinstance(result, list):
@@ -410,7 +469,7 @@ class AsyncCIClient:
         """Fetch a blob from the server (async).
 
         Calls ``GET /blobs/{session_id}/{key}`` and returns the parsed JSON
-        response, or ``None`` on failure.
+        response.
 
         Parameters
         ----------
@@ -422,18 +481,45 @@ class AsyncCIClient:
         Returns
         -------
         Any or None
-            Parsed JSON content, or ``None`` when the request fails.
+            Parsed JSON content. A genuine 200 response with a JSON ``null``
+            body returns ``None`` -- that is the caller's problem, not a
+            transport error.
+
+        Raises
+        ------
+        CIClientError
+            The request genuinely failed: connection error/refused, timeout,
+            non-2xx HTTP status, or a malformed (non-JSON) response body.
         """
         url = f"{self._server_url}/blobs/{session_id}/{key}"
         try:
-            async with httpx.AsyncClient() as client:  # type: ignore[union-attr]
+            async with httpx.AsyncClient(timeout=self._timeout) as client:  # type: ignore[union-attr]
                 resp = await client.get(url, headers=self._strategy.headers())
                 resp.raise_for_status()
                 return resp.json()
-        except Exception:
-            return None
+        except httpx.TimeoutException as exc:  # type: ignore[union-attr]
+            raise CIClientError(f"timeout fetching {url}", error_type="timeout", url=url) from exc
+        except httpx.HTTPStatusError as exc:  # type: ignore[union-attr]
+            raise CIClientError(
+                f"HTTP {exc.response.status_code} from {url}",
+                error_type="http_status",
+                url=url,
+                status_code=exc.response.status_code,
+            ) from exc
+        except (ValueError, json.JSONDecodeError) as exc:  # resp.json() failed
+            raise CIClientError(
+                f"malformed JSON from {url}", error_type="decode_error", url=url
+            ) from exc
+        except httpx.HTTPError as exc:  # type: ignore[union-attr]  # ConnectError, transport, etc.
+            raise CIClientError(
+                f"connection error to {url}: {exc}", error_type="connection_error", url=url
+            ) from exc
 
     async def list_blob_keys(self, session_id: str) -> set[str]:
+        # NOTE (v5 Phase 0): off the tool execute() path -- no tool calls the async
+        # list_blob_keys; only reconstruct/*.py use the SYNC CIClient variant.
+        # Fail-loud deferred to a follow-up so the blast radius of this change
+        # stays on the query/blob-read tools. Left as `except Exception: return set()`.
         """Return the set of ``ci-blob://`` URI keys for *session_id* (async).
 
         Calls ``GET /blobs/{session_id}`` and parses the response list of
