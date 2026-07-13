@@ -66,32 +66,35 @@ Use `jq`, `head`, or targeted shell commands to extract only the field(s) you ne
 
 ## Safe Extraction Patterns
 
-Always check size before reading, then extract only the field you need.
+Always check size before reading, then extract only the field you need. In the
+examples below the path is the exact `path` string returned by `blob_read`
+(real form: `/tmp/ci-blobs/<session_id>/<key>.json`) — use that returned value
+verbatim; never hand-construct or guess a blob path.
 
 **Check size before reading:**
 ```bash
-ls -lh /tmp/blob_abc123.json
-wc -c /tmp/blob_abc123.json
+ls -lh /tmp/ci-blobs/<session_id>/<key>.json
+wc -c /tmp/ci-blobs/<session_id>/<key>.json
 ```
 
 **Extract a top-level field:**
 ```bash
-jq '.field_name' /tmp/blob_abc123.json
+jq '.field_name' /tmp/ci-blobs/<session_id>/<key>.json
 ```
 
 **Check available keys (safe exploration):**
 ```bash
-jq 'keys' /tmp/blob_abc123.json
+jq 'keys' /tmp/ci-blobs/<session_id>/<key>.json
 ```
 
 **Extract a nested field:**
 ```bash
-jq '.response.content[0].text' /tmp/blob_abc123.json
+jq '.response.content[0].text' /tmp/ci-blobs/<session_id>/<key>.json
 ```
 
 **Extract with a size guard (first 500 chars):**
 ```bash
-jq -r '.response.content[0].text' /tmp/blob_abc123.json | head -c 500
+jq -r '.response.content[0].text' /tmp/ci-blobs/<session_id>/<key>.json | head -c 500
 ```
 
 ---
