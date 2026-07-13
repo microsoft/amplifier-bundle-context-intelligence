@@ -175,6 +175,20 @@ tools (see the main `README.md` §"read side"). For multi-source, the connectabl
   `signals` public symbols import, and **all 12 fixtures scored OK / 0 failures**;
   instance then destroyed. This confirms the DTU pipeline (provision → install → run →
   assert) is healthy on a standard host.
+- **The three mode profiles proven live** (manual run, captured — not yet CI-enforced):
+  `redesigned-mode`, `contributes-migration`, and `mode-activation` were each launched
+  against a **live Gitea mirror** of this branch (mirror HEAD `50a3bd5`, a working-tree
+  snapshot of `docs/contributing-and-pr-template`) and each reached **`readiness: ready:True`** —
+  i.e. their structural gates passed for real: `amplifier` usable; **bundle loaded via
+  `amplifier bundle add` from the mirror** (not GitHub `main`); `amplifier bundle show
+  context-intelligence-behavior` listed the **2 baseline agents with the 2 mode-gated
+  specialists absent** while the mode is off; the installed mirror mode file declared the
+  full gated surface (advertised:false, 3 context incl. `strategy.md`, 3 skills incl.
+  `evaluation-methodology`, tool policies). The **behavioural off→on→off round-trip**
+  (`/mode context-intelligence` → `[context-intelligence]>` → `/mode off`) was confirmed in a
+  real Anthropic PTY session. All three instances were then destroyed.
+  *Not independently re-logged in CI yet* — the `readiness` gates re-prove the structural
+  claims on every launch; the behavioural round-trip is a documented manual `exec` step.
 - **Runtime-green is per-launch**, per the AGENTS.md rule — capture the run evidence
   (real request/response, provenance, fail-loud on a down/500/timeout) when you exercise
   a seam. Start with `context-intelligence-signals-validation.yaml` (no external deps) to
