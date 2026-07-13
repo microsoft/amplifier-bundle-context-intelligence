@@ -194,6 +194,16 @@ event types, payload structures, safe extraction sizes) before extracting:
 Load skill: context-intelligence-session-navigation
 ```
 
+If the question is **analytics-shaped** — pathfinding, reachability, a delegation
+subtree, centrality/influence ("which agent/session is a hub"), community/clustering,
+similarity, or any variable-length multi-hop — load the graph-data-science skill FIRST
+and let it pick the algorithm. It exists specifically so you stop hand-rolling
+traversals and re-deriving structure one hop at a time with naive Cypher:
+
+```
+Load skill: context-intelligence-gds
+```
+
 ### Using graph_query
 
 The `graph_query` tool auto-injects `$workspace` — provide only the Cypher query.
