@@ -37,12 +37,12 @@ def _make_hook_resolver(server_url: str | None, api_key: str | None = None) -> M
     """Return a MagicMock hook resolver (returned by get_capability).
 
     api_key defaults to None so tests that don't exercise auth get a clean mock.
-    Also sets destinations so _first_destination() can iterate it safely.
+    Also sets destinations so _connectable_pool() can iterate it safely.
     """
     resolver = MagicMock()
     resolver.context_intelligence_server_url = server_url
     resolver.context_intelligence_api_key = api_key
-    # destinations must be a real dict so _first_destination() can iterate it safely
+    # destinations must be a real dict so _connectable_pool() can iterate it safely
     if server_url:
         resolver.destinations = {
             "default": SimpleNamespace(name="default", url=server_url, api_key=api_key or ""),
@@ -129,11 +129,15 @@ class TestBlobReadToolProtocol:
         tool = BlobReadTool(_make_coordinator(None))
         assert tool.input_schema["type"] == "object"
 
-    def test_schema_has_uri_required(self) -> None:
+    def test_schema_uri_not_schema_required_but_enforced_at_execute(self) -> None:
+        """v5: `uri` is NOT in the JSON-schema `required` list -- list_sources=true
+        calls legitimately omit it. execute() enforces "uri required unless
+        list_sources=true" itself."""
         from amplifier_module_tool_context_intelligence_query.blob_read_tool import BlobReadTool
 
         tool = BlobReadTool(_make_coordinator(None))
-        assert "uri" in tool.input_schema["required"]
+        assert "uri" not in tool.input_schema["required"]
+        assert "uri" in tool.input_schema["properties"]
 
     def test_schema_uri_is_string(self) -> None:
         from amplifier_module_tool_context_intelligence_query.blob_read_tool import BlobReadTool
@@ -720,3 +724,183 @@ class TestBlobReadSourceSelection:
                 {"uri": "ci-blob://my-session/my-key", "source": "good"}
             )
         assert good_result.success is True
+
+
+# ---------------------------------------------------------------------------
+# TestBlobReadSourceProvenanceOnFailure -- §5.1 honesty contract
+#
+# `source` is present on failures ONLY when an endpoint was actually chosen
+# (endpoint-level failures: transport errors, null-body http_error, AND
+# post-resolution input validation: missing uri, malformed ci-blob:// URI). It
+# is ABSENT for selection/config failures that occur BEFORE any endpoint is
+# chosen (ambiguous/unknown/misconfigured/no-url).
+# ---------------------------------------------------------------------------
+
+
+class TestBlobReadSourceProvenanceOnFailure:
+    """Per-branch source presence/absence matrix for blob_read failures."""
+
+    def _single_source(self) -> dict:
+        return {"sources": {"only": {"url": "http://only.example.com", "api_key": "k"}}}
+
+    # --- endpoint-level failures: source PRESENT and correct ---
+
+    async def test_missing_uri_validation_error_carries_source(self) -> None:
+        from amplifier_module_tool_context_intelligence_query.blob_read_tool import BlobReadTool
+
+        resolver = _tool_resolver_br(self._single_source())
+        coordinator = _make_coordinator(_make_hook_resolver_br(destinations={}))
+        tool = BlobReadTool(coordinator, resolver)
+
+        # No "uri" key, list_sources not set -> validation_error AFTER resolution.
+        result = await tool.execute({})
+
+        assert result.success is False
+        assert result.error is not None
+        assert result.error["type"] == "validation_error"
+        assert result.error["source"] == {
+            "name": "only",
+            "url": "http://only.example.com",
+            "origin": "source",
+        }
+
+    async def test_bad_scheme_uri_error_carries_source(self) -> None:
+        from amplifier_module_tool_context_intelligence_query.blob_read_tool import BlobReadTool
+
+        resolver = _tool_resolver_br(self._single_source())
+        coordinator = _make_coordinator(_make_hook_resolver_br(destinations={}))
+        tool = BlobReadTool(coordinator, resolver)
+
+        result = await tool.execute({"uri": "http://not-a-blob/session/key"})
+
+        assert result.success is False
+        assert result.error is not None
+        assert result.error["type"] == "uri_error"
+        assert result.error["source"]["name"] == "only"
+        assert result.error["source"]["origin"] == "source"
+
+    async def test_no_slash_uri_error_carries_source(self) -> None:
+        from amplifier_module_tool_context_intelligence_query.blob_read_tool import BlobReadTool
+
+        resolver = _tool_resolver_br(self._single_source())
+        coordinator = _make_coordinator(_make_hook_resolver_br(destinations={}))
+        tool = BlobReadTool(coordinator, resolver)
+
+        result = await tool.execute({"uri": "ci-blob://sessiononly"})
+
+        assert result.success is False
+        assert result.error is not None
+        assert result.error["type"] == "uri_error"
+        assert result.error["source"]["name"] == "only"
+        assert result.error["source"]["origin"] == "source"
+
+    async def test_null_body_http_error_carries_source(self) -> None:
+        from amplifier_module_tool_context_intelligence_query.blob_read_tool import BlobReadTool
+
+        resolver = _tool_resolver_br(self._single_source())
+        coordinator = _make_coordinator(_make_hook_resolver_br(destinations={}))
+        tool = BlobReadTool(coordinator, resolver)
+
+        with _patch_async_client(fetch_blob_return=None):
+            result = await tool.execute({"uri": "ci-blob://my-session/my-key"})
+
+        assert result.success is False
+        assert result.error is not None
+        assert result.error["type"] == "http_error"
+        assert result.error["source"]["name"] == "only"
+        assert result.error["source"]["origin"] == "source"
+
+    async def test_ciclienterror_carries_source(self) -> None:
+        from context_intelligence.client import CIClientError
+
+        from amplifier_module_tool_context_intelligence_query.blob_read_tool import BlobReadTool
+
+        resolver = _tool_resolver_br(self._single_source())
+        coordinator = _make_coordinator(_make_hook_resolver_br(destinations={}))
+        tool = BlobReadTool(coordinator, resolver)
+
+        mock_instance = MagicMock()
+        mock_instance.fetch_blob = AsyncMock(
+            side_effect=CIClientError(
+                "boom", error_type="connection_error", url="http://only.example.com"
+            )
+        )
+        mock_cls = MagicMock(return_value=mock_instance)
+        with patch(
+            "amplifier_module_tool_context_intelligence_query.blob_read_tool.AsyncCIClient",
+            mock_cls,
+        ):
+            result = await tool.execute({"uri": "ci-blob://my-session/my-key"})
+
+        assert result.success is False
+        assert result.error is not None
+        assert result.error["type"] == "connection_error"
+        assert result.error["source"]["name"] == "only"
+        assert result.error["source"]["origin"] == "source"
+
+    # --- selection/config failures: source ABSENT (no endpoint chosen) ---
+
+    async def test_ambiguous_selection_has_no_source(self) -> None:
+        from amplifier_module_tool_context_intelligence_query.blob_read_tool import BlobReadTool
+
+        config = {
+            "sources": {
+                "alpha": {"url": "http://alpha.example.com", "api_key": "a"},
+                "beta": {"url": "http://beta.example.com", "api_key": "b"},
+            }
+        }
+        resolver = _tool_resolver_br(config)
+        coordinator = _make_coordinator(_make_hook_resolver_br(destinations={}))
+        tool = BlobReadTool(coordinator, resolver)
+
+        result = await tool.execute({"uri": "ci-blob://my-session/my-key"})
+
+        assert result.success is False
+        assert result.error is not None
+        assert result.error["type"] == "ambiguous_source_selection"
+        assert "source" not in result.error
+
+    async def test_unknown_source_has_no_source(self) -> None:
+        from amplifier_module_tool_context_intelligence_query.blob_read_tool import BlobReadTool
+
+        resolver = _tool_resolver_br(self._single_source())
+        coordinator = _make_coordinator(_make_hook_resolver_br(destinations={}))
+        tool = BlobReadTool(coordinator, resolver)
+
+        result = await tool.execute({"uri": "ci-blob://my-session/my-key", "source": "nope"})
+
+        assert result.success is False
+        assert result.error is not None
+        assert result.error["type"] == "unknown_source"
+        assert "source" not in result.error
+
+    async def test_source_misconfigured_has_no_source(self) -> None:
+        from amplifier_module_tool_context_intelligence_query.blob_read_tool import BlobReadTool
+
+        config = {"sources": {"bad": {"url": "", "api_key": ""}}}
+        resolver = _tool_resolver_br(config)
+        coordinator = _make_coordinator(_make_hook_resolver_br(destinations={}))
+        tool = BlobReadTool(coordinator, resolver)
+
+        result = await tool.execute({"uri": "ci-blob://my-session/my-key", "source": "bad"})
+
+        assert result.success is False
+        assert result.error is not None
+        assert result.error["type"] == "source_misconfigured"
+        assert "source" not in result.error
+
+    async def test_configuration_error_has_no_source(self) -> None:
+        from amplifier_module_tool_context_intelligence_query.blob_read_tool import BlobReadTool
+
+        resolver = _tool_resolver_br({})
+        coordinator = _make_coordinator(_make_hook_resolver_br(destinations={}))
+        tool = BlobReadTool(coordinator, resolver)
+
+        clean = {k: "" for k in os.environ if k.startswith("AMPLIFIER_CONTEXT_INTELLIGENCE_")}
+        with patch.dict(os.environ, clean):
+            result = await tool.execute({"uri": "ci-blob://my-session/my-key"})
+
+        assert result.success is False
+        assert result.error is not None
+        assert result.error["type"] == "configuration_error"
+        assert "source" not in result.error

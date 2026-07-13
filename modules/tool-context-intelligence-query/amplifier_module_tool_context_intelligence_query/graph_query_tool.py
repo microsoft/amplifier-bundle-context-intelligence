@@ -1,18 +1,33 @@
 """GraphQueryTool — agent-facing tool for executing Cypher queries.
 
-Implements the Amplifier Tool protocol.  Configuration is resolved via the
-three-tier fallback chain in ``resolve_query_endpoint``:
+Implements the Amplifier Tool protocol. Configuration and provenance are
+resolved via ``resolve_query_connection`` — a SINGLE-HIT selection over the
+connectable pool (tool ``sources`` ∪ hook ``destinations``):
 
-  1. Explicit read-config (``sources:`` in mount config, if set).
-  2. Upload destinations from ``context_intelligence.hook_config_resolver``
-     capability (fixes the destinations-only config bug).
-  3. ``AMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_URL`` env var (canonical last-resort).
+  1. Explicit ``source=<name>`` — resolves against the WHOLE pool (can name a
+     tool source OR a hook upload destination).
+  2. No name — default semantics (PR #67, unchanged). See
+     ``resolve_query_connection``'s docstring in context_intelligence/tool_resolver.py
+     for the authoritative rule; in brief: 1 source -> use it; 2+ sources ->
+     fail loud (the ONLY default-path fail-loud); 0 sources + N destinations ->
+     use the FIRST destination in config order (destinations are the established
+     read-fallback pool; no error for any N); 0 of either -> env (tier 3).
+
+Every result (success or failure) carries a ``source`` field naming the
+endpoint that answered / was attempted (docs/multi-source-build-spec-v5.md §5) —
+so which endpoint served a default-path pick is always visible to the user.
+Callers can also pass ``list_sources: true`` to discover the connectable set
+without running a query (§4.3).
 
 The hook resolver is fetched lazily at first ``execute()`` call so that late
 mount order is handled correctly (tools mount before hooks).
 
 The ``ToolConfigResolver`` is injected at construction time by ``mount()``
 (one shared instance for both CI read tools — single config namespace).
+
+READ-SIDE / FAN-IN ONLY: this tool never touches the hook's fan-out (write
+path, logging handler, destination dispatcher). It only reads
+``HookConfigResolver.destinations`` to know what endpoints exist to connect to.
 """
 
 from __future__ import annotations
@@ -22,19 +37,21 @@ from typing import Any
 from context_intelligence.client import AsyncCIClient, CIClientError
 from context_intelligence.tool_resolver import (
     ToolConfigResolver,
-    resolve_query_auth_strategy,
-    resolve_query_endpoint,
+    _connectable_pool,
+    _origin_dict,
+    resolve_query_connection,
 )
 
 from amplifier_core.models import ToolResult
 
 
 class GraphQueryTool:
-    """Execute Cypher queries against the context-intelligence server.
+    """Execute Cypher queries against the context-intelligence property graph.
 
     Implements the Amplifier Tool protocol (name, description, input_schema,
-    execute).  Configuration is resolved via resolve_query_endpoint() at
-    execute() time, consulting the hook's upload destinations as a fallback.
+    execute). Configuration and provenance are resolved via
+    resolve_query_connection() at execute() time, over the connectable pool
+    (tool sources ∪ the hook's upload destinations).
     """
 
     def __init__(self, coordinator: Any, resolver: ToolConfigResolver | None = None) -> None:
@@ -52,7 +69,8 @@ class GraphQueryTool:
             "Execute a Cypher query against the context-intelligence property graph. "
             "Use this to explore session history, relationships between entities, "
             "and metadata stored in the graph. The workspace is automatically injected "
-            "to scope results to the current session namespace."
+            "to scope results to the current session namespace. Every result names the "
+            "`source` (name/url/origin) that answered -- ALWAYS state it in your answer."
         )
 
     @property
@@ -64,7 +82,8 @@ class GraphQueryTool:
                     "type": "string",
                     "description": (
                         "Cypher query string to execute against the context-intelligence graph. "
-                        'Example: "MATCH (n:Session) RETURN n LIMIT 10"'
+                        'Example: "MATCH (n:Session) RETURN n LIMIT 10". Required unless '
+                        "list_sources=true."
                     ),
                 },
                 "params": {
@@ -89,77 +108,56 @@ class GraphQueryTool:
                 "source": {
                     "type": "string",
                     "description": (
-                        "Optional name of a specific configured read source to query (see "
-                        "overrides.tool-context-intelligence-query.config.sources). Required when "
-                        "2 or more sources are configured and you have not already been told which "
-                        "one to use -- omitting it in that case raises an error listing the valid "
-                        "names. Safe to omit when 0 or 1 source is configured."
+                        "Optional name of a specific connectable endpoint to query -- either a "
+                        "configured read source OR a hook upload destination (the full "
+                        "connectable set; call with list_sources=true to see the names). "
+                        "Omitting `source` uses the default endpoint: the single configured "
+                        "source, or -- if no sources are configured -- the first destination "
+                        "in config order (destinations are the read fallback pool). The only "
+                        "case where omitting it errors is when 2+ SOURCES are configured (then "
+                        "you must pass source=<name>, and the error lists the valid names); "
+                        "any number of destinations is fine to leave implicit. Pass "
+                        "source=<name> to target a specific source or destination."
+                    ),
+                },
+                "list_sources": {
+                    "type": "boolean",
+                    "description": (
+                        "When true, do NOT run a query. Return the connectable set -- every "
+                        "source and destination this tool can reach, with name, url, and origin "
+                        "(source/destination). Use this to discover valid `source` values before "
+                        "selecting one."
                     ),
                 },
             },
-            "required": ["query"],
+            "required": [],
         }
-
-    @property
-    def skill_sync_enabled(self) -> bool:
-        """Pass-through to the resolver's skill_sync_enabled knob.
-
-        Consumed by skill_sync.on_session_ready via the coordinator capability;
-        returning False (the resolver default) makes the sync path a complete
-        no-op (zero GET /version, zero skill fetch, no reload handler).
-        """
-        return self._tool_resolver.skill_sync_enabled
-
-    def _resolve_server_config(
-        self,
-        coordinator: Any,
-        source_name: str | None = None,
-        *,
-        allow_implicit_default: bool = False,
-    ) -> tuple[str | None, str | None, str, Any]:
-        """Resolve (server_url, api_key, workspace, auth_strategy) using the three-tier fallback chain.
-
-        source_name / allow_implicit_default: forwarded to resolve_query_endpoint() /
-        resolve_query_auth_strategy() unchanged -- see their docstrings and
-        docs/designs/workstream-1-multi-source-query-tools.md sec 2.2 for the selection
-        contract (criteria 1-3). Raises SourceSelectionError / ValueError on ambiguous
-        or misconfigured selection; callers (execute(), skill_sync) are responsible for
-        catching these and degrading appropriately for their own context.
-
-        Late-mount upgrade: retries hook capability lookup on every call while
-        _hook_resolver is None (hook may mount after the tool).
-        """
-        if self._hook_resolver is None:
-            self._hook_resolver = coordinator.get_capability(
-                "context_intelligence.hook_config_resolver"
-            )
-        url, api_key = resolve_query_endpoint(
-            self._hook_resolver,
-            self._tool_resolver,
-            source_name=source_name,
-            allow_implicit_default=allow_implicit_default,
-        )
-        auth_strategy = resolve_query_auth_strategy(
-            self._hook_resolver,
-            self._tool_resolver,
-            api_key=api_key or "",
-            source_name=source_name,
-            allow_implicit_default=allow_implicit_default,
-        )
-        workspace = (
-            self._hook_resolver.workspace
-            if self._hook_resolver is not None
-            else self._tool_resolver.workspace
-        )
-        return url, api_key, workspace, auth_strategy
 
     async def execute(self, input: dict[str, Any]) -> ToolResult:  # noqa: A002
         from context_intelligence.tool_resolver import SourceSelectionError  # noqa: PLC0415
 
+        # Late-mount upgrade: retry hook capability lookup on every call while
+        # _hook_resolver is None (hook may mount after the tool).
+        if self._hook_resolver is None:
+            self._hook_resolver = self._coordinator.get_capability(
+                "context_intelligence.hook_config_resolver"
+            )
+
+        if input.get("list_sources"):
+            pool = _connectable_pool(self._tool_resolver, self._hook_resolver)
+            return ToolResult(
+                success=True,
+                output={
+                    "connectable_set": [
+                        {"name": e.name, "url": e.url, "origin": e.kind} for e in pool.values()
+                    ]
+                },
+            )
+
         source_name = input.get("source")
         try:
-            server_url, api_key, workspace, auth_strategy = self._resolve_server_config(
-                self._coordinator, source_name
+            conn = resolve_query_connection(
+                self._hook_resolver, self._tool_resolver, source_name=source_name
             )
         except SourceSelectionError as exc:
             return ToolResult(
@@ -177,7 +175,7 @@ class GraphQueryTool:
                 error={"message": str(exc), "type": "source_misconfigured"},
             )
 
-        if not server_url:
+        if not conn.url:
             return ToolResult(
                 success=False,
                 error={
@@ -186,7 +184,24 @@ class GraphQueryTool:
                 },
             )
 
+        if "query" not in input:
+            # Endpoint already resolved above -> attach provenance (spec §5.1):
+            # `source` is present on failures that occur AFTER an endpoint is chosen.
+            return ToolResult(
+                success=False,
+                error={
+                    "message": "query is required unless list_sources=true",
+                    "type": "validation_error",
+                    "source": _origin_dict(conn.origin),
+                },
+            )
         query: str = input["query"]
+
+        workspace = (
+            self._hook_resolver.workspace
+            if self._hook_resolver is not None
+            else self._tool_resolver.workspace
+        )
         ws_override = input.get("workspace")
         effective_workspace = ws_override if ws_override is not None else workspace
 
@@ -194,20 +209,22 @@ class GraphQueryTool:
         if raw_params is None:
             params: dict = {}
         elif not isinstance(raw_params, dict):
+            # Endpoint already resolved above -> attach provenance (spec §5.1).
             return ToolResult(
                 success=False,
                 error={
                     "message": (f"params must be a dict, got {type(raw_params).__name__!r}"),
                     "type": "validation_error",
+                    "source": _origin_dict(conn.origin),
                 },
             )
         else:
             params = raw_params
 
         async_client = AsyncCIClient(
-            server_url=server_url,
-            api_key=api_key or "",
-            auth_strategy=auth_strategy,
+            server_url=conn.url,
+            api_key=conn.api_key or "",
+            auth_strategy=conn.auth_strategy,
             timeout=self._tool_resolver.request_timeout,
         )
         try:
@@ -217,12 +234,17 @@ class GraphQueryTool:
             # back-fills output from error["message"] when output is None. Do NOT
             # also set output= here or that back-fill is suppressed (matches the
             # SourceSelectionError/ValueError handlers above).
+            origin_name = conn.origin.name if conn.origin and conn.origin.name else conn.url
             return ToolResult(
                 success=False,
                 error={
-                    "message": f"query failed against {server_url}: {exc}",
+                    "message": f"query failed against {origin_name}: {exc}",
                     "type": exc.error_type,  # connection_error|timeout|http_status|decode_error
+                    "source": _origin_dict(conn.origin),
                     **({"status_code": exc.status_code} if exc.status_code is not None else {}),
                 },
             )
-        return ToolResult(success=True, output=result)
+        return ToolResult(
+            success=True,
+            output={"source": _origin_dict(conn.origin), "rows": result},
+        )

@@ -226,7 +226,7 @@ class TestCIClientListBlobKeys:
             "ci-blob://session1/key2",
         ]
 
-        with patch("context_intelligence.client._http_get") as mock_get:
+        with patch("context_intelligence.client._http_get_strict") as mock_get:
             mock_get.return_value = mock_response
             result = client.list_blob_keys("session1")
 
@@ -245,7 +245,7 @@ class TestCIClientListBlobKeys:
             "ci-blob://session1/key2",
         ]
 
-        with patch("context_intelligence.client._http_get") as mock_get:
+        with patch("context_intelligence.client._http_get_strict") as mock_get:
             mock_get.return_value = mock_response
             result = client.list_blob_keys("session1")
 
@@ -254,29 +254,52 @@ class TestCIClientListBlobKeys:
         assert "ci-blob://session1/key2" in result
 
     def test_list_blob_keys_empty_response(self):
-        """list_blob_keys() returns empty set when server returns empty list."""
+        """list_blob_keys() returns empty set when server returns empty list.
+
+        Genuine-empty (a real 200 with `[]`) is an empty SUCCESS, not an error.
+        """
         from context_intelligence.client import CIClient
 
         client = CIClient("http://localhost:8000", "key")
 
-        with patch("context_intelligence.client._http_get") as mock_get:
+        with patch("context_intelligence.client._http_get_strict") as mock_get:
             mock_get.return_value = []
             result = client.list_blob_keys("session1")
 
         assert result == set()
 
-    def test_list_blob_keys_returns_empty_set_on_none_response(self):
-        """list_blob_keys() returns empty set when _http_get returns None."""
+    def test_list_blob_keys_non_list_body_is_empty_success(self):
+        """A well-formed non-list body (e.g. {} ) is treated as empty success, NOT an error.
+
+        This preserves the genuine-empty semantics: only a genuine transport/HTTP
+        FAILURE raises (see the fail-loud tests); a strange-but-200 body degrades to
+        an empty set rather than crashing reconstruction.
+        """
         from context_intelligence.client import CIClient
 
         client = CIClient("http://localhost:8000", "key")
 
-        with patch("context_intelligence.client._http_get") as mock_get:
-            mock_get.return_value = None
+        with patch("context_intelligence.client._http_get_strict") as mock_get:
+            mock_get.return_value = {"unexpected": "shape"}
             result = client.list_blob_keys("session1")
 
-        # None response should produce empty set, not an exception
         assert result == set()
+
+    def test_list_blob_keys_propagates_ciclienterror(self):
+        """list_blob_keys() must NOT swallow a genuine failure -- it propagates
+        CIClientError raised by _http_get_strict (no more silent empty-set)."""
+        from context_intelligence.client import CIClient, CIClientError
+
+        client = CIClient("http://localhost:8000", "key")
+
+        with patch("context_intelligence.client._http_get_strict") as mock_get:
+            mock_get.side_effect = CIClientError(
+                "boom", error_type="connection_error", url="http://localhost:8000/blobs/session1"
+            )
+            with pytest.raises(CIClientError) as excinfo:
+                client.list_blob_keys("session1")
+
+        assert excinfo.value.error_type == "connection_error"
 
 
 class TestCIClientFetchBlob:
@@ -762,3 +785,159 @@ class TestAsyncCIClientHealthCheck:
 
         assert result["status"] == "ok"
         assert result["session_count"] == 0
+
+
+# ---------------------------------------------------------------------------
+# REAL-SOCKET fail-loud tests for list_blob_keys (sync + async)
+#
+# Risk 2: a genuine transport/HTTP failure must NOT masquerade as "no blobs".
+# Uses a real stdlib ThreadingHTTPServer (no mocks on the transport path) so the
+# classification is proven end-to-end, mirroring the Phase 0 e2e harness.
+# ---------------------------------------------------------------------------
+
+
+class _BlobsBehavior:
+    """Mutable control block read by the handler on every GET /blobs/<sid>."""
+
+    def __init__(self) -> None:
+        self.status_code: int = 200
+        self.body: bytes = b"[]"
+
+
+def _find_free_port() -> int:
+    import socket
+
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
+
+
+def _make_blobs_handler(behavior: "_BlobsBehavior"):
+    from http.server import BaseHTTPRequestHandler
+
+    class _Handler(BaseHTTPRequestHandler):
+        def do_GET(self):  # noqa: N802
+            if not self.path.startswith("/blobs/"):
+                self.send_error(404)
+                return
+            self.send_response(behavior.status_code)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(behavior.body)
+
+        def log_message(self, *args):  # silence server logs
+            pass
+
+    return _Handler
+
+
+def _start_blobs_server(behavior: "_BlobsBehavior"):
+    import threading
+    from http.server import ThreadingHTTPServer
+
+    port = _find_free_port()
+    server = ThreadingHTTPServer(("127.0.0.1", port), _make_blobs_handler(behavior))
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    return server, f"http://127.0.0.1:{port}"
+
+
+class TestSyncListBlobKeysFailLoudRealSocket:
+    """Sync CIClient.list_blob_keys() over real sockets: raise on failure, empty-200 ok."""
+
+    def test_down_server_raises_connection_error(self):
+        from context_intelligence.client import CIClient, CIClientError
+
+        port = _find_free_port()  # bound-then-released -> nothing listening
+        client = CIClient(f"http://127.0.0.1:{port}", "key")
+        with pytest.raises(CIClientError) as excinfo:
+            client.list_blob_keys("session1")
+        assert excinfo.value.error_type == "connection_error"
+
+    def test_500_raises_http_status(self):
+        from context_intelligence.client import CIClient, CIClientError
+
+        behavior = _BlobsBehavior()
+        behavior.status_code = 500
+        behavior.body = b'{"detail": "boom"}'
+        server, base_url = _start_blobs_server(behavior)
+        client = CIClient(base_url, "key")
+        try:
+            with pytest.raises(CIClientError) as excinfo:
+                client.list_blob_keys("session1")
+        finally:
+            server.shutdown()
+            server.server_close()
+        assert excinfo.value.error_type == "http_status"
+        assert excinfo.value.status_code == 500
+
+    def test_genuine_empty_200_returns_empty_set(self):
+        from context_intelligence.client import CIClient
+
+        behavior = _BlobsBehavior()
+        behavior.body = b"[]"
+        server, base_url = _start_blobs_server(behavior)
+        client = CIClient(base_url, "key")
+        try:
+            result = client.list_blob_keys("session1")
+        finally:
+            server.shutdown()
+            server.server_close()
+        assert result == set()
+
+    def test_populated_200_returns_keys(self):
+        from context_intelligence.client import CIClient
+
+        behavior = _BlobsBehavior()
+        behavior.body = b'["ci-blob://session1/a", "not-a-blob", "ci-blob://session1/b"]'
+        server, base_url = _start_blobs_server(behavior)
+        client = CIClient(base_url, "key")
+        try:
+            result = client.list_blob_keys("session1")
+        finally:
+            server.shutdown()
+            server.server_close()
+        assert result == {"ci-blob://session1/a", "ci-blob://session1/b"}
+
+
+class TestAsyncListBlobKeysFailLoudRealSocket:
+    """Async AsyncCIClient.list_blob_keys() over real sockets: raise on failure, empty-200 ok."""
+
+    async def test_down_server_raises_connection_error(self):
+        from context_intelligence.client import AsyncCIClient, CIClientError
+
+        port = _find_free_port()
+        client = AsyncCIClient(f"http://127.0.0.1:{port}", "key")
+        with pytest.raises(CIClientError) as excinfo:
+            await client.list_blob_keys("session1")
+        assert excinfo.value.error_type == "connection_error"
+
+    async def test_500_raises_http_status(self):
+        from context_intelligence.client import AsyncCIClient, CIClientError
+
+        behavior = _BlobsBehavior()
+        behavior.status_code = 500
+        behavior.body = b'{"detail": "boom"}'
+        server, base_url = _start_blobs_server(behavior)
+        client = AsyncCIClient(base_url, "key")
+        try:
+            with pytest.raises(CIClientError) as excinfo:
+                await client.list_blob_keys("session1")
+        finally:
+            server.shutdown()
+            server.server_close()
+        assert excinfo.value.error_type == "http_status"
+        assert excinfo.value.status_code == 500
+
+    async def test_genuine_empty_200_returns_empty_set(self):
+        from context_intelligence.client import AsyncCIClient
+
+        behavior = _BlobsBehavior()
+        behavior.body = b"[]"
+        server, base_url = _start_blobs_server(behavior)
+        client = AsyncCIClient(base_url, "key")
+        try:
+            result = await client.list_blob_keys("session1")
+        finally:
+            server.shutdown()
+            server.server_close()
+        assert result == set()

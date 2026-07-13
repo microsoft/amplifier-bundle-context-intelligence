@@ -4,7 +4,10 @@ Covers:
 - Source dataclass gains auth_mode / auth_resource fields
 - ToolConfigResolver.sources parses and _expand()s auth fields
 - ToolConfigResolver.validate_sources() XOR validation
-- resolve_query_auth_strategy returns ApiKeyAuth for static, EntraTokenAuth for entra
+- resolve_query_connection().auth_strategy returns ApiKeyAuth for static,
+  EntraTokenAuth for entra (v5: replaces the old resolve_query_auth_strategy,
+  which re-ran selection independently and discarded the origin -- see
+  docs/multi-source-build-spec-v5.md §4.5)
 - AsyncCIClient uses strategy.headers() per-request
 - graph_query_tool and blob_read_tool pass auth_strategy to AsyncCIClient
 - Per-target XOR (static source coexists with entra source)
@@ -41,7 +44,7 @@ class FakeCredential:
         return FakeToken(self._token)
 
 
-def _tool_resolver(config: dict) -> object:
+def _tool_resolver(config: dict) -> Any:
     from context_intelligence.tool_resolver import ToolConfigResolver
 
     coord = MagicMock()
@@ -269,25 +272,30 @@ class TestValidateSourcesXOR:
 
 
 # ---------------------------------------------------------------------------
-# resolve_query_auth_strategy
+# resolve_query_connection().auth_strategy
+#
+# v5 (docs/multi-source-build-spec-v5.md §4.5): resolve_query_auth_strategy()
+# was replaced by resolve_query_connection(), which selects the endpoint ONCE
+# and returns its auth_strategy (+ url/api_key/origin) together -- no separate
+# api_key override param, no independent re-selection.
 # ---------------------------------------------------------------------------
 
 
-class TestResolveQueryAuthStrategy:
-    """resolve_query_auth_strategy returns the right strategy."""
+class TestResolveQueryConnectionAuthStrategy:
+    """resolve_query_connection().auth_strategy returns the right strategy."""
 
     def test_static_source_returns_api_key_auth(self) -> None:
         from context_intelligence.auth import ApiKeyAuth
-        from context_intelligence.tool_resolver import resolve_query_auth_strategy
+        from context_intelligence.tool_resolver import resolve_query_connection
 
         r = _tool_resolver({"sources": {"local": {"url": "http://ci:8000", "api_key": "sk"}}})
-        strategy = resolve_query_auth_strategy(None, r, api_key="my-key")  # type: ignore[arg-type]
-        assert isinstance(strategy, ApiKeyAuth)
-        assert strategy.headers() == {"Authorization": "Bearer my-key"}
+        conn = resolve_query_connection(None, r)
+        assert isinstance(conn.auth_strategy, ApiKeyAuth)
+        assert conn.auth_strategy.headers() == {"Authorization": "Bearer sk"}
 
     def test_entra_source_returns_entra_token_auth(self) -> None:
         from context_intelligence.auth import EntraTokenAuth
-        from context_intelligence.tool_resolver import resolve_query_auth_strategy
+        from context_intelligence.tool_resolver import resolve_query_connection
 
         fake_cred = FakeCredential("entra-query-token")
         r = _tool_resolver(
@@ -302,31 +310,37 @@ class TestResolveQueryAuthStrategy:
             }
         )
         with patch("context_intelligence.auth._make_cli_credential", return_value=fake_cred):
-            strategy = resolve_query_auth_strategy(None, r, api_key="")  # type: ignore[arg-type]
+            conn = resolve_query_connection(None, r)
 
-        assert isinstance(strategy, EntraTokenAuth)
-        headers = strategy.headers()
+        assert isinstance(conn.auth_strategy, EntraTokenAuth)
+        headers = conn.auth_strategy.headers()
         assert headers == {"Authorization": "Bearer entra-query-token"}
         assert fake_cred.calls[0] == ("api://53aa4ffd/.default",)
 
-    def test_no_source_falls_back_to_api_key_auth(self) -> None:
-        """When no sources configured, returns ApiKeyAuth from the api_key param."""
+    def test_no_source_no_destination_falls_back_to_env_api_key(self) -> None:
+        """0 sources, 0 destinations -> pure env tier 3; ApiKeyAuth built from env."""
+        import os
+
         from context_intelligence.auth import ApiKeyAuth
-        from context_intelligence.tool_resolver import resolve_query_auth_strategy
+        from context_intelligence.tool_resolver import resolve_query_connection
 
         r = _tool_resolver({})  # no sources
-        strategy = resolve_query_auth_strategy(None, r, api_key="fallback-key")  # type: ignore[arg-type]
-        assert isinstance(strategy, ApiKeyAuth)
-        assert strategy.headers() == {"Authorization": "Bearer fallback-key"}
+        env = {"AMPLIFIER_CONTEXT_INTELLIGENCE_API_KEY": "fallback-key"}
+        with patch.dict(os.environ, env):
+            conn = resolve_query_connection(None, r)
+        assert isinstance(conn.auth_strategy, ApiKeyAuth)
+        assert conn.auth_strategy.headers() == {"Authorization": "Bearer fallback-key"}
 
     def test_hook_dest_entra_used_when_no_source(self) -> None:
-        """When tool has no sources, falls back to hook destination auth_mode."""
+        """0 sources, 1 destination -> auto-selects that destination (unchanged from
+        #67's _first_destination behavior, now read from the connectable pool)."""
         from context_intelligence.auth import EntraTokenAuth
-        from context_intelligence.tool_resolver import resolve_query_auth_strategy
+        from context_intelligence.tool_resolver import resolve_query_connection
 
         # Simulate a hook resolver with an entra destination
         fake_cred = FakeCredential("hook-entra-token")
         mock_dest = MagicMock()
+        mock_dest.name = "azure"
         mock_dest.auth_mode = "entra"
         mock_dest.auth_resource = "api://hook-resource"
         mock_dest.url = "http://hook:8000"
@@ -337,11 +351,14 @@ class TestResolveQueryAuthStrategy:
 
         r = _tool_resolver({})  # no sources
         with patch("context_intelligence.auth._make_cli_credential", return_value=fake_cred):
-            strategy = resolve_query_auth_strategy(mock_hook, r, api_key="")  # type: ignore[arg-type]
+            conn = resolve_query_connection(mock_hook, r)
 
-        assert isinstance(strategy, EntraTokenAuth)
-        headers = strategy.headers()
+        assert isinstance(conn.auth_strategy, EntraTokenAuth)
+        headers = conn.auth_strategy.headers()
         assert headers["Authorization"].startswith("Bearer hook-entra-token")
+        assert conn.origin is not None
+        assert conn.origin.kind == "destination"
+        assert conn.origin.name == "azure"
 
 
 # ---------------------------------------------------------------------------

@@ -197,7 +197,14 @@ def extract_transcript(
     """
     messages: list[dict] = []
 
-    # List available blobs; actual data fetched on demand via fetch_blob()
+    # List available blobs; actual data fetched on demand via fetch_blob().
+    # FAIL LOUD (deliberate, do NOT wrap in try/except): list_blob_keys() now raises
+    # CIClientError on a genuine transport/HTTP failure. The blobs ARE the transcript
+    # content (assistant messages, tool results) -- swallowing the failure to an empty
+    # set would emit a transcript missing that content while *looking* complete. Let it
+    # propagate so the reconstruction surfaces the error instead. A genuinely-empty
+    # result (session with no blobs) is not an error: it returns an empty set and the
+    # transcript is built from whatever inline data exists.
     log.debug("Listing available blobs for session %s ...", session_id)
     available_keys = client.list_blob_keys(session_id)
     blob_index: dict[str, Any] = {}  # cache for fetched blobs

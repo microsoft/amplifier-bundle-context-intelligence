@@ -107,7 +107,9 @@ def _make_coordinator() -> MagicMock:
     return coordinator
 
 
-def _make_tool_resolver(base_url: str, *, request_timeout: float | None = None) -> ToolConfigResolver:
+def _make_tool_resolver(
+    base_url: str, *, request_timeout: float | None = None
+) -> ToolConfigResolver:
     """Real ToolConfigResolver with a single configured source pointing at *base_url*.
 
     Single source -> no ambiguity, no `source=` selector needed on the tool call.
@@ -228,7 +230,8 @@ class TestGraphQueryPhase0:
             server.server_close()
 
         assert result.success is True
-        assert result.output == []
+        assert result.output is not None
+        assert result.output["rows"] == []
 
 
 # ---------------------------------------------------------------------------
@@ -308,8 +311,19 @@ class TestBlobReadPhase0:
         assert result.error["type"] == "http_status"
         assert result.error["status_code"] == status_code
 
-    async def test_genuine_blob_200_is_success(self) -> None:
-        """Real 200 with a valid JSON blob body -> success True, file written."""
+    async def test_genuine_blob_200_is_success_and_carries_provenance(self) -> None:
+        """Real 200 with a valid JSON blob body -> success True, file written, AND
+        the success output carries the `source` provenance block {name,url,origin}
+        naming the REAL server that answered (Risk 1, addressable part).
+
+        NOTE (Risk 1 scope): the *production* blob round-trip -- a ci-blob:// URI
+        minted by the hook's WRITE-side fan-out and later resolved -- cannot be
+        exercised here: blobs are minted write-side, which is out of scope for this
+        read-side work (guardrail: never touch the hook fan-out). This real-socket
+        test IS the proof for the blob-read SUCCESS + provenance path: a live HTTP
+        server serves GET /blobs/<session>/<key>, BlobReadTool.execute() drives a
+        real success, and we assert the provenance block names that server.
+        """
         from amplifier_module_tool_context_intelligence_query.blob_read_tool import (
             BlobReadTool,
         )
@@ -331,3 +345,9 @@ class TestBlobReadPhase0:
         assert result.success is True
         assert result.output is not None
         assert "path" in result.output
+        # Provenance block present, well-formed, and naming the REAL server that answered.
+        assert result.output["source"] == {
+            "name": "testsrc",
+            "url": base_url,
+            "origin": "source",
+        }

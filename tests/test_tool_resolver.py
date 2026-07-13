@@ -1,8 +1,16 @@
 """Unit tests for context_intelligence.tool_resolver.
 
-Tests the shared helpers (_first_entry, _first_destination, resolve_query_endpoint)
-and ToolConfigResolver.sources (including legacy synthesis — spec §7 cases
-#9 and #10 at the unit level).
+Tests ToolConfigResolver.sources (including legacy synthesis — spec §7 cases
+#9 and #10 at the unit level), _select_source (the default-path source tiers),
+and validate_source/validate_sources (per-entry vs whole-map fail-loud).
+
+v5 (docs/multi-source-build-spec-v5.md §4-5) replaced `_first_entry`,
+`_first_destination`, `resolve_query_endpoint`, and `resolve_query_auth_strategy`
+with `_connectable_pool`, `_select_from_pool`, and `resolve_query_connection` --
+that coverage now lives in modules/tool-context-intelligence-query/tests/
+test_pool_and_selection.py (pure unit, p1-p12) and test_multi_source_e2e.py
+(real-socket scenarios e-j), alongside the module that owns the tools which are
+resolve_query_connection's only callers.
 """
 
 from __future__ import annotations
@@ -32,107 +40,11 @@ def _make_dest(url: str, api_key: str, name: str = "default") -> SimpleNamespace
     return SimpleNamespace(name=name, url=url, api_key=api_key)
 
 
-# ---------------------------------------------------------------------------
-# TestFirstEntry
-# ---------------------------------------------------------------------------
-
-
-class TestFirstEntry:
-    """_first_entry() — edge-case coverage."""
-
-    def test_none_returns_none(self) -> None:
-        from context_intelligence.tool_resolver import _first_entry
-
-        assert _first_entry(None) is None
-
-    def test_empty_dict_returns_none(self) -> None:
-        from context_intelligence.tool_resolver import _first_entry
-
-        assert _first_entry({}) is None
-
-    def test_non_dict_mock_returns_none(self) -> None:
-        """A MagicMock (auto-created attribute) is not a dict → None."""
-        from context_intelligence.tool_resolver import _first_entry
-
-        assert _first_entry(MagicMock()) is None
-
-    def test_single_entry_returns_value(self) -> None:
-        from context_intelligence.tool_resolver import _first_entry
-
-        result = _first_entry({"alpha": "hello"})
-        assert result == "hello"
-
-    def test_two_entry_dict_returns_first(self) -> None:
-        from context_intelligence.tool_resolver import _first_entry
-
-        result = _first_entry({"alpha": 1, "beta": 2})
-        assert result == 1
-
-
-# ---------------------------------------------------------------------------
-# TestFirstDestination
-# ---------------------------------------------------------------------------
-
-
-class TestFirstDestination:
-    """_first_destination() — delegating edge cases."""
-
-    def test_none_resolver_returns_none(self) -> None:
-        from context_intelligence.tool_resolver import _first_destination
-
-        assert _first_destination(None) is None
-
-    def test_resolver_with_empty_destinations_returns_none(self) -> None:
-        from context_intelligence.tool_resolver import _first_destination
-
-        resolver = MagicMock()
-        resolver.destinations = {}
-        assert _first_destination(resolver) is None
-
-    def test_resolver_with_no_destinations_attr_returns_none(self) -> None:
-        """getattr(resolver, 'destinations', None) returns None for a plain object."""
-        from context_intelligence.tool_resolver import _first_destination
-
-        class NoDestinations:
-            pass
-
-        assert _first_destination(NoDestinations()) is None
-
-
-# ---------------------------------------------------------------------------
-# TestResolveQueryEndpointHelpers
-# ---------------------------------------------------------------------------
-
-
-class TestResolveQueryEndpoint:
-    """resolve_query_endpoint() — the three-tier chain."""
-
-    def _make_empty_tool_resolver(self) -> Any:
-        from context_intelligence.tool_resolver import ToolConfigResolver
-
-        return ToolConfigResolver({}, _make_coordinator())
-
-    async def test_none_hook_and_empty_tool_resolver_returns_none_tuple(self) -> None:
-        from context_intelligence.tool_resolver import resolve_query_endpoint
-
-        tool_resolver = self._make_empty_tool_resolver()
-        # Clear all CI env vars so tier-3 fallback cannot supply a URL
-        clean = {k: "" for k in os.environ if k.startswith("AMPLIFIER_CONTEXT_INTELLIGENCE_")}
-        with patch.dict(os.environ, clean):
-            url, api_key = resolve_query_endpoint(None, tool_resolver)
-        assert url is None
-        assert api_key is None
-
-    async def test_debug_log_emitted(self, caplog: Any) -> None:
-        import logging
-
-        from context_intelligence.tool_resolver import resolve_query_endpoint
-
-        tool_resolver = self._make_empty_tool_resolver()
-        with caplog.at_level(logging.DEBUG, logger="context_intelligence.tool_resolver"):
-            resolve_query_endpoint(None, tool_resolver)
-
-        assert any("CI query endpoint resolved" in r.message for r in caplog.records)
+# NOTE (v5): _first_entry, _first_destination, resolve_query_endpoint, and
+# resolve_query_auth_strategy were removed -- replaced by _connectable_pool,
+# _select_from_pool, and resolve_query_connection. Their unit coverage now
+# lives in modules/tool-context-intelligence-query/tests/test_pool_and_selection.py
+# (pure, p1-p12) and test_multi_source_e2e.py (real-socket, scenarios e-j).
 
 
 # ---------------------------------------------------------------------------
@@ -256,7 +168,7 @@ class TestToolConfigResolverSources:
         """Env vars are excluded from legacy synthesis — env can never enter tier 1.
 
         Setting canonical env vars alone does NOT cause legacy synthesis to fire.
-        Env is only consulted at tier 3 in resolve_query_endpoint(), which is
+        Env is only consulted at tier 3 in resolve_query_connection(), which is
         BELOW the hook destination (tier 2). This prevents env from outranking
         an upload destination via the synthesis path.
         """
@@ -288,20 +200,19 @@ def _src(name: str, url: str = "http://x.example.com", api_key: str = "k") -> An
 class TestSelectSource:
     """_select_source() — every row of the §2.2 truth table.
 
-    | len(sources) | requested_name | allow_implicit_default | Result |
+    | len(sources) | requested_name | Result |
     """
 
     # --- 0 sources ---
 
     def test_zero_sources_none_requested_returns_none(self) -> None:
-        """0 | None | any -> None (unchanged: falls through to hook destination / env)."""
+        """0 | None -> None (unchanged: falls through to hook destination / env)."""
         from context_intelligence.tool_resolver import _select_source
 
         assert _select_source({}, None) is None
-        assert _select_source({}, None, allow_implicit_default=True) is None
 
     def test_zero_sources_named_requested_raises_unknown_source(self) -> None:
-        """0 | "foo" | any -> raises unknown_source, valid_names=[]."""
+        """0 | "foo" -> raises unknown_source, valid_names=[]."""
         from context_intelligence.tool_resolver import SourceSelectionError, _select_source
 
         with pytest.raises(SourceSelectionError) as excinfo:
@@ -312,24 +223,22 @@ class TestSelectSource:
     # --- 1 source ---
 
     def test_one_source_none_requested_returns_that_source(self) -> None:
-        """1 | None | any -> that single source (unchanged behavior, now principled)."""
+        """1 | None -> that single source (unchanged behavior, now principled)."""
         from context_intelligence.tool_resolver import _select_source
 
         src = _src("default")
         result = _select_source({"default": src}, None)
         assert result is src
-        # allow_implicit_default irrelevant with exactly one source
-        assert _select_source({"default": src}, None, allow_implicit_default=True) is src
 
     def test_one_source_matching_name_returns_that_source(self) -> None:
-        """1 | "default" (matches) | any -> that source."""
+        """1 | "default" (matches) -> that source."""
         from context_intelligence.tool_resolver import _select_source
 
         src = _src("default")
         assert _select_source({"default": src}, "default") is src
 
     def test_one_source_non_matching_name_raises_unknown_source(self) -> None:
-        """1 | "bogus" (no match) | any -> raises unknown_source, valid_names=["default"]."""
+        """1 | "bogus" (no match) -> raises unknown_source, valid_names=["default"]."""
         from context_intelligence.tool_resolver import SourceSelectionError, _select_source
 
         src = _src("default")
@@ -340,42 +249,32 @@ class TestSelectSource:
 
     # --- 2+ sources ---
 
-    def test_two_plus_sources_none_requested_allow_implicit_false_raises_ambiguous(
-        self,
-    ) -> None:
-        """2+ | None | False (tools) -> raises ambiguous_source_selection, valid_names=[...]."""
+    def test_two_plus_sources_none_requested_raises_ambiguous(self) -> None:
+        """2+ | None -> raises ambiguous_source_selection, valid_names=[...].
+
+        Unconditional: there is no implicit "use the first entry" fallback for any
+        caller (the skill_sync.py carve-out that used to exist here is gone along
+        with skill_sync.py itself).
+        """
         from context_intelligence.tool_resolver import SourceSelectionError, _select_source
 
         sources = {"a": _src("a"), "b": _src("b")}
         with pytest.raises(SourceSelectionError) as excinfo:
-            _select_source(sources, None, allow_implicit_default=False)
+            _select_source(sources, None)
         assert excinfo.value.error_type == "ambiguous_source_selection"
         assert excinfo.value.valid_names == ["a", "b"]
 
-    def test_two_plus_sources_none_requested_allow_implicit_true_returns_first(
-        self,
-    ) -> None:
-        """2+ | None | True (skill_sync only) -> first by insertion order, logged DEBUG."""
-        from context_intelligence.tool_resolver import _select_source
-
-        src_a = _src("a")
-        src_b = _src("b")
-        sources = {"a": src_a, "b": src_b}
-        result = _select_source(sources, None, allow_implicit_default=True)
-        assert result is src_a
-
     def test_two_plus_sources_matching_name_returns_that_source(self) -> None:
-        """2+ | "a" (matches) | any -> source "a"."""
+        """2+ | "a" (matches) -> source "a"."""
         from context_intelligence.tool_resolver import _select_source
 
         src_a = _src("a")
         src_b = _src("b")
         sources = {"a": src_a, "b": src_b}
         assert _select_source(sources, "a") is src_a
-        assert _select_source(sources, "a", allow_implicit_default=True) is src_a
 
     def test_two_plus_sources_non_matching_name_raises_unknown_source(self) -> None:
-        """2+ | "z" (no match) | any -> raises unknown_source, valid_names=["a", "b", ...]."""
+        """2+ | "z" (no match) -> raises unknown_source, valid_names=["a", "b", ...]."""
         from context_intelligence.tool_resolver import SourceSelectionError, _select_source
 
         sources = {"a": _src("a"), "b": _src("b")}
@@ -383,17 +282,6 @@ class TestSelectSource:
             _select_source(sources, "z")
         assert excinfo.value.error_type == "unknown_source"
         assert excinfo.value.valid_names == ["a", "b"]
-
-    def test_explicit_request_never_falls_back_even_when_ambiguous_default_would_apply(
-        self,
-    ) -> None:
-        """An explicit unknown name must raise even if allow_implicit_default=True."""
-        from context_intelligence.tool_resolver import SourceSelectionError, _select_source
-
-        sources = {"a": _src("a"), "b": _src("b")}
-        with pytest.raises(SourceSelectionError) as excinfo:
-            _select_source(sources, "z", allow_implicit_default=True)
-        assert excinfo.value.error_type == "unknown_source"
 
     def test_ambiguous_error_message_names_all_sources(self) -> None:
         from context_intelligence.tool_resolver import SourceSelectionError, _select_source
@@ -468,147 +356,11 @@ class TestValidateSourcePerEntry:
         assert resolver.validate_sources() == []
 
 
-# ---------------------------------------------------------------------------
-# TestResolveQueryEndpointSourceName — source_name threading + criterion-7 log
-# ---------------------------------------------------------------------------
-
-
-class TestResolveQueryEndpointSourceName:
-    """resolve_query_endpoint() — source_name threading, SourceSelectionError propagation,
-    and the criterion-7 log line firing only when len(sources) >= 2."""
-
-    def _resolver(self, config: dict) -> Any:
-        from context_intelligence.tool_resolver import ToolConfigResolver
-
-        return ToolConfigResolver(config, _make_coordinator())
-
-    def test_source_name_selects_named_entry(self) -> None:
-        from context_intelligence.tool_resolver import resolve_query_endpoint
-
-        config = {
-            "sources": {
-                "a": {"url": "http://a.example.com", "api_key": "a-key"},
-                "b": {"url": "http://b.example.com", "api_key": "b-key"},
-            }
-        }
-        resolver = self._resolver(config)
-        url, api_key = resolve_query_endpoint(None, resolver, source_name="b")
-        assert url == "http://b.example.com"
-        assert api_key == "b-key"
-
-    def test_ambiguous_selection_raises_source_selection_error(self) -> None:
-        from context_intelligence.tool_resolver import (
-            SourceSelectionError,
-            resolve_query_endpoint,
-        )
-
-        config = {
-            "sources": {
-                "a": {"url": "http://a.example.com", "api_key": "a-key"},
-                "b": {"url": "http://b.example.com", "api_key": "b-key"},
-            }
-        }
-        resolver = self._resolver(config)
-        with pytest.raises(SourceSelectionError) as excinfo:
-            resolve_query_endpoint(None, resolver)
-        assert excinfo.value.error_type == "ambiguous_source_selection"
-        assert excinfo.value.valid_names == ["a", "b"]
-
-    def test_allow_implicit_default_true_avoids_ambiguity_error(self) -> None:
-        from context_intelligence.tool_resolver import resolve_query_endpoint
-
-        config = {
-            "sources": {
-                "a": {"url": "http://a.example.com", "api_key": "a-key"},
-                "b": {"url": "http://b.example.com", "api_key": "b-key"},
-            }
-        }
-        resolver = self._resolver(config)
-        url, api_key = resolve_query_endpoint(None, resolver, allow_implicit_default=True)
-        assert url == "http://a.example.com"
-        assert api_key == "a-key"
-
-    def test_unknown_source_name_raises_source_selection_error(self) -> None:
-        from context_intelligence.tool_resolver import (
-            SourceSelectionError,
-            resolve_query_endpoint,
-        )
-
-        config = {
-            "sources": {
-                "a": {"url": "http://a.example.com", "api_key": "a-key"},
-            }
-        }
-        resolver = self._resolver(config)
-        with pytest.raises(SourceSelectionError) as excinfo:
-            resolve_query_endpoint(None, resolver, source_name="nope")
-        assert excinfo.value.error_type == "unknown_source"
-        assert excinfo.value.valid_names == ["a"]
-
-    def test_selected_source_misconfigured_raises_plain_value_error(self) -> None:
-        """The selected source itself fails per-field validation -> plain ValueError."""
-        from context_intelligence.tool_resolver import resolve_query_endpoint
-
-        config = {
-            "sources": {
-                "bad": {"url": "", "api_key": ""},
-            }
-        }
-        resolver = self._resolver(config)
-        with pytest.raises(ValueError) as excinfo:
-            resolve_query_endpoint(None, resolver, source_name="bad")
-        # Must NOT be a SourceSelectionError (that's for selection ambiguity, not
-        # misconfiguration) -- assert it lacks the SourceSelectionError-only attrs.
-        assert not hasattr(excinfo.value, "error_type")
-        assert "bad" in str(excinfo.value)
-
-    def test_criterion7_log_line_fires_with_two_plus_sources(self, caplog: Any) -> None:
-        import logging
-
-        from context_intelligence.tool_resolver import resolve_query_endpoint
-
-        config = {
-            "sources": {
-                "a": {"url": "http://a.example.com", "api_key": "a-key"},
-                "b": {"url": "http://b.example.com", "api_key": "b-key"},
-            }
-        }
-        resolver = self._resolver(config)
-        with caplog.at_level(logging.INFO, logger="context_intelligence.tool_resolver"):
-            resolve_query_endpoint(None, resolver, source_name="a")
-
-        info_records = [r for r in caplog.records if r.levelno == logging.INFO]
-        assert any("other configured source" in r.message for r in info_records)
-        assert any("b" in r.message for r in info_records)
-
-    def test_criterion7_log_line_does_not_fire_with_single_source(self, caplog: Any) -> None:
-        import logging
-
-        from context_intelligence.tool_resolver import resolve_query_endpoint
-
-        config = {
-            "sources": {
-                "default": {"url": "http://only.example.com", "api_key": "k"},
-            }
-        }
-        resolver = self._resolver(config)
-        with caplog.at_level(logging.INFO, logger="context_intelligence.tool_resolver"):
-            resolve_query_endpoint(None, resolver)
-
-        info_records = [r for r in caplog.records if r.levelno == logging.INFO]
-        assert not any("other configured source" in r.message for r in info_records)
-
-    def test_criterion7_log_line_does_not_fire_when_falling_through_to_tier2(
-        self, caplog: Any
-    ) -> None:
-        """No sources configured at all -> read is None -> criterion-7 log must not fire."""
-        import logging
-
-        from context_intelligence.tool_resolver import resolve_query_endpoint
-
-        resolver = self._resolver({})
-        with caplog.at_level(logging.INFO, logger="context_intelligence.tool_resolver"):
-            resolve_query_endpoint(None, resolver)
-
-        info_records = [r for r in caplog.records if r.levelno == logging.INFO]
-        assert not any("other configured source" in r.message for r in info_records)
+# NOTE (v5): source_name threading, SourceSelectionError propagation (ambiguous /
+# unknown / misconfigured), and this class's coverage all now live against
+# resolve_query_connection() in modules/tool-context-intelligence-query/tests/
+# test_pool_and_selection.py (p4-p9) -- alongside the module that owns its only
+# callers. The old per-tier "criterion-7" DEBUG/INFO logging (noting untouched
+# sibling sources) was diagnostic-only and was dropped as part of consolidating
+# resolve_query_endpoint()/resolve_query_auth_strategy() into the single
+# resolve_query_connection() (pure subtraction -- see spec §4.5's MJ callout).

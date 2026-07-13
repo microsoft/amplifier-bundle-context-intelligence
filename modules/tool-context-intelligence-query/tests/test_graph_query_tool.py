@@ -35,7 +35,7 @@ def _make_hook_resolver(
     resolver.context_intelligence_server_url = server_url
     resolver.workspace = workspace
     resolver.context_intelligence_api_key = api_key
-    # destinations must be a real dict so _first_destination() can iterate it safely
+    # destinations must be a real dict so _connectable_pool() can iterate it safely
     if server_url:
         resolver.destinations = {
             "default": SimpleNamespace(name="default", url=server_url, api_key=api_key or ""),
@@ -92,11 +92,15 @@ class TestGraphQueryToolProtocol:
         tool = GraphQueryTool(_make_coordinator())
         assert tool.input_schema["type"] == "object"
 
-    def test_input_schema_has_query_as_required(self) -> None:
+    def test_input_schema_query_not_schema_required_but_enforced_at_execute(self) -> None:
+        """v5: `query` is NOT in the JSON-schema `required` list -- list_sources=true
+        calls legitimately omit it. execute() enforces "query required unless
+        list_sources=true" itself (see TestListSources)."""
         from amplifier_module_tool_context_intelligence_query.graph_query_tool import GraphQueryTool
 
         tool = GraphQueryTool(_make_coordinator())
-        assert "query" in tool.input_schema["required"]
+        assert "query" not in tool.input_schema["required"]
+        assert "query" in tool.input_schema["properties"]
 
     def test_input_schema_has_optional_params_and_workspace(self) -> None:
         from amplifier_module_tool_context_intelligence_query.graph_query_tool import GraphQueryTool
@@ -265,7 +269,8 @@ class TestGraphQuery:
             result = await tool.execute({"query": "MATCH (n:Session) RETURN n LIMIT 10"})
 
         assert result.success is True
-        assert result.output == expected
+        assert result.output is not None
+        assert result.output["rows"] == expected
 
 
 # ---------------------------------------------------------------------------
@@ -356,7 +361,8 @@ class TestGraphQueryErrors:
             result = await tool.execute({"query": "MATCH (n) RETURN n"})
 
         assert result.success is True
-        assert result.output == []
+        assert result.output is not None
+        assert result.output["rows"] == []
 
     async def test_none_api_key_passed_as_empty_string(self) -> None:
         from amplifier_module_tool_context_intelligence_query.graph_query_tool import GraphQueryTool
@@ -550,7 +556,7 @@ class TestConfigFallback:
     # --- Case #3: a partially-configured single source is now a hard per-entry error ---
     #
     # BEHAVIOR CHANGE (criterion 4, workstream-1-multi-source-query-tools.md §2.3/§2.5):
-    # resolve_query_endpoint() now calls tool_resolver.validate_source(read.name)
+    # resolve_query_connection() now calls tool_resolver.validate_source(entry.name)
     # unconditionally on whatever source is selected -- even the sole configured entry.
     # A source with url="" is "missing url" per _collect_source_problems (this rule
     # predates workstream-1; it's what validate_sources() always enforced at mount()
@@ -1045,3 +1051,154 @@ class TestGraphQuerySourceSelection:
         ):
             good_result = await tool.execute({"query": "MATCH (n) RETURN n", "source": "good"})
         assert good_result.success is True
+
+
+# ---------------------------------------------------------------------------
+# TestGraphQuerySourceProvenanceOnFailure -- §5.1 honesty contract
+#
+# `source` is present on failures ONLY when an endpoint was actually chosen
+# (endpoint-level failures: transport errors AND post-resolution input
+# validation). It is ABSENT for selection/config failures that occur BEFORE any
+# endpoint is chosen (ambiguous/unknown/misconfigured/no-url) -- there is no
+# single endpoint to name, and we must not fabricate one.
+# ---------------------------------------------------------------------------
+
+
+class TestGraphQuerySourceProvenanceOnFailure:
+    """Per-branch source presence/absence matrix for graph_query failures."""
+
+    def _single_source(self) -> dict:
+        return {"sources": {"only": {"url": "http://only.example.com", "api_key": "k"}}}
+
+    # --- endpoint-level failures: source PRESENT and correct ---
+
+    async def test_missing_query_validation_error_carries_source(self) -> None:
+        from amplifier_module_tool_context_intelligence_query.graph_query_tool import GraphQueryTool
+
+        resolver = _tool_resolver_with_config(self._single_source())
+        coordinator = _make_coordinator(resolver=_make_hook_resolver_with_dests(destinations={}))
+        tool = GraphQueryTool(coordinator, resolver)
+
+        # No "query" key, and list_sources not set -> validation_error AFTER resolution.
+        result = await tool.execute({})
+
+        assert result.success is False
+        assert result.error is not None
+        assert result.error["type"] == "validation_error"
+        assert result.error["source"] == {
+            "name": "only",
+            "url": "http://only.example.com",
+            "origin": "source",
+        }
+
+    async def test_non_dict_params_validation_error_carries_source(self) -> None:
+        from amplifier_module_tool_context_intelligence_query.graph_query_tool import GraphQueryTool
+
+        resolver = _tool_resolver_with_config(self._single_source())
+        coordinator = _make_coordinator(resolver=_make_hook_resolver_with_dests(destinations={}))
+        tool = GraphQueryTool(coordinator, resolver)
+
+        result = await tool.execute({"query": "MATCH (n) RETURN n", "params": "not-a-dict"})
+
+        assert result.success is False
+        assert result.error is not None
+        assert result.error["type"] == "validation_error"
+        assert result.error["source"] is not None
+        assert result.error["source"]["name"] == "only"
+        assert result.error["source"]["origin"] == "source"
+
+    async def test_ciclienterror_carries_source(self) -> None:
+        from context_intelligence.client import CIClientError
+
+        from amplifier_module_tool_context_intelligence_query.graph_query_tool import GraphQueryTool
+
+        resolver = _tool_resolver_with_config(self._single_source())
+        coordinator = _make_coordinator(resolver=_make_hook_resolver_with_dests(destinations={}))
+        tool = GraphQueryTool(coordinator, resolver)
+
+        mock_instance = AsyncMock()
+        mock_instance.cypher = AsyncMock(
+            side_effect=CIClientError(
+                "boom", error_type="connection_error", url="http://only.example.com"
+            )
+        )
+        mock_cls = MagicMock(return_value=mock_instance)
+        with patch(
+            "amplifier_module_tool_context_intelligence_query.graph_query_tool.AsyncCIClient",
+            mock_cls,
+        ):
+            result = await tool.execute({"query": "MATCH (n) RETURN n"})
+
+        assert result.success is False
+        assert result.error is not None
+        assert result.error["type"] == "connection_error"
+        assert result.error["source"]["name"] == "only"
+        assert result.error["source"]["origin"] == "source"
+
+    # --- selection/config failures: source ABSENT (no endpoint chosen) ---
+
+    async def test_ambiguous_selection_has_no_source(self) -> None:
+        from amplifier_module_tool_context_intelligence_query.graph_query_tool import GraphQueryTool
+
+        config = {
+            "sources": {
+                "alpha": {"url": "http://alpha.example.com", "api_key": "a"},
+                "beta": {"url": "http://beta.example.com", "api_key": "b"},
+            }
+        }
+        resolver = _tool_resolver_with_config(config)
+        coordinator = _make_coordinator(resolver=_make_hook_resolver_with_dests(destinations={}))
+        tool = GraphQueryTool(coordinator, resolver)
+
+        result = await tool.execute({"query": "MATCH (n) RETURN n"})
+
+        assert result.success is False
+        assert result.error is not None
+        assert result.error["type"] == "ambiguous_source_selection"
+        assert "source" not in result.error
+
+    async def test_unknown_source_has_no_source(self) -> None:
+        from amplifier_module_tool_context_intelligence_query.graph_query_tool import GraphQueryTool
+
+        resolver = _tool_resolver_with_config(self._single_source())
+        coordinator = _make_coordinator(resolver=_make_hook_resolver_with_dests(destinations={}))
+        tool = GraphQueryTool(coordinator, resolver)
+
+        result = await tool.execute({"query": "MATCH (n) RETURN n", "source": "nope"})
+
+        assert result.success is False
+        assert result.error is not None
+        assert result.error["type"] == "unknown_source"
+        assert "source" not in result.error
+
+    async def test_source_misconfigured_has_no_source(self) -> None:
+        from amplifier_module_tool_context_intelligence_query.graph_query_tool import GraphQueryTool
+
+        config = {"sources": {"bad": {"url": "", "api_key": ""}}}
+        resolver = _tool_resolver_with_config(config)
+        coordinator = _make_coordinator(resolver=_make_hook_resolver_with_dests(destinations={}))
+        tool = GraphQueryTool(coordinator, resolver)
+
+        result = await tool.execute({"query": "MATCH (n) RETURN n", "source": "bad"})
+
+        assert result.success is False
+        assert result.error is not None
+        assert result.error["type"] == "source_misconfigured"
+        assert "source" not in result.error
+
+    async def test_configuration_error_has_no_source(self) -> None:
+        from amplifier_module_tool_context_intelligence_query.graph_query_tool import GraphQueryTool
+
+        # 0 sources, 0 destinations, no env -> configuration_error (no endpoint).
+        resolver = _tool_resolver_with_config({})
+        coordinator = _make_coordinator(resolver=_make_hook_resolver_with_dests(destinations={}))
+        tool = GraphQueryTool(coordinator, resolver)
+
+        clean = {k: "" for k in os.environ if k.startswith("AMPLIFIER_CONTEXT_INTELLIGENCE_")}
+        with patch.dict(os.environ, clean):
+            result = await tool.execute({"query": "MATCH (n) RETURN n"})
+
+        assert result.success is False
+        assert result.error is not None
+        assert result.error["type"] == "configuration_error"
+        assert "source" not in result.error

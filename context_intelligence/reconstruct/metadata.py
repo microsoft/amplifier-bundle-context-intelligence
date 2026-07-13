@@ -17,7 +17,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from context_intelligence.client import CIClient, _safe_json_loads
+from context_intelligence.client import CIClient, CIClientError, _safe_json_loads
 
 log = logging.getLogger("context_intelligence.reconstruct.metadata")
 
@@ -271,7 +271,20 @@ def _build_root_metadata(
                     log.debug("  llm_request blob was not a dict: %s", type(llm_blob))
             else:
                 log.debug("  No llm_request blob keys found either")
+    except CIClientError:
+        # FAIL LOUD: a genuine transport/HTTP failure (server down / timeout / 5xx /
+        # malformed) means the blob store is unreachable, not that this session simply
+        # has no enrichment blobs. Swallowing it here would silently emit metadata
+        # missing bundle/model/working_dir that *looks* complete -- the exact "partial
+        # reconstruction masquerading as complete" failure. Propagate so the operator
+        # sees it; the disk-only path (build_disk_only_metadata, selected upstream via
+        # discover.disk_only_ids) is the intentional server-unavailable fallback.
+        raise
     except Exception as exc:
+        # Best-effort enrichment for NON-transport problems only (e.g. a blob that
+        # isn't the shape we expected). A genuinely-empty result -- session with no
+        # blobs -- is not an error: list_blob_keys returns an empty set and the
+        # `if start_key:` / `if llm_key:` guards leave the fields blank, which is fine.
         log.debug("  Failed to resolve session_start blob: %s", exc)
 
     # -- Populate fields (use "bundle:" prefix for bundle_name) --------------

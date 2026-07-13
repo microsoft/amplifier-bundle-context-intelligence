@@ -282,7 +282,7 @@ class TestSharedResolverInvariant:
         divergent read-endpoint config is structurally impossible.
         """
         from amplifier_module_tool_context_intelligence_query import mount
-        from context_intelligence.tool_resolver import resolve_query_endpoint
+        from context_intelligence.tool_resolver import resolve_query_connection
 
         config = {
             "sources": {
@@ -297,11 +297,11 @@ class TestSharedResolverInvariant:
         br = tools["blob_read"]
 
         # Resolve using the shared resolver (no hook resolver needed for tier-1 hit)
-        gq_url, gq_key = resolve_query_endpoint(None, gq._tool_resolver)
-        br_url, br_key = resolve_query_endpoint(None, br._tool_resolver)
+        gq_conn = resolve_query_connection(None, gq._tool_resolver)
+        br_conn = resolve_query_connection(None, br._tool_resolver)
 
-        assert gq_url == br_url == "http://read.example.com"
-        assert gq_key == br_key == "shared-key"
+        assert gq_conn.url == br_conn.url == "http://read.example.com"
+        assert gq_conn.api_key == br_conn.api_key == "shared-key"
 
     async def test_concurrent_resolution_is_consistent(self) -> None:
         """Execute both tools 'concurrently'; both resolve to the same endpoint.
@@ -461,13 +461,14 @@ class TestMalformedDestinationInputs:
     """Malformed / empty destination inputs must fail loud or fall through correctly."""
 
     async def test_empty_sources_list_falls_through(self) -> None:
-        """sources: [] (a list, not dict) — _first_entry() returns None → falls to tier 2."""
+        """sources: [] (a list, not dict) — ToolConfigResolver.sources returns {}
+        for a non-dict value → falls to tier 2 (hook destination)."""
         from amplifier_module_tool_context_intelligence_query.graph_query_tool import GraphQueryTool
         from context_intelligence.tool_resolver import ToolConfigResolver
 
         coord = MagicMock()
         coord.config = {}
-        # sources as a list (malformed — _first_entry guards isinstance(mapping, dict))
+        # sources as a list (malformed — ToolConfigResolver.sources guards isinstance(raw, dict))
         config = {"sources": []}
         resolver = ToolConfigResolver(config, coord)
 
@@ -525,8 +526,8 @@ class TestMalformedDestinationInputs:
         an entry with url: '' is "missing url" per _collect_source_problems (both url
         and api_key are documented-required for a `sources` entry). Previously this
         validation only ran at mount() time, so a unit test bypassing mount() could
-        exercise pure per-field _pick() fallback on an internally-incomplete source.
-        Now resolve_query_endpoint() validates the selected source on every call, so
+        exercise pure per-field fallback on an internally-incomplete source.
+        Now resolve_query_connection() validates the selected source on every call, so
         this configuration is caught immediately as source_misconfigured."""
         from amplifier_module_tool_context_intelligence_query.graph_query_tool import GraphQueryTool
         from context_intelligence.tool_resolver import ToolConfigResolver
