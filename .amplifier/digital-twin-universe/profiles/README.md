@@ -115,6 +115,11 @@ tools (see the main `README.md` §"read side"). For multi-source, the connectabl
 - All profiles parse as **valid YAML** and reference only agents/skills/context that
   exist in this bundle.
 - Host prerequisites confirmed present: `amplifier-digital-twin` 0.3.0, Incus 7.2, Docker.
+- **Harness proven live:** `context-intelligence-signals-validation.yaml` was launched
+  (Incus, no external deps) and passed end-to-end — readiness `all checks passed`, the
+  `signals` public symbols import, and **all 12 fixtures scored OK / 0 failures**;
+  instance then destroyed. This confirms the DTU pipeline (provision → install → run →
+  assert) is healthy on a standard host.
 - **Runtime-green is per-launch**, per the AGENTS.md rule — capture the run evidence
   (real request/response, provenance, fail-loud on a down/500/timeout) when you exercise
   a seam. Start with `context-intelligence-signals-validation.yaml` (no external deps) to
