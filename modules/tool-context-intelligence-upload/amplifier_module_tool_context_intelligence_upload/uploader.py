@@ -10,6 +10,9 @@ to stderr via ``print(..., file=sys.stderr)`` rather than the ``logging`` module
 from __future__ import annotations
 
 import json
+import random
+import socket
+import ssl
 import sys
 import time
 from pathlib import Path
@@ -97,6 +100,89 @@ def _count_lines(file_path: Path) -> int:
     return count
 
 
+# ---------------------------------------------------------------------------
+# Retry / backoff (issue #338 — bounded exponential backoff on transient errors)
+# ---------------------------------------------------------------------------
+#: Backoff schedule mirrors the live-forwarding hook's proven values
+#: (hook-context-intelligence logging_handler: initial 1.0s, cap 30.0s, jitter).
+#: Kept as module constants rather than run_upload parameters — there is no
+#: second caller that needs to tune them, so widening the signature would be
+#: speculative generality.
+_BACKOFF_INITIAL_S = 1.0
+_BACKOFF_MAX_S = 30.0
+_BACKOFF_JITTER = True
+#: Default number of *additional* retries after the first attempt.  Total
+#: attempts per event = max_retries + 1 (default 5 -> 6 attempts).
+_DEFAULT_MAX_RETRIES = 5
+
+
+def _is_fatal_transport_error(exc: BaseException) -> bool:
+    """True if a transport-level error is PERMANENT (never succeeds on retry).
+
+    ``httpx.ConnectError`` covers both genuinely transient faults (connection
+    reset, refused) and permanent ones — DNS resolution failure (``socket.gaierror``,
+    e.g. a mistyped ``--server-url``) and TLS/certificate failure (``ssl.SSLError``,
+    e.g. an untrusted cert).  Retrying a permanent transport fault just burns the
+    whole backoff budget on a guaranteed-dead destination, so we classify those as
+    fail-fast.  The underlying OS error is wrapped by httpx, so walk the
+    cause/context chain to find it.
+    """
+    seen: set[int] = set()
+    cur: BaseException | None = exc
+    while cur is not None and id(cur) not in seen:
+        seen.add(id(cur))
+        if isinstance(cur, (socket.gaierror, ssl.SSLError)):
+            return True
+        cur = cur.__cause__ or cur.__context__
+    return False
+
+
+def _is_transient_status(status_code: int) -> bool:
+    """Return True if *status_code* is a transient failure worth retrying.
+
+    Transient = HTTP 429 (throttled) or any 5xx (server-side).  Everything else
+    non-2xx is permanent.
+
+    NOTE — deliberately ADAPTED from the live-forwarding hook's classifier
+    (``_classify_http_outcome`` treats 401 as transient): for the batch
+    uploader, per-request token refresh (see :func:`run_upload`) already handles
+    token expiry, so a 401 that survives a fresh token is a *real* auth fault
+    that retrying cannot fix.  401 is therefore PERMANENT here — fail fast, loud.
+    """
+    return status_code == 429 or status_code >= 500
+
+
+def _backoff_delay(retry_index: int) -> float:
+    """Exponential backoff for *retry_index* (0 = first retry), capped + jittered."""
+    delay = min(_BACKOFF_INITIAL_S * (2**retry_index), _BACKOFF_MAX_S)
+    if _BACKOFF_JITTER:
+        # Full-ish jitter in [50%, 100%] of the computed delay — spreads retries
+        # without ever collapsing the backoff to ~0.
+        delay = delay * (0.5 + random.random() * 0.5)
+    return delay
+
+
+def _retry_after_or_backoff(response: httpx.Response, retry_index: int) -> float:
+    """Honor a numeric ``Retry-After`` header (clamped to the cap); else backoff.
+
+    APIM commonly answers 429/503 with ``Retry-After``.  Ignoring it either
+    under-waits (keeps getting throttled) or over-waits.  Only the delta-seconds
+    form is honored; the HTTP-date form falls back to exponential backoff.
+    """
+    try:
+        raw = response.headers.get("Retry-After")
+    except (AttributeError, TypeError):  # defensive: non-httpx mock response
+        raw = None
+    if raw:
+        try:
+            secs = float(raw)
+        except (ValueError, TypeError):
+            secs = -1.0
+        if secs >= 0:
+            return min(secs, _BACKOFF_MAX_S)
+    return _backoff_delay(retry_index)
+
+
 def run_upload(
     sessions: list[tuple[Path, dict[str, Any]]],
     server_url: str,
@@ -106,6 +192,8 @@ def run_upload(
     *,
     auth_strategy: AuthStrategy | None = None,
     replay: bool = True,
+    max_retries: int = _DEFAULT_MAX_RETRIES,
+    timeout_s: float | None = None,
 ) -> UploadResult:
     """Replay all events from *sessions* to the server.
 
@@ -148,14 +236,23 @@ def run_upload(
         auth_strategy = ApiKeyAuth(api_key)
 
     endpoint = f"{server_url}/events"
-    timeout = httpx.Timeout(connect=5.0, read=30.0, write=30.0, pool=5.0)
-    headers = auth_strategy.headers()
+    # timeout_s (when set via --timeout) tunes the read/write timeout — the dial an
+    # operator reaches for on a slow/variable link with large event payloads.  connect
+    # stays short (a slow *connect* is a real problem, not a payload-size one).
+    rw_timeout = timeout_s if timeout_s is not None else 30.0
+    timeout = httpx.Timeout(connect=5.0, read=rw_timeout, write=rw_timeout, pool=5.0)
     query_params: dict[str, str] | None = {"replay": "true"} if replay else None
+    # max_retries is the number of ADDITIONAL attempts after the first; guard
+    # against negatives so there is always at least one POST (never a silent skip).
+    max_retries = max(0, max_retries)
 
     total_events_uploaded = 0
     total_sessions_uploaded = 0
 
-    with httpx.Client(headers=headers, timeout=timeout) as client:
+    # NOTE (issue #338): auth headers are fetched PER attempt inside the loop
+    # (not baked into the client here), so a long run that crosses the Entra
+    # token-expiry boundary transparently picks up a refreshed bearer token.
+    with httpx.Client(timeout=timeout) as client:
         for session_dir, metadata in sessions:
             session_id: str = metadata["session_id"]
             events_file = session_dir / "events.jsonl"
@@ -202,36 +299,111 @@ def run_upload(
 
                     payload = build_payload(event, workspace, data)
 
-                    try:
-                        response = client.post(endpoint, json=payload, params=query_params)
-                    except httpx.HTTPError as exc:
-                        tracker.mark_failed(
-                            session_id=session_id,
-                            event_index=event_index,
-                            http_status=0,
-                            error=str(exc),
-                        )
-                        return UploadResult(
-                            success=False,
-                            sessions_uploaded=total_sessions_uploaded,
-                            events_uploaded=total_events_uploaded,
-                            error=str(exc),
-                            failed_at={
-                                "session_id": session_id,
-                                "event_index": event_index,
-                                "http_status": 0,
-                            },
-                        )
+                    # --- POST with bounded retry + exponential backoff (issue #338) ---
+                    # Transient failures (connection errors, timeouts, 5xx, 429) are
+                    # retried up to *max_retries* times; permanent failures (4xx other
+                    # than 429, 3xx) and an exhausted retry budget fail loud exactly as
+                    # before.  tracker.event_sent()/mark_failed() fire ONCE per event on
+                    # the terminal outcome — never per attempt (so progress.json never
+                    # flips to 'failed' mid-retry, and sent-counts never over-count).
+                    retry_index = 0
+                    while True:
+                        # Fetch the auth header for THIS attempt so a retry that crosses
+                        # the token-expiry margin transparently gets a refreshed token.
+                        # headers() can raise (unusable API key -> ValueError; credential
+                        # failure -> azure error) — neither is an httpx.HTTPError, so guard
+                        # it explicitly and fail loud rather than crash the run mid-batch.
+                        try:
+                            request_headers = auth_strategy.headers()
+                        except Exception as exc:  # noqa: BLE001 - auth failure must fail loud, not crash
+                            error_msg = f"auth header error: {exc}"
+                            tracker.mark_failed(
+                                session_id=session_id,
+                                event_index=event_index,
+                                http_status=0,
+                                error=error_msg,
+                            )
+                            return UploadResult(
+                                success=False,
+                                sessions_uploaded=total_sessions_uploaded,
+                                events_uploaded=total_events_uploaded,
+                                error=error_msg,
+                                failed_at={
+                                    "session_id": session_id,
+                                    "event_index": event_index,
+                                    "http_status": 0,
+                                },
+                            )
 
-                    if response.status_code < 200 or response.status_code >= 300:
+                        try:
+                            response = client.post(
+                                endpoint,
+                                json=payload,
+                                params=query_params,
+                                headers=request_headers,
+                            )
+                        except httpx.HTTPError as exc:
+                            # Transport-level error.  Genuinely transient ones (connection
+                            # reset, timeout) are retried; PERMANENT ones (DNS resolution,
+                            # TLS/cert failure) never succeed on retry, so fail them fast
+                            # instead of burning the whole backoff budget on a dead host.
+                            if not _is_fatal_transport_error(exc) and retry_index < max_retries:
+                                delay = _backoff_delay(retry_index)
+                                print(
+                                    f"WARNING: transient network error uploading session "
+                                    f"{session_id!r} event {event_index} "
+                                    f"(attempt {retry_index + 1}/{max_retries + 1}): {exc}; "
+                                    f"retrying in {delay:.1f}s",
+                                    file=sys.stderr,
+                                )
+                                time.sleep(delay)
+                                retry_index += 1
+                                continue
+                            tracker.mark_failed(
+                                session_id=session_id,
+                                event_index=event_index,
+                                http_status=0,
+                                error=str(exc),
+                            )
+                            return UploadResult(
+                                success=False,
+                                sessions_uploaded=total_sessions_uploaded,
+                                events_uploaded=total_events_uploaded,
+                                error=str(exc),
+                                failed_at={
+                                    "session_id": session_id,
+                                    "event_index": event_index,
+                                    "http_status": 0,
+                                },
+                            )
+
+                        status_code = response.status_code
+                        if 200 <= status_code < 300:
+                            break  # delivered
+
+                        # Non-2xx: retry only transient statuses, and only while budget remains.
+                        if _is_transient_status(status_code) and retry_index < max_retries:
+                            delay = _retry_after_or_backoff(response, retry_index)
+                            print(
+                                f"WARNING: HTTP {status_code} uploading session "
+                                f"{session_id!r} event {event_index} "
+                                f"(attempt {retry_index + 1}/{max_retries + 1}); "
+                                f"retrying in {delay:.1f}s",
+                                file=sys.stderr,
+                            )
+                            time.sleep(delay)
+                            retry_index += 1
+                            continue
+
+                        # Permanent failure, or transient budget exhausted — fail loud.
                         body = response.text[:200].strip() if response.text else ""
-                        error_msg = f"HTTP {response.status_code} from {endpoint}" + (
+                        error_msg = f"HTTP {status_code} from {endpoint}" + (
                             f": {body}" if body else ""
                         )
                         tracker.mark_failed(
                             session_id=session_id,
                             event_index=event_index,
-                            http_status=response.status_code,
+                            http_status=status_code,
                             error=error_msg,
                         )
                         return UploadResult(
@@ -242,7 +414,7 @@ def run_upload(
                             failed_at={
                                 "session_id": session_id,
                                 "event_index": event_index,
-                                "http_status": response.status_code,
+                                "http_status": status_code,
                             },
                         )
 

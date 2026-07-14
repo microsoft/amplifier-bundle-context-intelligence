@@ -106,8 +106,10 @@ class TestRunUploadWithAuthStrategy:
                 auth_strategy=strategy,
             )
 
-        _, init_kwargs = mock_cls.call_args
-        assert init_kwargs["headers"] == {"Authorization": "Bearer my-entra-token"}
+        # Issue #338: headers are sent PER REQUEST (so token refresh can fire
+        # mid-run), not baked into the httpx.Client constructor.
+        post_kwargs = mock_client.post.call_args.kwargs
+        assert post_kwargs["headers"] == {"Authorization": "Bearer my-entra-token"}
 
     def test_no_strategy_derives_api_key_auth(self, tmp_path: Path) -> None:
         """When auth_strategy is None, ApiKeyAuth(api_key) is derived — backward compat."""
@@ -128,11 +130,17 @@ class TestRunUploadWithAuthStrategy:
                 tracker=tracker,
             )
 
-        _, init_kwargs = mock_cls.call_args
-        assert init_kwargs["headers"] == {"Authorization": "Bearer legacy-key"}
+        # Issue #338: header is sent per request, not baked into the client.
+        post_kwargs = mock_client.post.call_args.kwargs
+        assert post_kwargs["headers"] == {"Authorization": "Bearer legacy-key"}
 
-    def test_strategy_headers_called_once_at_client_construction(self, tmp_path: Path) -> None:
-        """The strategy's headers() is called once, at httpx.Client construction."""
+    def test_strategy_headers_fetched_per_request(self, tmp_path: Path) -> None:
+        """Issue #338: the strategy's headers() is fetched PER request, not baked once.
+
+        The Authorization header must be attached to each ``client.post`` call (so a
+        long run can pick up a refreshed token mid-flight), NOT passed to the
+        ``httpx.Client`` constructor where it would freeze for the whole run.
+        """
         from context_intelligence.auth import ApiKeyAuth
 
         from amplifier_module_tool_context_intelligence_upload.uploader import run_upload
@@ -154,10 +162,13 @@ class TestRunUploadWithAuthStrategy:
                 auth_strategy=strategy,
             )
 
-        # httpx.Client is constructed once; headers kwarg should contain strategy headers
-        assert mock_cls.call_count == 1
-        _, kwargs = mock_cls.call_args
-        assert kwargs.get("headers") == {"Authorization": "Bearer test-static"}
+        # The header is NOT baked into the client constructor...
+        _, init_kwargs = mock_cls.call_args
+        assert "headers" not in init_kwargs or init_kwargs.get("headers") is None
+        # ...it is attached to every POST (3 events -> 3 posts, each carrying it).
+        assert mock_client.post.call_count == 3
+        for call in mock_client.post.call_args_list:
+            assert call.kwargs.get("headers") == {"Authorization": "Bearer test-static"}
 
 
 # ---------------------------------------------------------------------------
