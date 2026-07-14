@@ -1,0 +1,52 @@
+digraph AgentCooccurrence {
+  rankdir=TB; bgcolor="white"; nodesep=0.35; ranksep=0.7; splines=true;
+  node [shape=box, style="filled,rounded", fontname="Helvetica", fontsize=11, penwidth=1.2];
+  edge [fontname="Helvetica", fontsize=8, dir=none];
+  labelloc="t"; fontsize=15; fontname="Helvetica-Bold";
+  label="Agent co-occurrence -> GDS Louvain communities + PageRank hubs (private, 43 agents)";
+
+  // hubs (top rank) -- connective glue, top PageRank
+  { rank=same;
+    gitops   [label="git-ops\nPageRank 5.55", fillcolor="#f59e0b", fontsize=13];
+    explorer [label="explorer\nPageRank 5.50", fillcolor="#f59e0b", fontsize=13];
+    builder  [label="modular-builder\nPageRank 3.11", fillcolor="#fbbf24", fontsize=12];
+  }
+
+  subgraph cluster_c3 {
+    label="Community 3 — foundation build/investigate core (19)"; fontsize=10;
+    style="rounded,filled"; fillcolor="#f0fdf4"; color="#86efac";
+    zen [label="zen-architect", fillcolor="#bbf7d0"];
+    bughunt [label="bug-hunter", fillcolor="#bbf7d0"];
+    ganalyst [label="graph-analyst", fillcolor="#bbf7d0"];
+    dtu [label="dtu-profile-builder", fillcolor="#bbf7d0"];
+    sessan [label="session-analyst", fillcolor="#bbf7d0"];
+  }
+  subgraph cluster_c11 {
+    label="Community 11 — superpowers TDD pipeline (14)"; fontsize=10;
+    style="rounded,filled"; fillcolor="#eff6ff"; color="#93c5fd";
+    impl [label="implementer", fillcolor="#bfdbfe"];
+    plan [label="plan-writer", fillcolor="#bfdbfe"];
+    crev [label="code-reviewer", fillcolor="#bfdbfe"];
+    fileops [label="file-ops", fillcolor="#bfdbfe"];
+  }
+  subgraph cluster_c23 {
+    label="Community 23 — research / expert consult (6)"; fontsize=10;
+    style="rounded,filled"; fillcolor="#faf5ff"; color="#d8b4fe";
+    webres [label="web-research", fillcolor="#e9d5ff"];
+    setupdtu [label="setup-digital-twin", fillcolor="#e9d5ff"];
+    secg [label="security-guardian", fillcolor="#e9d5ff"];
+  }
+
+  // top co-occurring edges (weights = sessions together)
+  explorer -> gitops  [label="69", penwidth=4.0, color="#334155"];
+  gitops -> builder   [label="34", penwidth=2.6, color="#334155"];
+  explorer -> builder [label="32", penwidth=2.5, color="#334155"];
+  bughunt -> gitops   [label="21", penwidth=1.8, color="#64748b"];
+  setupdtu -> gitops  [label="17", penwidth=1.6, color="#64748b"];
+  ganalyst -> explorer[label="14", penwidth=1.4, color="#64748b"];
+
+  gitops -> zen [color="#a7f3d0"]; gitops -> sessan [color="#a7f3d0"]; explorer -> dtu [color="#a7f3d0"];
+  impl -> plan [color="#bfdbfe"]; impl -> crev [color="#bfdbfe"]; impl -> fileops [color="#bfdbfe"];
+  webres -> secg [color="#e9d5ff"];
+  builder -> impl [style=dashed, color="#cbd5e1"];
+}

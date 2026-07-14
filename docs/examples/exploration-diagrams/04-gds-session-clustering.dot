@@ -1,0 +1,42 @@
+digraph GdsSessionClustering {
+  rankdir=LR; bgcolor="white"; nodesep=0.35; ranksep=0.9;
+  node [fontname="Helvetica", fontsize=10];
+  edge [color="#64748b", fontname="Helvetica", fontsize=9];
+  labelloc="t"; fontsize=15; fontname="Helvetica-Bold";
+  label="GDS transformation: sessions -> TF-IDF tool-vectors -> kNN -> Louvain (19 communities, Q=0.862)";
+
+  // stage 1: raw graph (bipartite session-tool)
+  subgraph cluster_raw {
+    label="1. graph (read-only)"; style="rounded,filled"; fillcolor="#f8fafc"; color="#cbd5e1"; fontsize=10;
+    s1 [label="Session", shape=ellipse, style=filled, fillcolor="#e0e7ff"];
+    s2 [label="Session", shape=ellipse, style=filled, fillcolor="#e0e7ff"];
+    s3 [label="Session", shape=ellipse, style=filled, fillcolor="#e0e7ff"];
+    tb [label="bash",       shape=box, style="filled,rounded", fillcolor="#fee2e2"];
+    tr [label="read_file",  shape=box, style="filled,rounded", fillcolor="#fef9c3"];
+    tg [label="graph_query",shape=box, style="filled,rounded", fillcolor="#dcfce7"];
+    s1 -> tb [label="USES", fontsize=7]; s1 -> tr [fontsize=7];
+    s2 -> tb [fontsize=7]; s2 -> tg [fontsize=7];
+    s3 -> tr [fontsize=7]; s3 -> tb [fontsize=7];
+  }
+
+  // stage 2: TF-IDF vectors
+  vec [label="2. per-session\nTF-IDF tool vector\n(32 dims)\ndown-weights ubiquitous\nbash / read_file / todo", shape=box, style="filled,rounded", fillcolor="#ede9fe", color="#7c3aed"];
+
+  // stage 3: knn similarity graph
+  knn [label="3. gds.knn (cosine)\n2,030 nodes\n20,300 SIMILAR edges", shape=box, style="filled,rounded", fillcolor="#dbeafe", color="#2563eb"];
+
+  // stage 4: louvain communities
+  subgraph cluster_comm {
+    label="4. gds.louvain -> 19 workload communities"; style="rounded,filled"; fillcolor="#f0fdf4"; color="#86efac"; fontsize=10;
+    c1 [label="pure shell/ops\n344", shape=box, style="filled,rounded", fillcolor="#fecaca"];
+    c2 [label="edit+python\nimpl 158", shape=box, style="filled,rounded", fillcolor="#bfdbfe"];
+    c3 [label="grep/read\nrecon 165", shape=box, style="filled,rounded", fillcolor="#fde68a"];
+    c4 [label="delegate/todo\norchestration 156", shape=box, style="filled,rounded", fillcolor="#ddd6fe"];
+    c5 [label="graph_query\nanalysis 49", shape=box, style="filled,rounded", fillcolor="#bbf7d0"];
+    c6 [label="web research\n89", shape=box, style="filled,rounded", fillcolor="#fbcfe8"];
+  }
+
+  s1 -> vec [ltail=cluster_raw, style=bold]; 
+  vec -> knn [style=bold]; 
+  knn -> c1 [lhead=cluster_comm, style=bold];
+}
