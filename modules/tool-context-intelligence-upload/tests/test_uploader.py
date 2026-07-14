@@ -177,8 +177,13 @@ class TestUploadHappyPath:
 class TestUploadStopOnFailure:
     """Tests for run_upload — stop on failure scenarios."""
 
-    def test_stops_on_503(self, tmp_path: Path) -> None:
-        """Fail on 3rd call: events_uploaded=2, call_count=3."""
+    def test_stops_on_permanent_403(self, tmp_path: Path) -> None:
+        """A permanent 4xx (403) on the 3rd call aborts immediately: uploaded=2, calls=3.
+
+        (Issue #338: a *transient* status like 503 is now retried; this test uses a
+        permanent status to prove the whole-run-stops-on-failure behaviour is preserved
+        for errors retrying cannot fix.)
+        """
         events = _make_events(5)
         session_dir, metadata = _write_session(tmp_path, "abc", events)
         sessions = [(session_dir, metadata)]
@@ -189,7 +194,7 @@ class TestUploadStopOnFailure:
         def side_effect(url: str, **kwargs: Any) -> MagicMock:
             post_calls.append(1)
             if len(post_calls) == 3:
-                return _mock_response(503)
+                return _mock_response(403)
             return _mock_response(200)
 
         with patch("httpx.Client") as mock_client_cls:
@@ -204,7 +209,11 @@ class TestUploadStopOnFailure:
         assert mock_client.post.call_count == 3
 
     def test_failed_at_populated_correctly(self, tmp_path: Path) -> None:
-        """status='failed', failed_at has session_id, event_index=2, http_status=503."""
+        """status='failed', failed_at has session_id, event_index=2, http_status=403.
+
+        Uses a permanent 403 (not 503, which is now retried) so the run aborts at the
+        failing event with no retry noise.
+        """
         events = _make_events(5)
         session_dir, metadata = _write_session(tmp_path, "my-session", events)
         sessions = [(session_dir, metadata)]
@@ -215,7 +224,7 @@ class TestUploadStopOnFailure:
         def side_effect(url: str, **kwargs: Any) -> MagicMock:
             post_calls.append(1)
             if len(post_calls) == 3:
-                return _mock_response(503)
+                return _mock_response(403)
             return _mock_response(200)
 
         with patch("httpx.Client") as mock_client_cls:
@@ -230,7 +239,7 @@ class TestUploadStopOnFailure:
         assert result.failed_at is not None
         assert result.failed_at["session_id"] == "my-session"
         assert result.failed_at["event_index"] == 2
-        assert result.failed_at["http_status"] == 503
+        assert result.failed_at["http_status"] == 403
 
 
 # ---------------------------------------------------------------------------
@@ -332,8 +341,10 @@ class TestUploadUrlAndAuth:
 
             run_upload(sessions, "https://server", "sk-my-key", tracker)
 
-        _, kwargs = mock_client_cls.call_args
-        headers = kwargs.get("headers", {})
+        # Issue #338: the Authorization header is now sent PER REQUEST (so token
+        # refresh can fire mid-run), not baked into the httpx.Client constructor.
+        post_kwargs = mock_client.post.call_args.kwargs
+        headers = post_kwargs.get("headers", {})
         assert headers.get("Authorization") == "Bearer sk-my-key"
 
     def test_default_sends_replay_true_query_param(self, tmp_path: Path) -> None:
@@ -457,7 +468,9 @@ class TestUploadEdgeCases:
             mock_client_cls.return_value.__enter__.return_value = mock_client
             mock_client.post.side_effect = httpx.HTTPError("Connection refused")
 
-            result = run_upload(sessions, "https://server", "api-key", tracker)
+            # max_retries=0 → single attempt, so a persistent transport error fails
+            # immediately (no backoff sleeps in the unit test).
+            result = run_upload(sessions, "https://server", "api-key", tracker, max_retries=0)
 
         assert result.success is False
         assert result.error == "Connection refused"
@@ -609,7 +622,9 @@ class TestErrorMessageIncludesServerBody:
             mock_response.text = "Internal Server Error"
             mock_client.post.return_value = mock_response
 
-            result = run_upload(sessions, "https://server/", "key", tracker)
+            # 500 is transient (retried); max_retries=0 → single attempt so the test
+            # asserts the terminal error message without incurring backoff sleeps.
+            result = run_upload(sessions, "https://server/", "key", tracker, max_retries=0)
 
         assert result.success is False
         assert result.error is not None

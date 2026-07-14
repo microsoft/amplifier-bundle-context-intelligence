@@ -351,6 +351,34 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
     )
 
+    parser.add_argument(
+        "--max-retries",
+        type=int,
+        default=5,
+        metavar="N",
+        dest="max_retries",
+        help=(
+            "Number of ADDITIONAL retries after the first attempt for transient "
+            "failures (connection errors, timeouts, HTTP 5xx, HTTP 429) using "
+            "exponential backoff (default: 5, i.e. up to 6 attempts per event). "
+            "Permanent failures (4xx other than 429, and DNS/TLS errors) fail "
+            "immediately. Set 0 to disable retries."
+        ),
+    )
+
+    parser.add_argument(
+        "--timeout",
+        type=float,
+        default=None,
+        metavar="SECONDS",
+        dest="timeout_s",
+        help=(
+            "Read/write HTTP timeout in seconds (default: 30). Increase for a slow "
+            "or variable link with large event payloads; the connect timeout is "
+            "unaffected."
+        ),
+    )
+
     # Auth flags
     parser.add_argument(
         "--auth-mode",
@@ -499,6 +527,8 @@ def main() -> None:
         event_delay_s=args.event_delay_ms / 1000.0,
         auth_strategy=auth_strategy,
         replay=not args.no_replay,
+        max_retries=args.max_retries,
+        timeout_s=args.timeout_s,
     )
 
     # 7. Write result JSON to stdout
