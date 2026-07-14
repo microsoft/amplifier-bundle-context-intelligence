@@ -3,16 +3,18 @@ name: context-intelligence-gds
 description: >
   Use when an analysis over the context-intelligence graph is about to be written as
   naive Cypher — reach for Neo4j GDS (Graph Data Science) or APOC instead when the
-  question is really pathfinding, reachability, centrality/influence, community/
-  clustering, similarity, or a variable-length multi-hop traversal. Names the
+  question is really a complex topology search: pathfinding, reachability,
+  centrality/influence, community/clustering, topological/structural similarity, or
+  finding similar event PATHS / trajectories (with or without a time dimension). Names the
   advantages of the graph-data-science package and the best-fit scenarios for it, so
   you stop hand-rolling traversals and re-deriving structure one hop at a time. This
   is the WHEN/WHY layer; the graph-query skill's "Push Work to the Database" section
   is the HOW.
 license: MIT
 metadata:
-  version: "1.0.0"
+  version: "1.1.0"
   changelog:
+    - "1.1.0: Added the 'Complex topology searches' section — centrality, topological/structural similarity (nodeSimilarity/KNN/FastRP embeddings), and similar event PATHS / trajectories with-or-without a time dimension (set-similarity vs transition-signature), plus pathfinding and a non-lineage projection recipe. These are the hard searches the skill exists to route off naive Cypher."
     - "1.0.0: Initial — GDS/APOC scenario-selection and advantages, avoid-naive-Cypher decision map, three reusable primitives tuned to this graph."
 ---
 
@@ -78,6 +80,61 @@ Match the *question shape* to the tool. This is the core of the skill.
 | **Reach a JSON field inside `Event.data`** | `e.data.working_dir` (raises a type error) | `apoc.convert.fromJsonMap(e.data).working_dir` | correct *and* lean — see graph-query §8's authoritative pattern |
 | **Operate over a known set of ids** | 50-id `IN [ … ]` literal | pass `$ids` and `UNWIND $ids AS id` | one reusable shape; for heavy scans, `apoc.periodic.iterate` |
 | **Consecutive-pair math (inter-event gaps)** | `UNWIND range(0,size-2)` | `apoc.coll.pairsMin(list)` | expresses the intent directly |
+
+---
+
+## Complex topology searches — the hard ones this skill exists for
+
+These are the searches naive Cypher either **cannot express** or does at O(n²) with
+wrong/approximate results. When the question is one of these, do NOT hand-roll it —
+project the right graph and run the algorithm.
+
+**1. Centrality / influence** — "which sessions, agents, or tools are structurally most important?"
+- `gds.pageRank` · `gds.betweenness` · `gds.degree` · `gds.closeness` · `gds.eigenvector`.
+- Project the relevant graph (`Session`/`FORKED` for delegation influence; a tool
+  co-occurrence graph for tool influence), stream, roll up by the property you care
+  about, `gds.graph.drop`.
+
+**2. Topological / structural similarity** — "which sessions are shaped alike?"
+- **By shared neighbors** (same tools/skills/agents used): project a **bipartite**
+  `Session → Tool` (or `→Skill`/`→Agent`) graph → `gds.nodeSimilarity` (Jaccard/overlap)
+  or `gds.knn`.
+- **By structural role** (behave alike even without sharing exact neighbors):
+  `gds.fastRP` (or `gds.node2vec`) node embeddings → `gds.knn` for nearest structural
+  neighbors. This finds role-equivalent sessions.
+
+**3. Similar event PATHS / trajectories — the sequence question, with or without time**
+This is the "find similar paths of events" search. The time dimension decides the tool:
+- **WITHOUT time (bag of steps):** reduce each session to its *multiset* of event/tool
+  types, then `gds.nodeSimilarity`/`gds.knn` over the `Session → Tool` projection. Order
+  is ignored — "used A, B, C" matches "used C, B, A".
+- **WITH time (ordered trajectory):** order matters, so build the ordering first. Sort
+  each session's events by `started_at`, form consecutive pairs with
+  `apoc.coll.pairsMin(ordered_list)`, and materialise a **transition signature** —
+  `(:Session)-[:HAS_TRANSITION]->(:TypePair {a,b})`. Then either `gds.nodeSimilarity`
+  over that transition projection, or `gds.fastRP` + `gds.knn` to cluster whole
+  trajectories. This distinguishes `A→B→C` from `A→C→B`, which set-similarity cannot.
+- Extract one session's ordered path with `apoc.path.expandConfig` or a time-ordered
+  `MATCH` — never a client-side reconstruction.
+
+**4. Pathfinding / reachability** — shortest, k-shortest, all-reachable.
+- `gds.shortestPath.dijkstra` · `gds.allShortestPaths` · Yen's k-shortest ·
+  `gds.bfs`/`gds.dfs`; or `apoc.path.expandConfig` for filtered reach.
+
+**Projection recipe (similarity/trajectory graphs are not stored edges — build them):**
+```cypher
+// bipartite Session→ToolCall for similarity (Cypher projection, GDS 2.x)
+// confirm the Session→ToolCall reach against the graph-query skill / live schema first
+CALL gds.graph.project.cypher('sess-tool',
+  'MATCH (n) WHERE n:Session OR n:ToolCall RETURN id(n) AS id',
+  'MATCH (s:Session)-[:HAS_EXECUTION|HAS_PART*1..3]->(tc:ToolCall)
+   RETURN id(s) AS source, id(tc) AS target');
+CALL gds.nodeSimilarity.stream('sess-tool')
+  YIELD node1, node2, similarity
+RETURN gds.util.asNode(node1).node_id AS a, gds.util.asNode(node2).node_id AS b, similarity
+ORDER BY similarity DESC LIMIT 20;
+CALL gds.graph.drop('sess-tool') YIELD graphName;   // always release (in-memory only, no data touched)
+```
 
 ---
 
