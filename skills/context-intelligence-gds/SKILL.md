@@ -12,8 +12,9 @@ description: >
   is the HOW.
 license: MIT
 metadata:
-  version: "1.1.0"
+  version: "1.2.0"
   changelog:
+    - "1.2.0: Lifted patterns from a real graph exploration — TF-IDF weighting to defeat glue-tool dominance in similarity; read-only vector-property gds.knn fallback (no bipartite edges); a derived co-occurrence/teaming projection (distinct from the edge-less Agent-node dead end); apoc.map.fromPairs/apoc.coll.sort as a fourth primitive (in-graph frequency map); a read-only .stream/.stats vs .write/.mutate guardrail; and a 'When GDS itself isn't enough' boundary (structure vs intent → escalate to LLM embeddings)."
     - "1.1.0: Added the 'Complex topology searches' section — centrality, topological/structural similarity (nodeSimilarity/KNN/FastRP embeddings), and similar event PATHS / trajectories with-or-without a time dimension (set-similarity vs transition-signature), plus pathfinding and a non-lineage projection recipe. These are the hard searches the skill exists to route off naive Cypher."
     - "1.0.0: Initial — GDS/APOC scenario-selection and advantages, avoid-naive-Cypher decision map, three reusable primitives tuned to this graph."
 ---
@@ -102,6 +103,15 @@ project the right graph and run the algorithm.
 - **By structural role** (behave alike even without sharing exact neighbors):
   `gds.fastRP` (or `gds.node2vec`) node embeddings → `gds.knn` for nearest structural
   neighbors. This finds role-equivalent sessions.
+- **Weight the vector before you compare it.** Raw tool-usage counts are dominated by glue
+  tools (`bash`, `read_file`, `todo`) — un-weighted, *every* session looks similar and the
+  result is noise. Down-weight ubiquitous tools with a TF-IDF weighting (the same job
+  `fastRP` otherwise buys you), built in-graph with `apoc.map.fromPairs(collect([tool_name, count]))`.
+- **Read-only fallback — no bipartite edges needed.** When the store is read-only and you
+  can't materialise `Session→Tool` edges, compute the weighted vector as a **node property**
+  inside the Cypher projection and run `gds.knn(nodeProperties: ['toolVector'])` directly on
+  it — same answer, no derived edges. (General principle: when an algorithm's naive input is
+  wrong or unavailable, reshape the input in the projection before reaching for a fancier algorithm.)
 
 **3. Similar event PATHS / trajectories — the sequence question, with or without time**
 This is the "find similar paths of events" search. The time dimension decides the tool:
@@ -136,9 +146,24 @@ ORDER BY similarity DESC LIMIT 20;
 CALL gds.graph.drop('sess-tool') YIELD graphName;   // always release (in-memory only, no data touched)
 ```
 
+**Deriving a graph that isn't stored (co-occurrence / teaming).** "Which agents work
+together?" has no stored `Agent→Agent` edge — but you can *derive* one from shared group
+membership (e.g. agents whose sessions share a parent), then run community/centrality on the
+derived graph. This is valid and **different from projecting the real (edge-less) `Agent`
+nodes, which is the dead end** graph-query §8 warns about — confirm the grouping edge against
+the live schema first:
+```cypher
+CALL gds.graph.project.cypher('agent-team',
+  'MATCH (s:Session) WHERE s.agent IS NOT NULL RETURN id(s) AS id, s.agent AS agent',
+  'MATCH (a:Session)<-[:FORKED]-(p)-[:FORKED]->(b:Session)
+   WHERE a.agent < b.agent RETURN id(a) AS source, id(b) AS target, count(*) AS weight');
+CALL gds.louvain.stream('agent-team') YIELD nodeId, communityId RETURN communityId, count(*) LIMIT 20;
+CALL gds.graph.drop('agent-team') YIELD graphName;
+```
+
 ---
 
-## Three primitives that replace most naive Cypher here
+## Four primitives that replace most naive Cypher here
 
 Default to these instead of re-deriving structure:
 
@@ -149,6 +174,10 @@ Default to these instead of re-deriving structure:
    with `apoc.convert.fromJsonMap` and return only the scalar (graph-query §8 is authoritative).
 3. **The parameterized id-set** — `UNWIND $ids`, never a pasted literal list. Collapses a
    long tail of "unique" queries into one reused shape.
+4. **The in-graph frequency map** — `apoc.map.fromPairs(collect([key, count]))` builds a
+   per-node weight/vector map server-side (feeds TF-IDF `gds.knn` node properties). When
+   collecting a set as a grouping key, canonicalise it first with `apoc.coll.sort` so `[A,B]`
+   and `[B,A]` group as one.
 
 ---
 
@@ -166,11 +195,27 @@ client-side pull, or reconstructing an algorithm by hand** — not for a plain a
 
 ---
 
+## When GDS itself isn't enough (the upper bound)
+
+GDS answers **structural / behavioral** questions — how a session was executed, who is
+central, what clusters by shape. It does **not** answer **intent** questions — what a session
+was *for*. Tool-vector similarity clusters the *machinery*, not the *mission*. The tell: if you
+cross-tab a GDS cluster against the human's actual objective and the same goal is scattered
+across most clusters, stop iterating on GDS. Export the bounded inline text (e.g.
+`Prompt.prompt`) and run LLM-embedding + k-means instead — a different tool for a different
+question shape. Escalating *to* GDS is right; escalating *past* it when the question is
+semantic is the next move, not more algorithms.
+
+---
+
 ## Guardrails
 
 - **Probe first:** `RETURN gds.version()` / `CALL gds.list()`; `CALL apoc.help('path')`.
   Both plugins run on the live target (Neo4j Community — GDS works).
 - **Always release projections:** `gds.graph.drop('g')` when done.
+- **Behind a read-only-enforcing endpoint, use `.stream` / scalar `.stats`.** The `.write`/
+  `.mutate` variants can be rejected (HTTP 500) even though they only touch the in-memory
+  catalog, not the store.
 - **Bound the returned result** even when the compute is server-side — `count` / aggregate
   / `LIMIT`. Pushing work to the DB does not excuse an unbounded `RETURN`.
 - **Project the labels that exist** — `Session` (nodes), `FORKED` (relationships). Agents
