@@ -1,0 +1,24 @@
+digraph MethodEscalation {
+  rankdir=LR;
+  bgcolor="white";
+  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=11, margin="0.18,0.10"];
+  edge [fontname="Helvetica", fontsize=9, color="#555555"];
+  labelloc="t"; fontsize=16; fontname="Helvetica-Bold";
+  label="How the search escalated: plain question -> Cypher -> GDS -> Embeddings";
+
+  q     [label="Plain-language\nquestion\n(\"who works with whom?\")", fillcolor="#fef3c7", color="#d97706"];
+  cy    [label="Rung 1: CYPHER\ngraph queries\n(co-occurrence,\ndelegation, tool profiles)", fillcolor="#dbeafe", color="#2563eb"];
+  gds   [label="Rung 2: NEO4J GDS\nproject.cypher + knn +\nlouvain + pageRank\n(+ APOC helpers)", fillcolor="#dcfce7", color="#16a34a"];
+  neg   [label="Rung 3: negative result\ntool-behaviour clusters\n!= objectives\n(machinery, not mission)", fillcolor="#ffe4e6", color="#e11d48"];
+  emb   [label="Rung 4: EMBEDDINGS\nOpenAI text-embedding-3-small\n(1536-d) + k-means\non 3,199 first-prompts", fillcolor="#ede9fe", color="#7c3aed"];
+  disc  [label="DISCOVERY\ncoherent objective clusters\n(review / implement / git / build)", shape=box, style="rounded,filled,bold", fillcolor="#fde68a", color="#b45309"];
+
+  q -> cy -> gds -> neg -> emb -> disc;
+
+  steer1 [label="steering:\n\"any root/forked/sub session\"", shape=note, fillcolor="#f1f5f9", color="#94a3b8", fontsize=9];
+  steer2 [label="steering:\n\"neo4j community, GDS free\"\n+ \"use the private destination\"", shape=note, fillcolor="#f1f5f9", color="#94a3b8", fontsize=9];
+  steer3 [label="steering:\n\"read the inline prompts;\nuse OpenAI models\"", shape=note, fillcolor="#f1f5f9", color="#94a3b8", fontsize=9];
+  steer1 -> cy  [style=dashed, arrowhead=none, color="#94a3b8"];
+  steer2 -> gds [style=dashed, arrowhead=none, color="#94a3b8"];
+  steer3 -> emb [style=dashed, arrowhead=none, color="#94a3b8"];
+}
