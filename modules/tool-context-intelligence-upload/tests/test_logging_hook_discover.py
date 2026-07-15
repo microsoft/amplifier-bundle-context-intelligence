@@ -112,6 +112,41 @@ def test_unresolvable_working_dir_is_session_level_signal(
     assert captured.err.count("WARNING") == 1
 
 
+def test_legacy_file_with_more_than_sniff_bound_junk_leading_records_is_counted(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A file that IS legacy but whose first 6+ (more than _SNIFF_BOUND=5)
+    leading records are corrupt/non-schema must not vanish from every
+    counter -- it is skipped as ``unclassified`` with a stderr warning
+    rather than silently dropped (regression for the uncounted-drop bug:
+    it used to fail the bounded sniff and disappear from candidates_seen,
+    live_skipped, AND unresolved_workspace alike)."""
+    session_dir = tmp_path / "sessions" / "trunc1"
+    session_dir.mkdir(parents=True)
+    junk_lines = ["NOT JSON GARBAGE"] * 6
+    legit_records = [
+        make_legacy_record(session_id="trunc1"),
+        make_legacy_record(event="session:end", session_id="trunc1"),
+    ]
+    lines = junk_lines + [json.dumps(r) for r in legit_records]
+    (session_dir / "events.jsonl").write_text("\n".join(lines) + "\n", encoding="utf-8")
+    (session_dir / "metadata.json").write_text(
+        json.dumps({"working_dir": "/Users/me/project"}), encoding="utf-8"
+    )
+
+    result = discover_legacy(tmp_path)
+
+    assert result.sessions == []
+    assert result.candidates_seen == 0
+    assert result.live_skipped == 0
+    assert result.unresolved_workspace == 0
+    assert result.unclassified == 1
+    assert str(session_dir) in result.unclassified_ids
+    captured = capsys.readouterr()
+    assert "unclassified" in captured.err
+    assert "inconclusive" in captured.err
+
+
 def test_read_working_dir_precedence_metadata_wins(tmp_path: Path) -> None:
     """metadata.json working_dir wins over a session:start event's working_dir
     (read_working_dir rule 1: metadata.json precedence, existing Phase 1 rule) (TB-8).

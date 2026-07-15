@@ -83,6 +83,12 @@ class LegacyDiscovery:
     live_skipped: int = 0
     unresolved_workspace: int = 0
     live_skipped_ids: list[str] = field(default_factory=list)
+    #: Candidates whose bounded schema sniff was inconclusive (no legacy
+    #: match within the first _SNIFF_BOUND records, but the file has more
+    #: records beyond that bound) -- counted + warned rather than silently
+    #: dropped. See :func:`_sniff_legacy_schema`.
+    unclassified: int = 0
+    unclassified_ids: list[str] = field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
@@ -134,23 +140,55 @@ def _matches_legacy_schema(record: dict[str, Any]) -> bool:
     return major == _SUPPORTED_SCHEMA_MAJOR
 
 
+def _sniff_legacy_schema(path: Path) -> tuple[bool, bool]:
+    """Sniff *path* for the legacy schema, bounded to the first
+    :data:`_SNIFF_BOUND` records. Returns ``(matched, truncated)``:
+
+    * ``matched`` -- True if a record within the first :data:`_SNIFF_BOUND`
+      records carries the legacy schema (see :func:`_matches_legacy_schema`).
+      Identical discrimination semantics to the prior ``_is_legacy_events``.
+    * ``truncated`` -- True only when ``matched`` is False AND the file has
+      at least one more record beyond the sniff bound -- i.e. the negative
+      result is *inconclusive*: the sniff never saw the rest of the file and
+      cannot rule out a legacy record further in (this is exactly the
+      "legacy file with 6+ corrupt/non-schema leading records" case). False
+      when the file's records were fully exhausted within the bound, making
+      "not legacy" a definitive conclusion (empty file, or a genuinely
+      unrelated/short file).
+
+    Peeking one record past the bound to distinguish "truncated" from
+    "exhausted" keeps the sniff O(1)-ish (not proportional to file size) --
+    it does not change the bound or the matching logic itself.
+    """
+    try:
+        records_seen = 0
+        for _, record in _iter_records(path):
+            if records_seen < _SNIFF_BOUND:
+                if record is not None and _matches_legacy_schema(record):
+                    return True, False
+                records_seen += 1
+                continue
+            # A record exists beyond the bound -- the negative result above
+            # is inconclusive, not definitive. No need to inspect its
+            # content; its mere presence is enough to mark this truncated.
+            return False, True
+    except OSError:
+        return False, False
+    return False, False
+
+
 def _is_legacy_events(path: Path) -> bool:
     """Return True if *path* is a legacy hooks-logging ``events.jsonl``.
 
     Bounded to the first :data:`_SNIFF_BOUND` records so a corrupt or
     unrelated leading line cannot hide a legitimate legacy record a few
     lines further down, without turning this into an unbounded scan of
-    (potentially huge) unrelated files.
+    (potentially huge) unrelated files. Thin wrapper around
+    :func:`_sniff_legacy_schema` that drops the ``truncated`` signal --
+    kept for callers that only need the plain match/no-match answer.
     """
-    try:
-        for i, (_, record) in enumerate(_iter_records(path)):
-            if i >= _SNIFF_BOUND:
-                break
-            if record is not None and _matches_legacy_schema(record):
-                return True
-    except OSError:
-        return False
-    return False
+    matched, _truncated = _sniff_legacy_schema(path)
+    return matched
 
 
 def _first_legacy_record(path: Path) -> dict[str, Any] | None:
@@ -224,6 +262,11 @@ def discover_legacy(target_path: Path) -> LegacyDiscovery:
       warning and counted in ``unresolved_workspace``.
     * Otherwise the workspace is derived exactly once (hygiene I) and
       stashed in the returned metadata's ``workspace`` key.
+    * A candidate whose bounded schema sniff is inconclusive (no legacy
+      match in the first :data:`_SNIFF_BOUND` records, but the file has
+      more records beyond that bound -- see :func:`_sniff_legacy_schema`)
+      is skipped with a stderr warning and counted in ``unclassified``
+      rather than silently vanishing from every counter.
 
     Emits a stderr warning if zero candidates were discovered at all (UA-4).
     """
@@ -232,13 +275,26 @@ def discover_legacy(target_path: Path) -> LegacyDiscovery:
     live_skipped = 0
     unresolved_workspace = 0
     live_skipped_ids: list[str] = []
+    unclassified = 0
+    unclassified_ids: list[str] = []
 
     candidate_paths = sorted(
         p for p in target_path.rglob("events.jsonl") if not _is_ci_native_session(p.parent)
     )
 
     for events_path in candidate_paths:
-        if not _is_legacy_events(events_path):
+        matched, truncated = _sniff_legacy_schema(events_path)
+        if not matched:
+            if truncated:
+                print(
+                    f"WARNING: {events_path}: legacy-schema sniff inconclusive "
+                    f"(no match within the first {_SNIFF_BOUND} records, but the "
+                    "file has more records beyond the sniff bound), counting as "
+                    "unclassified rather than silently dropping",
+                    file=sys.stderr,
+                )
+                unclassified += 1
+                unclassified_ids.append(str(events_path.parent))
             continue
         candidates_seen += 1
 
@@ -297,6 +353,8 @@ def discover_legacy(target_path: Path) -> LegacyDiscovery:
         live_skipped=live_skipped,
         unresolved_workspace=unresolved_workspace,
         live_skipped_ids=live_skipped_ids,
+        unclassified=unclassified,
+        unclassified_ids=unclassified_ids,
     )
 
 

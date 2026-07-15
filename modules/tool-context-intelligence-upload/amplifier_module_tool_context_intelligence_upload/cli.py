@@ -589,7 +589,8 @@ def main() -> None:
         print(
             f"scope: format={args.format} discovered {len(sessions)} legacy session(s); "
             f"live-skipped={discovery.live_skipped}, "
-            f"unresolved-workspace={discovery.unresolved_workspace}",
+            f"unresolved-workspace={discovery.unresolved_workspace}, "
+            f"unclassified={discovery.unclassified}",
             file=sys.stderr,
         )
 
@@ -597,6 +598,14 @@ def main() -> None:
             print(
                 f"note: {discovery.live_skipped} live/in-progress session(s) skipped: "
                 f"{','.join(discovery.live_skipped_ids)}",
+                file=sys.stderr,
+            )
+
+        if discovery.unclassified:
+            print(
+                f"note: {discovery.unclassified} session(s) skipped as unclassified "
+                f"(schema sniff inconclusive, not silently dropped): "
+                f"{','.join(discovery.unclassified_ids)}",
                 file=sys.stderr,
             )
 
