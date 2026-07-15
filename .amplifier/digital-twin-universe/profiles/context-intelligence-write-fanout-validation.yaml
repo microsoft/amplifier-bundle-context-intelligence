@@ -25,23 +25,38 @@
 #   implemented. This profile uses only that -- the patch workaround is fully removed.)
 #
 # TOPOLOGY
-#   host: TWO real Context-Intelligence servers (each Neo4j + API), stood up via docker
-#         compose on distinct ports, reachable from the DTU at the Incus host-gateway IP
-#         (e.g. http://10.67.103.1:18001 and http://10.67.103.1:18002).
+#   host: TWO real Context-Intelligence servers (each Neo4j + API), each stood up
+#         NON-COMPOSE by launching this bundle's own context-intelligence-backend.yaml
+#         DTU profile TWICE on distinct HOST_PORTs -- two fully separate Incus
+#         containers, so events never cross. Both forwarded ports are reachable from
+#         THIS DTU at the Incus host-gateway IP (e.g. http://10.67.103.1:38001 and
+#         http://10.67.103.1:38002).
 #   DTU:  amplifier + the branch bundle; the hook config carries TWO named destinations,
 #         each include:["**"], so a single session fans out to both.
 #
 # HOW TO RUN
-#   # stand up TWO servers on the host (server repo docker-compose.yml; distinct ports +
-#   # data dirs + project names); confirm both:
-#   #   curl -sf http://10.67.103.1:18001/status ; curl -sf http://10.67.103.1:18002/status
+#   # stand up TWO backends first (see context-intelligence-backend.yaml for the full
+#   # non-compose recipe + pinned versions) -- distinct --name and HOST_PORT each:
+#   amplifier-digital-twin launch \
+#     .amplifier/digital-twin-universe/profiles/context-intelligence-backend.yaml \
+#     --name ci-backend-main --var HOST_PORT=38001 \
+#     --var NEO4J_PASSWORD=<pw-a> --var API_KEY=<token-a> \
+#     --var SERVER_REF=766a9691850e6d7c29e7d4e90b537e88e69736bf
+#   amplifier-digital-twin launch \
+#     .amplifier/digital-twin-universe/profiles/context-intelligence-backend.yaml \
+#     --name ci-backend-team --var HOST_PORT=38002 \
+#     --var NEO4J_PASSWORD=<pw-b> --var API_KEY=<token-b> \
+#     --var SERVER_REF=766a9691850e6d7c29e7d4e90b537e88e69736bf
+#   #   confirm both (find the Incus gateway IP via `incus list` / `ip route`):
+#   #     curl -sf http://<incus-gateway-ip>:38001/status
+#   #     curl -sf http://<incus-gateway-ip>:38002/status
 #   export GH_TOKEN=$(gh auth token)
 #   amplifier-digital-twin launch \
 #     .amplifier/digital-twin-universe/profiles/context-intelligence-write-fanout-validation.yaml \
 #     --name ci-write-fanout \
 #     --var gitea_host=http://localhost:10110 \
-#     --var server_a_url=http://10.67.103.1:18001 --var server_a_token=<TOKEN_A> \
-#     --var server_b_url=http://10.67.103.1:18002 --var server_b_token=<TOKEN_B> \
+#     --var server_a_url=http://<incus-gateway-ip>:38001 --var server_a_token=<token-a> \
+#     --var server_b_url=http://<incus-gateway-ip>:38002 --var server_b_token=<token-b> \
 #     --var workspace=ci-write-fanout
 #
 # WHAT IS PROVEN

@@ -15,9 +15,12 @@ import sys
 import uuid
 from pathlib import Path
 
+from .formats import FORMATS
+from .logging_hook_format import discover_legacy
 from .progress import ProgressTracker, progress_file_path
+from .reconciliation import reconciliation_summary
 from .session_graph import ScopeError, resolve_upload_sessions
-from .uploader import run_upload
+from .uploader import _count_lines, run_upload
 
 # ---------------------------------------------------------------------------
 # Compact help text
@@ -42,6 +45,8 @@ flags:
                        default: /tmp/context-intelligence-upload-{job_id}.json
   --event-delay-ms   Milliseconds to sleep between events (default: 0)
                        Use 50-200 to reduce Neo4j write pressure on the server
+  --format           context-intelligence (default) | logging-hook
+                       logging-hook = discover+transform legacy hooks-logging in memory
   --no-replay        Disable replay=true; re-enable server 7-day idempotency cache
                        default: off (every event is replayed unconditionally)
 """
@@ -94,6 +99,45 @@ PARAMETERS
       the server can accept them.
       Recommended range: 50–200 ms when uploading large session trees and the
       server reports Neo4j thread starvation warnings.
+
+  --format FORMAT       (optional, default: context-intelligence)
+      Input format to discover and ingest.
+
+      context-intelligence (default)
+          Today's behavior: discover native Context Intelligence session
+          trees and replay them.
+
+      logging-hook
+          Discover legacy hooks-logging sessions (schema {amplifier.log,
+          version 1.x}) and transform them in memory before POSTing to the
+          SAME /events path. Non-destructive: no files are written or
+          deleted on disk during discovery or transformation.
+
+          The legacy import always uses server dedup (replay=False,
+          idempotent — an aborted upload can be safely rerun). ``--no-replay``
+          does NOT apply to the logging-hook path and cannot disable dedup
+          for it; passing both flags together fails fast with exit code 2
+          before any discovery or upload happens.
+
+          Malformed lines, lines with an unknown schema major version, or
+          lines missing required fields are skipped with a warning.
+          Event names that cannot be mapped to a Context Intelligence event
+          type are counted separately (not treated as parse errors).
+          Live/in-progress sessions are skipped in their entirety. All of
+          these counts are reported in the reconciliation summary printed
+          to stderr at the end of the run.
+
+          If zero legacy sessions are discovered under --path, a warning is
+          printed to stderr before the run continues. Any live/in-progress
+          sessions that were skipped are also listed by session id (as a
+          stderr note) so they can be found and re-run later once complete.
+
+          Exit codes (logging-hook): 0 = clean (no skipped/unmapped/
+          live-skipped sessions), 3 = completed WITH issues (one or more
+          events were skipped or unmapped, or one or more sessions were
+          live-skipped -- see the reconciliation summary for counts),
+          2 = usage error (see EXIT CODES below). This is additive to the
+          default exit codes; the context-intelligence path never returns 3.
 
 METADATA VALIDATION
 -------------------
@@ -341,6 +385,19 @@ def _build_parser() -> argparse.ArgumentParser:
     )
 
     parser.add_argument(
+        "--format",
+        choices=["context-intelligence", "logging-hook"],
+        default="context-intelligence",
+        dest="format",
+        help=(
+            "Input format to discover and ingest. 'context-intelligence' (default) "
+            "is today's behavior. 'logging-hook' discovers and transforms legacy "
+            "hooks-logging events in memory (non-destructive) and ingests them "
+            "through the same /events path."
+        ),
+    )
+
+    parser.add_argument(
         "--no-replay",
         action="store_true",
         default=False,
@@ -471,28 +528,77 @@ def main() -> None:
         )
         sys.exit(2)
 
-    # 3. Resolve upload scope: descendants-only closure of sub-sessions.
-    #    Fails loud (exit 2) if nothing is discovered or the selected session
-    #    (single-session mode) cannot be identified.
-    try:
-        scope = resolve_upload_sessions(target_path)
-    except ScopeError as e:
-        print(f"error: {e}", file=sys.stderr)
-        sys.exit(2)
-
-    sessions = scope.sessions
-
-    print(
-        f"scope: mode={scope.mode} root(s)={','.join(scope.selected_root_ids)} "
-        f"uploading {scope.selected_count} of {scope.total_discovered} discovered session(s)",
-        file=sys.stderr,
-    )
-    if scope.dangling_parent_ids:
+    # 2b. DECISION C1 (loud reject): --no-replay is not valid with --format
+    #     logging-hook -- the legacy import always dedups, with no override.
+    #     Fail fast, before discovery or any upload.
+    if args.format == "logging-hook" and args.no_replay:
         print(
-            f"note: {len(scope.dangling_parent_ids)} parent session(s) not included "
-            f"will appear as placeholders until uploaded: {','.join(scope.dangling_parent_ids)}",
+            "error: --no-replay is not valid with --format logging-hook "
+            "(legacy import always dedups)",
             file=sys.stderr,
         )
+        sys.exit(2)
+
+    # 3. Select the discover/parse pair for --format, then run discovery.
+    parse_fn = FORMATS[args.format][1]
+
+    # live_sessions_skipped is only ever non-zero on the logging-hook branch
+    # below (discovery.live_skipped) -- the context-intelligence branch has
+    # no such concept, so it stays 0.
+    live_sessions_skipped = 0
+
+    if args.format == "context-intelligence":
+        # Resolve upload scope: descendants-only closure of sub-sessions.
+        # Fails loud (exit 2) if nothing is discovered or the selected session
+        # (single-session mode) cannot be identified.
+        try:
+            scope = resolve_upload_sessions(target_path)
+        except ScopeError as e:
+            print(f"error: {e}", file=sys.stderr)
+            sys.exit(2)
+
+        sessions = scope.sessions
+
+        print(
+            f"scope: mode={scope.mode} root(s)={','.join(scope.selected_root_ids)} "
+            f"uploading {scope.selected_count} of {scope.total_discovered} discovered session(s)",
+            file=sys.stderr,
+        )
+        if scope.dangling_parent_ids:
+            print(
+                f"note: {len(scope.dangling_parent_ids)} parent session(s) not included "
+                f"will appear as placeholders until uploaded: {','.join(scope.dangling_parent_ids)}",
+                file=sys.stderr,
+            )
+    else:
+        # logging-hook: discover legacy hooks-logging sessions directly
+        # (discover_legacy is used here for its stats; legacy_discover in
+        # FORMATS is the thin sessions-only adapter used by run_upload's
+        # own default-parse_fn fallback, not by main()).
+        discovery = discover_legacy(target_path)
+        sessions = discovery.sessions
+        live_sessions_skipped = discovery.live_skipped
+
+        if not sessions:
+            print(
+                f"warning: no legacy (hooks-logging) sessions found under {target_path} "
+                "\u2014 check --path and --format",
+                file=sys.stderr,
+            )
+
+        print(
+            f"scope: format={args.format} discovered {len(sessions)} legacy session(s); "
+            f"live-skipped={discovery.live_skipped}, "
+            f"unresolved-workspace={discovery.unresolved_workspace}",
+            file=sys.stderr,
+        )
+
+        if discovery.live_skipped:
+            print(
+                f"note: {discovery.live_skipped} live/in-progress session(s) skipped: "
+                f"{','.join(discovery.live_skipped_ids)}",
+                file=sys.stderr,
+            )
 
     # 4. Handle no sessions found (fallback guard; resolve_upload_sessions
     #    already raises ScopeError on empty discovery, but keep this as a
@@ -519,6 +625,10 @@ def main() -> None:
     )
 
     # 6. Run upload
+    # DECISION D2 (hard-lock): the logging-hook (legacy) path always dedups --
+    # replay=False unconditionally, with no --no-replay override (enforced
+    # above at step 2b). The context-intelligence path keeps today's behavior.
+    replay = False if args.format == "logging-hook" else not args.no_replay
     upload_result = run_upload(
         sessions=sessions,
         server_url=server_url,
@@ -526,13 +636,45 @@ def main() -> None:
         tracker=tracker,
         event_delay_s=args.event_delay_ms / 1000.0,
         auth_strategy=auth_strategy,
-        replay=not args.no_replay,
+        replay=replay,
         max_retries=args.max_retries,
         timeout_s=args.timeout_s,
+        parse_fn=parse_fn,
+    )
+
+    # 6b. Print the operator reconciliation summary -- independently-measured
+    # counts only (read is a fresh non-blank-line count from the events.jsonl
+    # files on disk, NOT a rederivation of ingested + skipped).
+    read_total = 0
+    for session_dir, _session_metadata in sessions:
+        events_file = session_dir / "events.jsonl"
+        if events_file.exists():
+            read_total += _count_lines(events_file)
+
+    print(
+        "reconciliation: "
+        + reconciliation_summary(
+            read=read_total,
+            ingested=upload_result.events_uploaded,
+            skipped=upload_result.events_skipped,
+            unmapped=upload_result.events_unmapped,
+            live_sessions_skipped=live_sessions_skipped,
+        ),
+        file=sys.stderr,
     )
 
     # 7. Write result JSON to stdout
     sys.stdout.write(json.dumps(upload_result.to_dict(), indent=2) + "\n")
 
-    # 8. Exit 0 on success, 1 on failure
-    sys.exit(0 if upload_result.success else 1)
+    # 8. Exit code. Default (context-intelligence) path: 0 on success, 1 on
+    #    failure -- byte-unchanged (GATE 2). logging-hook path additionally
+    #    distinguishes "completed WITH issues" (skipped/unmapped/live-skipped
+    #    sessions) from a fully clean run via exit code 3 (C4).
+    if not upload_result.success:
+        sys.exit(1)
+    if args.format == "logging-hook":
+        issues = (
+            upload_result.events_skipped + upload_result.events_unmapped + live_sessions_skipped
+        )
+        sys.exit(3 if issues else 0)
+    sys.exit(0)

@@ -31,6 +31,27 @@ def _fake_scope(
     )
 
 
+def _make_upload_result(sessions_uploaded: int = 1, events_uploaded: int = 0) -> MagicMock:
+    """Build a MagicMock standing in for run_upload()'s UploadResult return value.
+
+    events_skipped/events_unmapped are pinned to 0 (rather than left as
+    auto-speccing MagicMock attributes) because main()'s exit-code logic
+    (C4) sums them with discovery.live_skipped -- an unpinned MagicMock
+    supports arithmetic via its magic methods and would always be truthy,
+    silently forcing exit code 3 for every caller of this helper.
+    """
+    mock_result = MagicMock()
+    mock_result.success = True
+    mock_result.events_skipped = 0
+    mock_result.events_unmapped = 0
+    mock_result.to_dict.return_value = {
+        "status": "completed",
+        "sessions_uploaded": sessions_uploaded,
+        "events_uploaded": events_uploaded,
+    }
+    return mock_result
+
+
 # ---------------------------------------------------------------------------
 # -h compact help
 # ---------------------------------------------------------------------------
@@ -102,6 +123,68 @@ class TestNoReplayArgparse:
             ]
         )
         assert args.no_replay is True
+
+
+# ---------------------------------------------------------------------------
+# --format argparse
+# ---------------------------------------------------------------------------
+
+
+class TestFormatArgparse:
+    """The --format flag must be defined with correct argparse properties."""
+
+    def test_parser_accepts_format_flag(self):
+        from amplifier_module_tool_context_intelligence_upload.cli import _build_parser
+
+        args = _build_parser().parse_args(
+            [
+                "--path",
+                "/tmp",
+                "--server-url",
+                "http://localhost",
+                "--api-key",
+                "k",
+                "--format",
+                "logging-hook",
+            ]
+        )
+        assert args.format == "logging-hook"
+
+        default_args = _build_parser().parse_args(
+            ["--path", "/tmp", "--server-url", "http://localhost", "--api-key", "k"]
+        )
+        assert default_args.format == "context-intelligence"
+
+    def test_parser_rejects_unknown_format(self):
+        from amplifier_module_tool_context_intelligence_upload.cli import _build_parser
+
+        with pytest.raises(SystemExit) as exc_info:
+            _build_parser().parse_args(
+                [
+                    "--path",
+                    "/tmp",
+                    "--server-url",
+                    "http://localhost",
+                    "--api-key",
+                    "k",
+                    "--format",
+                    "bogus",
+                ]
+            )
+        assert exc_info.value.code == 2
+
+
+def test_help_mentions_format():
+    """Both _COMPACT_HELP and _DETAILED_HELP must document --format and logging-hook."""
+    from amplifier_module_tool_context_intelligence_upload.cli import (
+        _COMPACT_HELP,
+        _DETAILED_HELP,
+    )
+
+    assert "--format" in _COMPACT_HELP
+    assert "logging-hook" in _COMPACT_HELP
+    assert "--format" in _DETAILED_HELP
+    assert "logging-hook" in _DETAILED_HELP
 
 
 # ---------------------------------------------------------------------------
@@ -722,3 +805,644 @@ class TestScopeResolutionWiring:
         assert "error:" in captured.err
         assert "no context-intelligence sessions found" in captured.err
         assert captured.out == ""
+
+
+# ---------------------------------------------------------------------------
+# main() -- --server-url precedence over env-based default (DTU isolation)
+# ---------------------------------------------------------------------------
+
+
+class TestDtuServerUrlPrecedence:
+    """CLI --server-url must win over the env-based server URL default.
+
+    This locks the precedence property that dtu/verify.sh and its callers
+    (Tasks 6/8) rely on: when a Digital Twin Universe container runs the
+    upload CLI, the host's environment-based server URL default must NOT
+    leak in -- an explicit --server-url must always win.
+
+    NOTE ON NAMING: the task spec that requested this test named the env
+    var ``AMPLIFIER_CONTEXT_INTELLIGENCE_PRIVATE_SERVER_URL``. A grep across
+    this package (``PKG/``) confirms no such variable is read anywhere:
+
+        $ grep -rn "PRIVATE_SERVER_URL" amplifier-bundle-context-intelligence
+        (no matches)
+
+    The only env-based default that actually exists is
+    ``AMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_URL``, consulted by
+    ``context_intelligence.config.resolve_config`` (see
+    ``TestEnvVarConfigResolution`` above, which already covers the general
+    case). This test exercises that real env var with DTU-flavored values
+    (a host production URL vs. a DTU container URL) so the precedence
+    property is locked under the specific naming this task cares about.
+    """
+
+    def test_server_url_overrides_env_default(self, tmp_path, monkeypatch, capsys):
+        """--server-url wins over AMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_URL."""
+        from amplifier_module_tool_context_intelligence_upload.cli import main
+
+        monkeypatch.setenv("AMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_URL", "http://HOST-PROD:8000")
+        monkeypatch.setenv("AMPLIFIER_CONTEXT_INTELLIGENCE_API_KEY", "env-key")
+
+        mock_result = MagicMock()
+        mock_result.success = True
+        mock_result.to_dict.return_value = {
+            "status": "completed",
+            "sessions_uploaded": 1,
+            "events_uploaded": 0,
+        }
+        fake_sessions = [(tmp_path, {"session_id": "s1"})]
+
+        with (
+            patch(
+                "sys.argv",
+                [
+                    "context-intelligence-upload",
+                    "--path",
+                    str(tmp_path),
+                    "--server-url",
+                    "http://dtu-container:8000",
+                    "--api-key",
+                    "dtu-key",
+                ],
+            ),
+            patch(
+                "amplifier_module_tool_context_intelligence_upload.cli.resolve_upload_sessions",
+                return_value=_fake_scope(fake_sessions),
+            ),
+            patch(
+                "amplifier_module_tool_context_intelligence_upload.cli.run_upload",
+                return_value=mock_result,
+            ) as mock_run_upload,
+            patch("amplifier_module_tool_context_intelligence_upload.cli.ProgressTracker"),
+            pytest.raises(SystemExit) as exc_info,
+        ):
+            main()
+
+        assert exc_info.value.code == 0
+        _, kwargs = mock_run_upload.call_args
+        assert kwargs["server_url"] == "http://dtu-container:8000"
+
+
+# ---------------------------------------------------------------------------
+# main() -- --format discover/parse pair selection (Task 2)
+# ---------------------------------------------------------------------------
+
+
+class TestFormatDispatch:
+    """main() must select the discover/parse pair based on --format.
+
+    DECISION C1 (loud reject): --no-replay + --format logging-hook must exit 2
+    before any discovery/upload happens.
+    DECISION D2 (hard-lock): the logging-hook (legacy) path always dedups --
+    replay=False unconditionally, with no override.
+    """
+
+    def test_main_logging_hook_selects_pair(self, tmp_path, capsys):
+        """--format logging-hook calls discover_legacy and passes its parse_fn
+        from FORMATS['logging-hook'] through to run_upload."""
+        from amplifier_module_tool_context_intelligence_upload import cli as cli_mod
+        from amplifier_module_tool_context_intelligence_upload.formats import FORMATS
+        from amplifier_module_tool_context_intelligence_upload.logging_hook_format import (
+            LegacyDiscovery,
+        )
+
+        fake_sessions = [
+            (tmp_path, {"session_id": "s1", "format": "logging-hook", "workspace": "ws"})
+        ]
+        fake_discovery = LegacyDiscovery(
+            sessions=fake_sessions,
+            candidates_seen=1,
+            live_skipped=0,
+            unresolved_workspace=0,
+        )
+        mock_result = _make_upload_result()
+
+        with (
+            patch(
+                "sys.argv",
+                [
+                    "context-intelligence-upload",
+                    "--path",
+                    str(tmp_path),
+                    "--server-url",
+                    "http://localhost",
+                    "--api-key",
+                    "key",
+                    "--format",
+                    "logging-hook",
+                ],
+            ),
+            patch.object(cli_mod, "discover_legacy", return_value=fake_discovery) as mock_discover,
+            patch.object(cli_mod, "run_upload", return_value=mock_result) as mock_run_upload,
+            patch.object(cli_mod, "ProgressTracker"),
+            pytest.raises(SystemExit) as exc_info,
+        ):
+            cli_mod.main()
+
+        assert exc_info.value.code == 0
+        mock_discover.assert_called_once()
+        _, kwargs = mock_run_upload.call_args
+        assert kwargs["parse_fn"] is FORMATS["logging-hook"][1]
+
+    def test_main_logging_hook_locks_replay_false(self, tmp_path, capsys):
+        """The logging-hook path always calls run_upload with replay=False,
+        regardless of --no-replay (which is not even passed here)."""
+        from amplifier_module_tool_context_intelligence_upload import cli as cli_mod
+        from amplifier_module_tool_context_intelligence_upload.logging_hook_format import (
+            LegacyDiscovery,
+        )
+
+        fake_sessions = [
+            (tmp_path, {"session_id": "s1", "format": "logging-hook", "workspace": "ws"})
+        ]
+        fake_discovery = LegacyDiscovery(
+            sessions=fake_sessions,
+            candidates_seen=1,
+            live_skipped=0,
+            unresolved_workspace=0,
+        )
+        mock_result = _make_upload_result()
+
+        with (
+            patch(
+                "sys.argv",
+                [
+                    "context-intelligence-upload",
+                    "--path",
+                    str(tmp_path),
+                    "--server-url",
+                    "http://localhost",
+                    "--api-key",
+                    "key",
+                    "--format",
+                    "logging-hook",
+                ],
+            ),
+            patch.object(cli_mod, "discover_legacy", return_value=fake_discovery),
+            patch.object(cli_mod, "run_upload", return_value=mock_result) as mock_run_upload,
+            patch.object(cli_mod, "ProgressTracker"),
+            pytest.raises(SystemExit) as exc_info,
+        ):
+            cli_mod.main()
+
+        assert exc_info.value.code == 0
+        _, kwargs = mock_run_upload.call_args
+        assert kwargs["replay"] is False
+
+    def test_main_logging_hook_rejects_no_replay(self, tmp_path, capsys):
+        """--format logging-hook + --no-replay exits 2 with a loud stderr
+        message, and never reaches discovery or run_upload (fail fast)."""
+        from amplifier_module_tool_context_intelligence_upload import cli as cli_mod
+
+        with (
+            patch(
+                "sys.argv",
+                [
+                    "context-intelligence-upload",
+                    "--path",
+                    str(tmp_path),
+                    "--server-url",
+                    "http://localhost",
+                    "--api-key",
+                    "key",
+                    "--format",
+                    "logging-hook",
+                    "--no-replay",
+                ],
+            ),
+            patch.object(cli_mod, "discover_legacy") as mock_discover,
+            patch.object(cli_mod, "run_upload") as mock_run_upload,
+            patch.object(cli_mod, "ProgressTracker"),
+            pytest.raises(SystemExit) as exc_info,
+        ):
+            cli_mod.main()
+
+        assert exc_info.value.code == 2
+        captured = capsys.readouterr()
+        assert "--no-replay is not valid with --format logging-hook" in captured.err
+        mock_discover.assert_not_called()
+        mock_run_upload.assert_not_called()
+
+    def test_main_default_path_still_honors_no_replay(self, tmp_path, capsys):
+        """The default --format context-intelligence path is unaffected by the
+        logging-hook hard-lock: --no-replay still sets replay=False."""
+        from amplifier_module_tool_context_intelligence_upload import cli as cli_mod
+
+        fake_sessions = [(tmp_path, {"session_id": "s1"})]
+        mock_result = _make_upload_result()
+
+        with (
+            patch(
+                "sys.argv",
+                [
+                    "context-intelligence-upload",
+                    "--path",
+                    str(tmp_path),
+                    "--server-url",
+                    "http://localhost",
+                    "--api-key",
+                    "key",
+                    "--no-replay",
+                ],
+            ),
+            patch.object(
+                cli_mod, "resolve_upload_sessions", return_value=_fake_scope(fake_sessions)
+            ),
+            patch.object(cli_mod, "run_upload", return_value=mock_result) as mock_run_upload,
+            patch.object(cli_mod, "ProgressTracker"),
+            pytest.raises(SystemExit) as exc_info,
+        ):
+            cli_mod.main()
+
+        assert exc_info.value.code == 0
+        _, kwargs = mock_run_upload.call_args
+        assert kwargs["replay"] is False
+
+
+# ---------------------------------------------------------------------------
+# main() -- operator reconciliation summary (Task 3)
+# ---------------------------------------------------------------------------
+
+
+class TestReconciliationSummary:
+    """main() must print the independently-measured reconciliation summary
+    to stderr after run_upload() returns and before the result JSON is
+    written to stdout."""
+
+    def test_main_prints_reconciliation_summary(self, tmp_path, capsys):
+        from amplifier_module_tool_context_intelligence_upload import cli as cli_mod
+        from amplifier_module_tool_context_intelligence_upload.logging_hook_format import (
+            LegacyDiscovery,
+        )
+        from amplifier_module_tool_context_intelligence_upload.uploader import UploadResult
+
+        # Build a REAL one-session tree with a 5-non-blank-line events.jsonl so
+        # read_total is an independent, on-disk-derived count -- not a
+        # rederivation of ingested + skipped.
+        session_dir = tmp_path / "session1"
+        session_dir.mkdir()
+        (session_dir / "events.jsonl").write_text(
+            "\n".join(f'{{"line": {i}}}' for i in range(5)) + "\n",
+            encoding="utf-8",
+        )
+        metadata = {"session_id": "s1", "format": "logging-hook", "workspace": "ws"}
+        fake_sessions = [(session_dir, metadata)]
+        fake_discovery = LegacyDiscovery(
+            sessions=fake_sessions,
+            candidates_seen=1,
+            live_skipped=2,
+            unresolved_workspace=0,
+        )
+        upload_result = UploadResult(
+            success=True,
+            sessions_uploaded=1,
+            events_uploaded=4,
+            events_skipped=1,
+            events_unmapped=0,
+        )
+
+        with (
+            patch(
+                "sys.argv",
+                [
+                    "context-intelligence-upload",
+                    "--path",
+                    str(tmp_path),
+                    "--server-url",
+                    "http://localhost",
+                    "--api-key",
+                    "key",
+                    "--format",
+                    "logging-hook",
+                ],
+            ),
+            patch.object(cli_mod, "discover_legacy", return_value=fake_discovery),
+            patch.object(cli_mod, "run_upload", return_value=upload_result),
+            patch.object(cli_mod, "ProgressTracker"),
+            pytest.raises(SystemExit) as exc_info,
+        ):
+            cli_mod.main()
+
+        # Task 4b (C4): 1 event skipped + 2 live-skipped sessions means this
+        # run completed WITH issues -- exit 3, not 0.
+        assert exc_info.value.code == 3
+        captured = capsys.readouterr()
+        assert "reconciliation:" in captured.err
+        assert "5 read" in captured.err
+        assert "4 ingested" in captured.err
+        assert "1 skipped" in captured.err
+        assert "0 unmapped" in captured.err
+        assert "2 live-sessions-skipped" in captured.err
+        assert "already-present" not in captured.err
+
+    def test_main_reconciliation_read_is_independent_line_count(self, tmp_path, capsys):
+        """read must follow the events.jsonl FILE, not ingested + skipped --
+        adding a 6th line changes 'read' even though ingested/skipped are
+        unchanged, proving it's not a derived echo."""
+        from amplifier_module_tool_context_intelligence_upload import cli as cli_mod
+        from amplifier_module_tool_context_intelligence_upload.logging_hook_format import (
+            LegacyDiscovery,
+        )
+        from amplifier_module_tool_context_intelligence_upload.uploader import UploadResult
+
+        session_dir = tmp_path / "session1"
+        session_dir.mkdir()
+        (session_dir / "events.jsonl").write_text(
+            "\n".join(f'{{"line": {i}}}' for i in range(6)) + "\n",
+            encoding="utf-8",
+        )
+        metadata = {"session_id": "s1", "format": "logging-hook", "workspace": "ws"}
+        fake_sessions = [(session_dir, metadata)]
+        fake_discovery = LegacyDiscovery(
+            sessions=fake_sessions,
+            candidates_seen=1,
+            live_skipped=2,
+            unresolved_workspace=0,
+        )
+        upload_result = UploadResult(
+            success=True,
+            sessions_uploaded=1,
+            events_uploaded=4,
+            events_skipped=1,
+            events_unmapped=0,
+        )
+
+        with (
+            patch(
+                "sys.argv",
+                [
+                    "context-intelligence-upload",
+                    "--path",
+                    str(tmp_path),
+                    "--server-url",
+                    "http://localhost",
+                    "--api-key",
+                    "key",
+                    "--format",
+                    "logging-hook",
+                ],
+            ),
+            patch.object(cli_mod, "discover_legacy", return_value=fake_discovery),
+            patch.object(cli_mod, "run_upload", return_value=upload_result),
+            patch.object(cli_mod, "ProgressTracker"),
+            pytest.raises(SystemExit),
+        ):
+            cli_mod.main()
+
+        captured = capsys.readouterr()
+        assert "6 read" in captured.err
+
+    def test_main_reconciliation_default_format_zero_live_sessions_skipped(self, tmp_path, capsys):
+        """The default context-intelligence path has no discovery object, so
+        live-sessions-skipped must be 0 without raising."""
+        from amplifier_module_tool_context_intelligence_upload import cli as cli_mod
+        from amplifier_module_tool_context_intelligence_upload.uploader import UploadResult
+
+        session_dir = tmp_path / "session1"
+        session_dir.mkdir()
+        (session_dir / "events.jsonl").write_text('{"line": 0}\n', encoding="utf-8")
+        fake_sessions = [(session_dir, {"session_id": "s1"})]
+        upload_result = UploadResult(
+            success=True,
+            sessions_uploaded=1,
+            events_uploaded=1,
+            events_skipped=0,
+            events_unmapped=0,
+        )
+
+        with (
+            patch(
+                "sys.argv",
+                [
+                    "context-intelligence-upload",
+                    "--path",
+                    str(tmp_path),
+                    "--server-url",
+                    "http://localhost",
+                    "--api-key",
+                    "key",
+                ],
+            ),
+            patch.object(
+                cli_mod, "resolve_upload_sessions", return_value=_fake_scope(fake_sessions)
+            ),
+            patch.object(cli_mod, "run_upload", return_value=upload_result),
+            patch.object(cli_mod, "ProgressTracker"),
+            pytest.raises(SystemExit),
+        ):
+            cli_mod.main()
+
+        captured = capsys.readouterr()
+        assert "reconciliation:" in captured.err
+        assert "0 live-sessions-skipped" in captured.err
+
+
+# ---------------------------------------------------------------------------
+# main() -- operator signals: zero-discovery warning, live-skip ids,
+# partial-success exit code (Task 4b)
+# ---------------------------------------------------------------------------
+
+
+class TestOperatorSignals:
+    """logging-hook path emits three operator-facing, machine-checkable
+    signals: a zero-discovery warning (C2), a live-skip session id list
+    (C3), and a partial-success exit code 3 (C4). All three are
+    logging-hook-only -- the default context-intelligence path's output and
+    exit semantics are byte-unchanged (GATE 2)."""
+
+    def test_main_logging_hook_warns_on_zero_discovery(self, tmp_path, capsys):
+        """Zero legacy sessions discovered emits a stderr warning naming the
+        target path, printed before the 'scope:' summary line."""
+        from amplifier_module_tool_context_intelligence_upload import cli as cli_mod
+        from amplifier_module_tool_context_intelligence_upload.logging_hook_format import (
+            LegacyDiscovery,
+        )
+
+        fake_discovery = LegacyDiscovery(
+            sessions=[],
+            candidates_seen=0,
+            live_skipped=0,
+            unresolved_workspace=0,
+        )
+
+        with (
+            patch(
+                "sys.argv",
+                [
+                    "context-intelligence-upload",
+                    "--path",
+                    str(tmp_path),
+                    "--server-url",
+                    "http://localhost",
+                    "--api-key",
+                    "key",
+                    "--format",
+                    "logging-hook",
+                ],
+            ),
+            patch.object(cli_mod, "discover_legacy", return_value=fake_discovery),
+            patch.object(cli_mod, "ProgressTracker"),
+            pytest.raises(SystemExit),
+        ):
+            cli_mod.main()
+
+        captured = capsys.readouterr()
+        assert "no legacy (hooks-logging) sessions found" in captured.err
+        assert str(tmp_path) in captured.err
+        assert "check --path and --format" in captured.err
+        warn_idx = captured.err.index("no legacy (hooks-logging) sessions found")
+        scope_idx = captured.err.index("scope:")
+        assert warn_idx < scope_idx
+
+    def test_main_logging_hook_lists_live_skipped_ids(self, tmp_path, capsys):
+        """discovery.live_skipped_ids are printed to stderr as a
+        comma-joined note, after the 'scope:' summary line."""
+        from amplifier_module_tool_context_intelligence_upload import cli as cli_mod
+        from amplifier_module_tool_context_intelligence_upload.logging_hook_format import (
+            LegacyDiscovery,
+        )
+        from amplifier_module_tool_context_intelligence_upload.uploader import UploadResult
+
+        session_dir = tmp_path / "session1"
+        session_dir.mkdir()
+        (session_dir / "events.jsonl").write_text('{"line": 0}\n', encoding="utf-8")
+        metadata = {"session_id": "s1", "format": "logging-hook", "workspace": "ws"}
+        fake_discovery = LegacyDiscovery(
+            sessions=[(session_dir, metadata)],
+            candidates_seen=3,
+            live_skipped=2,
+            unresolved_workspace=0,
+            live_skipped_ids=["live-a", "live-b"],
+        )
+        upload_result = UploadResult(
+            success=True,
+            sessions_uploaded=1,
+            events_uploaded=1,
+            events_skipped=0,
+            events_unmapped=0,
+        )
+
+        with (
+            patch(
+                "sys.argv",
+                [
+                    "context-intelligence-upload",
+                    "--path",
+                    str(tmp_path),
+                    "--server-url",
+                    "http://localhost",
+                    "--api-key",
+                    "key",
+                    "--format",
+                    "logging-hook",
+                ],
+            ),
+            patch.object(cli_mod, "discover_legacy", return_value=fake_discovery),
+            patch.object(cli_mod, "run_upload", return_value=upload_result),
+            patch.object(cli_mod, "ProgressTracker"),
+            pytest.raises(SystemExit),
+        ):
+            cli_mod.main()
+
+        captured = capsys.readouterr()
+        assert "live-a" in captured.err
+        assert "live-b" in captured.err
+        assert "note: 2 live/in-progress session(s) skipped:" in captured.err
+        scope_idx = captured.err.index("scope:")
+        note_idx = captured.err.index("note: 2 live/in-progress session(s) skipped:")
+        assert scope_idx < note_idx
+
+    def test_main_logging_hook_partial_success_exit_code(self, tmp_path, capsys):
+        """logging-hook exits 3 (completed WITH issues) when events_skipped,
+        events_unmapped, or discovery.live_skipped is nonzero -- even when
+        upload_result.success is True."""
+        from amplifier_module_tool_context_intelligence_upload import cli as cli_mod
+        from amplifier_module_tool_context_intelligence_upload.logging_hook_format import (
+            LegacyDiscovery,
+        )
+        from amplifier_module_tool_context_intelligence_upload.uploader import UploadResult
+
+        session_dir = tmp_path / "session1"
+        session_dir.mkdir()
+        (session_dir / "events.jsonl").write_text('{"line": 0}\n', encoding="utf-8")
+        metadata = {"session_id": "s1", "format": "logging-hook", "workspace": "ws"}
+        fake_discovery = LegacyDiscovery(
+            sessions=[(session_dir, metadata)],
+            candidates_seen=1,
+            live_skipped=0,
+            unresolved_workspace=0,
+        )
+        upload_result = UploadResult(
+            success=True,
+            sessions_uploaded=1,
+            events_uploaded=0,
+            events_skipped=1,
+            events_unmapped=0,
+        )
+
+        with (
+            patch(
+                "sys.argv",
+                [
+                    "context-intelligence-upload",
+                    "--path",
+                    str(tmp_path),
+                    "--server-url",
+                    "http://localhost",
+                    "--api-key",
+                    "key",
+                    "--format",
+                    "logging-hook",
+                ],
+            ),
+            patch.object(cli_mod, "discover_legacy", return_value=fake_discovery),
+            patch.object(cli_mod, "run_upload", return_value=upload_result),
+            patch.object(cli_mod, "ProgressTracker"),
+            pytest.raises(SystemExit) as exc_info,
+        ):
+            cli_mod.main()
+
+        assert exc_info.value.code == 3
+
+    def test_main_default_path_exit_semantics_unchanged(self, tmp_path, capsys):
+        """The default context-intelligence path never returns exit 3 --
+        even with events_skipped > 0, success=True still exits 0 (byte-
+        unchanged default-path exit semantics, GATE 2)."""
+        from amplifier_module_tool_context_intelligence_upload import cli as cli_mod
+        from amplifier_module_tool_context_intelligence_upload.uploader import UploadResult
+
+        session_dir = tmp_path / "session1"
+        session_dir.mkdir()
+        (session_dir / "events.jsonl").write_text('{"line": 0}\n', encoding="utf-8")
+        fake_sessions = [(session_dir, {"session_id": "s1"})]
+        upload_result = UploadResult(
+            success=True,
+            sessions_uploaded=1,
+            events_uploaded=0,
+            events_skipped=5,
+            events_unmapped=5,
+        )
+
+        with (
+            patch(
+                "sys.argv",
+                [
+                    "context-intelligence-upload",
+                    "--path",
+                    str(tmp_path),
+                    "--server-url",
+                    "http://localhost",
+                    "--api-key",
+                    "key",
+                ],
+            ),
+            patch.object(
+                cli_mod, "resolve_upload_sessions", return_value=_fake_scope(fake_sessions)
+            ),
+            patch.object(cli_mod, "run_upload", return_value=upload_result),
+            patch.object(cli_mod, "ProgressTracker"),
+            pytest.raises(SystemExit) as exc_info,
+        ):
+            cli_mod.main()
+
+        assert exc_info.value.code == 0

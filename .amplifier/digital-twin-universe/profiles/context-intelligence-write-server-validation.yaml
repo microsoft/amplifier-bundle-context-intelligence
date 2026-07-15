@@ -21,22 +21,32 @@
 #   to providers/tools/hooks alike, and IS implemented. This profile uses only that.)
 #
 # TOPOLOGY
-#   host: a real Context-Intelligence server (Neo4j + API) stood up via docker compose,
-#         reachable from the DTU at the Incus host-gateway IP (e.g. http://10.67.103.1:18001).
+#   host: a real Context-Intelligence server (Neo4j + API), stood up NON-COMPOSE by
+#         launching this bundle's own context-intelligence-backend.yaml DTU profile
+#         (Neo4j Community 5.26.22 LTS + standalone context-intelligence-server over
+#         bolt://). Its forwarded host port is reachable from THIS DTU at the Incus
+#         host-gateway IP (e.g. http://10.67.103.1:38000).
 #   DTU:  amplifier + the branch bundle (full context-intelligence behavior = design + logging).
 #
 # HOW TO RUN
-#   # 1. stand up the server on the host (server repo microsoft/amplifier-context-intelligence
-#   #    docker-compose.yml -> start.sh generates credentials.yaml + prints the API token once).
-#   #    Bind it to the Incus gateway IP so the container can reach it, and confirm:
-#   #      curl -sf http://10.67.103.1:18001/status
+#   # 1. stand up the backend first (see context-intelligence-backend.yaml for the
+#   #    full non-compose recipe + pinned versions):
+#   amplifier-digital-twin launch \
+#     .amplifier/digital-twin-universe/profiles/context-intelligence-backend.yaml \
+#     --name ci-backend \
+#     --var NEO4J_PASSWORD=<strong-pw> --var API_KEY=<token> \
+#     --var HOST_PORT=38000 \
+#     --var SERVER_REF=766a9691850e6d7c29e7d4e90b537e88e69736bf
+#   #    Confirm it's reachable from the Incus host-gateway IP (find it via
+#   #    `incus list` or `ip route | grep default` inside this DTU once launched):
+#   #      curl -sf http://<incus-gateway-ip>:38000/status
 #   export GH_TOKEN=$(gh auth token)
 #   amplifier-digital-twin launch \
 #     .amplifier/digital-twin-universe/profiles/context-intelligence-write-server-validation.yaml \
 #     --name ci-write-single \
 #     --var gitea_host=http://localhost:10110 \
-#     --var server_url=http://10.67.103.1:18001 \
-#     --var server_token=<RAW_API_TOKEN> \
+#     --var server_url=http://<incus-gateway-ip>:38000 \
+#     --var server_token=<token> \
 #     --var workspace=ci-write-single
 #
 # WHAT IS PROVEN

@@ -55,6 +55,7 @@ seams without those; that is the point of an end-to-end test.
 | `context-intelligence-write-server-validation.yaml` | **WRITE to a single server** — hook dispatches a real session's events to ONE `destinations` server; proves the server received them (tagged by workspace) | Incus + Gitea mirror + LLM + **CI server** | `... launch .../context-intelligence-write-server-validation.yaml --var gitea_host=... --var ci_server_url=...` |
 | `context-intelligence-write-fanout-validation.yaml` | **WRITE fan-out** — one session, TWO `destinations`; proves BOTH servers received the events (observes existing hook fan-out; never modifies it) | Incus + Gitea mirror + LLM + **2 CI servers** | `... launch .../context-intelligence-write-fanout-validation.yaml --var gitea_host=... --var ci_server_a=... --var ci_server_b=...` |
 | `context-intelligence-query-validation.yaml` | **EXECUTE queries** (read side) — after logging, drives `graph_query` (Cypher) + `blob_read` (`ci-blob://`) via the `graph-analyst` agent; proves real rows/content come back with the `source` provenance naming the server | Incus + Gitea mirror + LLM + **CI server** | `... launch .../context-intelligence-query-validation.yaml --var gitea_host=... --var ci_server_url=...` |
+| `context-intelligence-upload-format-validation.yaml` | **Legacy hooks-logging IMPORT** — `--format logging-hook` ingests a shipped neutral synthetic legacy fixture; proves discrimination, runtime slug parity/no fork (graph workspaces exactly equal the runtime-derived set), coexistence/dedupe/idempotency (node count captured at runtime does not grow); self-contained, no host data, no pinned counts | Incus + Gitea mirror + **CI backend** (`context-intelligence-backend.yaml` launched fresh) — no LLM | `... launch .../context-intelligence-upload-format-validation.yaml --var gitea_host=... --var server_url=http://<gateway-ip>:38000 --var server_token=...` |
 | `example-dtu-external-server.yaml` | *Not a test* — reference profile: point the client hook at an **external CI server** with a tagged workspace | Incus + running CI server (below) | see below |
 
 **Self-contained smoke to prove the harness works on your host:**
@@ -102,60 +103,49 @@ backed by Neo4j, serving `/status`, `/events` (write), `/blobs/{session}` and Cy
 via the hook, then query them back** via `graph_query` / `blob_read` and assert the
 result + provenance.
 
-There are two ways to give a DTU a server.
+### The canonical non-compose backend
 
-### Option A — External server on the host (simplest; the shipped path)
+This bundle ships its own self-contained backend recipe —
+[`context-intelligence-backend.yaml`](context-intelligence-backend.yaml) — that stands
+up, inside one Incus container: **Neo4j Community 5.26.22 (5.26 LTS)** run directly via
+`docker run` (APOC Core bundled in the image, no network fetch; GDS intentionally
+omitted), plus the **standalone `context-intelligence-server`** (`WEB_CONCURRENCY=1`)
+pointed at it over `bolt://localhost:7687`. **The server repo's docker-compose stack is
+retired as a DTU dependency** (its compose files are being removed from
+`microsoft/amplifier-context-intelligence` itself) — every server-backed profile below
+launches this backend profile first and points at its forwarded port.
 
-Run the server **outside** the DTU (on the host or another machine), and point the
-DTU's client at it. This is exactly what `example-dtu-external-server.yaml` does.
-
-1. **Start the server on the host** (per the server repo — Neo4j + server, listening on `:8000`):
-   ```bash
-   # in a checkout of microsoft/amplifier-context-intelligence — see that repo's README
-   # (typically a docker compose bringing up Neo4j + the API on :8000)
-   curl -sf http://localhost:8000/status   # confirm it's up
-   ```
-2. **Export the API key on the host** so the DTU passthrough can forward it:
-   ```bash
-   export AMPLIFIER_CONTEXT_INTELLIGENCE_API_KEY=<key>
-   ```
-3. **Launch the DTU pointed at it.** The server URL is auto-detected from the Incus
-   bridge gateway (host), or set it explicitly:
+1. **Launch the backend:**
    ```bash
    amplifier-digital-twin launch \
-     .amplifier/digital-twin-universe/profiles/example-dtu-external-server.yaml \
-     --var CONTEXT_INTELLIGENCE_WORKSPACE=e2e-readside \
-     --var CONTEXT_INTELLIGENCE_SERVER_URL=http://<host-ip>:8000   # optional; auto-detected if omitted
+     .amplifier/digital-twin-universe/profiles/context-intelligence-backend.yaml \
+     --name ci-backend \
+     --var NEO4J_PASSWORD=<strong-pw> --var API_KEY=<token> \
+     --var HOST_PORT=38000 \
+     --var SERVER_REF=766a9691850e6d7c29e7d4e90b537e88e69736bf
    ```
-   The profile wires `AMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_URL / _API_KEY / _WORKSPACE`
-   into the container and gates readiness on `curl $SERVER_URL/status`.
-4. **Drive the e2e flow** inside the DTU (`amplifier-digital-twin exec <id> -- ...`):
-   - run an Amplifier session → the hook POSTs events to `/events` (tagged with the workspace);
-   - then read them back with the query tools — `graph_query` (Cypher, filtered by
-     `workspace = "e2e-readside"`) and `blob_read` a `ci-blob://` URI — and assert the
-     rows + the `source` provenance block name the server that answered.
+2. **Confirm it's reachable** from the Incus host-gateway IP (find it via `incus list`
+   for the container's address, or `ip route | grep default` inside a consuming DTU):
+   ```bash
+   curl -sf http://<incus-gateway-ip>:38000/status
+   ```
+3. **Point the consuming profile at it** via its own `--var server_url=...` /
+   `--var server_a_url=... --var server_b_url=...` (see each profile's header comment
+   for the exact flags). For fan-out, launch the backend profile **twice** on distinct
+   `HOST_PORT`s (`38001`, `38002`) — two fully separate Incus containers, so events
+   never cross.
 
-> **Container DNS/networking:** if the client can't reach the server from inside the
+> **Container DNS/networking:** if the client can't reach the backend from inside the
 > container, see `docs/container-dns-troubleshooting.md` (the gateway-IP + port pattern).
 
-### Option B — Server as a Docker sidecar *inside* the DTU (self-contained)
+`example-dtu-external-server.yaml` is the reference "point a client at an already-running
+server" profile — it doesn't stand up a server itself; use the backend profile above to
+get one.
 
-Run the server **and Neo4j** as Docker containers **inside** the DTU via the
-docker-in-incus pattern (DTU launches enable `security.nesting=true` by default). Use
-this when you want one hermetic environment with no host dependency.
-
-1. Read the nested-container guide first: load the `digital-twin-universe` skill →
-   `read_file("@digital-twin-universe:docs/docker-in-incus.md")` (platform-specific
-   networking, pre-flight with the `docker-in-incus` profile).
-2. In the profile's `provision.setup_cmds`, bring up the server's compose (Neo4j + API)
-   from the server repo, then point the client at `http://localhost:8000` via the same
-   three `AMPLIFIER_CONTEXT_INTELLIGENCE_*` env vars as Option A.
-3. Gate readiness on `curl -sf http://localhost:8000/status`, then run the same
-   log→query→assert e2e flow as Option A.
-
-> The exact compose/run invocation lives in the **server repo**
-> (`microsoft/amplifier-context-intelligence`) — this bundle is the client side. Pin the
-> server version you're testing against and record it in your run evidence.
+> The exact non-compose bring-up (Neo4j image, APOC, server invocation) lives in
+> `context-intelligence-backend.yaml`'s header comment, cited against the **server repo**
+> (`microsoft/amplifier-context-intelligence`). Pin the server version you're testing
+> against (via `--var SERVER_REF`) and record it in your run evidence.
 
 ### Read-side config the tools resolve (both options)
 
@@ -192,9 +182,11 @@ tools (see the main `README.md` §"read side"). For multi-source, the connectabl
   real Anthropic PTY session. All three instances were then destroyed.
   *Not independently re-logged in CI yet* — the `readiness` gates re-prove the structural
   claims on every launch; the behavioural round-trip is a documented manual `exec` step.
-- **The three server-backed seams proven live** (manual run, captured — real CI server
-  stacks stood up via `docker compose` from `microsoft/amplifier-context-intelligence`,
-  Neo4j-backed, bundle loaded from the Gitea mirror):
+- **SUPERSEDED — the three server-backed seams' prior evidence** (captured against the
+  now-**retired** docker-compose backend path; kept here for historical record only, not
+  as current proof): real CI server stacks were stood up via `docker compose` from
+  `microsoft/amplifier-context-intelligence`, Neo4j-backed, bundle loaded from the Gitea
+  mirror:
   - **write to single server** — a real `amplifier` session's events reached the server:
     `/status` → `{workspace:"ci-write-single", events_processed:22}`, Cypher count **29** nodes
     tagged with that workspace.
@@ -221,6 +213,34 @@ tools (see the main `README.md` §"read side"). For multi-source, the connectabl
   `get_config_overrides`). No framework limitation — the support issue was closed as invalid.
   (2) `graph_query`/`blob_read` are **not** top-level tools in a plain session — the shipped read
   path is the `context-intelligence:graph-analyst` agent, which the query profile drives.
+- **PENDING — fresh non-compose evidence.** The three server-backed seams above must be
+  re-run against `context-intelligence-backend.yaml` (the current, non-compose backend)
+  before their proof is current again. No results are recorded here yet — a follow-up DTU
+  run will fill this in; do not treat the SUPERSEDED bullet above as still-valid proof.
+- **Proven live — portable, no pinned values.** `context-intelligence-upload-format-validation.yaml`
+  (Legacy hooks-logging IMPORT) was launched against a **fresh** `context-intelligence-backend.yaml`
+  instance (Neo4j + standalone `context-intelligence-server`, non-compose) and reached
+  `check-readiness` → `ready: true`, with the backend's own `/status` confirming
+  `neo4j_connected: true`. The upload CLI was installed from the **branch under test**, resolved
+  through a **Gitea mirror** (git `insteadOf` + `UV_NO_GITHUB_FAST_PATH=true`) — confirmed by an
+  `exec` smoke (`BRANCH-CLI-OK`: `--help` advertises `--format logging-hook`, which only exists on
+  the branch). The consumer profile's `readiness` computed `EXPECTED_SESSIONS` and the expected
+  workspace set **at runtime** from the shipped fixture (never a pinned literal) and asserted, all
+  live against the graph: **discrimination** (native-format ingest reads only the generated
+  `context-intelligence/` twin, never the legacy `events.jsonl`), **coexistence** (the paired legacy
+  twin converges into the SAME workspaces with **no growth** in the runtime-captured node count),
+  **idempotency** (re-ingesting the same legacy fixture produces **no additional growth**),
+  **no-fork/slug parity** (the graph's distinct-workspace set exactly equals the runtime-derived
+  expected set, and per-workspace counts sum to the grand total), **session count** (`count_label
+  Session` equals the shipped session count), and **`data.timestamp` presence** on a read-back
+  event. All invariants held — this is a self-referential proof; no number was measured then
+  pinned anywhere in the profile, the support scripts, or this entry. Both DTU instances (backend +
+  consumer) were destroyed immediately after; `amplifier-digital-twin list` confirmed neither
+  remained. The host's production server on `:8000` was never targeted (the consumer profile only
+  ever pointed at the fresh backend's forwarded port via the Incus host-gateway IP), and the host's
+  `~/.amplifier/settings.yaml` was untouched. Machine-agnostic by construction: re-running this on
+  any host reproduces the same PASS/FAIL verdict from the same shipped fixture, regardless of that
+  host's own path, hostname, or prior graph state (given a genuinely fresh backend).
 - **Runtime-green is per-launch**, per the AGENTS.md rule — capture the run evidence
   (real request/response, provenance, fail-loud on a down/500/timeout) when you exercise
   a seam. Start with `context-intelligence-signals-validation.yaml` (no external deps) to

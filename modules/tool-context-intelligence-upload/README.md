@@ -52,6 +52,24 @@ context-intelligence-upload --path PATH --server-url URL --api-key KEY
 | `-h` | — | Show compact help (usage line + flag list) and exit. |
 | `--help` | — | Show full documentation and exit. |
 
+### Legacy hooks-logging import (--format logging-hook)
+
+`--format` selects which input schema the tool discovers and ingests. The default, `context-intelligence`, is today's behavior described throughout the rest of this document. `logging-hook` is a separate, additive import path for the legacy `hooks-logging` format.
+
+**What it does.** Discovers legacy `hooks-logging` sessions (schema `{name: "amplifier.log", ver: "1.x"}`) under `--path`, transforms each event **in memory**, and POSTs the transformed events to the **same** `/events` endpoint used by the default path. No new server surface and no new storage format is introduced.
+
+**Non-destructive.** No files are written to, or deleted from, disk during discovery or transformation — the legacy archive on disk is never touched. (This is a deliberate contrast with the older `amplifier-ci-migrate` tool's materialize-to-disk approach; that tool is unaffected, unchanged, and out of scope here.)
+
+**Dedup always on.** The legacy import always uses server-side dedup (`replay=False`), so it is idempotent — an aborted or interrupted run is always safe to rerun. `--no-replay` does not apply to this path: passing `--no-replay` together with `--format logging-hook` fails fast with **exit code 2** before any discovery or upload happens.
+
+**Discrimination.** Sessions are selected by their `metadata.json` format. `--format logging-hook` ingests only legacy sessions; the default `--format context-intelligence` ingests only native sessions. The two paths never cross, even when a legacy `events.jsonl` and a native `context-intelligence/` tree both exist under the same session directory.
+
+**Slug parity with native.** The workspace for a migrated legacy event is derived from the legacy session's `working_dir` using the **same** slugifier the live context-intelligence hook uses (`config_resolver._slugify_path`). Migrated legacy events therefore land in the **exact same workspace** as native captures from the same working directory — the two coexist and dedupe together rather than forking into separate workspaces.
+
+**Exit codes.** `0` — clean (no skipped/unmapped/live-skipped sessions or events). `3` — completed with issues (one or more events were skipped or unmapped, or one or more sessions were live-skipped; see the reconciliation summary printed to stderr). `2` — usage error (e.g. `--no-replay` combined with `--format logging-hook`). This is additive to the default path's exit codes; `--format context-intelligence` never returns `3`.
+
+**Regression coverage.** This path is exercised end-to-end by the standing DTU profile [`context-intelligence-upload-format-validation.yaml`](../../.amplifier/digital-twin-universe/profiles/context-intelligence-upload-format-validation.yaml), which proves isolation, discrimination, slug parity/no-fork, and coexistence/dedup against a real Context Intelligence server.
+
 ### Examples
 
 **Replay a single session directory:**

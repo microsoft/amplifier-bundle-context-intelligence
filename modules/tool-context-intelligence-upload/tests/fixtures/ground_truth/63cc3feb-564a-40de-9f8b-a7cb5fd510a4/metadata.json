@@ -1,0 +1,13 @@
+{
+  "session_id": "63cc3feb-564a-40de-9f8b-a7cb5fd510a4",
+  "created": "2026-06-22T16:28:02.087368+00:00",
+  "bundle": "bundle:amplifier-dev",
+  "model": "claude-opus-4-8",
+  "turn_count": 1,
+  "incremental": true,
+  "working_dir": "/home/amplifier/workspaces/demo-parity-project",
+  "name": "Debugging Graph-Analyst Connectivity",
+  "name_generated_at": "2026-06-22T16:28:03.842963+00:00",
+  "description": "Troubleshooting errors when using the context-intelligence graph-analyst tool; running diagnostic checks on graph server availability and Cypher query access.",
+  "description_updated_at": "2026-06-22T16:28:03.842963+00:00"
+}

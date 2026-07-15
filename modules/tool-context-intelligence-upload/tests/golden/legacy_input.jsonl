@@ -1,0 +1,3 @@
+{"event": "tool:pre", "workspace": "ws", "data": {"a": 1, "b": [1, 2]}}
+{"event": "session:start", "data": {"working_dir": "/x"}}
+{"event": "tool:post", "workspace": "", "data": {}}

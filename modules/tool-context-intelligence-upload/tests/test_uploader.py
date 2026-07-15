@@ -451,6 +451,62 @@ class TestUploadEdgeCases:
         assert result.success is True
         assert result.events_uploaded == 1
 
+    def test_run_upload_counts_skipped_malformed_lines(self, tmp_path: Path) -> None:
+        """events_skipped counts malformed lines; blank lines do not count as skips."""
+        session_dir = tmp_path / "session-skip-count"
+        session_dir.mkdir(parents=True)
+        metadata = {"session_id": "skip-count-session", "format": "context-intelligence"}
+        (session_dir / "metadata.json").write_text(json.dumps(metadata), encoding="utf-8")
+
+        # Two valid lines, one malformed line in between
+        valid_event_1 = json.dumps({"event": "good-event-1", "workspace": "ws", "data": {}})
+        malformed_line = "NOT JSON"
+        valid_event_2 = json.dumps({"event": "good-event-2", "workspace": "ws", "data": {}})
+        (session_dir / "events.jsonl").write_text(
+            f"{valid_event_1}\n{malformed_line}\n{valid_event_2}\n", encoding="utf-8"
+        )
+
+        sessions = [(session_dir, metadata)]
+        tracker = MagicMock()
+
+        with patch("httpx.Client") as mock_client_cls:
+            mock_client = MagicMock()
+            mock_client_cls.return_value.__enter__.return_value = mock_client
+            mock_client.post.return_value = MagicMock(status_code=200)
+
+            result = run_upload(sessions, "https://server", "api-key", tracker)
+
+        assert result.events_uploaded == 2
+        assert result.events_skipped == 1
+
+    def test_run_upload_skips_non_dict_record_without_aborting(self, tmp_path: Path) -> None:
+        """TB-1/TB-15: valid-JSON non-dict records (null, 42) are skipped and
+        counted, never abort the batch with an uncaught AttributeError."""
+        session_dir = tmp_path / "session-non-dict"
+        session_dir.mkdir(parents=True)
+        metadata = {"session_id": "non-dict-session", "format": "context-intelligence"}
+        (session_dir / "metadata.json").write_text(json.dumps(metadata), encoding="utf-8")
+
+        good_event_1 = json.dumps({"event": "good-event-1", "workspace": "ws", "data": {}})
+        good_event_2 = json.dumps({"event": "good-event-2", "workspace": "ws", "data": {}})
+        (session_dir / "events.jsonl").write_text(
+            f"{good_event_1}\n42\nnull\n{good_event_2}\n", encoding="utf-8"
+        )
+
+        sessions = [(session_dir, metadata)]
+        tracker = MagicMock()
+
+        with patch("httpx.Client") as mock_client_cls:
+            mock_client = MagicMock()
+            mock_client_cls.return_value.__enter__.return_value = mock_client
+            mock_client.post.return_value = MagicMock(status_code=200)
+
+            result = run_upload(sessions, "https://server", "api-key", tracker)
+
+        assert result.success is True
+        assert result.events_uploaded == 2
+        assert result.events_skipped == 2
+
     def test_network_error_returns_failure_with_http_status_zero(self, tmp_path: Path) -> None:
         """httpx.HTTPError → UploadResult(success=False) with failed_at[http_status] == 0."""
         session_dir = tmp_path / "session-network-fail"
@@ -477,6 +533,46 @@ class TestUploadEdgeCases:
         assert result.failed_at is not None
         assert result.failed_at["http_status"] == 0
         assert result.failed_at["session_id"] == "net-fail-session"
+
+
+# ---------------------------------------------------------------------------
+# TestRunUploadParseFnInjection
+# ---------------------------------------------------------------------------
+
+
+class TestRunUploadParseFnInjection:
+    """Tests for the injectable parse_fn parameter (Seam B)."""
+
+    def test_run_upload_uses_injected_parse_fn(self, tmp_path: Path) -> None:
+        """A custom parse_fn controls the (event, workspace, data) triple posted."""
+        events = _make_events(2)
+        session_dir, metadata = _write_session(tmp_path, "abc", events)
+        sessions = [(session_dir, metadata)]
+        tracker = MagicMock()
+        captured_payloads: list[Any] = []
+
+        def fake_parse(
+            line: str, session_dir: Path, metadata: dict[str, Any]
+        ) -> tuple[str, str, dict[str, Any]]:
+            return ("custom:event", "custom-ws", {"raw": line})
+
+        with patch("httpx.Client") as mock_client_cls:
+            mock_client = MagicMock()
+            mock_client_cls.return_value.__enter__.return_value = mock_client
+
+            def capture_post(url: str, **kwargs: Any) -> MagicMock:
+                captured_payloads.append(kwargs.get("json"))
+                return _mock_response(200)
+
+            mock_client.post.side_effect = capture_post
+
+            run_upload(sessions, "https://server", "api-key", tracker, parse_fn=fake_parse)
+
+        assert len(captured_payloads) == 2
+        assert captured_payloads[0]["event"] == "custom:event"
+        assert captured_payloads[0]["workspace"] == "custom-ws"
+        assert captured_payloads[1]["event"] == "custom:event"
+        assert captured_payloads[1]["workspace"] == "custom-ws"
 
 
 class TestWorkspaceFromPath:
