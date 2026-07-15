@@ -84,8 +84,15 @@ environment*. This repo ships the harnesses for exactly that — use them, don't
 
 - **DTU profiles** — `.amplifier/digital-twin-universe/profiles/` (e.g. `context-intelligence-bundle-smoke-test.yaml`,
   `context-intelligence-redesigned-mode-validation.yaml`, `context-intelligence-contributes-migration-validation.yaml`,
-  `context-intelligence-mode-activation-validation.yaml`, `context-intelligence-signals-validation.yaml`). Launch the
+  `context-intelligence-mode-activation-validation.yaml`, `context-intelligence-signals-validation.yaml`,
+  `context-intelligence-upload-format-validation.yaml`). Launch the
   change in a DTU and drive the real agent/skill/mode/tool path end-to-end.
+- **DTU backends are provisioned non-compose**: Neo4j Community 5.26.22 LTS via
+  `docker run` (APOC Core bundled, GDS omitted) + the standalone
+  `context-intelligence-server` over `bolt://localhost:7687` (`WEB_CONCURRENCY=1`).
+  The server repo's docker-compose path is retired as a DTU dependency — every
+  server-backed profile launches `context-intelligence-backend.yaml` first and
+  points at its forwarded port. See that profile's header comment for the recipe.
 - **Evaluation methodology** — the `context-intelligence-eval-design` and
   `context-intelligence-evaluation-methodology` skills. Design/run the evaluation scenarios that
   score the behaviour, and capture the results as the evidence of working order.

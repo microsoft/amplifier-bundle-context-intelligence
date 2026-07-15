@@ -26,15 +26,26 @@
 #   `source` provenance block) from the agent's response.
 #
 # HOW TO RUN
-#   # 1. stand up the server; 2. log some events to it first (e.g. run the write profile, or
-#   #    just run one session in THIS DTU -- the hook writes as we read). Then:
+#   # 1. stand up the backend, non-compose, by launching this bundle's own
+#   #    context-intelligence-backend.yaml DTU profile (see that file for the full
+#   #    recipe + pinned versions):
+#   amplifier-digital-twin launch \
+#     .amplifier/digital-twin-universe/profiles/context-intelligence-backend.yaml \
+#     --name ci-backend \
+#     --var NEO4J_PASSWORD=<strong-pw> --var API_KEY=<token> \
+#     --var HOST_PORT=38000 \
+#     --var SERVER_REF=766a9691850e6d7c29e7d4e90b537e88e69736bf
+#   # 2. log some events to it first (e.g. run the write-server-validation profile
+#   #    against the same backend, or just run one session in THIS DTU -- the hook
+#   #    writes as we read). Then, find the Incus host-gateway IP (via `incus list`
+#   #    or `ip route | grep default` inside this DTU once launched):
 #   export GH_TOKEN=$(gh auth token)
 #   amplifier-digital-twin launch \
 #     .amplifier/digital-twin-universe/profiles/context-intelligence-query-validation.yaml \
 #     --name ci-query \
 #     --var gitea_host=http://localhost:10110 \
-#     --var server_url=http://10.67.103.1:18001 \
-#     --var server_token=<RAW_API_TOKEN> \
+#     --var server_url=http://<incus-gateway-ip>:38000 \
+#     --var server_token=<token> \
 #     --var workspace=ci-query
 #
 # WHAT IS PROVEN

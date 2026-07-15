@@ -6,6 +6,13 @@
 # The server and Neo4j are not installed inside the container -- this profile
 # only installs the client-side hook and bundle.
 #
+# To get a real server to point at, launch this bundle's own
+# context-intelligence-backend.yaml DTU profile (non-compose: Neo4j Community
+# 5.26.22 LTS + standalone context-intelligence-server over bolt://), then pass
+# its forwarded host port as CONTEXT_INTELLIGENCE_SERVER_URL below. See that
+# profile's header comment for the full recipe, pinned versions, and how to
+# launch it. (The server repo's own docker-compose path is retired.)
+#
 # Events are tagged with a custom workspace name so they can be queried
 # independently from other sessions hitting the same server.
 #

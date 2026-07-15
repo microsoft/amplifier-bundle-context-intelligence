@@ -575,6 +575,8 @@ The worker uses lazy creation: it creates an `httpx.AsyncClient` on the first di
 
 **Known limitation:** during a prolonged outage, once the bounded in-memory queue fills, the newest events are dropped from the queue but remain durable in `events.jsonl`. Recover them after the outage with `context-intelligence-upload --path <real storage path>` (--server-url/--api-key come from flags or env/config).
 
+> Recovering an older **legacy `hooks-logging`** archive instead of a native one? It can be imported non-destructively with `--format logging-hook` — see [Legacy hooks-logging import](modules/tool-context-intelligence-upload/README.md#legacy-hooks-logging-import---format-logging-hook) in the upload tool README.
+
 See [`docs/dispatch-circuit-breaker.dot`](docs/dispatch-circuit-breaker.dot) for the updated dispatch flow and [`docs/dispatch-auto-recovery-lifecycle.dot`](docs/dispatch-auto-recovery-lifecycle.dot) for the consolidated auto-recovery lifecycle (HEALTHY → DEGRADED → RECOVERY → OVERFLOW → SHUTDOWN).
 
 ---

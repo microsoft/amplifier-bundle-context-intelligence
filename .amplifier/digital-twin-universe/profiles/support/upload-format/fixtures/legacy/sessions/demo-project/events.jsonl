@@ -1,0 +1,4 @@
+{"event": "session:start", "schema": {"name": "amplifier.log", "ver": "1.0.0"}, "ts": "2026-01-01T00:00:00.000+00:00", "session_id": "demo-project", "status": "ok", "data": {"working_dir": "/home/amplifier/workspaces/demo-project"}}
+{"event": "tool:pre", "schema": {"name": "amplifier.log", "ver": "1.0.0"}, "ts": "2026-01-01T00:00:01.000+00:00", "session_id": "demo-project", "status": "ok", "data": {"tool_name": "bash", "tool_input": {"command": "echo hello"}}}
+{"event": "tool:post", "schema": {"name": "amplifier.log", "ver": "1.0.0"}, "ts": "2026-01-01T00:00:02.000+00:00", "session_id": "demo-project", "status": "ok", "data": {"tool_name": "bash"}}
+{"event": "session:end", "schema": {"name": "amplifier.log", "ver": "1.0.0"}, "ts": "2026-01-01T00:00:03.000+00:00", "session_id": "demo-project", "status": "ok", "data": {}}

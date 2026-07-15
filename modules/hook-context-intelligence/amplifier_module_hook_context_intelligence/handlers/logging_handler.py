@@ -85,12 +85,7 @@ _DELIVERED: str = "delivered"
 #: errors, HTTP 5xx, HTTP 429, HTTP 401).
 _TRANSIENT: str = "transient"
 #: Returned by _post when the event must be skipped permanently (HTTP 4xx
-#: other than 401/429). This is a RETRY-CLASSIFICATION bucket only -- it does
-#: NOT imply a single cause. The cause varies by status and is asserted only
-#: where actually known: 400/413/422 = malformed/unprocessable payload,
-#: 403 = forbidden (credentials), 404/410 = endpoint not found/gone (routing
-#: or deployment, not the payload). Any other 4xx is non-retryable but its
-#: cause is NOT asserted (see the message-layer branches in _worker).
+#: other than 401/429, i.e. malformed or forbidden).
 _PERMANENT: str = "permanent"
 
 
@@ -105,14 +100,7 @@ def _classify_http_outcome(status_code: int) -> str:
     - ``_PERMANENT``:  300 <= status < 400 (3xx redirect — deliberately not following;
       authenticated POST redirects risk bearer-token leakage to another host)
     - ``_TRANSIENT``:  401, 429, or any 5xx (retry forever w/ backoff)
-    - ``_PERMANENT``:  403, 400, 413, 422, 404, 410, and any other 4xx (loud skip)
-
-    This is a RETRY decision only — every status below is uniformly non-retryable.
-    It does NOT imply they share one cause: 400/413/422 mean the payload was
-    rejected, 403 means forbidden/credentials, 404/410 mean the endpoint itself
-    is missing/gone (routing or deployment, not the payload). The message layer
-    (see ``_worker``) asserts the cause per status instead of blaming the payload
-    for all of them.
+    - ``_PERMANENT``:  403, 400, 413, 422, and any other 4xx (loud skip)
     """
     if status_code < 300:
         return _DELIVERED
@@ -123,9 +111,7 @@ def _classify_http_outcome(status_code: int) -> str:
         return _PERMANENT
     if status_code == 401 or status_code == 429 or status_code >= 500:
         return _TRANSIENT
-    # 403, 400, 413, 422, 404, 410, and any other 4xx — all non-retryable, but
-    # NOT all "malformed"; see the message-layer branches in _worker for the
-    # per-status cause.
+    # 403, 400, 413, 422, and any other 4xx
     return _PERMANENT
 
 
@@ -715,26 +701,7 @@ class _DestinationDispatcher:
                                 self._record_forwarding_issue(
                                     "permanent_reject", "rejected event (HTTP 403)"
                                 )
-                            elif self._last_status in (404, 410):
-                                # Endpoint itself is missing/gone — a routing or deployment
-                                # problem (e.g. an undeployed route behind Azure APIM), NOT a
-                                # payload problem. Do not blame the payload for a 4xx that
-                                # means "there is nothing here to receive it."
-                                logger.warning(
-                                    "%s (%s) rejected event (HTTP %d) — endpoint not found;"
-                                    " verify the route is deployed and reachable behind the"
-                                    " gateway (this is not a payload problem).",
-                                    self._name,
-                                    self._url,
-                                    self._last_status,
-                                )
-                                self._record_forwarding_issue(
-                                    "endpoint_not_found",
-                                    "endpoint not found (HTTP %s)" % self._last_status,
-                                )
-                            elif self._last_status in (400, 413, 422):
-                                # These are the ONLY statuses that genuinely mean the
-                                # payload was rejected as malformed/unprocessable.
+                            else:
                                 logger.warning(
                                     "%s (%s) rejected event (HTTP %d) — malformed event, skipped.",
                                     self._name,
@@ -744,22 +711,6 @@ class _DestinationDispatcher:
                                 self._record_forwarding_issue(
                                     "permanent_reject",
                                     "rejected event (HTTP %s) — malformed" % self._last_status,
-                                )
-                            else:
-                                # Any other non-retryable 4xx (405, 409, 421, 451, …). The
-                                # cause is NOT known here — do not assert "malformed"; that
-                                # claim is only true for the enumerated payload-rejection
-                                # set above. State only what is true: the server rejected it
-                                # and it will not be retried.
-                                logger.warning(
-                                    "%s (%s) rejected event (HTTP %d) — skipped.",
-                                    self._name,
-                                    self._url,
-                                    self._last_status,
-                                )
-                                self._record_forwarding_issue(
-                                    "permanent_reject",
-                                    "rejected event (HTTP %s)" % self._last_status,
                                 )
                     self._consecutive_failures = 0
                     self._auth_failures = 0
@@ -832,12 +783,8 @@ class _DestinationDispatcher:
             WriteTimeout, PoolTimeout), or httpx.RemoteProtocolError -- or HTTP
             401/429/5xx — caller should retry with backoff.
         _PERMANENT
-            HTTP 403, 404/410, 400/413/422, or any other 4xx — event cannot be
-            delivered; caller should log loudly and skip. This is a uniform
-            RETRY decision; the cause is NOT uniform — see the message-layer
-            branches in _worker, which assert 403=forbidden, 404/410=endpoint
-            not found/gone, 400/413/422=malformed payload, and stay
-            cause-neutral for any other 4xx.
+            HTTP 403 or any other 4xx (400, 413, 422, …) — event cannot be
+            delivered; caller should log loudly and skip.
 
         The Authorization header is produced PER REQUEST via self._strategy.headers().
         This ensures Entra tokens are refreshed by the azure-identity SDK when they

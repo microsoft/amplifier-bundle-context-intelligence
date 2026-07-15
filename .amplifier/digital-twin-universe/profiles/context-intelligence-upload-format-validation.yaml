@@ -1,0 +1,364 @@
+# context-intelligence-upload-format-validation.yaml
+#
+# RUNNABLE amplifier-digital-twin profile (base + provision). Proves the
+# `context-intelligence-upload`'s `--format logging-hook` seam: the STANDALONE upload
+# CLI, installed from a Gitea mirror of the branch under test, discovers a legacy
+# hooks-logging session, transforms it in memory (non-destructive), and POSTs it
+# through the same /events path to a real Context-Intelligence server, landing in
+# the SAME workspace node as its paired native-CI twin. NOT pytest/artefacts.
+#
+# WHAT IS PROVEN (deterministic; no LLM -- asserted by readiness checks that build
+# on this skeleton's install + fixtures + runtime-generated twin):
+#   * ISOLATION                    -- every assertion runs against a FRESH backend
+#                                      (see TOPOLOGY / HOW TO RUN below --
+#                                      context-intelligence-backend.yaml launched
+#                                      FRESH, never reused from a prior run).
+#   * DISCRIMINATION                -- `--format context-intelligence` ingests ONLY
+#                                      the native `context-intelligence/` twin;
+#                                      `--format logging-hook` ingests ONLY the
+#                                      top-level legacy `events.jsonl`. Neither
+#                                      format reads the other layer of the paired
+#                                      fixture.
+#   * RUNTIME SLUG PARITY / NO FORK -- the legacy `working_dir` slugifies (via the
+#                                      tool's OWN `legacy_transform.derive_workspace`,
+#                                      called live -- never re-implemented, never a
+#                                      literal) to the EXACT SAME workspace as the
+#                                      native twin generated from the SAME fixture
+#                                      at runtime (see gen_native_twin.py below), so
+#                                      the graph's distinct-workspace set, captured
+#                                      at RUNTIME, equals EXACTLY the runtime-derived
+#                                      expected set -- no escaped-hyphen fork.
+#   * COEXISTENCE / DEDUPE /
+#     IDEMPOTENCY                   -- ingesting the native twin then its paired
+#                                      legacy twin (identical event+workspace+data
+#                                      idempotency keys) produces NO growth in the
+#                                      node count captured at runtime on the second
+#                                      ingest.
+#   * data.timestamp VALUE          -- the `data.timestamp` field on a chosen event
+#                                      is asserted to be PRESENT as a value (not
+#                                      merely non-empty), read back from the graph.
+#
+# This profile PINS NOTHING measured on any host: every workspace slug, node count,
+# and timestamp value consumed by downstream assertions is computed AT RUNTIME,
+# inside the container, from the SHIPPED fixture and the tool's own code -- never a
+# literal captured from a prior run on this or any other machine.
+#
+# TOPOLOGY (two containers, same pattern as every other server-backed profile in
+# this directory -- there is no shared-include mechanism in the DTU profile schema):
+#   host: a real Context-Intelligence server (Neo4j + API), stood up NON-COMPOSE by
+#         launching this bundle's own context-intelligence-backend.yaml DTU profile,
+#         launched FRESH. Its forwarded host port is reachable from THIS DTU at the
+#         Incus host-gateway IP (an example shape, never a pinned value -- find the
+#         real gateway IP per-run, see HOW TO RUN).
+#   DTU:  the standalone `context-intelligence-upload` CLI, installed from the
+#         branch (resolved through Gitea -- see DESIGN DECISION below). No
+#         `amplifier` CLI session runs here -- this profile drives the upload tool
+#         directly, never a full amplifier bundle load.
+#
+# HOW TO RUN (two-step; the backend is REUSED across every readiness poll of this
+# profile, never relaunched or duplicated)
+#   # 1. stand up the backend first, FRESH (see context-intelligence-backend.yaml
+#   #    for the full non-compose recipe + pinned versions):
+#   amplifier-digital-twin launch \
+#     .amplifier/digital-twin-universe/profiles/context-intelligence-backend.yaml \
+#     --name ci-upload-backend \
+#     --var NEO4J_PASSWORD=<strong-pw> --var API_KEY=<token> \
+#     --var HOST_PORT=<port> \
+#     --var SERVER_REF=<branch-ref>
+#   #    Confirm it's reachable from the Incus host-gateway IP (find it via
+#   #    `incus list` or `ip route | grep default` inside this DTU once launched):
+#   #      curl -sf http://<incus-gateway-ip>:<port>/status
+#   export GH_TOKEN=$(gh auth token)
+#   amplifier-digital-twin launch \
+#     .amplifier/digital-twin-universe/profiles/context-intelligence-upload-format-validation.yaml \
+#     --name ci-upload-format \
+#     --var gitea_host=<gitea-base-url> \
+#     --var server_url=http://<incus-gateway-ip>:<port> \
+#     --var server_token=<token>
+#
+# REQUIRED --var (the DTU substitution engine does exact ${VAR} text-replacement
+# with NO fallback/default syntax, so every var below must be passed explicitly):
+#   --var gitea_host=<url>     Gitea mirror base URL (e.g. http://localhost:10110)
+#   --var server_url=<url>     Context-Intelligence server URL, from the Incus
+#                              host-gateway IP of the FRESH backend DTU above --
+#                              NEVER the host's own :8000.
+#   --var server_token=<token> Bearer token for the backend's static API_KEY
+#
+# DESIGN DECISION (resolve the convention tension once, up front)
+#   The bundle convention elsewhere in this directory is "load through the
+#   Amplifier CLI via `amplifier bundle add` from a Gitea mirror." But the artifact
+#   under test here is a STANDALONE CLI (`context-intelligence-upload`), whose
+#   documented real-user install (modules/tool-context-intelligence-upload/README.md,
+#   "As a standalone CLI") is `uv tool install "... @ git+https://github.com/.../
+#   amplifier-bundle-context-intelligence@main#subdirectory=modules/tool-context-
+#   intelligence-upload"`. `amplifier bundle add` does NOT put the
+#   `context-intelligence-upload` console script on PATH -- it only registers the
+#   bundle's behaviors/agents for an `amplifier` session, which this profile does
+#   not start. So the honest reconciliation for THIS profile is:
+#
+#   Install the upload CLI from the branch code, resolved through Gitea, via the
+#   tool's own `uv tool install` path -- and exercise the ACTUAL
+#   `context-intelligence-upload`'s `--format logging-hook` command:
+#     1. The profile installs `@main` (the permanent, post-merge form) plus the
+#        same `git config --global url."${gitea_host}/...".insteadOf
+#        "https://github.com/..."` redirect the other profiles use, so a
+#        developer's local branch (mirrored into Gitea) is what actually installs.
+#     2. Because `uv` has a "GitHub fast path" that can bypass the git-level
+#        `insteadOf` redirect for `github.com` URLs, the profile EXPORTS
+#        `UV_NO_GITHUB_FAST_PATH=true` before `uv tool install` (documented in
+#        @digital-twin-universe:docs/profiles.md under `allow_uv_github_fast_path`).
+#     3. Once installed, the profile resolves TOOL_PY -- the python interpreter
+#        INSIDE the tool's own uv-managed venv (`$(uv tool dir)/<pkg>/bin/python`)
+#        -- and uses it (never the system python3) to run the tool's own transform
+#        functions when generating the runtime native-CI twin (gen_native_twin.py)
+#        and, later, any runtime-derived readiness assertions. This keeps the
+#        fixture-vs-transform relationship exact: the SAME code under test produces
+#        the "expected" native twin, so nothing here is hand-authored or pinned.
+#     This keeps both truths intact: the CLI under test is exercised through its
+#     real, documented install path, and the code under test is the BRANCH (via
+#     Gitea), not upstream GitHub `main`.
+#
+# NOTE ON write-to-FILE / native-format ingest: covered by other profiles in this
+# directory (write-server-validation, query-validation) -- not duplicated here.
+# This profile is exclusively about the `--format logging-hook` legacy seam.
+#
+# NOTE ON SCOPE: base/header/install/fixtures/TOOL_PY resolution/runtime-twin-
+# generation live in `provision` above; isolation + discrimination + slug parity
+# + coexistence + idempotency + session-count + timestamp-presence assertions
+# (all computed at runtime via portable_assert.sh, zero pinned values) live in
+# the `readiness` section below.
+
+name: context-intelligence-upload-format-validation
+description: >
+  Runnable proof of the standalone `context-intelligence-upload`'s `--format
+  logging-hook` seam. Installs the upload CLI from the branch under test via
+  `uv tool install`, resolved to a Gitea mirror (never GitHub upstream), resolves
+  the tool's own python interpreter (TOOL_PY), and generates the paired native-CI
+  twin for the shipped legacy fixture AT RUNTIME (never a pinned/committed twin)
+  so isolation, discrimination, slug parity, coexistence, and the data.timestamp
+  value can all be asserted against runtime-derived expectations, never
+  host-measured literals.
+
+base:
+  image: ubuntu:24.04
+
+passthrough:
+  allow_external: true
+  services:
+    - name: github
+      key_env: GH_TOKEN
+
+provision:
+  files:
+    - src: ./support/upload-format/verify.sh
+      dest: /root/upload-format/verify.sh
+      mode: "0755"
+    - src: ./support/upload-format/portable_assert.sh
+      dest: /root/upload-format/portable_assert.sh
+      mode: "0755"
+    - src: ./support/upload-format/gen_native_twin.py
+      dest: /root/upload-format/gen_native_twin.py
+      mode: "0644"
+    - src: ./support/upload-format/fixtures/
+      dest: /root/upload-format/
+      recursive: true
+      # DTU directory-push basename rule (@digital-twin-universe:docs/api-reference.md):
+      # pushing ./support/upload-format/fixtures/ to /root/upload-format/ lands it at
+      # /root/upload-format/fixtures/... (basename preserved), so the legacy fixture
+      # tree lands at /root/upload-format/fixtures/legacy/sessions/<sid>/... -- NOT
+      # directly at /root/upload-format/legacy/....
+
+  setup_cmds:
+    # (1) base tooling + uv + PATH wiring. PATH is written into BOTH
+    # /etc/environment and /root/.bashrc so every subsequent setup_cmds entry --
+    # each its own `bash -lc` login-shell invocation -- picks up /root/.local/bin
+    # automatically.
+    - |
+      apt-get update && apt-get install -y git curl python3 jq
+      curl -LsSf https://astral.sh/uv/install.sh | sh
+      echo 'export PATH="/root/.local/bin:$PATH"' >> /root/.bashrc
+      echo 'PATH=/root/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin' >> /etc/environment
+
+    # (2) GH_TOKEN netrc + narrow git insteadOf redirect (only the
+    # context-intelligence bundle self-references -> mirror), copied from
+    # write-server-validation.yaml.
+    - |
+      if [ -n "${GH_TOKEN:-}" ]; then
+        echo "machine github.com login x-token-auth password $GH_TOKEN" > /root/.netrc
+        chmod 600 /root/.netrc
+        git config --global credential.helper 'store'
+      fi
+
+    - |
+      git config --global \
+        url."${gitea_host}/microsoft/amplifier-bundle-context-intelligence".insteadOf \
+        "https://github.com/microsoft/amplifier-bundle-context-intelligence"
+      echo "insteadOf:"; git config --global --get-regexp insteadOf
+
+    # (3) DESIGN DECISION: install the STANDALONE upload CLI (not `amplifier bundle
+    # add`, which does not expose this console script on PATH) via its own
+    # documented `uv tool install` path. UV_NO_GITHUB_FAST_PATH=true forces uv down
+    # the real git-fetch path so the insteadOf redirect above actually applies --
+    # otherwise uv's GitHub fast path would resolve @main straight from upstream
+    # GitHub, silently bypassing the Gitea mirror of the branch under test.
+    - |
+      export UV_NO_GITHUB_FAST_PATH=true
+      uv tool install \
+        "amplifier-module-tool-context-intelligence-upload @ git+https://github.com/microsoft/amplifier-bundle-context-intelligence@main#subdirectory=modules/tool-context-intelligence-upload"
+
+    # (4) Resolve TOOL_PY -- the python interpreter INSIDE the tool's own
+    # uv-managed venv (never system python3) -- fail loud if it can't import the
+    # installed package, then persist it (plus the verification-only server
+    # coordinates) to ci.env for every later setup_cmds entry (each its own shell)
+    # and for readiness checks to source.
+    - |
+      TOOL_PY="$(uv tool dir)/amplifier-module-tool-context-intelligence-upload/bin/python"
+      "$TOOL_PY" -c "import amplifier_module_tool_context_intelligence_upload" \
+        || { echo "FATAL: TOOL_PY failed to import amplifier_module_tool_context_intelligence_upload: $TOOL_PY" >&2; exit 1; }
+      mkdir -p /root/upload-format
+      cat > /root/upload-format/ci.env << CIENVEOF
+      CI_BASE=${server_url}
+      CI_API_KEY=${server_token}
+      TOOL_PY=$TOOL_PY
+      CIENVEOF
+      echo "== ci.env written =="; cat /root/upload-format/ci.env
+
+    # (5) Generate the native-CI twin for the shipped legacy fixture AT RUNTIME,
+    # using the tool's OWN transform (gen_native_twin.py) via TOOL_PY -- never a
+    # hand-authored or pre-committed twin. This is the single source of truth the
+    # follow-up readiness rebuild derives its expected workspace/count values from.
+    - |
+      source /root/upload-format/ci.env
+      "$TOOL_PY" /root/upload-format/gen_native_twin.py /root/upload-format/fixtures/legacy
+
+    # (6) Fail-loud smoke: the branch CLI is on PATH and advertises --format
+    # logging-hook.
+    - |
+      export PATH="/root/.local/bin:$PATH"
+      context-intelligence-upload --help >/dev/null
+      context-intelligence-upload --help | grep -q 'logging-hook'
+      echo "ready: context-intelligence-upload on PATH, advertises --format logging-hook"
+
+# -----------------------------------------------------------------------------
+# READINESS (deterministic, poll-safe, no LLM). Every check here re-runs on
+# EACH `check-readiness` invocation, so `ingest-discriminate-converge` below
+# MUST be idempotent -- and, unlike an earlier iteration of this profile, it
+# pins NOTHING measured on any host: EXPECTED_SESSIONS and EXPECTED_WS are
+# both computed AT RUNTIME from the shipped fixture (find + the tool's own
+# runtime_slug()), so the proof is self-referential and fully portable across
+# machines. See portable_assert.sh for runtime_slug / assert_workspace_set /
+# assert_no_growth / count_label, and verify.sh (sourced by it) for
+# count_all / count_ws / poll_stable_ws / assert_labels / event_data_field.
+# -----------------------------------------------------------------------------
+readiness:
+  - name: upload-cli-present
+    command: "context-intelligence-upload --help | grep -q logging-hook && echo ready"
+
+  - name: server-reachable-from-dtu
+    command: >
+      . /root/upload-format/ci.env;
+      curl -sf "$CI_BASE/status"
+      | python3 -c "import sys,json;d=json.load(sys.stdin);assert d['status']=='ok' and d['neo4j_connected'];print('ready: server reachable, neo4j_connected')"
+
+  - name: ingest-discriminate-converge
+    # DESIGN NOTE -- runtime-derived, self-referential isolation gate:
+    # count_all read after the FIRST (native-format) ingest becomes N_NATIVE,
+    # the baseline every later step is compared against via assert_no_growth.
+    # Any foreign data already in the backend would already be baked into
+    # N_NATIVE and would then have to ALSO be reproduced exactly by the
+    # legacy/re-ingest steps to still pass -- for all practical purposes this
+    # is only possible on a genuinely fresh backend, which is why one is a
+    # hard prerequisite (see TOPOLOGY / HOW TO RUN above --
+    # context-intelligence-backend.yaml launched FRESH, never reused).
+    command: |
+      set -euo pipefail
+      source /root/upload-format/ci.env
+      source /root/upload-format/portable_assert.sh
+
+      TREE=/root/upload-format/fixtures/legacy
+
+      # ---- expected values, computed AT RUNTIME from the shipped fixture --
+      # no pinned count, no literal slug anywhere below. ----
+      EXPECTED_SESSIONS="$(find "$TREE/sessions" -mindepth 1 -maxdepth 1 -type d | wc -l)"
+
+      EXPECTED_WS=""
+      for meta in "$TREE"/sessions/*/metadata.json; do
+        working_dir="$(jq -r '.working_dir' "$meta")"
+        ws="$(runtime_slug "$working_dir")"
+        EXPECTED_WS="$(printf '%s\n%s' "$EXPECTED_WS" "$ws")"
+      done
+      EXPECTED_WS="$(printf '%s' "$EXPECTED_WS" | sed '/^$/d' | sort -u)"
+
+      # ---- (1) DISCRIMINATION: native-format ingest reads ONLY the
+      # generated context-intelligence/ twins under $TREE, never the legacy
+      # events.jsonl. ----
+      context-intelligence-upload --format context-intelligence --path "$TREE" \
+        --server-url "$CI_BASE" --api-key "$CI_API_KEY"
+      while IFS= read -r ws; do
+        [ -n "$ws" ] && poll_stable_ws "$ws" >/dev/null
+      done <<< "$EXPECTED_WS"
+      N_NATIVE="$(count_all)"
+
+      # ---- (2) COEXISTENCE / NO-FORK / DEDUPE: the paired legacy twin
+      # (--format logging-hook) must slug-parity into the SAME workspaces as
+      # the native twin just ingested, producing NO growth in count_all. ----
+      context-intelligence-upload --format logging-hook --path "$TREE" \
+        --server-url "$CI_BASE" --api-key "$CI_API_KEY"
+      while IFS= read -r ws; do
+        [ -n "$ws" ] && poll_stable_ws "$ws" >/dev/null
+      done <<< "$EXPECTED_WS"
+      N_AFTER_LEGACY="$(count_all)"
+      assert_no_growth "$N_NATIVE" "$N_AFTER_LEGACY" 'native->legacy coexistence'
+
+      # ---- (3) IDEMPOTENCY: re-ingesting the SAME legacy fixture must
+      # produce NO additional growth (identical event+workspace+data
+      # idempotency keys as the previous ingest). ----
+      context-intelligence-upload --format logging-hook --path "$TREE" \
+        --server-url "$CI_BASE" --api-key "$CI_API_KEY"
+      while IFS= read -r ws; do
+        [ -n "$ws" ] && poll_stable_ws "$ws" >/dev/null
+      done <<< "$EXPECTED_WS"
+      N_REINGEST="$(count_all)"
+      assert_no_growth "$N_AFTER_LEGACY" "$N_REINGEST" 'legacy re-ingest idempotency'
+
+      # ---- (4) NO-FORK / SLUG PARITY: the graph's distinct-workspace set
+      # must EXACTLY equal the runtime-derived expected set (an
+      # escaped-hyphen fork would show up as an unexpected member), and the
+      # sum of per-workspace counts must equal the grand total -- proving no
+      # nodes landed outside the expected workspaces. ----
+      assert_workspace_set "$EXPECTED_WS"
+      SUM_WS=0
+      while IFS= read -r ws; do
+        [ -z "$ws" ] && continue
+        c="$(count_ws "$ws")"
+        SUM_WS=$((SUM_WS + c))
+      done <<< "$EXPECTED_WS"
+      if [[ "$SUM_WS" -ne "$N_REINGEST" ]]; then
+        echo "FAIL: sum(count_ws over expected workspaces)=$SUM_WS != count_all=$N_REINGEST -- nodes landed outside the expected workspaces" >&2
+        exit 1
+      fi
+
+      # ---- (5) SESSION COUNT: exactly one :Session node per legacy
+      # fixture session, regardless of how many times/formats it was
+      # ingested under (MERGE semantics keyed by session_id). ----
+      N_SESSIONS="$(count_label Session)"
+      if [[ "$N_SESSIONS" -ne "$EXPECTED_SESSIONS" ]]; then
+        echo "FAIL: count_label(Session)=$N_SESSIONS != EXPECTED_SESSIONS=$EXPECTED_SESSIONS" >&2
+        exit 1
+      fi
+
+      # ---- (6) LABELS + data.timestamp presence: structural value
+      # presence is asserted here, NOT a pinned timestamp literal (this MAY
+      # be strengthened later to compare against the fixture's own ts read
+      # live, but presence is sufficient to prove the field survived the
+      # legacy transform). ----
+      assert_labels
+      FIRST_WS="$(printf '%s\n' "$EXPECTED_WS" | head -1)"
+      TS="$(event_data_field "$FIRST_WS" 'session:start' 'timestamp')"
+      if [[ -z "$TS" ]]; then
+        echo "FAIL: data.timestamp missing on session:start event in workspace=$FIRST_WS" >&2
+        exit 1
+      fi
+
+      N_WORKSPACES="$(printf '%s\n' "$EXPECTED_WS" | wc -l)"
+      echo "ready: ingest+discriminate+converge proven (count_all=$N_REINGEST across $N_WORKSPACES workspace(s), sessions=$N_SESSIONS, labels present, data.timestamp present)"

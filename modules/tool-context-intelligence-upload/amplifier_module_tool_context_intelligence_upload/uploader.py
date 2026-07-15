@@ -21,10 +21,12 @@ from typing import TYPE_CHECKING, Any
 import httpx
 
 from amplifier_module_hook_context_intelligence.upload import build_payload
+from .logging_hook_format import SkipLine
 
 if TYPE_CHECKING:
     from context_intelligence.auth import AuthStrategy
     from amplifier_module_tool_context_intelligence_upload.progress import ProgressTracker
+    from .formats import ParseFn
 
 
 class UploadResult:
@@ -35,12 +37,17 @@ class UploadResult:
         success: bool,
         sessions_uploaded: int,
         events_uploaded: int,
+        events_skipped: int = 0,
+        events_unmapped: int = 0,
         error: str | None = None,
         failed_at: dict[str, Any] | None = None,
     ) -> None:
         self.success = success
         self.sessions_uploaded = sessions_uploaded
         self.events_uploaded = events_uploaded
+        self.events_skipped = events_skipped
+        # Not included in to_dict() (GATE 2) -- inspect this attribute directly.
+        self.events_unmapped = events_unmapped
         self.error = error
         self.failed_at = failed_at
 
@@ -194,6 +201,7 @@ def run_upload(
     replay: bool = True,
     max_retries: int = _DEFAULT_MAX_RETRIES,
     timeout_s: float | None = None,
+    parse_fn: ParseFn | None = None,
 ) -> UploadResult:
     """Replay all events from *sessions* to the server.
 
@@ -230,6 +238,13 @@ def run_upload(
         Success result after all sessions complete, or failure result if any
         HTTP error occurs.
     """
+    if parse_fn is None:
+        from .formats import ci_parse_line
+
+        parse_fn = ci_parse_line
+
+    from .formats import MalformedRecordError
+
     if auth_strategy is None:
         from context_intelligence.auth import ApiKeyAuth
 
@@ -247,6 +262,8 @@ def run_upload(
     max_retries = max(0, max_retries)
 
     total_events_uploaded = 0
+    total_events_skipped = 0
+    total_events_unmapped = 0
     total_sessions_uploaded = 0
 
     # NOTE (issue #338): auth headers are fetched PER attempt inside the loop
@@ -276,27 +293,47 @@ def run_upload(
                     if not line:
                         continue
 
-                    # Parse JSON — skip malformed lines with a warning
+                    # Parse the line via parse_fn — skip malformed lines with a warning
                     try:
-                        record: dict[str, Any] = json.loads(line)
+                        parsed = parse_fn(line, session_dir, metadata)
                     except json.JSONDecodeError as exc:
                         print(
                             f"WARNING: malformed JSON in {events_file} "
                             f"at line {event_index}: {exc}",
                             file=sys.stderr,
                         )
+                        total_events_skipped += 1
+                        tracker.event_sent()
+                        event_index += 1
+                        continue
+                    except MalformedRecordError as exc:
+                        print(
+                            f"WARNING: skipping malformed record in {events_file} "
+                            f"at line {event_index}: {exc}",
+                            file=sys.stderr,
+                        )
+                        total_events_skipped += 1
+                        tracker.event_sent()
+                        event_index += 1
+                        continue
+                    except SkipLine as exc:
+                        print(
+                            f"WARNING: skipping line in {events_file} "
+                            f"at line {event_index}: {exc.reason}",
+                            file=sys.stderr,
+                        )
+                        if exc.category == "unmapped":
+                            total_events_unmapped += 1
+                        else:
+                            total_events_skipped += 1
                         tracker.event_sent()
                         event_index += 1
                         continue
 
-                    event = record.get("event", "")
-                    workspace = (
-                        record.get("workspace")
-                        or metadata.get("workspace")
-                        or _workspace_from_path(session_dir)
-                    )
-                    data: dict[str, Any] = record.get("data", {})
+                    if parsed is None:
+                        continue
 
+                    event, workspace, data = parsed
                     payload = build_payload(event, workspace, data)
 
                     # --- POST with bounded retry + exponential backoff (issue #338) ---
@@ -327,6 +364,8 @@ def run_upload(
                                 success=False,
                                 sessions_uploaded=total_sessions_uploaded,
                                 events_uploaded=total_events_uploaded,
+                                events_skipped=total_events_skipped,
+                                events_unmapped=total_events_unmapped,
                                 error=error_msg,
                                 failed_at={
                                     "session_id": session_id,
@@ -369,6 +408,8 @@ def run_upload(
                                 success=False,
                                 sessions_uploaded=total_sessions_uploaded,
                                 events_uploaded=total_events_uploaded,
+                                events_skipped=total_events_skipped,
+                                events_unmapped=total_events_unmapped,
                                 error=str(exc),
                                 failed_at={
                                     "session_id": session_id,
@@ -410,6 +451,8 @@ def run_upload(
                             success=False,
                             sessions_uploaded=total_sessions_uploaded,
                             events_uploaded=total_events_uploaded,
+                            events_skipped=total_events_skipped,
+                            events_unmapped=total_events_unmapped,
                             error=error_msg,
                             failed_at={
                                 "session_id": session_id,
@@ -432,4 +475,6 @@ def run_upload(
         success=True,
         sessions_uploaded=total_sessions_uploaded,
         events_uploaded=total_events_uploaded,
+        events_skipped=total_events_skipped,
+        events_unmapped=total_events_unmapped,
     )

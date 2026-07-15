@@ -1,0 +1,199 @@
+# context-intelligence-backend.yaml
+#
+# CANONICAL non-compose Context-Intelligence backend for this bundle's DTU seam
+# profiles. Stands up, inside ONE Incus container:
+#   * Neo4j Community 5.26.22 (5.26 LTS) as a Docker container, APOC Core bundled
+#     in the image (no network fetch), GDS intentionally OMITTED (the server calls
+#     no APOC/GDS procedures -- adding GDS would only add a network-egress
+#     dependency for parity we don't need)
+#   * the standalone `context-intelligence-server` (gunicorn + 1 uvicorn worker),
+#     run NON-COMPOSE, pointed at that Neo4j over bolt://
+#
+# The server repo's own docker-compose stack is RETIRED as a DTU dependency (the
+# compose files are being removed from microsoft/amplifier-context-intelligence
+# itself -- see the open PR there). Every profile in this directory that needs a
+# real Context-Intelligence backend launches THIS profile first, then points its
+# own `--var server_url` / `--var server_a_url` / etc. at the port(s) forwarded
+# here. There is no shared-include mechanism in the DTU profile schema (confirmed:
+# no `!include`/anchor/fragment primitive), so this is the one canonical bring-up
+# every validation profile's header comment points back to.
+#
+# WHY bolt:// (not neo4j://): neo4j:// is the routing-driver scheme -- on a
+# Community single-node instance there is no cluster to route within, and the
+# driver's routing table discovery adds a round-trip that gains nothing. bolt://
+# talks directly to the one instance. Confirmed against the server repo's
+# docs/service-setup.md.
+#
+# PINNED (cited to the amplifier-context-intelligence submodule):
+#   * neo4j:5.26.22-community              (neo4j.Dockerfile:26, docker-compose.yml:48
+#                                            -- image tag only; compose itself is retired)
+#   * APOC Core, bundled in the image      (README.md:129 -- no network fetch)
+#   * server URI MUST be bolt:// not neo4j:// on Community single-node
+#                                          (docs/service-setup.md:249-251)
+#   * WEB_CONCURRENCY MUST be 1            (hard server invariant)
+#   * server @ commit 766a9691850e6d7c29e7d4e90b537e88e69736bf (submodule HEAD,
+#                                            overridable via --var SERVER_REF)
+#
+# REQUIRED --var (the DTU substitution engine does exact ${VAR} text-replacement
+# with NO fallback/default syntax -- confirmed against the engine's `_VAR_RE`
+# regex, which has no `:-default` support -- so every var below must be passed
+# explicitly at launch; "typical value" below is guidance, not an enforced default):
+#   --var NEO4J_PASSWORD=<strong-pw>   Neo4j auth password (NEO4J_AUTH=neo4j/<pw>)
+#   --var API_KEY=<token>              static bearer token for the CI server
+#   --var HOST_PORT=<port>             host port forwarded to container :8000
+#                                      (typical: 38000 for a single instance)
+#   --var SERVER_REF=<git-ref>         context-intelligence server git ref/commit
+#                                      (typical: 766a9691850e6d7c29e7d4e90b537e88e69736bf)
+#
+# LAUNCH -- single backend (e.g. for write-server-validation / query-validation):
+#   amplifier-digital-twin launch \
+#     .amplifier/digital-twin-universe/profiles/context-intelligence-backend.yaml \
+#     --name ci-backend \
+#     --var NEO4J_PASSWORD=<strong-pw> \
+#     --var API_KEY=<token> \
+#     --var HOST_PORT=38000 \
+#     --var SERVER_REF=766a9691850e6d7c29e7d4e90b537e88e69736bf
+#   # then, from the host: find the Incus bridge gateway IP reachable from the
+#   # OTHER DTU (e.g. `ip route | grep default` inside that DTU, or `incus list`
+#   # for this container's address), and pass it to the consuming profile as
+#   # --var server_url=http://<gateway-ip>:38000 --var server_token=<token>
+#
+# LAUNCH -- TWO backends for fan-out validation (distinct HOST_PORTs; each is a
+# fully separate Incus container/Neo4j/server, so events never cross):
+#   amplifier-digital-twin launch \
+#     .amplifier/digital-twin-universe/profiles/context-intelligence-backend.yaml \
+#     --name ci-backend-main --var HOST_PORT=38001 \
+#     --var NEO4J_PASSWORD=<pw-a> --var API_KEY=<token-a> \
+#     --var SERVER_REF=766a9691850e6d7c29e7d4e90b537e88e69736bf
+#   amplifier-digital-twin launch \
+#     .amplifier/digital-twin-universe/profiles/context-intelligence-backend.yaml \
+#     --name ci-backend-team --var HOST_PORT=38002 \
+#     --var NEO4J_PASSWORD=<pw-b> --var API_KEY=<token-b> \
+#     --var SERVER_REF=766a9691850e6d7c29e7d4e90b537e88e69736bf
+#
+# VERIFY (after readiness passes):
+#   amplifier-digital-twin exec <id> -- curl -sf http://localhost:8000/status
+#   amplifier-digital-twin exec <id> -- curl -sf -X POST http://localhost:8000/cypher \
+#     -H 'Authorization: Bearer <API_KEY>' -H 'Content-Type: application/json' \
+#     -d '{"query":"MATCH (n) RETURN count(n) AS n"}'
+#
+# Neo4j browser (:7474) and bolt (:7687) are intentionally NOT forwarded to the
+# host -- only :8000 is, via `access.ports`. This avoids fixed high-port
+# collisions between sibling DTUs (e.g. the two fan-out backends). Reach Neo4j
+# directly via the container IP if needed: http://<container_ip>:7474/.
+
+name: context-intelligence-backend
+description: >
+  Canonical non-compose Context-Intelligence backend (Neo4j Community 5.26.22 LTS
+  + standalone context-intelligence-server over bolt://) for this bundle's
+  server-backed DTU validation profiles. Replaces the retired docker-compose path.
+
+base:
+  image: ubuntu:24.04
+  config:
+    limits.cpu: "4"
+    limits.memory: 6GiB
+
+access:
+  ports:
+    - host: ${HOST_PORT}
+      container: 8000
+      label: CI ingestion server (/status, /events, /cypher, /dashboard)
+      path: /
+    # Neo4j browser (:7474) / bolt (:7687) intentionally NOT forwarded -- see
+    # header comment. Reach via the container IP if needed.
+
+provision:
+  setup_cmds:
+    - apt-get update && apt-get install -y ca-certificates curl gnupg lsb-release python3 jq
+
+    # ---- Docker Engine (for the Neo4j container) ----
+    - |
+      install -m 0755 -d /etc/apt/keyrings
+      curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
+      chmod a+r /etc/apt/keyrings/docker.asc
+      echo \
+        "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] \
+        https://download.docker.com/linux/ubuntu \
+        $(. /etc/os-release && echo "$VERSION_CODENAME") stable" \
+        | tee /etc/apt/sources.list.d/docker.list > /dev/null
+      apt-get update
+      apt-get install -y docker-ce docker-ce-cli containerd.io
+
+    # ---- Start dockerd (no systemd as PID 1 inside Incus) ----
+    - |
+      dockerd &>/var/log/dockerd.log &
+      for i in $(seq 1 30); do docker info &>/dev/null && break; sleep 1; done
+      docker info &>/dev/null || { echo "Docker failed to start"; cat /var/log/dockerd.log; exit 1; }
+
+    # ---- Neo4j Community 5.26.22 (APOC Core bundled in the image), run DIRECTLY
+    # via `docker run` -- NOT docker-compose (the compose path is retired). bolt
+    # 7687 + browser 7474 bind to the Incus container's loopback only; the server
+    # reaches Neo4j at bolt://localhost:7687. GDS is intentionally omitted.
+    - |
+      mkdir -p /root/ci-data/neo4j /root/ci-data/blobs /root/ci-data/logs /root/ci-data/queues
+      docker run -d --name neo4j --restart unless-stopped \
+        -p 7474:7474 -p 7687:7687 \
+        -e NEO4J_AUTH=neo4j/${NEO4J_PASSWORD} \
+        -e 'NEO4J_PLUGINS=["apoc"]' \
+        -e 'NEO4J_dbms_security_procedures_unrestricted=apoc.*,gds.*' \
+        -v /root/ci-data/neo4j:/data \
+        neo4j:5.26.22-community
+
+    # ---- Wait for Neo4j to be query-ready (HTTP tx returns 201) ----
+    - |
+      for i in $(seq 1 60); do
+        code=$(curl -s -o /dev/null -w "%{http_code}" \
+          -u "neo4j:${NEO4J_PASSWORD}" \
+          http://localhost:7474/db/neo4j/tx \
+          -H "Content-Type: application/json" \
+          -d '{"statements":[{"statement":"RETURN 1"}]}')
+        [ "$code" = "201" ] && { echo "Neo4j ready"; break; }
+        sleep 3
+      done
+      [ "$code" = "201" ] || { echo "Neo4j not ready (last=$code)"; docker logs neo4j | tail -40; exit 1; }
+
+    # ---- Install uv + the standalone CI server (pinned via --var SERVER_REF) ----
+    - curl -LsSf https://astral.sh/uv/install.sh | sh
+    - uv tool install "git+https://github.com/microsoft/amplifier-context-intelligence@${SERVER_REF}"
+
+    # ---- server-config.yaml (static single-key auth; bolt:// URI) ----
+    # ${NEO4J_PASSWORD} and ${API_KEY} are DTU --vars, substituted to literals by
+    # the engine BEFORE this quoted heredoc reaches the container shell.
+    - |
+      cat > /root/server-config.yaml << 'CFGEOF'
+      neo4j_url: bolt://localhost:7687
+      neo4j_browser_url: http://localhost:7474
+      neo4j_user: neo4j
+      neo4j_password: "${NEO4J_PASSWORD}"
+      api_key: "${API_KEY}"
+      server_host: 0.0.0.0
+      server_port: 8000
+      web_ui_enabled: true
+      log_level: INFO
+      blob_path: /root/ci-data/blobs
+      log_path: /root/ci-data/logs/server.jsonl
+      queues_path: /root/ci-data/queues
+      CFGEOF
+      echo "== server-config.yaml =="; cat /root/server-config.yaml
+
+    # ---- Start the CI server (WEB_CONCURRENCY MUST be 1) ----
+    - |
+      export AMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_CONFIG_FILE=/root/server-config.yaml
+      export WEB_CONCURRENCY=1
+      nohup context-intelligence-server > /var/log/ci-server.log 2>&1 &
+      for i in $(seq 1 60); do
+        curl -sf http://localhost:8000/status >/dev/null 2>&1 && break
+        sleep 2
+      done
+      curl -sf http://localhost:8000/status | jq . || { echo "server not up"; tail -60 /var/log/ci-server.log; exit 1; }
+
+readiness:
+  - name: neo4j-bolt
+    tcp:
+      port: 7687
+
+  - name: server-neo4j-connected
+    http:
+      url: http://localhost:8000/status
+      expect_json: { "neo4j_connected": true }

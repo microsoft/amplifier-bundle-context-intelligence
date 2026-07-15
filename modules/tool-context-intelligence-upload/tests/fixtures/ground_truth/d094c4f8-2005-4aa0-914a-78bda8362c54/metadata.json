@@ -1,0 +1,8 @@
+{
+  "session_id": "d094c4f8-2005-4aa0-914a-78bda8362c54",
+  "created": "2026-06-17T15:35:25.930400+00:00",
+  "bundle": "bundle:amplifier-dev",
+  "model": "claude-opus-4-8",
+  "turn_count": 1,
+  "working_dir": "/home/amplifier/workspaces/demo-parity-hyphen-svc"
+}
