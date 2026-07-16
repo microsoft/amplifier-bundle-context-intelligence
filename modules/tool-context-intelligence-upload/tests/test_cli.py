@@ -1192,6 +1192,77 @@ class TestReconciliationSummary:
         captured = capsys.readouterr()
         assert "6 read" in captured.err
 
+    def test_main_reconciliation_read_excludes_blank_lines(self, tmp_path, capsys):
+        """read must count non-blank event lines only, so the arithmetic
+        (read == ingested + skipped + unmapped) reconciles exactly even when
+        events.jsonl has interior and trailing blank lines.
+
+        Prior to the fix, _count_lines counted every physical line
+        (including blanks), so `read` could exceed
+        ingested + skipped + unmapped purely from blank/trailing lines --
+        defeating the operator-trust arithmetic this summary exists for.
+        """
+        from amplifier_module_tool_context_intelligence_upload import cli as cli_mod
+        from amplifier_module_tool_context_intelligence_upload.logging_hook_format import (
+            LegacyDiscovery,
+        )
+        from amplifier_module_tool_context_intelligence_upload.uploader import UploadResult
+
+        session_dir = tmp_path / "session1"
+        session_dir.mkdir()
+        # 5 non-blank event lines interleaved with blank/whitespace-only lines
+        # (interior AND trailing) -- these must NOT be counted as "read".
+        (session_dir / "events.jsonl").write_text(
+            '{"line": 0}\n\n{"line": 1}\n{"line": 2}\n   \n{"line": 3}\n{"line": 4}\n\n\n',
+            encoding="utf-8",
+        )
+        metadata = {"session_id": "s1", "format": "logging-hook", "workspace": "ws"}
+        fake_sessions = [(session_dir, metadata)]
+        fake_discovery = LegacyDiscovery(
+            sessions=fake_sessions,
+            candidates_seen=1,
+            live_skipped=0,
+            unresolved_workspace=0,
+        )
+        # ingested + skipped + unmapped == 5, matching the 5 non-blank lines.
+        upload_result = UploadResult(
+            success=True,
+            sessions_uploaded=1,
+            events_uploaded=3,
+            events_skipped=1,
+            events_unmapped=1,
+        )
+
+        with (
+            patch(
+                "sys.argv",
+                [
+                    "context-intelligence-upload",
+                    "--path",
+                    str(tmp_path),
+                    "--server-url",
+                    "http://localhost",
+                    "--api-key",
+                    "key",
+                    "--format",
+                    "logging-hook",
+                ],
+            ),
+            patch.object(cli_mod, "discover_legacy", return_value=fake_discovery),
+            patch.object(cli_mod, "run_upload", return_value=upload_result),
+            patch.object(cli_mod, "ProgressTracker"),
+            pytest.raises(SystemExit),
+        ):
+            cli_mod.main()
+
+        captured = capsys.readouterr()
+        assert "reconciliation:" in captured.err
+        # read == ingested + skipped + unmapped == 3 + 1 + 1 == 5, exactly.
+        assert "5 read" in captured.err
+        assert "3 ingested" in captured.err
+        assert "1 skipped" in captured.err
+        assert "1 unmapped" in captured.err
+
     def test_main_reconciliation_default_format_zero_live_sessions_skipped(self, tmp_path, capsys):
         """The default context-intelligence path has no discovery object, so
         live-sessions-skipped must be 0 without raising."""

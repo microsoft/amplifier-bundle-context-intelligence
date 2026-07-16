@@ -177,27 +177,27 @@ def reassemble_event_data(legacy_record: dict[str, Any]) -> tuple[str, dict[str,
 def _slugify_path(path: str) -> str:
     """Convert a working_dir path to the CI workspace slug.
 
-    Delegates directly to the live CI hook's own slugifier,
-    :func:`amplifier_module_hook_context_intelligence.config_resolver._slugify_path`,
-    so migrated data lands in the *exact* same workspace the live hook writes,
-    for every input the hook itself can receive. Reusing the hook's function --
-    rather than re-implementing or partially re-implementing it -- makes
-    divergence structurally impossible: there is a single source of truth for
-    the slug.
+    Mirrors the live CI hook's *default-config* workspace derivation,
+    ``HookConfigResolver._slug_from_working_dir``, which resolves the working
+    directory (symlinks included) before slugifying:
+    ``_hook_slugify_path(str(Path(working_dir).resolve()))``. Matching that
+    branch -- rather than the bare, non-resolving
+    :func:`amplifier_module_hook_context_intelligence.config_resolver._slugify_path`
+    the hook uses internally -- is what makes migrated data land in the
+    *exact* same workspace the live hook writes: the hook always resolves
+    ``session.working_dir`` before deriving a slug from it, so a
+    ``working_dir`` that traverses a symlink must be resolved here too, or
+    the import lands in a different workspace than the hook wrote to.
 
-    This matters beyond plain POSIX paths: the hook's ``config_resolver``
-    normalises the raw ``session.working_dir`` value (backslash -> hyphen,
-    drive-letter colon stripped, leading-dash guaranteed, empty input falls
-    back to the default project slug) around calling the lower-level
-    ``workspace_slug``. An earlier revision here called bare ``workspace_slug``
-    directly and additionally rejected empty/relative/root input outright --
-    that diverged from the hook on exactly the inputs its own normalisation
-    exists to handle (e.g. a Windows-origin ``working_dir``), silently
-    dropping those sessions instead of placing them where the hook would.
-    There is no separate "correct" derivation to invent here: matching the
-    hook byte-for-byte on every input *is* correct by definition.
+    The empty-string case is preserved as a special case (rather than being
+    resolved) because ``Path("").resolve()`` returns the current working
+    directory, not "no path" -- resolving it would silently manufacture a
+    bogus slug from the CWD instead of falling through to the hook's
+    documented empty-input fallback (``_DEFAULT_PROJECT_SLUG``).
     """
-    return _hook_slugify_path(path)
+    if not path:
+        return _hook_slugify_path(path)
+    return _hook_slugify_path(str(Path(path).resolve()))
 
 
 def derive_workspace(working_dir: str) -> str:

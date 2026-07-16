@@ -99,11 +99,12 @@ def _workspace_from_path(session_dir: Path) -> str:
 
 
 def _count_lines(file_path: Path) -> int:
-    """Count the number of lines in *file_path*."""
+    """Count the number of non-blank lines in *file_path*."""
     count = 0
     with file_path.open(encoding="utf-8") as fh:
-        for _ in fh:
-            count += 1
+        for raw_line in fh:
+            if raw_line.strip():
+                count += 1
     return count
 
 
