@@ -12,6 +12,7 @@ import httpx
 
 from amplifier_module_tool_context_intelligence_upload.uploader import (
     UploadResult,
+    _count_lines,
     run_upload,
 )
 
@@ -726,3 +727,45 @@ class TestErrorMessageIncludesServerBody:
         assert result.error is not None
         assert "500" in result.error
         assert "Internal Server Error" in result.error
+
+
+# ---------------------------------------------------------------------------
+# TestCountLines
+# ---------------------------------------------------------------------------
+
+
+class TestCountLines:
+    """Tests for _count_lines — must count non-blank lines only.
+
+    The upload loop (run_upload) skips blank/whitespace-only lines when
+    processing events.jsonl (``if not line: continue``), so _count_lines must
+    apply the identical blank-check or the reconciliation arithmetic
+    (read == ingested + skipped + unmapped) breaks whenever a file has blank
+    interior or trailing lines.
+    """
+
+    def test_counts_non_blank_lines_only(self, tmp_path: Path) -> None:
+        """Interior and trailing blank lines are excluded from the count."""
+        events_file = tmp_path / "events.jsonl"
+        # 3 non-blank lines, with a blank line between two of them and two
+        # trailing blank lines (whitespace-only counts as blank too).
+        events_file.write_text(
+            "line-one\n\nline-two\nline-three\n\n   \n",
+            encoding="utf-8",
+        )
+
+        assert _count_lines(events_file) == 3
+
+    def test_counts_zero_for_all_blank_file(self, tmp_path: Path) -> None:
+        """A file containing only blank/whitespace lines counts as zero."""
+        events_file = tmp_path / "events.jsonl"
+        events_file.write_text("\n\n   \n\t\n", encoding="utf-8")
+
+        assert _count_lines(events_file) == 0
+
+    def test_counts_all_lines_when_none_are_blank(self, tmp_path: Path) -> None:
+        """A file with no blank lines counts every line (baseline, no regression)."""
+        events_file = tmp_path / "events.jsonl"
+        events_file.write_text("a\nb\nc\n", encoding="utf-8")
+
+        assert _count_lines(events_file) == 3

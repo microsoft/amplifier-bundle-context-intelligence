@@ -7,6 +7,8 @@ cleanly and round-trips a single legacy record correctly in its new home.
 from __future__ import annotations
 
 import json
+import os
+from pathlib import Path
 
 import pytest
 from amplifier_module_hook_context_intelligence.config_resolver import (
@@ -157,16 +159,28 @@ def test_schema_guard_passes_clean_baseline_silently(capsys: pytest.CaptureFixtu
 
 
 # ---------------------------------------------------------------------------
-# _slugify_path: EXACT parity with the live CI hook's own slugifier,
-# ``amplifier_module_hook_context_intelligence.config_resolver._slugify_path``
-# (which itself delegates to ``context_intelligence.reconstruct.discover.
+# _slugify_path: parity with the live CI hook's *resolve-then-slugify* branch,
+# ``HookConfigResolver._slug_from_working_dir``, which calls
+# ``_hook_slugify_path(str(Path(working_dir).resolve()))``
+# (``amplifier_module_hook_context_intelligence.config_resolver._slugify_path``
+# itself delegates to ``context_intelligence.reconstruct.discover.
 # workspace_slug`` and then applies Windows normalisation + a leading-dash /
-# empty-input fallback). The hook is the ORACLE: legacy_transform must produce
-# byte-identical output to it for every input, including Windows-origin paths
-# and empty input -- there is no separate "correct" derivation, only "matches
-# the hook or doesn't". Ground-truth parity against real hook-written data is
+# empty-input fallback). That resolve-then-slugify branch is the ORACLE:
+# legacy_transform must produce the same output as it for every input --
+# including Windows-origin paths, empty input, and symlinked working_dirs --
+# there is no separate "correct" derivation, only "matches the hook's write-time
+# branch or doesn't". Ground-truth parity against real hook-written data is
 # proven in test_ground_truth_parity.py.
 # ---------------------------------------------------------------------------
+
+
+def _resolved_oracle(raw_path: str) -> str:
+    """Compute the hook's ``_slug_from_working_dir`` oracle for *raw_path*.
+
+    Mirrors ``HookConfigResolver._slug_from_working_dir`` exactly: resolve
+    symlinks/relative components, then slugify via the hook's own slugifier.
+    """
+    return _hook_slugify_path(str(Path(raw_path).resolve()))
 
 
 def test_slugify_absolute_posix_unchanged() -> None:
@@ -193,11 +207,12 @@ def test_slug_matches_hook_for_windows_path() -> None:
     and drive-letter colons; the old ``legacy_transform._slugify_path``
     instead rejected any non-POSIX-absolute path outright, so migrated
     Windows sessions were silently skipped instead of landing where the hook
-    would put them. This asserts exact parity, using the hook function itself
-    as the oracle (never a hardcoded expected string).
+    would put them. This asserts parity against the resolve-then-slugify
+    oracle (the hook's actual write-time branch), using the hook function
+    itself as the oracle (never a hardcoded expected string).
     """
     windows_path = "C:\\Users\\me\\project"
-    assert derive_workspace(windows_path) == _hook_slugify_path(windows_path)
+    assert derive_workspace(windows_path) == _resolved_oracle(windows_path)
 
 
 @pytest.mark.parametrize(
@@ -210,29 +225,62 @@ def test_slug_matches_hook_for_windows_path() -> None:
     ],
 )
 def test_slug_matches_hook_across_inputs(raw_path: str) -> None:
-    """derive_workspace must equal the hook's own slugifier for every input.
+    """derive_workspace must equal the resolve-then-slugify oracle for every input.
 
-    The hook function is the oracle -- expected values are never hardcoded,
-    only compared against ``config_resolver._slugify_path`` directly, so this
-    test cannot pass by coincidence and cannot drift from the hook.
+    The oracle is the hook's actual write-time branch
+    (``HookConfigResolver._slug_from_working_dir``) -- expected values are
+    never hardcoded, only computed via ``Path(x).resolve()`` +
+    ``config_resolver._slugify_path`` directly, so this test cannot pass by
+    coincidence and cannot drift from the hook.
     """
-    assert derive_workspace(raw_path) == _hook_slugify_path(raw_path)
+    assert derive_workspace(raw_path) == _resolved_oracle(raw_path)
 
 
 def test_slugify_root_matches_hook() -> None:
     # The hook does NOT reject a root path -- workspace_slug("/") == "-", and
     # the hook returns it as-is (truthy, already dash-prefixed). No raise.
-    assert _slugify_path("/") == _hook_slugify_path("/")
+    # "/" resolves to itself, so the resolved oracle is unaffected here.
+    assert _slugify_path("/") == _resolved_oracle("/")
 
 
 def test_derive_workspace_empty_matches_hook_default() -> None:
     # The hook returns its default project slug for empty input rather than
-    # failing -- match that exactly instead of raising.
+    # failing -- match that exactly instead of raising. Empty input is the
+    # one case NOT run through Path(...).resolve() (see _slugify_path
+    # docstring), so the oracle here stays bare (unresolved).
     assert derive_workspace("") == _hook_slugify_path("")
 
 
 def test_derive_workspace_relative_matches_hook() -> None:
-    # The hook resolves relative paths via os.path.abspath (cwd-dependent) --
-    # it does not reject them. Compare against the oracle rather than a
-    # hardcoded string so the test is correct regardless of cwd.
-    assert derive_workspace("me/project") == _hook_slugify_path("me/project")
+    # The hook resolves relative paths (Path(...).resolve(), cwd-dependent)
+    # before slugifying -- it does not reject them. Compare against the
+    # resolved oracle rather than a hardcoded string so the test is correct
+    # regardless of cwd.
+    assert derive_workspace("me/project") == _resolved_oracle("me/project")
+
+
+def test_derive_workspace_resolves_symlinked_working_dir(tmp_path: Path) -> None:
+    """A working_dir that traverses a symlink must land in the SAME workspace
+    the live hook would write to.
+
+    The hook's ``_slug_from_working_dir`` always resolves ``session.working_dir``
+    (``Path(working_dir).resolve()``) before slugifying, so a working_dir that
+    is -- or traverses -- a symlink must resolve to its target here too. This
+    is the regression this fix exists to close: prior to the fix,
+    ``derive_workspace`` matched the hook's *bare* (non-resolving) slugifier,
+    so a symlinked working_dir would import into a different workspace than
+    the one the live hook actually wrote to.
+    """
+    target_dir = tmp_path / "real_project"
+    target_dir.mkdir()
+    link_path = tmp_path / "linked_project"
+    try:
+        os.symlink(target_dir, link_path)
+    except (OSError, NotImplementedError):
+        pytest.skip("OS does not support creating symlinks in this environment")
+
+    expected = _resolved_oracle(str(link_path))
+    assert derive_workspace(str(link_path)) == expected
+    # Sanity: the expected value really is derived from the RESOLVED target,
+    # not the symlink path itself (proves the test would fail pre-fix).
+    assert expected == _hook_slugify_path(str(target_dir.resolve()))
