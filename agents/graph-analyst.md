@@ -204,6 +204,19 @@ traversals and re-deriving structure one hop at a time with naive Cypher:
 Load skill: context-intelligence-gds
 ```
 
+### Track multi-step investigations in a todo climb-log
+
+If the task is a **multi-step investigation** — provenance tracing, cross-session
+synthesis ("how do we work?"), anything that will take more than one probe — load the
+hill-climbing skill and track the climb in the `todo` tool: seed the open questions,
+write each finding (with its node id / citation) into the item as you answer it, and
+mark dead leads. It does **not** change how you query — it makes the investigation
+leave an auditable trail. Skip it for a genuine single-shot lookup.
+
+```
+Load skill: context-intelligence-hill-climbing
+```
+
 ### Using graph_query
 
 The `graph_query` tool auto-injects `$workspace` — provide only the Cypher query.

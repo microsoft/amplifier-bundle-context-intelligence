@@ -103,6 +103,17 @@ tool-call budget, summarize-and-discard between steps, and head-limited extracti
 lookup, respect the max-3-strategy ladder, and hard-stop with "session/data not found" rather
 than trying every ID variant. Never hold raw JSONL output across steps.
 
+**Track multi-step navigation in a todo climb-log.** For any investigation that will take
+more than one probe (provenance tracing, cross-session synthesis, anything you'll refine or
+escalate), load the hill-climbing skill and track the climb in the `todo` tool: seed the open
+questions, write each finding — with the file/record you found it in — into the item as you
+answer it, and mark dead leads. It does **not** change the bounded-extraction discipline above;
+it makes the navigation leave an auditable trail. Skip it for a genuine single-shot lookup.
+
+```
+Load skill: context-intelligence-hill-climbing
+```
+
 ---
 
 ## Section 1: Identity and Navigation Approach
