@@ -53,6 +53,15 @@ _ALLOWED_HOT_PATH_CALLS: frozenset[str] = frozenset(
         "create_task",
         # _ensure_worker() → self._worker() [coroutine: scheduled, NOT entered]
         "_worker",
+        # _ensure_worker() → functools.partial(): constructs a tiny callable object,
+        # no I/O, no awaits. Only reached on the rare worker-(re)start branch, never
+        # on the per-event happy path.
+        "partial",
+        # _ensure_worker() → asyncio.Task.add_done_callback(): a synchronous list
+        # append on the Task object. Required so worker-task exceptions are always
+        # retrieved (never "Task exception was never retrieved"). Same rare
+        # worker-(re)start branch as create_task itself.
+        "add_done_callback",
         # Task 10: overflow branch — time.monotonic() is a single syscall (VDSO on Linux),
         # effectively free (~10 ns). Only reached on the rare QueueFull path, never on
         # the happy path. Monotonic reads are non-blocking by design.
