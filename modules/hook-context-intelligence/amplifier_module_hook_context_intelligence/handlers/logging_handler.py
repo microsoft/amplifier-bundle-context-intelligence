@@ -13,6 +13,7 @@ import random
 import time
 from collections import deque
 from datetime import datetime, timezone
+from functools import partial
 from pathlib import Path
 from typing import Any
 
@@ -41,6 +42,13 @@ _DEFAULT_BACKOFF_JITTER = True
 #: sane ceiling), so bounding the exponent changes no delivered delay — it only
 #: removes the overflow footgun that would otherwise crash the retry loop.
 _BACKOFF_MAX_EXPONENT = 64
+#: Hard deadline (seconds) for each previously-UNBOUNDED teardown step in
+#: ``_DestinationDispatcher.close()``: joining the cancelled worker task and
+#: closing the httpx client. Event delivery is documented best-effort and must
+#: NEVER block process exit -- a half-closed (CLOSE-WAIT) connection once
+#: wedged a host process for hours inside ``AsyncClient.aclose()`` during the
+#: final flush at session end. On deadline: warn and abandon.
+_CLOSE_HARD_TIMEOUT = 5.0
 _METADATA_FORMAT = "context-intelligence"
 _METADATA_VERSION = "1.0.0"
 _CONNECT_TIMEOUT = 3.0
@@ -127,6 +135,30 @@ def _classify_http_outcome(status_code: int) -> str:
     # NOT all "malformed"; see the message-layer branches in _worker for the
     # per-status cause.
     return _PERMANENT
+
+
+# ---------------------------------------------------------------------------
+# Delivery-path task hygiene
+# ---------------------------------------------------------------------------
+def _retrieve_task_exception(task: asyncio.Task[Any], context: str = "task") -> None:
+    """Done-callback: retrieve a delivery-path task's exception so asyncio never
+    reports ``Task exception was never retrieved``.
+
+    Teardown races with an already-closed event loop or client (e.g. httpx
+    ``AsyncClient.aclose`` raising ``RuntimeError('Event loop is closed')``)
+    are expected best-effort noise: logged at DEBUG and swallowed. Anything
+    else is a real defect surfaced at WARNING -- but NEVER propagated; event
+    delivery is best-effort and must not take the host process down.
+    """
+    if task.cancelled():
+        return
+    exc = task.exception()
+    if exc is None:
+        return
+    if isinstance(exc, RuntimeError) and "closed" in str(exc).lower():
+        logger.debug("%s: teardown raced a closed event loop/client: %r", context, exc)
+        return
+    logger.warning("%s: unhandled exception retrieved: %r", context, exc)
 
 
 # ---------------------------------------------------------------------------
@@ -305,6 +337,13 @@ class _DestinationDispatcher:
     def _ensure_worker(self) -> None:
         if self._worker_task is None or self._worker_task.done():
             self._worker_task = asyncio.create_task(self._worker())
+            # Retrieve any terminal exception so asyncio never reports
+            # "Task exception was never retrieved" for the delivery path
+            # (the worker supervisor catches Exception, but a defect outside
+            # its try block -- or a teardown race -- must still be retrieved).
+            self._worker_task.add_done_callback(
+                partial(_retrieve_task_exception, context=f"{self._name} dispatch worker")
+            )
 
     def enqueue(self, event: str, data: dict[str, Any]) -> None:
         """Enqueue an event for dispatch. HOT PATH — zero awaits, zero I/O.
@@ -981,6 +1020,15 @@ class _DestinationDispatcher:
         that deadline, then the worker is cancelled regardless.  The worker's
         ``asyncio.sleep`` in ``_sleep_backoff`` is cancellation-safe, so close()
         returns promptly even when the worker is mid-backoff.
+
+        EVERY remaining await in this method is bounded by ``_CLOSE_HARD_TIMEOUT``:
+        joining the cancelled worker and closing the httpx client both use
+        ``asyncio.wait`` (NOT ``wait_for``) so that even a step that misbehaves
+        under cancellation -- e.g. ``AsyncClient.aclose()`` wedged on a
+        half-closed CLOSE-WAIT connection, which once hung a host process for
+        hours at session end -- can delay close() by at most the deadline.
+        On deadline: warn, abandon, return. Delivery is best-effort and must
+        NEVER block process exit.
         """
         if self._worker_task is not None:
             # Attempt bounded drain: let the worker flush what it can within the timeout.
@@ -1013,14 +1061,48 @@ class _DestinationDispatcher:
                 )
 
             self._worker_task.cancel()
-            try:
-                await self._worker_task
-            except asyncio.CancelledError:
-                pass
+            # Bounded join via asyncio.wait, NOT wait_for: wait_for blocks until
+            # the cancellation actually completes, so a worker wedged in an
+            # uncancellable await would reintroduce exactly the unbounded hang
+            # this removes. asyncio.wait simply returns at the deadline; the
+            # abandoned task's eventual outcome is retrieved by the done-callback
+            # installed in _ensure_worker.
+            _done, pending = await asyncio.wait({self._worker_task}, timeout=_CLOSE_HARD_TIMEOUT)
+            if pending:
+                logger.warning(
+                    "%s worker did not stop within %.1fs during close — abandoning it;"
+                    " events remain durable in events.jsonl.",
+                    self._name,
+                    _CLOSE_HARD_TIMEOUT,
+                )
             self._worker_task = None
 
         if self._client is not None and not self._client.is_closed:
-            await self._client.aclose()
+            # Hand-off: null the attribute first so a re-entrant close can never
+            # double-aclose the same client.
+            client, self._client = self._client, None
+            # aclose() has NO deadline of its own: on a half-closed (CLOSE-WAIT)
+            # connection it can block forever — this is the exact call that once
+            # wedged a host process for 2.7h at session end. Run it as a task and
+            # bound it; on deadline, cancel and abandon (delivery is best-effort
+            # and must never block process exit). The done-callback retrieves any
+            # late exception — including the RuntimeError('Event loop is closed')
+            # teardown race — so it is logged, swallowed, and never left as an
+            # unretrieved task exception.
+            close_task = asyncio.create_task(client.aclose())
+            close_task.add_done_callback(
+                partial(_retrieve_task_exception, context=f"{self._name} http client aclose")
+            )
+            _done, pending = await asyncio.wait({close_task}, timeout=_CLOSE_HARD_TIMEOUT)
+            if pending:
+                close_task.cancel()
+                logger.warning(
+                    "%s HTTP client close exceeded %.1fs (half-closed connection?) —"
+                    " abandoning it; delivery is best-effort and events remain durable"
+                    " in events.jsonl.",
+                    self._name,
+                    _CLOSE_HARD_TIMEOUT,
+                )
 
 
 # ---------------------------------------------------------------------------
