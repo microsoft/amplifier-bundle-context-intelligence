@@ -8,9 +8,10 @@ description: >
   verified Cypher patterns.
 license: MIT
 metadata:
-  version: "2.2.0"
+  version: "2.3.0"
   changelog:
-    - "2.2.0: Corrected the Section 2 workspace/working_dir claims — workspace is a lifted, reliable (~100%) scoping slug, not the literal working directory; working_dir is a sparsely-populated (~7%, 238/3,259 sessions) payload-only field with no canonical per-session source, and must never be used to scope a population. Consolidated one visible+correct in-graph APOC payload-parse pattern: dot-access on a JSON-string field (e.g. e.data.working_dir) raises a type error, not a silent null — parse in-graph with apoc.convert.fromJsonMap and return only the scalar needed. De-duplicated the Section 6 copy into a pointer at this pattern."
+    - "2.3.0: Corrected the working_dir population figure from an inaccurate ~7% (238/3,259 sessions) down to its true measured value: ~0% queryable in-graph (0 of 4,504 / 0 of 9,086 sessions — not a lifted Session property); workspace remains ~100% and the only valid scoping lever. Added Trap 6 (cost_usd totals: a JSON-string payload field, not a lifted property; a bare sum() returns HTTP 500; must pin to :LlmResponseEvent to avoid triple-counting against ContentBlockEndEvent / ProviderResponseEvent) with a validated APOC aggregation pattern in Section 8. Added Trap 7 (Iteration.node_id MERGEs across orchestrator runs, corrupting iteration-scoped counts/aggregates by up to +66%) with caveats on every affected iteration-based query pattern. Added a validated temporal-join pattern (Section 7) for per-prompt/per-run tool-call attribution — more accurate than the structural run→Iteration→ToolCall path and unaffected by the Trap 7 MERGE bug."
+    - "2.2.0: Corrected the Section 2 workspace/working_dir claims — workspace is a lifted, reliable (~100%) scoping slug, not the literal working directory; working_dir is ~0% queryable in-graph (0 of 4,504 / 0 of 9,086 sessions — not a lifted Session property) payload-only field with no canonical per-session source, and must never be used to scope a population. Consolidated one visible+correct in-graph APOC payload-parse pattern: dot-access on a JSON-string field (e.g. e.data.working_dir) raises a type error, not a silent null — parse in-graph with apoc.convert.fromJsonMap and return only the scalar needed. De-duplicated the Section 6 copy into a pointer at this pattern."
     - "2.1.0: Reporting guidance — agent-level / self-delegation answers must STATE the resolved self→actor breakdown (root/main vs named) as an explicit standalone finding, not fold it into a blended statistic. Tightened the Section 8 agent-rollup: project Session/FORKED (the labels that exist) and roll up by the Session.agent property; agents are NOT a projectable Agent graph."
     - "2.0.1: Schema accuracy fix: corrected Prompt/SkillLoad/Orchestrator property names, RecipeStep/RecipeRun property placement, RecipeStep→RecipeRun edge (SPAWNED), removed phantom L1 edges, fixed example queries — all validated against the live graph."
 ---
@@ -136,10 +137,10 @@ Both live as first-class properties on nodes — confirm them by sampling:
   not the literal working directory**: the true directory lives in the event `data` payload as
   `working_dir`, and the **same `working_dir`** (`/home/user/project`) can map to **different**
   `workspace` slugs (`myproject`, `proj`, `multi`). Treat `workspace` as the reliable scoping
-  slug; treat `working_dir` as a **payload field, sparsely populated (~7% of sessions)** with no
-  canonical per-session source — read it via the APOC parse in Section 8, but do **not** scope by
-  it. The `/cypher` request's own `workspace` scope is a second, orthogonal server-side filter
-  layered on top.
+  slug; treat `working_dir` as a **payload field, ~0% queryable in-graph (0 of 4,504 / 0 of
+  9,086 sessions — not a lifted Session property)** with no canonical per-session source — read
+  it via the APOC parse in Section 8, but do **not** scope by it. The `/cypher` request's own
+  `workspace` scope is a second, orthogonal server-side filter layered on top.
 
 **Always anchor scope on the first `MATCH`** so the workspace index is used:
 
@@ -301,6 +302,60 @@ RETURN t.tool_name AS tool, d.seconds AS secs
 ORDER BY secs DESC LIMIT 8
 ```
 
+### Trap 6 — `cost_usd` is a JSON string nested in the payload, not a lifted property
+
+There is **no top-level lifted cost property** anywhere in the graph. The real value lives at
+`data.usage.cost_usd` on `:LlmResponseEvent`, serialized as a **JSON string** — not a number, and
+not a top-level field. Two failure modes follow directly from this:
+
+- A bare `sum(e.cost_usd)` or `sum(e.data.usage.cost_usd)` **returns HTTP 500** (Section 6: `data`
+  is a string, dot-access into it type-errors; the nested numeric value also arrives as a JSON
+  string, not a Cypher number, so it must be parsed *and* cast).
+- You **must pin to `:LlmResponseEvent`** specifically. Aggregating cost across a broader `:Event`
+  sweep (or joining through `ContentBlockEndEvent` / `ProviderResponseEvent`, which co-occur with
+  the same LLM turn) **triple-counts** the same dollar figure.
+
+**Validated** (returns `$44,886.32` over 63,758 events):
+
+```cypher
+MATCH (e:LlmResponseEvent) WHERE e.data CONTAINS 'cost_usd'
+WITH apoc.convert.fromJsonMap(e.data) AS d
+RETURN sum(toFloat(d.usage.cost_usd)) AS total_cost_usd
+```
+
+See Section 8 for the full worked pattern.
+
+### Trap 7 — `Iteration.node_id` MERGEs across orchestrator runs
+
+`Iteration.node_id` is composed as `"{session_id}::iteration::{N}"` — but `N` (`iteration_number`)
+**restarts at 1 for every `OrchestratorRun`**, not once per session. Because the MERGE key omits
+the run, **one `Iteration` node absorbs iterations from every run that reused the same number** —
+observed up to **15 run parents on a single `Iteration` node**.
+
+This corrupts anything that aggregates through `Iteration`:
+
+- **Last-write-wins property garbage** on `usage_input`, `usage_output`, `usage_cache_write`, and
+  `message_count` — whichever run's ingest landed last overwrites the others' values.
+- **`count(DISTINCT Iteration)` undercounts** — iterations from different runs that share a number
+  collapse into one node.
+- **`run → Iteration → ToolCall` traversals overcount tool calls by +1.1% to +66%** — a `ToolCall`
+  reached through the merged `Iteration` looks like it belongs to every run that touches that node.
+
+**Every query pattern below that groups or counts through `Iteration` inherits this bug** — see the
+caveat noted at each: Section 4's `SOURCED_FROM` example, and Section 7's "Full conversation turn
+trace," "Tool usage per iteration," "Failed tool calls," and "Skills active per iteration."
+
+**What to do instead:**
+1. For **tool-call attribution** to a prompt or run, use the **temporal join** pattern in Section 7
+   — it never touches `Iteration` and is unaffected by this bug.
+2. For **token or message counts**, recompute directly from `LlmRequestEvent` /
+   `LlmResponseEvent` payloads rather than trusting `Iteration.usage_*` / `message_count`.
+
+**Trust marker:** a bare `node_id` of the form `"{session_id}::iteration::{N}"` with no
+orchestrator-run segment is **pre-fix data — suspect**. A `node_id` that additionally scopes to
+the run (i.e. the run is part of the key, not just `N`) is **post-fix — trustworthy**. Check the
+literal `node_id` shape before trusting an `Iteration` aggregate.
+
 ---
 
 ## Section 4 — Cross-Layer Joins (SOURCED_FROM)
@@ -324,6 +379,10 @@ RETURN iter.iteration_number AS iteration,
 ORDER BY pre.occurred_at
 LIMIT 25
 ```
+
+> **Caveat (Trap 7):** `iter.iteration_number` here can be a cross-run merged node (up to 15 run
+> parents observed) — do not treat this join as an authoritative per-run tool-call count. For
+> per-prompt/per-run attribution, prefer the temporal join pattern in Section 7.
 
 **Fallback joins** (only when `SOURCED_FROM` is absent — older sessions ingested before
 the handler existed; check with the query in Gotcha 5):
@@ -477,6 +536,10 @@ ORDER BY p.occurred_at, iter.iteration_number, tc.started_at
 LIMIT 100
 ```
 
+> **Caveat (Trap 7):** `iter.iteration_number` here can be a merged node spanning multiple
+> orchestrator runs — do not trust it as a pure per-run counter. For attributing tool calls to a
+> specific prompt/run, prefer the temporal join pattern below.
+
 **Tool usage per iteration** — how many tools each LLM round fired:
 
 ```cypher
@@ -489,6 +552,42 @@ RETURN iter.iteration_number AS iteration,
 ORDER BY iter.iteration_number
 LIMIT 50
 ```
+
+> **Caveat (Trap 7):** counts and groupings by `iter.iteration_number` above inherit the
+> `Iteration`-MERGE bug (one node can span up to 15 runs) — treat this as an approximate, not
+> authoritative, per-iteration tool count.
+
+**Per-prompt (or per-run) tool-call attribution — temporal join, no edges (preferred over the
+`Iteration`-based counts above; see Trap 7):**
+
+There is no direct edge from `ToolCall` to `Prompt` or `OrchestratorRun`. The reliable way to
+attribute a tool call to the prompt (or run) that was active when it fired is a **temporal join**
+on `tc.started_at` — this is *more* accurate than the structural `run → Iteration → ToolCall`
+path above, which inflates counts by +4–20% due to the Trap 7 `Iteration`-MERGE bug and silently
+drops prompts:
+
+```cypher
+// Per-prompt tool-call attribution — temporal, no new edges.
+// Swap (p:Prompt)/p.occurred_at for (p:OrchestratorRun)/p.started_at for per-run.
+MATCH (tc:ToolCall {session_id:$sid}) WHERE tc.started_at IS NOT NULL
+OPTIONAL MATCH (p:Prompt {session_id:$sid}) WHERE p.occurred_at <= tc.started_at
+WITH tc, p ORDER BY p.occurred_at DESC
+WITH tc, head(collect(p)) AS last_prompt
+RETURN coalesce(last_prompt.node_id,'<orphan: no preceding prompt>') AS prompt_id,
+       count(tc) AS tool_calls
+ORDER BY prompt_id
+```
+
+**Caveats:**
+- Use `tc.started_at` directly — it equals `ToolPreEvent.occurred_at` on 100% of rows. Do **not**
+  join via `SOURCED_FROM` for this: it fans out to *both* `tool:pre` and `tool:post` events for
+  the same call and double-counts.
+- Report an explicit **orphan bucket** (`<orphan: no preceding prompt>`) rather than dropping
+  those rows — ~0.2% of tool calls occur in sub-agent sessions with no `Prompt` node, and a few
+  precede the session's first prompt.
+- Filter the ~0.007% of `ToolCall` rows with a null `started_at` (the `WHERE` above already does
+  this).
+- This is a single-writer timeline — no clock skew, no tied timestamps observed in validation.
 
 **Failed tool calls** — scope to one session; add `ORDER BY tc.started_at DESC` for
 most-recent-first:
@@ -504,6 +603,10 @@ RETURN iter.iteration_number AS iteration, tc.tool_name AS tool,
 ORDER BY tc.started_at
 LIMIT 50
 ```
+
+> **Caveat (Trap 7):** `iter.iteration_number` may be a cross-run merged node — a failed call
+> attributed to "iteration 3" may actually belong to iteration 3 of a *different* run. Cross-check
+> against the temporal join pattern above when per-run precision matters.
 
 **Delegations in a session** — which tool call triggered which agent (enumeration, not
 depth — see Trap 1 for lineage/depth):
@@ -529,6 +632,9 @@ RETURN iter.iteration_number, sl.skill_name, sl.content_length, sl.started_at
 ORDER BY iter.iteration_number, sl.started_at
 LIMIT 100
 ```
+
+> **Caveat (Trap 7):** `iter.iteration_number` can be a cross-run merged node — a skill load shown
+> under "iteration 2" may actually have loaded during a different run's iteration 2.
 
 **Recipe run trace:**
 
@@ -664,8 +770,30 @@ client to parse with `jq`.
 **Rule.** Prefer lifted first-class properties when they exist; when a field is **only** in the
 payload, lift it in-graph with APOC and return just the scalar. (`working_dir` is the worked
 example here — proven, and the whole point of the pattern — but per Section 2, it is **not**
-a scoping lever: it is sparsely populated (~7% of sessions) with no canonical per-session
-source, so use it to read one session's directory, never to scope a population.)
+a scoping lever: it is ~0% queryable in-graph (0 of 4,504 / 0 of 9,086 sessions — not a lifted
+Session property) with no canonical per-session source, so use it to read one session's
+directory, never to scope a population.)
+
+### Aggregate a numeric JSON-string payload field: total cost (Trap 6)
+
+The same parse-in-graph idiom extends past reading a scalar to **aggregating** a numeric value
+buried inside a JSON string. `cost_usd` lives at `data.usage.cost_usd` on `:LlmResponseEvent`,
+itself a string inside the parsed map — cast it with `toFloat()` before summing, and pin the
+label to avoid the triple-count described in Trap 6:
+
+```cypher
+MATCH (e:LlmResponseEvent) WHERE e.data CONTAINS 'cost_usd'
+WITH apoc.convert.fromJsonMap(e.data) AS d
+RETURN sum(toFloat(d.usage.cost_usd)) AS total_cost_usd
+```
+
+**Rules:**
+- Pre-filter with `WHERE e.data CONTAINS 'cost_usd'` before parsing — cheaper than parsing every
+  `LlmResponseEvent` just to find the field absent.
+- Pin the label to `:LlmResponseEvent` — do not sweep `:SST_EVENT` or join through
+  `ContentBlockEndEvent` / `ProviderResponseEvent` for the same figure (Trap 6).
+- Always `toFloat()` the nested value — it deserializes from JSON as a string, and a bare
+  `sum()` over it returns HTTP 500, not a wrong number.
 
 ---
 

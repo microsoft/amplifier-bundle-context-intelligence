@@ -238,6 +238,7 @@ class _DestinationDispatcher:
         api_key: str,
         workspace: str | None,
         *,
+        working_dir: str | None = None,
         dispatch_timeout: float,
         failure_threshold: int,
         queue_capacity: int,
@@ -261,6 +262,7 @@ class _DestinationDispatcher:
         self._url = url.rstrip("/")
         self._api_key = api_key
         self._workspace = workspace
+        self._working_dir = working_dir
         self._dispatch_timeout = dispatch_timeout
         self._read_timeout = read_timeout
         self._connect_timeout = connect_timeout
@@ -906,7 +908,7 @@ class _DestinationDispatcher:
                 limits=httpx.Limits(max_connections=1, max_keepalive_connections=1),
             )
 
-        payload = build_payload(event, self._workspace, data)
+        payload = build_payload(event, self._workspace, data, working_dir=self._working_dir)
         # Per-request header: Entra SDK returns cached token and refreshes near expiry.
         try:
             auth_headers = self._strategy.headers()

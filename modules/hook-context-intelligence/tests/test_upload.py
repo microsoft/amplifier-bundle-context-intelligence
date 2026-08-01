@@ -77,7 +77,13 @@ class TestComputeIdempotencyKey:
 class TestBuildPayload:
     def test_has_required_keys(self) -> None:
         payload = build_payload("session:start", "ws1", {"x": 1})
-        assert set(payload.keys()) >= {"event", "workspace", "idempotency_key", "data"}
+        assert set(payload.keys()) >= {
+            "event",
+            "workspace",
+            "working_dir",
+            "idempotency_key",
+            "data",
+        }
 
     def test_event_field_matches_input(self) -> None:
         payload = build_payload("session:start", "ws1", {"x": 1})
@@ -103,3 +109,45 @@ class TestBuildPayload:
         payload = build_payload(event, workspace, data)
         expected_key = _compute_idempotency_key(event, workspace, data)
         assert payload["idempotency_key"] == expected_key
+
+    # -- working_dir: top-level envelope field (Phase-1 emit) ------------------
+
+    def test_working_dir_field_matches_input(self) -> None:
+        """working_dir is a TOP-LEVEL envelope field, alongside workspace."""
+        payload = build_payload("session:start", "ws1", {"x": 1}, working_dir="/abs/path")
+        assert payload["working_dir"] == "/abs/path"
+
+    def test_working_dir_defaults_to_empty_string_when_omitted(self) -> None:
+        """Callers that don't pass working_dir (e.g. legacy call sites) get a safe default."""
+        payload = build_payload("session:start", "ws1", {"x": 1})
+        assert payload["working_dir"] == ""
+
+    def test_none_working_dir_becomes_empty_string(self) -> None:
+        payload = build_payload("session:start", "ws1", {"x": 1}, working_dir=None)
+        assert payload["working_dir"] == ""
+
+    def test_working_dir_absent_from_nested_data(self) -> None:
+        """working_dir is envelope metadata, NOT event data \u2014 it must never leak into `data`."""
+        data = {"session_id": "abc", "timestamp": "2024-01-01"}
+        payload = build_payload("session:start", "ws", data, working_dir="/abs/path")
+        assert "working_dir" not in payload["data"]
+        assert payload["data"] == data
+
+    def test_idempotency_key_unaffected_by_working_dir(self) -> None:
+        """working_dir is additive envelope metadata only \u2014 NOT part of the dedup key.
+
+        Two payloads that differ ONLY in working_dir must produce the SAME
+        idempotency_key, so existing HTTP dedup behavior is unchanged.
+        """
+        event = "session:start"
+        workspace = "ws1"
+        data = {"x": 1}
+        payload_a = build_payload(event, workspace, data, working_dir="/path/a")
+        payload_b = build_payload(event, workspace, data, working_dir="/path/b")
+        payload_none = build_payload(event, workspace, data)
+        assert (
+            payload_a["idempotency_key"]
+            == payload_b["idempotency_key"]
+            == payload_none["idempotency_key"]
+        )
+        assert payload_a["idempotency_key"] == _compute_idempotency_key(event, workspace, data)
