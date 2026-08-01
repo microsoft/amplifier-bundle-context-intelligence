@@ -8,8 +8,16 @@ description: >
   verified Cypher patterns.
 license: MIT
 metadata:
-  version: "2.4.0"
+  version: "2.5.0"
   changelog:
+    - "2.5.0: Elevated the anti-multi-count guidance scattered across Trap 6 (cost) and Trap 8
+      (tokens) into a single named cross-cutting rule (Section 3: \"Rule \u2014 one owner per numeric
+      fact: never multi-count cost or tokens by over-reading events\") \u2014 every usage value is
+      emitted once per LLM turn, owned by :LlmResponseEvent, and echoed onto ContentBlockEndEvent /
+      ProviderResponseEvent; aggregating across the wider set sums it 2\u20133x over. Trimmed Trap 6
+      and Trap 8 to reference the rule instead of each restating the mechanism; both traps keep
+      only their field-specific specifics (cost_usd is a STRING requiring toFloat; token/cache
+      fields are INTEGER with the correct cache field names). Section 8 queries unchanged."
     - "2.4.0: Added Trap 8 (token & cache usage fields on :LlmResponseEvent are payload INTEGERs — unlike cost_usd's STRING — but still require pinning to :LlmResponseEvent; an unpinned :Event sweep replays the same usage map via ContentBlockEndEvent/ProviderResponseEvent and inflates every total by ~3.4x, measured: cost 3.43x, input 3.31x, output 3.63x, cache 3.39x) with a validated combined cost+token aggregation and a per-model breakdown pattern in Section 8. Documented the correct cache field names (cache_read_input_tokens, cache_creation_input_tokens — complete) versus the sparse/wrong-typed alternatives (cache_read_tokens, cache_creation), and reinforced that Iteration.usage_input/usage_output/usage_cache_write (Trap 7) must never be used for token or cost aggregation — they are last-write-wins corrupted and Iteration carries no cost field at all."
     - "2.3.0: Corrected the working_dir population figure from an inaccurate ~7% (238/3,259 sessions) down to its true measured value: ~0% queryable in-graph (0 of 4,504 / 0 of 9,086 sessions — not a lifted Session property); workspace remains ~100% and the only valid scoping lever. Added Trap 6 (cost_usd totals: a JSON-string payload field, not a lifted property; a bare sum() returns HTTP 500; must pin to :LlmResponseEvent to avoid triple-counting against ContentBlockEndEvent / ProviderResponseEvent) with a validated APOC aggregation pattern in Section 8. Added Trap 7 (Iteration.node_id MERGEs across orchestrator runs, corrupting iteration-scoped counts/aggregates by up to +66%) with caveats on every affected iteration-based query pattern. Added a validated temporal-join pattern (Section 7) for per-prompt/per-run tool-call attribution — more accurate than the structural run→Iteration→ToolCall path and unaffected by the Trap 7 MERGE bug."
     - "2.2.0: Corrected the Section 2 workspace/working_dir claims — workspace is a lifted, reliable (~100%) scoping slug, not the literal working directory; working_dir is ~0% queryable in-graph (0 of 4,504 / 0 of 9,086 sessions — not a lifted Session property) payload-only field with no canonical per-session source, and must never be used to scope a population. Consolidated one visible+correct in-graph APOC payload-parse pattern: dot-access on a JSON-string field (e.g. e.data.working_dir) raises a type error, not a silent null — parse in-graph with apoc.convert.fromJsonMap and return only the scalar needed. De-duplicated the Section 6 copy into a pointer at this pattern."
@@ -303,18 +311,39 @@ RETURN t.tool_name AS tool, d.seconds AS secs
 ORDER BY secs DESC LIMIT 8
 ```
 
+### Rule — one owner per numeric fact: never multi-count cost or tokens by over-reading events
+
+This is a cross-cutting rule, not a single trap — Traps 6 and 8 below are both instances of it.
+
+Every numeric usage value — dollars (`cost_usd`) and every token field (`input_tokens`,
+`output_tokens`, `cache_read_input_tokens`, `cache_creation_input_tokens`) — is emitted **once**
+per LLM turn and is **owned** by the `:LlmResponseEvent` node. The identical `usage` map is then
+**echoed** onto other events of the same turn: `ContentBlockEndEvent` (streaming replays it ~2.33x
+per response) and `ProviderResponseEvent` (a third, lower-layer copy).
+
+**Consequence:** any aggregation that reads a set *wider* than the owning label — an unpinned
+`:Event` / `:SST_EVENT` sweep, or a cross-layer join through `ContentBlockEndEvent` /
+`ProviderResponseEvent` — sums the same dollars and tokens 2–3x over. This is **over-reading the
+events**, not a rounding error. Measured inflation ~3.4x on the production graph (a true ~$45.5K
+reads as a phantom ~$156K); reproduced on an isolated DTU at 2.1x–3.9x across fields.
+
+**The rule, stated generally:** a numeric fact has exactly **one owning event layer** — aggregate
+it only from that layer. For LLM cost and tokens, the owner is `:LlmResponseEvent`. Concretely:
+always `MATCH (e:LlmResponseEvent)`; never `sum()` a usage field across a broader label set, and
+never reach the same figure through a cross-layer join. If a numeric value appears on more than one
+label, those are **copies, not addends** — pick the owner. This applies identically to dollars and
+tokens, and to any future numeric usage field added to the payload.
+
 ### Trap 6 — `cost_usd` is a JSON string nested in the payload, not a lifted property
+
+An instance of the **Rule** above — for cost, the owner is `:LlmResponseEvent`. The trap-specific
+wrinkle here is typing, not scoping:
 
 There is **no top-level lifted cost property** anywhere in the graph. The real value lives at
 `data.usage.cost_usd` on `:LlmResponseEvent`, serialized as a **JSON string** — not a number, and
-not a top-level field. Two failure modes follow directly from this:
-
-- A bare `sum(e.cost_usd)` or `sum(e.data.usage.cost_usd)` **returns HTTP 500** (Section 6: `data`
-  is a string, dot-access into it type-errors; the nested numeric value also arrives as a JSON
-  string, not a Cypher number, so it must be parsed *and* cast).
-- You **must pin to `:LlmResponseEvent`** specifically. Aggregating cost across a broader `:Event`
-  sweep (or joining through `ContentBlockEndEvent` / `ProviderResponseEvent`, which co-occur with
-  the same LLM turn) **triple-counts** the same dollar figure.
+not a top-level field. A bare `sum(e.cost_usd)` or `sum(e.data.usage.cost_usd)` **returns HTTP
+500** (Section 6: `data` is a string, dot-access into it type-errors; the nested numeric value also
+arrives as a JSON string, not a Cypher number, so it must be parsed *and* cast with `toFloat()`).
 
 **Validated** (returns `$44,886.32` over 63,758 events):
 
@@ -359,24 +388,21 @@ orchestrator-run segment is **pre-fix data — suspect**. A `node_id` that addit
 the run (i.e. the run is part of the key, not just `N`) is **post-fix — trustworthy**. Check the
 literal `node_id` shape before trusting an `Iteration` aggregate.
 
-### Trap 8 — Token & cache usage: payload integers, still must pin to `:LlmResponseEvent`
+### Trap 8 — Token & cache usage: payload integers, still owned by `:LlmResponseEvent`
 
-Token and cache-usage figures live at `data.usage.{input_tokens, output_tokens,
-cache_read_input_tokens, cache_creation_input_tokens}` on `:LlmResponseEvent`, parsed the same way
-as cost (Trap 6) via `apoc.convert.fromJsonMap(e.data)`. The typing differs from cost in one
-important way, and the triple-count danger is identical:
+An instance of the **Rule** above (before Trap 6) — for tokens, the owner is also
+`:LlmResponseEvent`, exactly as for cost. Token and cache-usage figures live at
+`data.usage.{input_tokens, output_tokens, cache_read_input_tokens, cache_creation_input_tokens}`
+on `:LlmResponseEvent`, parsed the same way as cost (Trap 6) via `apoc.convert.fromJsonMap(e.data)`.
+The trap-specific wrinkle is the opposite typing quirk:
 
 - **Typing is the opposite of `cost_usd`.** The token fields deserialize as **INTEGER**, not a
   JSON string — `toInteger()` on them is defensive/optional, not required. `cost_usd` (Trap 6) is
   the **STRING** one; `toFloat()` there is mandatory. Don't let the cost pattern's mandatory cast
   make you assume tokens need the same cast for the same reason — they don't need it to avoid an
-  error, only to normalize type.
-- **You must still pin to `:LlmResponseEvent`.** An unpinned `:Event` sweep also matches
-  `ContentBlockEndEvent` and `ProviderResponseEvent`, each of which replays the same response-level
-  `usage` map (~2.33x + 1x on top of the real one) — **inflating every total by ~3.4x**. Validated:
-  cost 3.43x, input tokens 3.31x, output tokens 3.63x, cache tokens 3.39x. This is the exact same
-  triple-count mechanism as Trap 6, and it hits the integer fields just as hard as the string one —
-  correct typing does not protect you from wrong scoping.
+  error, only to normalize type. Correct typing does **not** protect you from wrong scoping —
+  validated inflation when the Rule is violated: cost 3.43x, input tokens 3.31x, output tokens
+  3.63x, cache tokens 3.39x.
 - **Use the complete cache fields, not the sparse/wrong-typed ones.** `cache_read_input_tokens` and
   `cache_creation_input_tokens` are complete. Do **not** sum `cache_read_tokens` (sparse — NULL on
   many events) or `cache_creation` (a **MAP**, not a number — summing it type-errors or silently
