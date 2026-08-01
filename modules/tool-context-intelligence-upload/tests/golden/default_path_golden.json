@@ -9,6 +9,7 @@
     },
     "event": "tool:pre",
     "idempotency_key": "aci-event-v1:2c95518c6ee4d53d6783744da1082980088ced3a891268ed754903599b3247bf",
+    "working_dir": "",
     "workspace": "ws"
   },
   {
@@ -17,12 +18,14 @@
     },
     "event": "session:start",
     "idempotency_key": "aci-event-v1:a850ca194d2bb4e34dfaa52e3775a926f3e938877874fab13440f5dc29bf3e07",
+    "working_dir": "",
     "workspace": ""
   },
   {
     "data": {},
     "event": "tool:post",
     "idempotency_key": "aci-event-v1:ebd3c2a3de8958c6747b25ba8d3072127407e059f0b59f11550f1471465985bd",
+    "working_dir": "",
     "workspace": ""
   }
 ]

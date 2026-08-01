@@ -273,6 +273,13 @@ def run_upload(
     with httpx.Client(timeout=timeout) as client:
         for session_dir, metadata in sessions:
             session_id: str = metadata["session_id"]
+            # working_dir is session-invariant (unlike workspace, which is read
+            # per-event from the parsed record) -- read it once per session from
+            # the same metadata dict that carries session_id. Both --format
+            # values populate metadata["working_dir"]: CI-native metadata.json
+            # carries it natively, and the legacy path's build_metadata() writes
+            # it into the reconstructed context-intelligence/metadata.json.
+            working_dir: str = metadata.get("working_dir", "")
             events_file = session_dir / "events.jsonl"
 
             if not events_file.exists():
@@ -335,7 +342,7 @@ def run_upload(
                         continue
 
                     event, workspace, data = parsed
-                    payload = build_payload(event, workspace, data)
+                    payload = build_payload(event, workspace, data, working_dir=working_dir)
 
                     # --- POST with bounded retry + exponential backoff (issue #338) ---
                     # Transient failures (connection errors, timeouts, 5xx, 429) are
