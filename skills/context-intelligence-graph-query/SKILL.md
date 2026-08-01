@@ -8,8 +8,9 @@ description: >
   verified Cypher patterns.
 license: MIT
 metadata:
-  version: "2.3.0"
+  version: "2.4.0"
   changelog:
+    - "2.4.0: Added Trap 8 (token & cache usage fields on :LlmResponseEvent are payload INTEGERs — unlike cost_usd's STRING — but still require pinning to :LlmResponseEvent; an unpinned :Event sweep replays the same usage map via ContentBlockEndEvent/ProviderResponseEvent and inflates every total by ~3.4x, measured: cost 3.43x, input 3.31x, output 3.63x, cache 3.39x) with a validated combined cost+token aggregation and a per-model breakdown pattern in Section 8. Documented the correct cache field names (cache_read_input_tokens, cache_creation_input_tokens — complete) versus the sparse/wrong-typed alternatives (cache_read_tokens, cache_creation), and reinforced that Iteration.usage_input/usage_output/usage_cache_write (Trap 7) must never be used for token or cost aggregation — they are last-write-wins corrupted and Iteration carries no cost field at all."
     - "2.3.0: Corrected the working_dir population figure from an inaccurate ~7% (238/3,259 sessions) down to its true measured value: ~0% queryable in-graph (0 of 4,504 / 0 of 9,086 sessions — not a lifted Session property); workspace remains ~100% and the only valid scoping lever. Added Trap 6 (cost_usd totals: a JSON-string payload field, not a lifted property; a bare sum() returns HTTP 500; must pin to :LlmResponseEvent to avoid triple-counting against ContentBlockEndEvent / ProviderResponseEvent) with a validated APOC aggregation pattern in Section 8. Added Trap 7 (Iteration.node_id MERGEs across orchestrator runs, corrupting iteration-scoped counts/aggregates by up to +66%) with caveats on every affected iteration-based query pattern. Added a validated temporal-join pattern (Section 7) for per-prompt/per-run tool-call attribution — more accurate than the structural run→Iteration→ToolCall path and unaffected by the Trap 7 MERGE bug."
     - "2.2.0: Corrected the Section 2 workspace/working_dir claims — workspace is a lifted, reliable (~100%) scoping slug, not the literal working directory; working_dir is ~0% queryable in-graph (0 of 4,504 / 0 of 9,086 sessions — not a lifted Session property) payload-only field with no canonical per-session source, and must never be used to scope a population. Consolidated one visible+correct in-graph APOC payload-parse pattern: dot-access on a JSON-string field (e.g. e.data.working_dir) raises a type error, not a silent null — parse in-graph with apoc.convert.fromJsonMap and return only the scalar needed. De-duplicated the Section 6 copy into a pointer at this pattern."
     - "2.1.0: Reporting guidance — agent-level / self-delegation answers must STATE the resolved self→actor breakdown (root/main vs named) as an explicit standalone finding, not fold it into a blended statistic. Tightened the Section 8 agent-rollup: project Session/FORKED (the labels that exist) and roll up by the Session.agent property; agents are NOT a projectable Agent graph."
@@ -348,13 +349,50 @@ trace," "Tool usage per iteration," "Failed tool calls," and "Skills active per 
 **What to do instead:**
 1. For **tool-call attribution** to a prompt or run, use the **temporal join** pattern in Section 7
    — it never touches `Iteration` and is unaffected by this bug.
-2. For **token or message counts**, recompute directly from `LlmRequestEvent` /
-   `LlmResponseEvent` payloads rather than trusting `Iteration.usage_*` / `message_count`.
+2. For **token or cost counts**, never trust `Iteration.usage_*` / `message_count` — recompute
+   directly from `LlmResponseEvent` payloads using the validated Trap 8 / Section 8 aggregation
+   pattern (`Iteration` carries no cost field at all, and its token counters are last-write-wins
+   corrupted).
 
 **Trust marker:** a bare `node_id` of the form `"{session_id}::iteration::{N}"` with no
 orchestrator-run segment is **pre-fix data — suspect**. A `node_id` that additionally scopes to
 the run (i.e. the run is part of the key, not just `N`) is **post-fix — trustworthy**. Check the
 literal `node_id` shape before trusting an `Iteration` aggregate.
+
+### Trap 8 — Token & cache usage: payload integers, still must pin to `:LlmResponseEvent`
+
+Token and cache-usage figures live at `data.usage.{input_tokens, output_tokens,
+cache_read_input_tokens, cache_creation_input_tokens}` on `:LlmResponseEvent`, parsed the same way
+as cost (Trap 6) via `apoc.convert.fromJsonMap(e.data)`. The typing differs from cost in one
+important way, and the triple-count danger is identical:
+
+- **Typing is the opposite of `cost_usd`.** The token fields deserialize as **INTEGER**, not a
+  JSON string — `toInteger()` on them is defensive/optional, not required. `cost_usd` (Trap 6) is
+  the **STRING** one; `toFloat()` there is mandatory. Don't let the cost pattern's mandatory cast
+  make you assume tokens need the same cast for the same reason — they don't need it to avoid an
+  error, only to normalize type.
+- **You must still pin to `:LlmResponseEvent`.** An unpinned `:Event` sweep also matches
+  `ContentBlockEndEvent` and `ProviderResponseEvent`, each of which replays the same response-level
+  `usage` map (~2.33x + 1x on top of the real one) — **inflating every total by ~3.4x**. Validated:
+  cost 3.43x, input tokens 3.31x, output tokens 3.63x, cache tokens 3.39x. This is the exact same
+  triple-count mechanism as Trap 6, and it hits the integer fields just as hard as the string one —
+  correct typing does not protect you from wrong scoping.
+- **Use the complete cache fields, not the sparse/wrong-typed ones.** `cache_read_input_tokens` and
+  `cache_creation_input_tokens` are complete. Do **not** sum `cache_read_tokens` (sparse — NULL on
+  many events) or `cache_creation` (a **MAP**, not a number — summing it type-errors or silently
+  drops). `cache_write_tokens` is close to `cache_creation_input_tokens` but diverges ~1.5%; prefer
+  `cache_creation_input_tokens` as the validated figure.
+- **Never aggregate from `Iteration`.** `Iteration.usage_input` / `usage_output` /
+  `usage_cache_write` are the same Trap 7 last-write-wins corruption (undercounts 10–14%), and
+  `Iteration` carries **no cost field at all** — there is no `Iteration`-based cost figure to fall
+  back to even approximately. Recompute both tokens and cost from `LlmResponseEvent` payloads.
+- **NULL and zero-cost caveat.** ~4% of events have a null `cost_usd` (`sum()` ignores nulls, so the
+  total stays correct — just don't expect `count(*)` to equal the events actually priced). Some
+  models/providers are non-priced and report `$0` cost with real, non-zero token counts. Always
+  report `llm_calls` and the token columns alongside cost so this gap is visible rather than hidden
+  inside a dollar figure.
+
+See Section 8 for the validated combined cost+token aggregation and per-model breakdown.
 
 ---
 
@@ -794,6 +832,64 @@ RETURN sum(toFloat(d.usage.cost_usd)) AS total_cost_usd
   `ContentBlockEndEvent` / `ProviderResponseEvent` for the same figure (Trap 6).
 - Always `toFloat()` the nested value — it deserializes from JSON as a string, and a bare
   `sum()` over it returns HTTP 500, not a wrong number.
+
+### Aggregate token + cost usage from LlmResponseEvent payloads (Trap 8)
+
+Token and cache-usage fields sit alongside `cost_usd` in the same `data.usage` map, but they
+deserialize as **INTEGER**, not a JSON string — `toInteger()` is defensive here, not required the
+way `toFloat()` is for `cost_usd`. The scoping danger is identical to Trap 6: an unpinned `:Event`
+sweep also matches `ContentBlockEndEvent` and `ProviderResponseEvent`, each replaying the same
+response-level `usage` map, and inflates every total by **~3.4x** regardless of field type.
+
+**Validated combined cost + tokens (canonical — aggregate == independent reduce == hand-summed
+subset):**
+
+```cypher
+MATCH (e:LlmResponseEvent)
+WHERE e.data CONTAINS 'input_tokens'
+WITH apoc.convert.fromJsonMap(e.data) AS d
+RETURN count(*)                                            AS llm_calls,
+       sum(toFloat(d.usage.cost_usd))                      AS total_cost_usd,
+       sum(toInteger(d.usage.input_tokens))                AS input_tokens,
+       sum(toInteger(d.usage.output_tokens))               AS output_tokens,
+       sum(toInteger(d.usage.cache_read_input_tokens))     AS cache_read_tokens,
+       sum(toInteger(d.usage.cache_creation_input_tokens)) AS cache_creation_tokens
+```
+
+**Per-model breakdown:**
+
+```cypher
+MATCH (e:LlmResponseEvent)
+WHERE e.data CONTAINS 'input_tokens'
+WITH apoc.convert.fromJsonMap(e.data) AS d
+RETURN d.model AS model, d.provider AS provider, count(*) AS calls,
+       round(sum(toFloat(d.usage.cost_usd)), 2)            AS cost_usd,
+       sum(toInteger(d.usage.input_tokens))                AS input_tokens,
+       sum(toInteger(d.usage.output_tokens))                AS output_tokens,
+       sum(toInteger(d.usage.cache_read_input_tokens))     AS cache_read,
+       sum(toInteger(d.usage.cache_creation_input_tokens)) AS cache_creation
+ORDER BY cost_usd DESC LIMIT 15
+```
+
+Add `{workspace: $workspace}` to the `MATCH (e:LlmResponseEvent ...)` anchor for a per-workspace
+variant of either query.
+
+**Validated global scale (real corpus snapshot, reader's sanity check):** ~68k LLM calls → ~$45.5K
+cost, input ~4.50B tokens, output ~80.6M tokens, cache_read ~4.62B tokens, cache_creation ~8.05B
+tokens. The same query with the `:LlmResponseEvent` pin removed reports ~$156K (~3.4x) — wrong,
+for the exact reason given in Trap 8.
+
+**Rules:**
+- Use `cache_read_input_tokens` and `cache_creation_input_tokens` — both complete. Do **not** sum
+  `cache_read_tokens` (sparse/NULL on many events) or `cache_creation` (a MAP, not a number).
+  `cache_write_tokens` is close to `cache_creation_input_tokens` but diverges ~1.5% — prefer
+  `cache_creation_input_tokens`.
+- Never source tokens or cost from `Iteration.usage_*` (Trap 7) — last-write-wins corrupted, and
+  `Iteration` has no cost field at all.
+- Report `llm_calls` alongside cost and tokens — ~4% of events have a null `cost_usd` (`sum()`
+  ignores nulls so the total is still correct), and some non-priced models report `$0` cost with
+  real token counts. Surfacing `llm_calls` and the token columns makes that gap visible instead of
+  hiding it inside a dollar figure.
 
 ---
 
