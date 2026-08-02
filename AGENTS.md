@@ -102,6 +102,37 @@ including ANY agent / skill / mode / tool / networking / auth edit → units + `
 real DTU run + the evaluation harness, with captured evidence.** Skipping the live run on a seam
 change is how a green build ships a broken bundle.
 
+## Authoring data-query & navigation skills — evidence-based, against a live graph
+
+The data-query and navigation skills (`context-intelligence-graph-query`, `-derived-metrics`,
+`-gds`, `-session-navigation`, `-session-reconstruction`, and any skill that ships Cypher or
+graph/file navigation steps) encode queries whose **correctness only exists relative to REAL
+data**. A query that *parses* is not a query that is *correct* — it can 500 on a type it didn't
+expect, silently over-count by reading echoed events, or read a corrupted/renamed property and
+return a confident wrong number. None of that is visible without running it against real data.
+
+So authoring these skills is **evidence-based, live-first — never from memory or the schema doc**:
+
+- **Validate every query/step against a LIVE graph (or real files) as you author it**, not only
+  at the "done" gate. Run it against a real server's `/cypher` (a DTU-backed server for isolation)
+  — or, for file-navigation skills, against real session `events.jsonl` — on real data.
+- **Cross-check the result against ground truth**, not just "it ran": a second independent
+  computation (e.g. aggregate vs an independent reduce), a hand-verified subset, and a **negative
+  control** that proves the discipline is load-bearing (e.g. the bare `sum()` that returns HTTP
+  500 without `toFloat()`). "Returned 200" is not evidence of correctness.
+- **Work in an evaluation loop:** author → run against live data → check vs ground truth → correct
+  → re-run, until the query is proven. For skills whose value is a *behaviour* (an agent following
+  the guidance), score the behaviour with the evaluation harness (`context-intelligence-eval-design`
+  / `-evaluation-methodology`) on a DTU — not the query in isolation.
+- **Never author without validating the skill's impact on ACTUAL behaviour.** A guidance or query
+  edit that has not been shown to change what runs — *correctly* — is **not done**. Capture the
+  before/after: the wrong query over-counts / 500s; the shipped one returns the verified figure.
+
+The bar, from this repo's own history: the cost/token aggregation patterns were proven three ways
+(aggregate == independent reduce == hand-summed subset) on a live graph, **and** re-run on a DTU
+with a negative control, **before** a single line was written into the skill. Ship queries you have
+watched return the right answer on real data — nothing less.
+
 ## Architecture note
 
 This bundle ships **layered, composable behaviours** — `context-intelligence-navigation` ⊂
