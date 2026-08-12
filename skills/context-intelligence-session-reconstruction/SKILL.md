@@ -23,7 +23,7 @@ Use reconstruction when local session files are absent or unusable but the graph
 
 ## When NOT to Use
 
-- **Server unreachable**: If the graph server is not reachable, reconstruction cannot proceed. Verify server reachability first with `python scripts/context-intelligence.py status`. If the server is down, fall back to `session-navigator` for local file navigation.
+- **Server unreachable**: If the graph server is not reachable, reconstruction cannot proceed. Verify server reachability first with `python scripts/context-intelligence.py status`. If the server is down, fall back to `prospector` for local file navigation.
 - **Pre-hook sessions**: Sessions that predate the `hook-context-intelligence` hook have no data in the graph. Reconstruction cannot create files for these sessions — there is no source data to read from.
 - **Real-time data**: Reconstruction reads a snapshot of what is stored in the graph. It is not a live stream. Do not use it to monitor an active session or capture events as they happen.
 
@@ -162,4 +162,4 @@ Sessions with successfully reconstructed `metadata.json` should now appear with 
 
 - **Session names are approximations**: Session names are generated at runtime by `hooks-session-naming` from the first user prompt. That output is not stored in the graph. Reconstruction generates names from the same source (the first prompt), but the exact phrasing may differ from the original session name.
 
-- **Pre-hook sessions have no graph data**: Sessions that predate the `hook-context-intelligence` hook have no entries in the graph. Reconstruction will produce empty output for these sessions — there is no data to read. Use `session-navigator` to work with pre-hook sessions directly from local JSONL files if they still exist on disk.
+- **Pre-hook sessions have no graph data**: Sessions that predate the `hook-context-intelligence` hook have no entries in the graph. Reconstruction will produce empty output for these sessions — there is no data to read. Use `prospector` to work with pre-hook sessions directly from local JSONL files if they still exist on disk.

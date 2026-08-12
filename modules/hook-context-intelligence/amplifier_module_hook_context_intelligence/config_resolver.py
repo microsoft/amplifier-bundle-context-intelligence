@@ -399,9 +399,17 @@ class HookConfigResolver:
         """Log level string for this module.
 
         Reads directly from config['log_level'], defaults to 'WARNING'.
-        No coordinator fallback.
+        No coordinator fallback. Falls back to the default when the configured
+        value is not a recognised logging level name (for example an
+        unexpanded ``${VAR:...}`` placeholder), so a misconfigured level can
+        never prevent the hook from loading.
         """
-        return str(self._config.get("log_level", "WARNING"))
+        raw = str(self._config.get("log_level", "WARNING")).strip().upper()
+        # logging.getLevelName returns an int for a known level name, otherwise
+        # a "Level <x>" string. Use that to validate without a hardcoded list.
+        if isinstance(logging.getLevelName(raw), int):
+            return raw
+        return "WARNING"
 
     @property
     def dispatch_timeout(self) -> float:

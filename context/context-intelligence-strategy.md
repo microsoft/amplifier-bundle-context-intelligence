@@ -3,7 +3,7 @@
 This thin orientation file is injected only when the context-intelligence mode is active. It
 routes a tool/agent designer to the **single authoritative home** of each concept. It is a
 **pure pointer table**: titles only, no restated rules — open each reference on demand with
-`read_file` or `load_skill`. (These are NON-loading references; only `session-navigator` uses a
+`read_file` or `load_skill`. (These are NON-loading references; only `prospector` uses a
 LOADING `@mention` for the discipline file, because it needs those rules resident while it
 works.)
 

@@ -46,7 +46,7 @@ The user's design corrections in the prior session followed one shape: **the age
 
 | Agent over-reached | User pulled down to |
 |---|---|
-| "Delegate to `context-intelligence-design-facilitator` for findings authoring." | *"The facilitator agent won't be available in runtime or production environments; the graph analyst is the only one you can rely upon."* And the Python tooling must work without even that. |
+| "Delegate to `context-intelligence-design-facilitator` for findings authoring." | *"The facilitator agent won't be available in runtime or production environments; the detective is the only one you can rely upon."* And the Python tooling must work without even that. |
 | "Query the graph (Cypher only)." | *"The Python tooling code must be able to function in the absence of the Cypher endpoint."* Data is on disk under `~/.amplifier/projects/`. |
 | "LLM-evaluate the whole user-steering signal." | *"look for prompt submissions"* (deterministic) *"but then evaluate the payload and see for 'strong user steering due to failure to converge'"* (LLM, but only on the narrowed payload). |
 

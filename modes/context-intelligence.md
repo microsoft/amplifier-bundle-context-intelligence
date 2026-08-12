@@ -59,7 +59,7 @@ Act on what you find:
 
 | `read_file` result | Your ONLY permitted next action |
 |---|---|
-| File **not found** | Delegate to `context-intelligence:context-intelligence-design-facilitator` with `context_depth="none"`. Do NOT call `graph-analyst`. Do NOT ask the user questions. Do NOT run any investigation. The single permitted action is the delegation. **PRE-delegation:** Produce NO response text before the `delegate()` call; your only output this turn is the tool invocation. **POST-delegation:** After a successful delegation, your ONLY message to the user is the facilitator's Part-A question, copied VERBATIM from the delegation result — no preamble, no summary. |
+| File **not found** | Delegate to `context-intelligence:context-intelligence-design-facilitator` with `context_depth="none"`. Do NOT call `detective`. Do NOT ask the user questions. Do NOT run any investigation. The single permitted action is the delegation. **PRE-delegation:** Produce NO response text before the `delegate()` call; your only output this turn is the tool invocation. **POST-delegation:** After a successful delegation, your ONLY message to the user is the facilitator's Part-A question, copied VERBATIM from the delegation result — no preamble, no summary. |
 | File **not found** AND the activating message already states the goal | Delegate to `context-intelligence:context-intelligence-design-facilitator`, passing that goal as `seed_statement="<verbatim user goal>"` with `context_depth="none"`. **Goal already provided:** the facilitator treats it as the pre-answered opening question and skips re-asking it (see its "Goal already provided" variant). This is also what lets the mode run **unattended** (e.g. from a recipe) instead of stalling on a question no one is there to answer. Same suppression rules as above apply. |
 | File **found, incomplete** | Delegate to `context-intelligence:context-intelligence-design-facilitator` with `context_depth="none"` to complete Phase 0. |
 | File **found, complete** | Check `handoff.md`. If present → delegate to `context-intelligence:context-intelligence-tool-designer`. If absent → delegate to the facilitator to begin Phase 1. |
@@ -70,7 +70,7 @@ This is a hard stop. Do all three of the following, in order, before doing anyth
 
 1. **Write a single sentence to the user** naming the failure:
    *"The context-intelligence-design-facilitator agent failed: [paste the error message]."*
-2. **Stop completely.** Do NOT attempt Phase 0 inline. Do NOT call graph-analyst. Do NOT ask
+2. **Stop completely.** Do NOT attempt Phase 0 inline. Do NOT call detective. Do NOT ask
    the user clarifying questions. Do NOT investigate. Do NOT try to work around the failure.
 3. **Wait** for the user to respond.
 
@@ -128,7 +128,7 @@ Permitted artifact types in this mode: `.md`, `.cypher`, `.dot` only.
 
 ### Phase 1 — Signal Discovery
 
-- **Owner:** `context-intelligence-design-facilitator` (delegates investigation to `graph-analyst` with `context_depth="none"`).
+- **Owner:** `context-intelligence-design-facilitator` (delegates investigation to `detective` with `context_depth="none"`).
 - **Trigger:** `domain-concepts.md` is confirmed.
 - **Produces:** `domain-signals.md` with initial signal definitions (Concept, JSONL pattern, Threshold, What it points to, Risk trajectory — no detection_strategy yet).
 - **Transition to Phase 2:** user confirms `domain-signals.md`; facilitator writes `handoff.md`.

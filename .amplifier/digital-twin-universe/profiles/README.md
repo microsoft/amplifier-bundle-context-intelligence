@@ -54,7 +54,7 @@ seams without those; that is the point of an end-to-end test.
 | `context-intelligence-mode-activation-validation.yaml` | Explicit `/context-intelligence` activation mounts the FULL gated surface — both specialists, all 3 context files, all 3 skills, tool policies — with an off→on→off round-trip | Incus + Gitea mirror + LLM | `... launch .../context-intelligence-mode-activation-validation.yaml --var gitea_host=...` |
 | `context-intelligence-write-server-validation.yaml` | **WRITE to a single server** — hook dispatches a real session's events to ONE `destinations` server; proves the server received them (tagged by workspace) | Incus + Gitea mirror + LLM + **CI server** | `... launch .../context-intelligence-write-server-validation.yaml --var gitea_host=... --var ci_server_url=...` |
 | `context-intelligence-write-fanout-validation.yaml` | **WRITE fan-out** — one session, TWO `destinations`; proves BOTH servers received the events (observes existing hook fan-out; never modifies it) | Incus + Gitea mirror + LLM + **2 CI servers** | `... launch .../context-intelligence-write-fanout-validation.yaml --var gitea_host=... --var ci_server_a=... --var ci_server_b=...` |
-| `context-intelligence-query-validation.yaml` | **EXECUTE queries** (read side) — after logging, drives `graph_query` (Cypher) + `blob_read` (`ci-blob://`) via the `graph-analyst` agent; proves real rows/content come back with the `source` provenance naming the server | Incus + Gitea mirror + LLM + **CI server** | `... launch .../context-intelligence-query-validation.yaml --var gitea_host=... --var ci_server_url=...` |
+| `context-intelligence-query-validation.yaml` | **EXECUTE queries** (read side) — after logging, drives `graph_query` (Cypher) + `blob_read` (`ci-blob://`) via the `detective` agent; proves real rows/content come back with the `source` provenance naming the server | Incus + Gitea mirror + LLM + **CI server** | `... launch .../context-intelligence-query-validation.yaml --var gitea_host=... --var ci_server_url=...` |
 | `context-intelligence-upload-format-validation.yaml` | **Legacy hooks-logging IMPORT** — `--format logging-hook` ingests a shipped neutral synthetic legacy fixture; proves discrimination, runtime slug parity/no fork (graph workspaces exactly equal the runtime-derived set), coexistence/dedupe/idempotency (node count captured at runtime does not grow); self-contained, no host data, no pinned counts | Incus + Gitea mirror + **CI backend** (`context-intelligence-backend.yaml` launched fresh) — no LLM | `... launch .../context-intelligence-upload-format-validation.yaml --var gitea_host=... --var server_url=http://<gateway-ip>:38000 --var server_token=...` |
 | `example-dtu-external-server.yaml` | *Not a test* — reference profile: point the client hook at an **external CI server** with a tagged workspace | Incus + running CI server (below) | see below |
 
@@ -71,7 +71,7 @@ CLI-loaded bundle is wrong. Each mode profile's `readiness` proves, for real:
 - `amplifier` is usable and the bundle was **loaded via `amplifier bundle add` from the Gitea
   mirror** (the branch snapshot, not GitHub `main`);
 - `amplifier bundle show context-intelligence-behavior` lists the **2 baseline agents**
-  (graph-analyst, session-navigator) and the **2 mode-gated specialists are absent** while the
+  (detective, prospector) and the **2 mode-gated specialists are absent** while the
   mode is off (contributes.agents gating holds);
 - the installed mirror mode file declares the full gated surface — `advertised: false`,
   `default_action: block`, 2 contributes.agents, 3 contributes.context (incl.
@@ -194,7 +194,7 @@ tools (see the main `README.md` §"read side"). For multi-source, the connectabl
     events (A and B each: `events_processed:22`, Cypher count **29**); server B only ever held
     the fan-out session, proving independent delivery to both endpoints. (Observes the existing
     hook fan-out; the hook code is never modified.)
-  - **execute queries** — after logging, the `graph-analyst` agent's `graph_query` returned
+  - **execute queries** — after logging, the `detective` agent's `graph_query` returned
     **5 real rows** and `blob_read` resolved a real `ci-blob://…__raw` URI (44 KB, 8 top-level
     keys), each carrying the `source` provenance block naming the answering server
     (`{name:default, origin:destination, url:http://…:18001}`).
@@ -212,7 +212,7 @@ tools (see the main `README.md` §"read side"). For multi-source, the connectabl
   `~/.amplifier/settings.yaml` named-map is the implemented, working path (app-cli
   `get_config_overrides`). No framework limitation — the support issue was closed as invalid.
   (2) `graph_query`/`blob_read` are **not** top-level tools in a plain session — the shipped read
-  path is the `context-intelligence:graph-analyst` agent, which the query profile drives.
+  path is the `context-intelligence:detective` agent, which the query profile drives.
 - **PENDING — fresh non-compose evidence.** The three server-backed seams above must be
   re-run against `context-intelligence-backend.yaml` (the current, non-compose backend)
   before their proof is current again. No results are recorded here yet — a follow-up DTU

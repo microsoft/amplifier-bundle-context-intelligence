@@ -1,9 +1,9 @@
 # Reconstruction Knowledge — Agent Context
 
-<!-- Loaded on-demand by graph-analyst via @mention — not composed into bundles via @-reference.
+<!-- Loaded on-demand by detective via @mention — not composed into bundles via @-reference.
      Place in context/agents/ for targeted agent discoverability; do NOT add to bundle.md or behavior YAML. -->
 
-Operational knowledge for invoking the session reconstruction tool from `graph-analyst`.
+Operational knowledge for invoking the session reconstruction tool from `detective`.
 Covers when to invoke, safe invocation patterns, what files are created, and other available subcommands.
 
 ---

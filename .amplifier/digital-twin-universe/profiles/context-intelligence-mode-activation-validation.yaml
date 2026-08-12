@@ -109,8 +109,8 @@ readiness:
   - name: baseline-present-specialists-gated
     command: >
       OUT=$(amplifier bundle show context-intelligence-behavior 2>/dev/null);
-      echo "$OUT" | grep -q "context-intelligence:graph-analyst"
-      && echo "$OUT" | grep -q "context-intelligence:session-navigator"
+      echo "$OUT" | grep -q "context-intelligence:detective"
+      && echo "$OUT" | grep -q "context-intelligence:prospector"
       && ! echo "$OUT" | grep -q "context-intelligence-design-facilitator"
       && ! echo "$OUT" | grep -q "context-intelligence-tool-designer"
       && echo "ready: baseline present, specialists gated when inactive"

@@ -96,7 +96,7 @@ Seven deterministic test points encoded as assertions in the DTU profile:
 6. **`domain-signals.md` enriched after Phase 2.** Each signal entry contains: `detection_strategy`, `detection_notes`, `ai_dependency`, `reasoning_requirement`, `suggested_primitive`.
 7. **`context-intelligence-primitives-reference.md` NOT in session context when mode inactive.** The primitives reference must not leak into sessions where mode has not been activated.
 8. **`context-intelligence-strategy.md` absent when mode inactive.** The thin mode-orientation strategy file must NOT appear in session context unless the context-intelligence mode is active (parallels point 7; guards mode-only injection via `contributes.context:`).
-9. **Strategy-file pointer correctness.** Every referenced path and skill name inside `context-intelligence-strategy.md` resolves to an existing file/skill in the bundle (guards against rename-induced dead pointers). These are NON-loading references (plain paths / skill names), in contrast to the LOADING `@mention` that `session-navigator` uses for the discipline file — this check covers the non-loading pointers.
+9. **Strategy-file pointer correctness.** Every referenced path and skill name inside `context-intelligence-strategy.md` resolves to an existing file/skill in the bundle (guards against rename-induced dead pointers). These are NON-loading references (plain paths / skill names), in contrast to the LOADING `@mention` that `prospector` uses for the discipline file — this check covers the non-loading pointers.
 10. **Tool-design enrichment marker present in-mode / absent in baseline.** The new R1 marker string **"module vs CLI"** is PRESENT in tool-design context when the mode is active, and ABSENT from the always-on baseline. (Anchors the test on a concrete, buildable marker introduced by this change, rather than the non-falsifiable "enriched content loads only when mode active".)
 
 ### Layer 2 — Behavioural Evaluation
@@ -115,7 +115,7 @@ Pass criterion: A `signal-gaps.md` entry is written with `Gap type`, `Question`,
 
 **Scenario C — bounded navigation (discipline still fires after extraction):**
 Reuses the workspace harness `evaluations/01-delegation-runaway` with `SCENARIO=disk_absent`
-(the `after` arm carries the local working branch). `session-navigator`, given a non-existent
+(the `after` arm carries the local working branch). `prospector`, given a non-existent
 session ID against a seeded corpus, must terminate in ≤3 strategies with "not found".
 
 Pass criterion: `runaway_detected=false`, `meta.exit_code=0`, and bounded `context_health`

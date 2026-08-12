@@ -29,7 +29,7 @@ metadata:
 
 If the context-intelligence server is unavailable or not configured for this
 session, graph-based analysis cannot proceed here. Delegate immediately to
-`session-navigator` for all session analysis, event lookup, and delegation
+`prospector` for all session analysis, event lookup, and delegation
 tree tracing — do not attempt Cypher queries against a server that isn't
 reachable.
 

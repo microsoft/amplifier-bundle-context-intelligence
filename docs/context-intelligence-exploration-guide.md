@@ -53,7 +53,7 @@ Previously, tool errors (`tool:error` events) were captured as raw events but di
 
 ### Rewritten Graph-Query Skill
 
-I completely rewrote the skill that teaches `graph-analyst` how to query the graph — it now reflects the Data Layer 2 schema, SST edge types, and proper multi-session navigation patterns. The agent should produce significantly better Cypher queries and navigate delegation trees more reliably.
+I completely rewrote the skill that teaches `detective` how to query the graph — it now reflects the Data Layer 2 schema, SST edge types, and proper multi-session navigation patterns. The agent should produce significantly better Cypher queries and navigate delegation trees more reliably.
 
 ---
 
@@ -238,7 +238,7 @@ Pick any session where you wrote or heavily edited files. Ask:
 
 ## 4. Skill Schema Verification
 
-The `graph-query` skill that teaches `graph-analyst` how to query the Data Layer 2 graph is loaded from the server at session start. If the server is serving a stale version — or if the agent is using cached schema knowledge rather than the current loaded skill — these probes will catch it. Run them in a **fresh session** to avoid warm-cache effects.
+The `graph-query` skill that teaches `detective` how to query the Data Layer 2 graph is loaded from the server at session start. If the server is serving a stale version — or if the agent is using cached schema knowledge rather than the current loaded skill — these probes will catch it. Run them in a **fresh session** to avoid warm-cache effects.
 
 ### Probe 1 — Iteration Node Properties
 

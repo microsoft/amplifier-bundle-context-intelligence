@@ -4,11 +4,11 @@ bundle:
   description: >
     LAYER 3 of 3 (top). Adds the context-intelligence design MODE (gates
     design-facilitator + tool-designer agents and design skills). Includes
-    context-intelligence-analysis. Use for full read/query + tooling-design
+    context-intelligence-server. Use for full read/query + tooling-design
     workflow.
 
 includes:
-  - bundle: context-intelligence:behaviors/context-intelligence-analysis
+  - bundle: context-intelligence:behaviors/context-intelligence-server
   # Brings tool-mode + the approval hook + the default hooks-mode config (search_paths: []).
   - bundle: git+https://github.com/microsoft/amplifier-bundle-modes@main#subdirectory=behaviors/modes.yaml
 

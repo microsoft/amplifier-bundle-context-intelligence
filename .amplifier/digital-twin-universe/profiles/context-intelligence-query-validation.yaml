@@ -20,7 +20,7 @@
 #   `graph_query` / `blob_read` are NOT mounted as top-level tools in a plain `amplifier run`
 #   session, and `amplifier tool invoke` cannot drive them (the context-intelligence behavior
 #   has no orchestrator by itself -> "Configuration must specify session.orchestrator").
-#   The real, shipped read path is the `context-intelligence:graph-analyst` AGENT: a session
+#   The real, shipped read path is the `context-intelligence:detective` AGENT: a session
 #   delegates to it, and the agent calls graph_query / blob_read in its sub-session. The
 #   validation step below drives exactly that path and captures the tool result (rows + the
 #   `source` provenance block) from the agent's response.
@@ -50,7 +50,7 @@
 #
 # WHAT IS PROVEN
 #   STRUCTURAL (readiness gates, deterministic, no LLM):
-#     * bundle installed via the CLI, resolved to the MIRROR; graph-analyst agent present;
+#     * bundle installed via the CLI, resolved to the MIRROR; detective agent present;
 #       the query-tool module (graph_query + blob_read) is in the loaded bundle.
 #     * the server is reachable from the DTU (neo4j_connected:true).
 #   BEHAVIOURAL (real session, real key; exec steps below):
@@ -63,7 +63,7 @@ name: context-intelligence-query-validation
 description: >
   Runnable proof of the read/execute-queries seam. Loads the branch bundle via the Amplifier
   CLI from a Gitea mirror, logs events to a real Context-Intelligence server, then drives
-  graph_query (Cypher) and blob_read (ci-blob://) through the graph-analyst agent and proves
+  graph_query (Cypher) and blob_read (ci-blob://) through the detective agent and proves
   real rows/content come back WITH a source provenance block naming the answering server.
 
 base:
@@ -140,15 +140,15 @@ readiness:
       && git -C "$C" log -1 --pretty=%s | grep -qi "docs/contributing-and-pr-template"
       && echo "ready: bundle resolved from mirror @ branch snapshot"
 
-  - name: graph-analyst-and-query-tools-loaded
-    # The read path is the graph-analyst agent; its module wiring must include the query tool
+  - name: detective-and-query-tools-loaded
+    # The read path is the detective agent; its module wiring must include the query tool
     # (graph_query + blob_read) from the loaded (mirror) bundle.
     command: >
       C=$(find /root/.amplifier/cache -maxdepth 1 -type d -name 'amplifier-bundle-context-intelligence-*' | head -1);
-      test -f "$C/agents/graph-analyst.md"
+      test -f "$C/agents/detective.md"
       && test -f "$C/modules/tool-context-intelligence-query/amplifier_module_tool_context_intelligence_query/graph_query_tool.py"
       && test -f "$C/modules/tool-context-intelligence-query/amplifier_module_tool_context_intelligence_query/blob_read_tool.py"
-      && echo "ready: graph-analyst + graph_query + blob_read present in loaded bundle"
+      && echo "ready: detective + graph_query + blob_read present in loaded bundle"
 
   - name: server-reachable-from-dtu
     command: >
@@ -167,13 +167,13 @@ manual_validation_steps:
       curl -sf "$AMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_URL/status" \
         | jq "[.completed_sessions[]?|select(.workspace==\"$AMPLIFIER_CONTEXT_INTELLIGENCE_WORKSPACE\")|{workspace, events_processed}]"
 
-  # ---- BEHAVIOURAL step 1: graph_query rows + source provenance (via graph-analyst) ----
+  # ---- BEHAVIOURAL step 1: graph_query rows + source provenance (via detective) ----
   - name: B1-graph-query-rows-and-provenance
     command: |
       set -a; . /etc/environment; set +a
       cd /root/ci-query
       WS="$AMPLIFIER_CONTEXT_INTELLIGENCE_WORKSPACE"
-      PROMPT="Delegate to context-intelligence:graph-analyst to run this Cypher verbatim: MATCH (n) WHERE n.workspace = \"$WS\" RETURN labels(n) AS labels, count(n) AS c ORDER BY c DESC LIMIT 5 -- then quote the returned rows AND the full 'source' provenance block from the tool result."
+      PROMPT="Delegate to context-intelligence:detective to run this Cypher verbatim: MATCH (n) WHERE n.workspace = \"$WS\" RETURN labels(n) AS labels, count(n) AS c ORDER BY c DESC LIMIT 5 -- then quote the returned rows AND the full 'source' provenance block from the tool result."
       amplifier run "$PROMPT" --output-format json-trace > /root/q1-trace.json 2>/root/q1.err || true
       echo "== graph_query result (rows + source) extracted from the agent trace =="
       python3 - <<'PY'
@@ -200,7 +200,7 @@ manual_validation_steps:
         -d "{\"query\":\"MATCH (n) WHERE n.workspace=\\\"$WS\\\" AND n.data CONTAINS \\\"ci-blob://\\\" WITH n.data AS d LIMIT 1 RETURN d\"}" \
         | python3 -c "import sys,json,re;print((re.search(r'ci-blob://[^\"\\\\]+',json.dumps(json.load(sys.stdin))) or [''])[0] if True else '')" 2>/dev/null)
       echo "discovered blob: $BLOB"
-      PROMPT="Use blob_read (delegate to context-intelligence:graph-analyst) to read this blob URI and report the full 'source' provenance block plus its top-level keys: $BLOB"
+      PROMPT="Use blob_read (delegate to context-intelligence:detective) to read this blob URI and report the full 'source' provenance block plus its top-level keys: $BLOB"
       amplifier run "$PROMPT" --output-format json-trace > /root/q2-trace.json 2>/root/q2.err || true
       python3 - <<'PY'
       import json

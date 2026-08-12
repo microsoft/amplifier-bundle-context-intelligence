@@ -48,7 +48,7 @@ Answers three questions:
 
 Follows the **dual-agent loop** established from direct investigation of Amplifier
 session corpora:
-- `context-intelligence:graph-analyst` — all corpus queries and JSONL inspection
+- `context-intelligence:detective` — all corpus queries and JSONL inspection
 - `context-intelligence:context-intelligence-design-facilitator` — structured artifact
   production and quality gating (mandatory gate before any finding is treated as curated)
 
@@ -117,7 +117,7 @@ expressible as a Cypher WHERE clause or metadata field filter.
 
 **Before drilling into any specific pattern**, build the full corpus inventory.
 
-Delegate to `context-intelligence:graph-analyst` to:
+Delegate to `context-intelligence:detective` to:
 - Find all sessions matching `{{workflow}}` scope using **Q1** from `cypher-patterns.md`
 - Split `:RootSession` from `:ForkedSession` — failure rates differ structurally
   (roots ~73% vs corpus ~55%)
@@ -150,7 +150,7 @@ User is aware of graph vs disk coverage situation.
 
 ### 3. Apply signal set — failing and successful runs
 
-Delegate to `context-intelligence:graph-analyst` to apply signals **S1–S9** from
+Delegate to `context-intelligence:detective` to apply signals **S1–S9** from
 `signals-reference.md` to all sessions in scope. Use **Q2–Q5** from `cypher-patterns.md`.
 
 For each signal compute:
@@ -196,7 +196,7 @@ and signal thresholds consistent across all files.
 Continue investigating specific patterns as the user steers. Each round follows the
 same dual-agent shape — repeat as many times as needed:
 
-**a.** Delegate to `context-intelligence:graph-analyst` with the specific question.
+**a.** Delegate to `context-intelligence:detective` with the specific question.
 Analyst writes raw findings to `findings/`.
 
 **b.** Delegate to `context-intelligence:context-intelligence-design-facilitator` to
@@ -236,7 +236,7 @@ signal thresholds validated against corpus evidence rather than assumed.
 
 ### 6. Produce Cypher query set for ongoing monitoring
 
-Delegate to `context-intelligence:graph-analyst` to produce a reusable, workflow-specific
+Delegate to `context-intelligence:detective` to produce a reusable, workflow-specific
 Cypher query set using templates from `cypher-patterns.md`:
 
 - **Q-enum**: Enumerate all runs with outcome classification
@@ -268,7 +268,7 @@ decisions for the context-intelligence bundle or any downstream action.
 1. **Enumerate the full corpus before investigating.** Anchor all signals to
    population-level denominators. Do not sample and claim corpus-level conclusions.
 
-2. **Graph-first; disk as explicit mode.** Both available via graph-analyst. Offer disk
+2. **Graph-first; disk as explicit mode.** Both available via detective. Offer disk
    scan when the user needs full coverage or suspects under-indexing.
 
 3. **Always split root vs sub-sessions.** Roots and subs have structurally different

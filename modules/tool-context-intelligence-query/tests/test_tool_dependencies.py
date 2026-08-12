@@ -93,7 +93,7 @@ class TestToolDependencies:
         )
 
     def test_entry_point_module_id_is_correct(self) -> None:
-        """Entry point key must match the module ID used in graph-analyst.md."""
+        """Entry point key must match the module ID used in detective.md."""
         data = _load_pyproject()
         eps = data.get("project", {}).get("entry-points", {}).get("amplifier.modules", {})
         assert "tool-context-intelligence-query" in eps, (

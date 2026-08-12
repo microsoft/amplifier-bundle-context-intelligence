@@ -25,7 +25,7 @@
 #     * bundle installed via `amplifier bundle add ... --app` resolved to the MIRROR
 #       (cache checkout HEAD == the branch snapshot commit; origin == mirror URL).
 #     * `amplifier bundle show context-intelligence-behavior` reports exactly the
-#       2 BASELINE agents (graph-analyst, session-navigator) and NOT the 2 mode-gated
+#       2 BASELINE agents (detective, prospector) and NOT the 2 mode-gated
 #       specialists -> proves the specialists are gated OFF when the mode is inactive.
 #     * the installed mode file declares advertised:false, default_action:block, and
 #       the 3 contributes.context / 3 contributes.skills / 2 contributes.agents.
@@ -130,8 +130,8 @@ readiness:
     # `bundle show` must list the 2 baseline agents and NOT the 2 mode-gated specialists.
     command: >
       OUT=$(amplifier bundle show context-intelligence-behavior 2>/dev/null);
-      echo "$OUT" | grep -q "context-intelligence:graph-analyst"
-      && echo "$OUT" | grep -q "context-intelligence:session-navigator"
+      echo "$OUT" | grep -q "context-intelligence:detective"
+      && echo "$OUT" | grep -q "context-intelligence:prospector"
       && ! echo "$OUT" | grep -q "context-intelligence-design-facilitator"
       && ! echo "$OUT" | grep -q "context-intelligence-tool-designer"
       && echo "ready: baseline agents present, specialists gated when mode inactive"

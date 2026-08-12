@@ -135,7 +135,7 @@ watched return the right answer on real data — nothing less.
 
 ## Architecture note
 
-This bundle ships **layered, composable behaviours** — `context-intelligence-navigation` ⊂
+This bundle ships **layered, composable behaviours** — `context-intelligence-local` ⊂
 `-analysis` ⊂ `-design`, plus an orthogonal `-logging` (the telemetry hook only) and the umbrella
 `context-intelligence`. The telemetry hook is **pure telemetry** (it does not load skills). The
 `context-intelligence-graph-query` skill is **vendored statically** at

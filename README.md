@@ -16,8 +16,8 @@ The bundle writes every session event to a local JSONL log and — when one or m
 
 Two agents are included for querying session data:
 
-- **`graph-analyst`** — primary entry point. Queries the context-intelligence property graph using Cypher, resolves `ci-blob://` URIs, and automatically delegates to `session-navigator` when the graph server is unreachable or returns 0 sessions.
-- **`session-navigator`** — local fallback agent. Navigates session data via flat JSONL files using safe `bash`/`jq`/`grep` extraction patterns when the server is unavailable. Invoked only by `graph-analyst` via the delegation chain — external callers should use `graph-analyst` as the entry point.
+- **`detective`** — primary entry point. Queries the context-intelligence property graph using Cypher, resolves `ci-blob://` URIs, and automatically delegates to `prospector` when the graph server is unreachable or returns 0 sessions.
+- **`prospector`** — local fallback agent. Navigates session data via flat JSONL files using safe `bash`/`jq`/`grep` extraction patterns when the server is unavailable. Invoked only by `detective` via the delegation chain — external callers should use `detective` as the entry point.
 
 A **`/context-intelligence` mode** is also included for building new context intelligence-aware tooling. Activate it to enter a design workspace where you can investigate session data, explore the graph model, and produce reusable Amplifier components (skills, agents, context files, recipes, CLIs) for your project.
 
@@ -28,8 +28,8 @@ The bundle ships as **composable layered behaviors** rather than one monolith. R
 | Behavior | Adds | Use when |
 |----------|------|----------|
 | `context-intelligence-logging` | the telemetry hook only (event capture + optional server fan-out) | you want **pure session telemetry/logging** — no agents, tools, skills, or mode |
-| `context-intelligence-navigation` (Layer 1) | `session-navigator` (reads raw JSONL on disk; no graph server) | local/offline navigation fallback only |
-| `context-intelligence-analysis` (Layer 2) | `graph-analyst` + graph/query skills + the query tools (⊃ navigation) | graph read/query/exploration, no design mode |
+| `context-intelligence-local` (Layer 1) | `prospector` (reads raw JSONL on disk; no graph server) | local/offline navigation fallback only |
+| `context-intelligence-server` (Layer 2) | `detective` + graph/query skills + the query tools (⊃ navigation) | graph read/query/exploration, no design mode |
 | `context-intelligence-design` (Layer 3) | the `/context-intelligence` design mode (⊃ analysis) | full read/query **plus** the tooling-design workflow |
 | `context-intelligence` (umbrella) | `design` **+** `logging` together | the full drop-in: read/query/design **and** session instrumentation |
 
@@ -531,9 +531,9 @@ hook's `dispatch_*` timeouts in the config table above, which govern the write/u
 
 #### Graph-query skill — vendored statically (no configuration)
 
-The `graph-analyst` agent uses a `context-intelligence-graph-query` skill that documents the Cypher patterns it issues. That skill is **vendored statically** in this repo at `skills/context-intelligence-graph-query/SKILL.md` (sourced from the [Context Intelligence Server](https://github.com/microsoft/amplifier-context-intelligence) repo's `main` branch). The bundle's behaviors deliver it at compose time — there is **no runtime skill fetching, syncing, or configuration knob**.
+The `detective` agent uses a `context-intelligence-graph-query` skill that documents the Cypher patterns it issues. That skill is **vendored statically** in this repo at `skills/context-intelligence-graph-query/SKILL.md` (sourced from the [Context Intelligence Server](https://github.com/microsoft/amplifier-context-intelligence) repo's `main` branch). The bundle's behaviors deliver it at compose time — there is **no runtime skill fetching, syncing, or configuration knob**.
 
-The vendored file carries its own leading **no-server guidance block**: when no graph server is configured for the session, the skill instructs the agent to delegate to `session-navigator` rather than attempt Cypher against an unreachable server.
+The vendored file carries its own leading **no-server guidance block**: when no graph server is configured for the session, the skill instructs the agent to delegate to `prospector` rather than attempt Cypher against an unreachable server.
 
 > **Telemetry hook does not load skills.** The `hook-context-intelligence` module is **pure telemetry** — event capture and `destinations` fan-out only — and performs no skill loading.
 
@@ -627,13 +627,13 @@ See [`context/graph-model-reference.md`](context/graph-model-reference.md) for t
 
 | Agent | Available | Tools | Role |
 |-------|-----------|-------|------|
-| `graph-analyst` | Always | `graph_query`, `blob_read`, `tool-filesystem`, `tool-bash`, `tool-skills` | Primary entry point — graph-powered analysis via Cypher across all three data layers, blob resolution, automatic fallback |
-| `session-navigator` | Always (via delegation) | `tool-filesystem`, `tool-search`, `tool-bash`, `tool-skills` | Local fallback — safe JSONL navigation via bash/jq/grep; invoked by graph-analyst when the server is unreachable |
+| `detective` | Always | `graph_query`, `blob_read`, `tool-filesystem`, `tool-bash`, `tool-skills` | Primary entry point — graph-powered analysis via Cypher across all three data layers, blob resolution, automatic fallback |
+| `prospector` | Always (via delegation) | `tool-filesystem`, `tool-search`, `tool-bash`, `tool-skills` | Local fallback — safe JSONL navigation via bash/jq/grep; invoked by detective when the server is unreachable |
 | `context-intelligence-design-facilitator` | `/context-intelligence` mode only | `tool-skills` | Design guide — domain elicitation and component design facilitation for building new context intelligence-aware tooling |
 
-**Delegation chain:** External callers always invoke `graph-analyst`. If the server is unreachable or the workspace contains 0 sessions, it delegates to `session-navigator`, which navigates local JSONL files using safe extraction patterns. `session-navigator` is never invoked directly.
+**Delegation chain:** External callers always invoke `detective`. If the server is unreachable or the workspace contains 0 sessions, it delegates to `prospector`, which navigates local JSONL files using safe extraction patterns. `prospector` is never invoked directly.
 
-The `context-intelligence-design-facilitator` is a conversational design guide available only when the `/context-intelligence` mode is active. It asks questions to understand the user's domain, maps that domain to context intelligence data layers, and helps design the right Amplifier component shape (skill, agent, recipe, CLI, etc.) for the investigation findings. It delegates investigation to `graph-analyst` and component authoring mechanics to ecosystem experts (`foundation:foundation-expert`, `recipes:recipe-author`).
+The `context-intelligence-design-facilitator` is a conversational design guide available only when the `/context-intelligence` mode is active. It asks questions to understand the user's domain, maps that domain to context intelligence data layers, and helps design the right Amplifier component shape (skill, agent, recipe, CLI, etc.) for the investigation findings. It delegates investigation to `detective` and component authoring mechanics to ecosystem experts (`foundation:foundation-expert`, `recipes:recipe-author`).
 
 See [`context/safe-extraction-patterns.md`](context/safe-extraction-patterns.md) for JSONL navigation patterns.
 
@@ -649,7 +649,7 @@ The design mode is an opt-in workspace for building new context intelligence-awa
 
 The mode supports an investigate → design → produce lifecycle:
 
-1. **Investigate** — use `graph-analyst` (graph-powered, all three data layers) and `session-navigator` (local JSONL fallback) to understand what context intelligence can already observe about the target runtime
+1. **Investigate** — use `detective` (graph-powered, all three data layers) and `prospector` (local JSONL fallback) to understand what context intelligence can already observe about the target runtime
 2. **Design** — the facilitator asks domain questions (what events does the runtime emit? what behaviors are invisible today? what would be valuable to observe?), maps findings to data layers, and recommends the right output shape
 3. **Produce** — create reusable components: skills, context files, agents, recipes, docs, agent tool modules, or standalone CLI tools
 
@@ -690,16 +690,16 @@ amplifier-bundle-context-intelligence/
 ├── bundle.md                           ← root bundle definition
 ├── bundle.dot / bundle.png             ← generated bundle structure diagram
 ├── behaviors/                          ← composable layered behaviors (compose what you need)
-│   ├── context-intelligence-navigation.yaml  ← Layer 1: session-navigator only
-│   ├── context-intelligence-analysis.yaml    ← Layer 2: + graph-analyst + query tools (⊃ navigation)
+│   ├── context-intelligence-local.yaml  ← Layer 1: prospector only
+│   ├── context-intelligence-server.yaml    ← Layer 2: + detective + query tools (⊃ navigation)
 │   ├── context-intelligence-design.yaml      ← Layer 3: + design mode (⊃ analysis)
 │   ├── context-intelligence-logging.yaml     ← orthogonal: telemetry hook only
 │   └── context-intelligence.yaml             ← umbrella: design + logging (full drop-in)
 ├── modes/
 │   └── context-intelligence.md  ← design-time mode
 ├── agents/
-│   ├── graph-analyst.md  ← primary entry point agent
-│   ├── session-navigator.md      ← local fallback agent
+│   ├── detective.md  ← primary entry point agent
+│   ├── prospector.md      ← local fallback agent
 │   └── context-intelligence-design-facilitator.md  ← design guide agent (mode only)
 ├── context/
 │   ├── event-schema.md                 ← all 51+ Amplifier events
@@ -707,7 +707,7 @@ amplifier-bundle-context-intelligence/
 │   ├── safe-extraction-patterns.md     ← JSONL navigation patterns
 │   ├── config-resolution.dot           ← HookConfigResolver fallback chain diagram
 │   ├── session-disk-layout.dot         ← on-disk session directory structure
-│   ├── delegation-strategy.dot         ← graph-analyst → session-navigator delegation logic
+│   ├── delegation-strategy.dot         ← detective → prospector delegation logic
 │   ├── agents/
 │   │   └── session-storage-knowledge.md
 │   ├── dual-path-library-template.md      ← copy-paste library template for dual-path tools

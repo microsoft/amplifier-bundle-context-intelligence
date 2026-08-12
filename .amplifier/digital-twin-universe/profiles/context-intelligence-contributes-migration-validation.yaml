@@ -18,7 +18,7 @@
 #   STRUCTURAL (deterministic):
 #     * specialists are GATED via contributes.agents -- NOT registered at behavior level.
 #       `amplifier bundle show context-intelligence-behavior` lists agents:(2) baseline
-#       ONLY (graph-analyst, session-navigator); the design-facilitator and tool-designer
+#       ONLY (detective, prospector); the design-facilitator and tool-designer
 #       are absent while the mode is inactive.
 #     * the installed mode file (from the mirror) declares the specialists under
 #       mode.contributes.agents with fully-namespaced keys, and the 3 skills / 3 context.
@@ -111,8 +111,8 @@ readiness:
     # The migration's core assertion: specialists NOT registered at behavior level.
     command: >
       OUT=$(amplifier bundle show context-intelligence-behavior 2>/dev/null);
-      echo "$OUT" | grep -q "context-intelligence:graph-analyst"
-      && echo "$OUT" | grep -q "context-intelligence:session-navigator"
+      echo "$OUT" | grep -q "context-intelligence:detective"
+      && echo "$OUT" | grep -q "context-intelligence:prospector"
       && ! echo "$OUT" | grep -q "context-intelligence-design-facilitator"
       && ! echo "$OUT" | grep -q "context-intelligence-tool-designer"
       && echo "ready: specialists gated (contributes.agents), baseline intact"
@@ -137,7 +137,7 @@ manual_validation_steps:
   #   $ cd /root/ci-int && amplifier run --mode chat
   #   > /mode context-intelligence
   #   [context-intelligence]> Investigate how testing sessions are performing.
-  #   ... (facilitator elicitation; observe delegate() to graph-analyst in the trace)
+  #   ... (facilitator elicitation; observe delegate() to detective in the trace)
   - name: B1-user-activation-roundtrip
     command: |
       echo "Interactive (real TTY). Expected transcript:"

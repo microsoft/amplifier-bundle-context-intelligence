@@ -1,7 +1,7 @@
 // Delegation Strategy — Agent Delegation Chain
 // Context-Intelligence Bundle
 //
-// Shows the delegation flow: graph-analyst → session-navigator → external session-data-analysis-capable agent
+// Shows the delegation flow: detective → prospector → external session-data-analysis-capable agent
 //
 // Render: dot -Tsvg delegation-strategy.dot -o delegation-strategy.svg
 
@@ -26,8 +26,8 @@ digraph delegation_strategy {
         color="#999999"
     ];
 
-    graph_analyst [
-        label="graph-analyst\ntools: graph_query / blob_read / bash / skills",
+    detective [
+        label="detective\ntools: graph_query / blob_read / bash / skills",
         shape=box,
         style=filled,
         fillcolor="#4A90D9",
@@ -37,7 +37,7 @@ digraph delegation_strategy {
     ];
 
     navigator [
-        label="session-navigator\ntools: filesystem / search / bash / skills",
+        label="prospector\ntools: filesystem / search / bash / skills",
         shape=box,
         style=filled,
         fillcolor="#7AB648",
@@ -77,9 +77,9 @@ digraph delegation_strategy {
 
     // --- Edges ---
 
-    caller -> graph_analyst [label="always delegate here first", fontsize=10];
-    graph_analyst -> server_check;
-    server_check -> graph_analyst [
+    caller -> detective [label="always delegate here first", fontsize=10];
+    detective -> server_check;
+    server_check -> detective [
         label="yes",
         color="#4A90D9",
         fontcolor="#4A90D9",

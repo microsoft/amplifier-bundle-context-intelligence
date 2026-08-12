@@ -35,7 +35,7 @@ After completing the ladder with no hit:
 2. Conclude: **"session/data not found"**.
 3. **RETURN your result immediately.**
 
-Do NOT retry. Do NOT broaden the search. Do NOT delegate upward to `graph-analyst`.
+Do NOT retry. Do NOT broaden the search. Do NOT delegate upward to `detective`.
 
 > **Delegation constraint:** You MAY delegate ONCE to another session-data-analysis-capable agent (if one is available in the host environment) ONLY for data that is **present-but-hard** to extract locally — **never for absent data**.
 
