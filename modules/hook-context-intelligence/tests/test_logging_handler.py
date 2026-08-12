@@ -5,10 +5,11 @@ Zero dependency on graph infrastructure. Tests file I/O only.
 
 from __future__ import annotations
 
+import asyncio
 import json
 from pathlib import Path
 from typing import Any
-from unittest.mock import patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from amplifier_core.models import HookResult
 
@@ -831,3 +832,103 @@ class TestWorkingDirFromResolver:
             ).read_text()
         )
         assert meta["working_dir"] == "/resolver/path"
+
+
+# ---------------------------------------------------------------------------
+# TestWorkingDirEnvelope \u2014 Phase-1 emit: working_dir is a TOP-LEVEL wire-envelope
+# field (alongside workspace), sourced from the resolver -- NOT event data
+# ---------------------------------------------------------------------------
+class TestWorkingDirEnvelope:
+    """working_dir travels as a TOP-LEVEL HTTP envelope field, not nested event data.
+
+    Companion to TestWorkingDirFromResolver above (which covers the local
+    metadata.json copy). This class covers the HTTP dispatch path: the same
+    "session attribute, not event data" guarantee now also holds for the
+    wire envelope POSTed to the context-intelligence server.
+    """
+
+    async def test_working_dir_absent_from_data_passed_to_dispatcher_enqueue(
+        self, tmp_path: Path
+    ) -> None:
+        """LoggingHandler never injects working_dir into the event data handed to dispatchers.
+
+        working_dir is resolver-sourced session metadata; it must not leak into the
+        sanitized event `data` that dispatchers enqueue (that data becomes the nested
+        `data` blob inside the wire envelope -- see test below for envelope shape).
+        """
+        from amplifier_module_hook_context_intelligence.handlers.logging_handler import (
+            LoggingHandler,
+        )
+
+        resolver = _FakeResolver(tmp_path, "proj", working_dir="/resolver/working/dir")
+        handler = LoggingHandler(resolver)
+
+        captured: dict[str, Any] = {}
+
+        class _SpyDispatcher:
+            def enqueue(self, event: str, data: dict[str, Any]) -> None:
+                captured["event"] = event
+                captured["data"] = data
+
+        await handler.set_dispatchers([_SpyDispatcher()])  # type: ignore[list-item]
+
+        await handler(
+            "tool:call",
+            {
+                "session_id": "s1",
+                "timestamp": "2026-01-15T10:00:01Z",
+                "tool_name": "read_file",
+            },
+        )
+
+        assert "working_dir" not in captured["data"]
+
+    async def test_dispatcher_envelope_carries_working_dir_top_level(self, tmp_path: Path) -> None:
+        """The real _DestinationDispatcher, wired with resolver.working_dir exactly as
+        production mount() does (see __init__.py), puts working_dir at the TOP LEVEL
+        of the posted envelope for the same event data LoggingHandler enqueues -- and
+        it is still absent from the nested `data`.
+        """
+        from amplifier_module_hook_context_intelligence.handlers.logging_handler import (
+            LoggingHandler,
+            _DestinationDispatcher,
+        )
+
+        resolver = _FakeResolver(tmp_path, "proj", working_dir="/resolver/working/dir")
+        handler = LoggingHandler(resolver)
+
+        dispatcher = _DestinationDispatcher(
+            name="test",
+            url="http://localhost:8080",
+            api_key="test-key",
+            workspace=resolver.workspace,
+            working_dir=resolver.working_dir,  # mirrors production mount() wiring
+            dispatch_timeout=10.0,
+            failure_threshold=3,
+            queue_capacity=256,
+            close_drain_timeout=0.5,
+        )
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_client = AsyncMock()
+        mock_client.is_closed = False
+        mock_client.post.return_value = mock_response
+        dispatcher._client = mock_client
+
+        await handler.set_dispatchers([dispatcher])
+
+        await handler(
+            "tool:call",
+            {
+                "session_id": "s1",
+                "timestamp": "2026-01-15T10:00:01Z",
+                "tool_name": "read_file",
+            },
+        )
+        await asyncio.sleep(0)  # let the dispatcher's worker process the queued event
+        await dispatcher.close()
+
+        _, kwargs = mock_client.post.call_args
+        posted_payload = kwargs["json"]
+        assert posted_payload["working_dir"] == "/resolver/working/dir"
+        assert "working_dir" not in posted_payload["data"]

@@ -20,6 +20,7 @@ def _dispatcher(
     url: str = "http://localhost:8080",
     api_key: str = "test-key",
     workspace: str | None = "ws",
+    working_dir: str | None = None,
     dispatch_timeout: float = 10.0,
     failure_threshold: int = 3,
     queue_capacity: int = 256,
@@ -30,6 +31,7 @@ def _dispatcher(
         url=url,
         api_key=api_key,
         workspace=workspace,
+        working_dir=working_dir,
         dispatch_timeout=dispatch_timeout,
         failure_threshold=failure_threshold,
         queue_capacity=queue_capacity,
@@ -74,6 +76,71 @@ class TestDispatcherInit:
         assert d._backoff_max == 20.0
         assert d._backoff_jitter is False
         assert str(d._storage_path) == "/tmp/ci-sessions"
+
+    def test_working_dir_defaults_to_none(self) -> None:
+        """working_dir is an optional constructor param; back-compat default is None."""
+        d = _dispatcher()
+        assert d._working_dir is None
+
+    def test_working_dir_stored(self) -> None:
+        d = _dispatcher(working_dir="/abs/working/dir")
+        assert d._working_dir == "/abs/working/dir"
+
+
+class TestDispatcherPostEnvelope:
+    """Phase-1 emit: working_dir travels as a TOP-LEVEL wire-envelope field.
+
+    Verifies the actual HTTP payload posted by _post carries working_dir
+    alongside workspace, and that it never leaks into the nested `data` blob.
+    """
+
+    async def test_working_dir_present_top_level_in_posted_payload(self) -> None:
+        d = _dispatcher(workspace="ws1", working_dir="/abs/working/dir")
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_client = AsyncMock()
+        mock_client.is_closed = False
+        mock_client.post.return_value = mock_response
+        d._client = mock_client
+
+        await d._post("session:start", {"session_id": "s1"})
+
+        _, kwargs = mock_client.post.call_args
+        posted_payload = kwargs["json"]
+        assert posted_payload["working_dir"] == "/abs/working/dir"
+        assert posted_payload["workspace"] == "ws1"
+
+    async def test_working_dir_absent_from_nested_data_in_posted_payload(self) -> None:
+        """working_dir must never leak into the nested `data` blob."""
+        d = _dispatcher(working_dir="/abs/working/dir")
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_client = AsyncMock()
+        mock_client.is_closed = False
+        mock_client.post.return_value = mock_response
+        d._client = mock_client
+
+        await d._post("session:start", {"session_id": "s1"})
+
+        _, kwargs = mock_client.post.call_args
+        posted_payload = kwargs["json"]
+        assert "working_dir" not in posted_payload["data"]
+
+    async def test_no_working_dir_configured_posts_empty_string(self) -> None:
+        """Dispatchers constructed without working_dir (back-compat) post working_dir=""."""
+        d = _dispatcher(working_dir=None)
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_client = AsyncMock()
+        mock_client.is_closed = False
+        mock_client.post.return_value = mock_response
+        d._client = mock_client
+
+        await d._post("session:start", {"session_id": "s1"})
+
+        _, kwargs = mock_client.post.call_args
+        posted_payload = kwargs["json"]
+        assert posted_payload["working_dir"] == ""
 
 
 class TestDispatcherEnqueue:

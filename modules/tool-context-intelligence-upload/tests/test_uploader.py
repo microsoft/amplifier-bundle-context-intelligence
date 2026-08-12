@@ -303,6 +303,98 @@ class TestUploadWorkspaceFromRecord:
 
 
 # ---------------------------------------------------------------------------
+# TestUploadWorkingDirFromMetadata
+# ---------------------------------------------------------------------------
+
+
+class TestUploadWorkingDirFromMetadata:
+    """Tests that working_dir is read once per session from metadata and
+
+    threaded into every event's payload -- matching the live hook's
+    build_payload() contract. Covers both the populated case and the
+    empty/absent terminal-fallback case (mirrors build_payload's own
+    ``working_dir or ""`` default).
+    """
+
+    def test_working_dir_from_metadata_used_in_payload(self, tmp_path: Path) -> None:
+        """Payload working_dir == the non-empty value from session metadata."""
+        events = [
+            {"event": "e1", "workspace": "ws", "data": {}},
+            {"event": "e2", "workspace": "ws", "data": {}},
+        ]
+        session_dir, metadata = _write_session(tmp_path, "abc", events)
+        metadata["working_dir"] = "/some/dir"
+        sessions = [(session_dir, metadata)]
+        tracker = MagicMock()
+        captured_payloads: list[Any] = []
+
+        with patch("httpx.Client") as mock_client_cls:
+            mock_client = MagicMock()
+            mock_client_cls.return_value.__enter__.return_value = mock_client
+
+            def capture_post(url: str, **kwargs: Any) -> MagicMock:
+                captured_payloads.append(kwargs.get("json"))
+                return _mock_response(200)
+
+            mock_client.post.side_effect = capture_post
+
+            run_upload(sessions, "https://server", "api-key", tracker)
+
+        assert len(captured_payloads) == 2
+        assert captured_payloads[0]["working_dir"] == "/some/dir"
+        assert captured_payloads[1]["working_dir"] == "/some/dir"
+
+    def test_missing_working_dir_defaults_to_empty_string(self, tmp_path: Path) -> None:
+        """No working_dir key in metadata -> payload working_dir == ''."""
+        events = [{"event": "e1", "workspace": "ws", "data": {}}]
+        session_dir, metadata = _write_session(tmp_path, "abc", events)
+        assert "working_dir" not in metadata
+        sessions = [(session_dir, metadata)]
+        tracker = MagicMock()
+        captured_payloads: list[Any] = []
+
+        with patch("httpx.Client") as mock_client_cls:
+            mock_client = MagicMock()
+            mock_client_cls.return_value.__enter__.return_value = mock_client
+
+            def capture_post(url: str, **kwargs: Any) -> MagicMock:
+                captured_payloads.append(kwargs.get("json"))
+                return _mock_response(200)
+
+            mock_client.post.side_effect = capture_post
+
+            run_upload(sessions, "https://server", "api-key", tracker)
+
+        assert len(captured_payloads) == 1
+        assert captured_payloads[0]["working_dir"] == ""
+
+    def test_empty_string_working_dir_stays_empty(self, tmp_path: Path) -> None:
+        """working_dir explicitly '' in metadata (CI-native, no working_dir at
+        capture time) -> payload working_dir == ''."""
+        events = [{"event": "e1", "workspace": "ws", "data": {}}]
+        session_dir, metadata = _write_session(tmp_path, "abc", events)
+        metadata["working_dir"] = ""
+        sessions = [(session_dir, metadata)]
+        tracker = MagicMock()
+        captured_payloads: list[Any] = []
+
+        with patch("httpx.Client") as mock_client_cls:
+            mock_client = MagicMock()
+            mock_client_cls.return_value.__enter__.return_value = mock_client
+
+            def capture_post(url: str, **kwargs: Any) -> MagicMock:
+                captured_payloads.append(kwargs.get("json"))
+                return _mock_response(200)
+
+            mock_client.post.side_effect = capture_post
+
+            run_upload(sessions, "https://server", "api-key", tracker)
+
+        assert len(captured_payloads) == 1
+        assert captured_payloads[0]["working_dir"] == ""
+
+
+# ---------------------------------------------------------------------------
 # TestUploadUrlAndAuth
 # ---------------------------------------------------------------------------
 

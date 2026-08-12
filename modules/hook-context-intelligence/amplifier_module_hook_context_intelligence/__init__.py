@@ -247,6 +247,7 @@ async def on_session_ready(coordinator: Any) -> None:
             url=d.url,
             api_key=d.api_key,
             workspace=resolver.workspace,
+            working_dir=resolver.working_dir,
             dispatch_timeout=resolver.dispatch_timeout,
             read_timeout=resolver.dispatch_read_timeout,
             connect_timeout=resolver.dispatch_connect_timeout,
