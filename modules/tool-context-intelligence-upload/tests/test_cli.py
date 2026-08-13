@@ -2300,8 +2300,7 @@ class TestProgressRendererWiring:
                 return_value={"team": _dest("team", "https://team.example.com")},
             ),
             patch(
-                "amplifier_module_tool_context_intelligence_upload.cli."
-                "load_keys_env_into_environ"
+                "amplifier_module_tool_context_intelligence_upload.cli.load_keys_env_into_environ"
             ),
             patch(
                 "amplifier_module_tool_context_intelligence_upload.cli.resolve_upload_sessions",
@@ -2341,8 +2340,7 @@ class TestProgressRendererWiring:
                 return_value={"team": _dest("team", "https://team.example.com")},
             ),
             patch(
-                "amplifier_module_tool_context_intelligence_upload.cli."
-                "load_keys_env_into_environ"
+                "amplifier_module_tool_context_intelligence_upload.cli.load_keys_env_into_environ"
             ),
             patch(
                 "amplifier_module_tool_context_intelligence_upload.cli.resolve_upload_sessions",

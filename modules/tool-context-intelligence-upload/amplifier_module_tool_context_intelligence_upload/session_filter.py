@@ -36,7 +36,7 @@ def default_scan_root() -> Path:
 def resolve_session_working_dir(
     session_dir: Path,
     metadata: dict[str, Any],
-    path_fallback: str | None,
+    path_fallback: str | Path | None,
 ) -> str | None:
     """Return the working directory to match this session against, or ``None``.
 
@@ -74,7 +74,7 @@ def resolve_session_working_dir(
             return approximate
 
     if path_fallback:
-        return path_fallback
+        return str(path_fallback)
 
     return None
 
@@ -82,7 +82,7 @@ def resolve_session_working_dir(
 def filter_sessions(
     sessions: list[tuple[Path, dict[str, Any]]],
     destination: Destination,
-    path_fallback: str | None,
+    path_fallback: str | Path | None,
 ) -> tuple[list[tuple[Path, dict[str, Any]]], int]:
     """Keep the sessions *destination* should receive; count the ones it should not.
 
