@@ -24,7 +24,7 @@ from .keys_env import load_keys_env_into_environ
 from .logging_hook_format import discover_legacy
 from .progress import ProgressTracker, progress_file_path
 from .reconciliation import reconciliation_summary
-from .session_filter import default_scan_root, filter_sessions  # noqa: F401
+from .session_filter import default_scan_root, filter_sessions
 from .session_graph import ScopeError, resolve_upload_sessions
 from .uploader import _count_lines, run_upload
 
@@ -721,6 +721,33 @@ def main() -> None:
                 f"{','.join(discovery.unclassified_ids)}",
                 file=sys.stderr,
             )
+
+    # 3b. Destination filter -- runs ONCE on the final pre-upload list, before
+    #     the empty guard, so it covers both the upload loop and the
+    #     reconciliation read-count loop.  Only destination mode filters:
+    #     explicit --server-url/--api-key means "send here", no filtering.
+    sessions_filtered_out = 0
+    if conn.destination is not None:
+        discovered_count = len(sessions)
+        sessions, sessions_filtered_out = filter_sessions(
+            sessions,
+            conn.destination,
+            path_fallback=Path(args.path) if args.path else None,
+        )
+        if discovered_count and not sessions:
+            print(
+                f"all {discovered_count} discovered session(s) were filtered out by "
+                f"destination '{conn.destination.name}' -- nothing to upload.",
+                file=sys.stderr,
+            )
+            result = {
+                "status": "completed",
+                "sessions_uploaded": 0,
+                "events_uploaded": 0,
+                "sessions_filtered_out": sessions_filtered_out,
+            }
+            sys.stdout.write(json.dumps(result, indent=2) + "\n")
+            sys.exit(0)
 
     # 4. Handle no sessions found (fallback guard; resolve_upload_sessions
     #    already raises ScopeError on empty discovery, but keep this as a
