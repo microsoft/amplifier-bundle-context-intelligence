@@ -2398,3 +2398,52 @@ class TestProgressRendererWiring:
         err = capsys.readouterr().err
         assert "summary:" in err
         assert "http://explicit:9000" in err
+
+
+# ---------------------------------------------------------------------------
+# Help text -- zero-arg gesture, destinations, keys.env, new flags
+# ---------------------------------------------------------------------------
+
+
+class TestHelpDocumentsTheNewGesture:
+    """Both help levels must explain the zero-arg gesture and the new flags."""
+
+    @pytest.mark.parametrize(
+        "needle",
+        ["--destination", "--auto-approve", "-y", "destinations", "keys.env"],
+    )
+    def test_compact_help_mentions(self, needle):
+        from amplifier_module_tool_context_intelligence_upload.cli import _COMPACT_HELP
+
+        assert needle in _COMPACT_HELP
+
+    @pytest.mark.parametrize(
+        "needle",
+        [
+            "--destination",
+            "--auto-approve",
+            "keys.env",
+            "destinations",
+            "~/.amplifier/projects",
+            "include",
+            "exclude",
+            "ZERO-ARG",
+            "PROGRESS DISPLAY",
+        ],
+    )
+    def test_detailed_help_mentions(self, needle):
+        from amplifier_module_tool_context_intelligence_upload.cli import _DETAILED_HELP
+
+        assert needle in _DETAILED_HELP
+
+    def test_compact_usage_line_shows_the_zero_arg_form(self):
+        from amplifier_module_tool_context_intelligence_upload.cli import _COMPACT_HELP
+
+        assert "usage: context-intelligence-upload" in _COMPACT_HELP
+        assert "[--path PATH]" in _COMPACT_HELP
+
+    def test_detailed_help_documents_the_new_exit_2_cases(self):
+        from amplifier_module_tool_context_intelligence_upload.cli import _DETAILED_HELP
+
+        assert "--auto-approve" in _DETAILED_HELP
+        assert "not a TTY" in _DETAILED_HELP

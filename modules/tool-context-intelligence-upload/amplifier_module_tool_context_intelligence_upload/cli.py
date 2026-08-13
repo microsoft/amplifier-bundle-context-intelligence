@@ -35,19 +35,35 @@ from .uploader import _count_lines, run_upload
 # ---------------------------------------------------------------------------
 
 _COMPACT_HELP = """\
-usage: context-intelligence-upload --path PATH --server-url URL --api-key KEY
+usage: context-intelligence-upload [--path PATH] [--destination NAME]
+	                                    [--server-url URL] [--api-key KEY]
+	                                    [-y | --auto-approve]
 	                                    [--job-id ID] [--progress FILE]
-	                                    [--event-delay-ms MS]
+	                                    [--event-delay-ms MS] [--format FORMAT]
 	                                    [--no-replay]
 
 Replay context-intelligence session data to a server.
 
+With no arguments at all, uploads everything under ~/.amplifier/projects to
+the destination configured in ~/.amplifier/settings.yaml (auto-selected when
+exactly one destination is configured), after showing a preview of what will
+be sent and asking you to confirm.
+
 flags:
   -h                 Show this compact help and exit
   --help             Show detailed documentation and exit
-  --path             File or folder to replay (required)
-  --server-url       Target server base URL (required)
-  --api-key          Bearer token for authorization (required)
+  --path             File or folder to replay
+                       default: ~/.amplifier/projects (auto-discovery of all
+                       sessions when omitted)
+  --destination      Name of the destination to upload to, from the
+                       'destinations' map in ~/.amplifier/settings.yaml.
+                       Exactly one configured -> auto-selected. Two or more
+                       -> interactive prompt, or name one explicitly.
+  -y, --auto-approve Skip the 'Proceed? [y/N]' confirmation prompt
+                       (required for non-interactive/CI use)
+  --server-url       Target server base URL (bypasses destinations map)
+  --api-key          Bearer token for authorization
+                       ${VAR} values resolve from ~/.amplifier/keys.env
   --job-id           Job identifier (auto-generated UUID4 if omitted)
   --progress         Progress file path
                        default: /tmp/context-intelligence-upload-{job_id}.json
@@ -76,12 +92,108 @@ every events.jsonl file to the server's /events endpoint.
 Progress is tracked atomically in a JSON file on disk so the upload can be
 monitored externally.  The final result is written as JSON to stdout.
 
+ZERO-ARG GESTURE
+-----------------
+Running ``context-intelligence-upload`` with no arguments at all is a
+supported, first-class gesture.  It resolves in five stages:
+
+  1. CONNECTION
+     Explicit flags (--server-url/--api-key) win if given.  Otherwise the
+     AMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_URL / _API_KEY environment
+     variables are checked next.  If neither is set, the tool falls back to
+     the same write destinations the live hook uses: the 'destinations' map
+     under overrides.hook-context-intelligence.config.destinations in
+     ~/.amplifier/settings.yaml, for example:
+
+       overrides:
+         hook-context-intelligence:
+           config:
+             destinations:
+               primary:
+                 url: "https://context-intelligence.example.com"
+                 api_key: "${CONTEXT_INTELLIGENCE_API_KEY}"
+                 include: ["~/repos/*"]
+                 exclude: ["~/repos/scratch/*"]
+
+     ``${VAR}`` values are resolved from ~/.amplifier/keys.env.  A real
+     environment variable of the same name always wins over a keys.env
+     entry.  A missing keys.env file is not an error -- it is simply
+     skipped.
+
+  2. DESTINATION SELECTION
+     Exactly one destination configured -> it is used silently, no prompt.
+     Two or more configured -> an interactive numbered prompt is shown, or
+     pass --destination NAME to choose one explicitly (required in
+     non-interactive/scripted contexts).  In a non-interactive run, an
+     ambiguous choice is a hard error (exit 2) rather than hanging waiting
+     for input.
+
+  3. DISCOVERY
+     With --path omitted, the tool scans ~/.amplifier/projects using the
+     native layout for the selected --format.
+
+  4. FILTERING
+     The chosen destination's include/exclude patterns are applied using
+     the SAME matcher the hook used at capture time.  Matching is always
+     against each session's OWN recorded working_dir -- never against
+     --path, which may point at a backup or mirrored copy living somewhere
+     else entirely.  Legacy sessions that only recorded a workspace slug
+     fall back to an approximate reconstruction of the working directory;
+     this is documented as approximate, not exact.  Nothing is silently
+     dropped: filtered-out sessions are counted and reported in the preview
+     and in the final summary.
+
+  5. PREVIEW + CONFIRM
+     Before anything is sent, a summary is printed: destination name,
+     number of sessions, approximate event count, and how many sessions
+     were filtered out.  You are then asked 'Proceed? [y/N]', which
+     defaults to NO if you just press Enter.  Pass --auto-approve (or -y)
+     to skip this prompt.  If stdin/stdout is not a TTY and --auto-approve
+     was not given, the tool exits with code 2 instead of hanging
+     indefinitely or silently uploading without consent.
+
+Only ~/.amplifier/settings.yaml and ~/.amplifier/keys.env are read for this
+gesture -- a project-local ./.amplifier/ directory is deliberately NOT
+consulted, since uploads are a user-level, cross-project operation.
+
+Filtering and the confirmation prompt are DESTINATION-MODE features only.
+When --server-url/--api-key are given explicitly, behavior is unchanged
+from previous releases: no filtering, no preview, no prompt.
+
+PROGRESS DISPLAY
+-----------------
+On an interactive terminal, progress renders at two levels: an outer
+session counter (e.g. ``[3/12] my-project/abc123``) and an inner per-session
+event bar that redraws in place as events are sent.  When stdout is piped
+or redirected (not a TTY), the ANSI redraw sequences are dropped and one
+plain completion line is printed per session instead.  A final summary is
+always printed, regardless of terminal mode: destination name and URL,
+sessions uploaded, events sent, events skipped, sessions filtered out, and
+elapsed duration.
+
+All human-facing progress output goes to stderr; stdout carries only the
+final result JSON, so ``context-intelligence-upload | jq`` continues to
+work unaffected by progress rendering.
+
 PARAMETERS
 ----------
   --path PATH
       File or folder to replay.  If PATH is a file named metadata.json only
       that single session is processed.  Otherwise the tool recurses into
       PATH searching for metadata.json files.
+
+  --destination NAME     (optional)
+      Name of the destination to upload to, from the 'destinations' map in
+      ~/.amplifier/settings.yaml.  Passing an unknown name is an error that
+      lists the valid destination names.  Omit to auto-select when exactly
+      one destination is configured, or to be prompted interactively when
+      several are.
+
+  -y, --auto-approve     (optional, default: off)
+      Skip the 'Proceed? [y/N]' confirmation shown before a destination-mode
+      upload.  Required for non-interactive/CI use: without it, a run whose
+      stdin/stdout is not a TTY errors out with exit code 2 instead of
+      hanging waiting for input or silently uploading without consent.
 
   --server-url URL
       Base URL of the Context Intelligence ingestion server
@@ -222,6 +334,11 @@ EXIT CODES
   1   Failure — at least one HTTP error occurred during upload.
   2   Invalid invocation — missing required argument, PATH does not exist, or
       no context-intelligence sessions could be found/resolved under PATH.
+
+  Also 2: no destination configured and no connection flags were given; an
+  ambiguous destination choice made during a non-interactive run; an unknown
+  --destination NAME; or a confirmation that could not be obtained because
+  the process is not a TTY and --auto-approve was not passed.
 
 FINDING SERVER_URL AND API_KEY
 ------------------------------
