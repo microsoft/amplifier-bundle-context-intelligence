@@ -121,3 +121,27 @@ def test_the_export_prefix_is_not_supported(tmp_path: Path, clean_environ: None)
     load_keys_env_into_environ(keys_env)
 
     assert "CI_TOKEN" not in os.environ
+
+
+def test_a_missing_keys_env_file_is_a_silent_no_op(tmp_path: Path, clean_environ: None) -> None:
+    missing = tmp_path / "no-such-dir" / "keys.env"
+    before = dict(os.environ)
+
+    load_keys_env_into_environ(missing)  # must not raise
+
+    assert dict(os.environ) == before
+
+
+def test_an_unreadable_keys_env_path_fails_silently(tmp_path: Path, clean_environ: None) -> None:
+    """A directory where a file was expected: read_text raises, we swallow it.
+
+    Uses a directory rather than chmod 0o000 so the test is deterministic even
+    when the suite runs as root (root can read a 000-mode file).
+    """
+    keys_env = tmp_path / "keys.env"
+    keys_env.mkdir()
+    before = dict(os.environ)
+
+    load_keys_env_into_environ(keys_env)  # must not raise
+
+    assert dict(os.environ) == before
