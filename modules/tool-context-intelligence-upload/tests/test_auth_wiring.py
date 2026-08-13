@@ -315,7 +315,7 @@ class TestCliMainEntraMode:
                 "amplifier_module_tool_context_intelligence_upload.cli.run_upload",
                 return_value=mock_result,
             ) as mock_upload,
-            patch("amplifier_module_tool_context_intelligence_upload.cli.ProgressTracker"),
+            patch("amplifier_module_tool_context_intelligence_upload.cli.TwoLevelProgressRenderer"),
             patch(
                 "context_intelligence.auth._make_cli_credential",
                 return_value=fake_cred,
@@ -377,7 +377,7 @@ class TestCliMainEntraMode:
                 "amplifier_module_tool_context_intelligence_upload.cli.run_upload",
                 side_effect=_capture_run_upload,
             ),
-            patch("amplifier_module_tool_context_intelligence_upload.cli.ProgressTracker"),
+            patch("amplifier_module_tool_context_intelligence_upload.cli.TwoLevelProgressRenderer"),
             patch(
                 "context_intelligence.auth._make_cli_credential",
                 return_value=fake_cred,
@@ -435,7 +435,7 @@ class TestCliMainEntraMode:
                 "amplifier_module_tool_context_intelligence_upload.cli.run_upload",
                 side_effect=_capture,
             ),
-            patch("amplifier_module_tool_context_intelligence_upload.cli.ProgressTracker"),
+            patch("amplifier_module_tool_context_intelligence_upload.cli.TwoLevelProgressRenderer"),
             pytest.raises(SystemExit),
         ):
             main()

@@ -429,7 +429,7 @@ class TestCliEndToEnd:
                 "amplifier_module_tool_context_intelligence_upload.cli.run_upload",
                 return_value=mock_result,
             ),
-            patch("amplifier_module_tool_context_intelligence_upload.cli.ProgressTracker"),
+            patch("amplifier_module_tool_context_intelligence_upload.cli.TwoLevelProgressRenderer"),
             pytest.raises(SystemExit) as exc_info,
         ):
             main()
@@ -474,7 +474,7 @@ class TestCliEndToEnd:
                 "amplifier_module_tool_context_intelligence_upload.cli.run_upload",
                 return_value=mock_result,
             ) as mock_run_upload,
-            patch("amplifier_module_tool_context_intelligence_upload.cli.ProgressTracker"),
+            patch("amplifier_module_tool_context_intelligence_upload.cli.TwoLevelProgressRenderer"),
             pytest.raises(SystemExit) as exc_info,
         ):
             main()
@@ -518,7 +518,7 @@ class TestCliEndToEnd:
                 "amplifier_module_tool_context_intelligence_upload.cli.run_upload",
                 return_value=mock_result,
             ) as mock_run_upload,
-            patch("amplifier_module_tool_context_intelligence_upload.cli.ProgressTracker"),
+            patch("amplifier_module_tool_context_intelligence_upload.cli.TwoLevelProgressRenderer"),
             pytest.raises(SystemExit) as exc_info,
         ):
             main()
@@ -575,7 +575,7 @@ class TestEnvVarConfigResolution:
                 "amplifier_module_tool_context_intelligence_upload.cli.run_upload",
                 return_value=mock_result,
             ) as mock_upload,
-            patch("amplifier_module_tool_context_intelligence_upload.cli.ProgressTracker"),
+            patch("amplifier_module_tool_context_intelligence_upload.cli.TwoLevelProgressRenderer"),
             pytest.raises(SystemExit) as exc_info,
         ):
             main()
@@ -625,7 +625,7 @@ class TestEnvVarConfigResolution:
                 "amplifier_module_tool_context_intelligence_upload.cli.run_upload",
                 return_value=mock_result,
             ) as mock_upload,
-            patch("amplifier_module_tool_context_intelligence_upload.cli.ProgressTracker"),
+            patch("amplifier_module_tool_context_intelligence_upload.cli.TwoLevelProgressRenderer"),
             pytest.raises(SystemExit) as exc_info,
         ):
             main()
@@ -723,7 +723,7 @@ class TestScopeResolutionWiring:
                 "amplifier_module_tool_context_intelligence_upload.cli.run_upload",
                 return_value=mock_result,
             ),
-            patch("amplifier_module_tool_context_intelligence_upload.cli.ProgressTracker"),
+            patch("amplifier_module_tool_context_intelligence_upload.cli.TwoLevelProgressRenderer"),
             pytest.raises(SystemExit) as exc_info,
         ):
             main()
@@ -858,7 +858,7 @@ class TestDtuServerUrlPrecedence:
                 "amplifier_module_tool_context_intelligence_upload.cli.run_upload",
                 return_value=mock_result,
             ) as mock_run_upload,
-            patch("amplifier_module_tool_context_intelligence_upload.cli.ProgressTracker"),
+            patch("amplifier_module_tool_context_intelligence_upload.cli.TwoLevelProgressRenderer"),
             pytest.raises(SystemExit) as exc_info,
         ):
             main()
@@ -919,7 +919,7 @@ class TestFormatDispatch:
             ),
             patch.object(cli_mod, "discover_legacy", return_value=fake_discovery) as mock_discover,
             patch.object(cli_mod, "run_upload", return_value=mock_result) as mock_run_upload,
-            patch.object(cli_mod, "ProgressTracker"),
+            patch.object(cli_mod, "TwoLevelProgressRenderer"),
             pytest.raises(SystemExit) as exc_info,
         ):
             cli_mod.main()
@@ -965,7 +965,7 @@ class TestFormatDispatch:
             ),
             patch.object(cli_mod, "discover_legacy", return_value=fake_discovery),
             patch.object(cli_mod, "run_upload", return_value=mock_result) as mock_run_upload,
-            patch.object(cli_mod, "ProgressTracker"),
+            patch.object(cli_mod, "TwoLevelProgressRenderer"),
             pytest.raises(SystemExit) as exc_info,
         ):
             cli_mod.main()
@@ -997,7 +997,7 @@ class TestFormatDispatch:
             ),
             patch.object(cli_mod, "discover_legacy") as mock_discover,
             patch.object(cli_mod, "run_upload") as mock_run_upload,
-            patch.object(cli_mod, "ProgressTracker"),
+            patch.object(cli_mod, "TwoLevelProgressRenderer"),
             pytest.raises(SystemExit) as exc_info,
         ):
             cli_mod.main()
@@ -1034,7 +1034,7 @@ class TestFormatDispatch:
                 cli_mod, "resolve_upload_sessions", return_value=_fake_scope(fake_sessions)
             ),
             patch.object(cli_mod, "run_upload", return_value=mock_result) as mock_run_upload,
-            patch.object(cli_mod, "ProgressTracker"),
+            patch.object(cli_mod, "TwoLevelProgressRenderer"),
             pytest.raises(SystemExit) as exc_info,
         ):
             cli_mod.main()
@@ -1103,7 +1103,7 @@ class TestReconciliationSummary:
             ),
             patch.object(cli_mod, "discover_legacy", return_value=fake_discovery),
             patch.object(cli_mod, "run_upload", return_value=upload_result),
-            patch.object(cli_mod, "ProgressTracker"),
+            patch.object(cli_mod, "TwoLevelProgressRenderer"),
             pytest.raises(SystemExit) as exc_info,
         ):
             cli_mod.main()
@@ -1169,7 +1169,7 @@ class TestReconciliationSummary:
             ),
             patch.object(cli_mod, "discover_legacy", return_value=fake_discovery),
             patch.object(cli_mod, "run_upload", return_value=upload_result),
-            patch.object(cli_mod, "ProgressTracker"),
+            patch.object(cli_mod, "TwoLevelProgressRenderer"),
             pytest.raises(SystemExit),
         ):
             cli_mod.main()
@@ -1235,7 +1235,7 @@ class TestReconciliationSummary:
             ),
             patch.object(cli_mod, "discover_legacy", return_value=fake_discovery),
             patch.object(cli_mod, "run_upload", return_value=upload_result),
-            patch.object(cli_mod, "ProgressTracker"),
+            patch.object(cli_mod, "TwoLevelProgressRenderer"),
             pytest.raises(SystemExit),
         ):
             cli_mod.main()
@@ -1283,7 +1283,7 @@ class TestReconciliationSummary:
                 cli_mod, "resolve_upload_sessions", return_value=_fake_scope(fake_sessions)
             ),
             patch.object(cli_mod, "run_upload", return_value=upload_result),
-            patch.object(cli_mod, "ProgressTracker"),
+            patch.object(cli_mod, "TwoLevelProgressRenderer"),
             pytest.raises(SystemExit),
         ):
             cli_mod.main()
@@ -1337,7 +1337,7 @@ class TestOperatorSignals:
                 ],
             ),
             patch.object(cli_mod, "discover_legacy", return_value=fake_discovery),
-            patch.object(cli_mod, "ProgressTracker"),
+            patch.object(cli_mod, "TwoLevelProgressRenderer"),
             pytest.raises(SystemExit),
         ):
             cli_mod.main()
@@ -1395,7 +1395,7 @@ class TestOperatorSignals:
             ),
             patch.object(cli_mod, "discover_legacy", return_value=fake_discovery),
             patch.object(cli_mod, "run_upload", return_value=upload_result),
-            patch.object(cli_mod, "ProgressTracker"),
+            patch.object(cli_mod, "TwoLevelProgressRenderer"),
             pytest.raises(SystemExit),
         ):
             cli_mod.main()
@@ -1453,7 +1453,7 @@ class TestOperatorSignals:
             ),
             patch.object(cli_mod, "discover_legacy", return_value=fake_discovery),
             patch.object(cli_mod, "run_upload", return_value=upload_result),
-            patch.object(cli_mod, "ProgressTracker"),
+            patch.object(cli_mod, "TwoLevelProgressRenderer"),
             pytest.raises(SystemExit) as exc_info,
         ):
             cli_mod.main()
@@ -1496,7 +1496,7 @@ class TestOperatorSignals:
                 cli_mod, "resolve_upload_sessions", return_value=_fake_scope(fake_sessions)
             ),
             patch.object(cli_mod, "run_upload", return_value=upload_result),
-            patch.object(cli_mod, "ProgressTracker"),
+            patch.object(cli_mod, "TwoLevelProgressRenderer"),
             pytest.raises(SystemExit) as exc_info,
         ):
             cli_mod.main()
@@ -2283,3 +2283,118 @@ class TestPreviewAndConfirmation:
         assert exc_info.value.code == 0
         assert mock_upload.call_count == 1
         assert "about to upload" not in capsys.readouterr().err
+
+
+class TestProgressRendererWiring:
+    """main() attaches the two-level renderer and prints a final summary."""
+
+    def test_final_summary_is_printed_to_stderr(self, tmp_path, isolated_home, capsys):
+        from amplifier_module_tool_context_intelligence_upload.cli import main
+
+        discovered = [(tmp_path / "a", {"session_id": "a"})]
+
+        with (
+            patch("sys.argv", ["context-intelligence-upload", "--path", str(tmp_path), "-y"]),
+            patch(
+                "amplifier_module_tool_context_intelligence_upload.cli.read_destinations",
+                return_value={"team": _dest("team", "https://team.example.com")},
+            ),
+            patch(
+                "amplifier_module_tool_context_intelligence_upload.cli."
+                "load_keys_env_into_environ"
+            ),
+            patch(
+                "amplifier_module_tool_context_intelligence_upload.cli.resolve_upload_sessions",
+                return_value=_fake_scope(discovered),
+            ),
+            patch(
+                "amplifier_module_tool_context_intelligence_upload.cli.filter_sessions",
+                return_value=(discovered, 4),
+            ),
+            patch(
+                "amplifier_module_tool_context_intelligence_upload.cli.run_upload",
+                return_value=_make_upload_result(sessions_uploaded=1, events_uploaded=9),
+            ),
+            pytest.raises(SystemExit) as exc_info,
+        ):
+            main()
+
+        assert exc_info.value.code == 0
+        err = capsys.readouterr().err
+        assert "summary:" in err
+        assert "team" in err
+        assert "filtered out:      4" in err
+        assert "duration:" in err
+
+    def test_renderer_is_used_as_the_tracker(self, tmp_path, isolated_home):
+        from amplifier_module_tool_context_intelligence_upload.cli import main
+        from amplifier_module_tool_context_intelligence_upload.progress import (
+            TwoLevelProgressRenderer,
+        )
+
+        discovered = [(tmp_path / "a", {"session_id": "a"})]
+
+        with (
+            patch("sys.argv", ["context-intelligence-upload", "--path", str(tmp_path), "-y"]),
+            patch(
+                "amplifier_module_tool_context_intelligence_upload.cli.read_destinations",
+                return_value={"team": _dest("team", "https://team.example.com")},
+            ),
+            patch(
+                "amplifier_module_tool_context_intelligence_upload.cli."
+                "load_keys_env_into_environ"
+            ),
+            patch(
+                "amplifier_module_tool_context_intelligence_upload.cli.resolve_upload_sessions",
+                return_value=_fake_scope(discovered),
+            ),
+            patch(
+                "amplifier_module_tool_context_intelligence_upload.cli.filter_sessions",
+                return_value=(discovered, 0),
+            ),
+            patch(
+                "amplifier_module_tool_context_intelligence_upload.cli.run_upload",
+                return_value=_make_upload_result(),
+            ) as mock_upload,
+            pytest.raises(SystemExit),
+        ):
+            main()
+
+        tracker = mock_upload.call_args.kwargs["tracker"]
+        assert isinstance(tracker, TwoLevelProgressRenderer)
+
+    def test_summary_labels_explicit_mode_without_a_destination(
+        self, tmp_path, isolated_home, capsys
+    ):
+        from amplifier_module_tool_context_intelligence_upload.cli import main
+
+        discovered = [(tmp_path / "a", {"session_id": "a"})]
+
+        with (
+            patch(
+                "sys.argv",
+                [
+                    "context-intelligence-upload",
+                    "--path",
+                    str(tmp_path),
+                    "--server-url",
+                    "http://explicit:9000",
+                    "--api-key",
+                    "explicit-key",
+                ],
+            ),
+            patch(
+                "amplifier_module_tool_context_intelligence_upload.cli.resolve_upload_sessions",
+                return_value=_fake_scope(discovered),
+            ),
+            patch(
+                "amplifier_module_tool_context_intelligence_upload.cli.run_upload",
+                return_value=_make_upload_result(),
+            ),
+            pytest.raises(SystemExit),
+        ):
+            main()
+
+        err = capsys.readouterr().err
+        assert "summary:" in err
+        assert "http://explicit:9000" in err

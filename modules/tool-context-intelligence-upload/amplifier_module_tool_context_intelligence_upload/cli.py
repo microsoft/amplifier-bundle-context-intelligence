@@ -12,6 +12,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import time
 import uuid
 from pathlib import Path
 from typing import NamedTuple
@@ -23,7 +24,7 @@ from .formats import FORMATS
 from .keys_env import load_keys_env_into_environ
 from .logging_hook_format import discover_legacy
 from .preview import ConfirmationRequiredError, build_preview_text, confirm_upload
-from .progress import ProgressTracker, progress_file_path
+from .progress import TwoLevelProgressRenderer, progress_file_path, session_label
 from .reconciliation import reconciliation_summary
 from .session_filter import default_scan_root, filter_sessions
 from .session_graph import ScopeError, resolve_upload_sessions
@@ -810,10 +811,17 @@ def main() -> None:
 
     # 5. Create progress tracker
     prog_path = progress_file_path(job_id, override=args.progress)
-    tracker = ProgressTracker(
-        job_id=job_id,
-        file_path=prog_path,
-        sessions_total=len(sessions),
+    labels = {
+        str(session_metadata.get("session_id") or session_dir.name): session_label(
+            session_dir, session_metadata
+        )
+        for session_dir, session_metadata in sessions
+    }
+    tracker = TwoLevelProgressRenderer(
+        job_id,
+        prog_path,
+        len(sessions),
+        labels=labels,
     )
 
     # 6. Run upload
@@ -821,6 +829,7 @@ def main() -> None:
     # replay=False unconditionally, with no --no-replay override (enforced
     # above at step 2b). The context-intelligence path keeps today's behavior.
     replay = False if args.format == "logging-hook" else not args.no_replay
+    upload_started_at = time.monotonic()
     upload_result = run_upload(
         sessions=sessions,
         server_url=server_url,
@@ -833,6 +842,7 @@ def main() -> None:
         timeout_s=args.timeout_s,
         parse_fn=parse_fn,
     )
+    upload_duration_s = time.monotonic() - upload_started_at
 
     # 6b. Print the operator reconciliation summary -- independently-measured
     # counts only (read is a fresh non-blank-line count from the events.jsonl
@@ -851,6 +861,21 @@ def main() -> None:
             skipped=upload_result.events_skipped,
             unmapped=upload_result.events_unmapped,
             live_sessions_skipped=live_sessions_skipped,
+        ),
+        file=sys.stderr,
+    )
+
+    print(
+        tracker.final_summary(
+            destination_name=(
+                conn.destination.name if conn.destination else "(explicit --server-url)"
+            ),
+            destination_url=server_url,
+            sessions_uploaded=upload_result.sessions_uploaded,
+            events_sent=upload_result.events_uploaded,
+            events_skipped=upload_result.events_skipped,
+            filtered_out=sessions_filtered_out,
+            duration_s=upload_duration_s,
         ),
         file=sys.stderr,
     )
