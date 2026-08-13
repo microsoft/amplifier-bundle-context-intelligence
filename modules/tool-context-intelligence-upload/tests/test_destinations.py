@@ -260,3 +260,47 @@ def test_a_single_destination_is_auto_selected_without_prompting(
 
     assert chosen.name == "team"
     assert capsys.readouterr().out == ""
+
+
+def two_destinations() -> dict[str, Destination]:
+    return {
+        "team": make_destination("team", "https://team.example.com"),
+        "personal": make_destination("personal", "https://personal.example.com"),
+    }
+
+
+@pytest.mark.parametrize("interactive", [True, False])
+def test_an_explicitly_named_destination_is_selected_without_prompting(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], interactive: bool
+) -> None:
+    monkeypatch.setattr("builtins.input", explode_on_input)
+
+    chosen = select_destination(two_destinations(), "personal", interactive=interactive)
+
+    assert chosen.name == "personal"
+    assert chosen.url == "https://personal.example.com"
+    assert capsys.readouterr().out == ""
+
+
+@pytest.mark.parametrize("interactive", [True, False])
+def test_an_unknown_destination_name_raises_and_lists_the_valid_names(
+    monkeypatch: pytest.MonkeyPatch, interactive: bool
+) -> None:
+    """An explicit --destination is never silently redirected to another endpoint."""
+    monkeypatch.setattr("builtins.input", explode_on_input)
+
+    with pytest.raises(DestinationSelectionError) as excinfo:
+        select_destination(two_destinations(), "typo", interactive=interactive)
+
+    message = str(excinfo.value)
+    assert "'typo'" in message
+    assert "personal" in message
+    assert "team" in message
+
+
+def test_an_unknown_name_against_a_single_destination_still_raises() -> None:
+    """The 1-destination auto-select shortcut must not swallow an explicit typo."""
+    only = {"team": make_destination("team", "https://team.example.com")}
+
+    with pytest.raises(DestinationSelectionError):
+        select_destination(only, "typo", interactive=False)
