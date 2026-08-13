@@ -101,6 +101,29 @@ readiness:
   - name: library-check
     command: "/opt/venv/bin/python3 -c \"from context_intelligence.client import AsyncCIClient; print('ready')\""
 
+  - name: upload-module-is-cli-only
+    # The upload module ships a console script and NO in-session tools: no
+    # mount() and no amplifier.modules entry point. The README used to claim
+    # otherwise; this gate makes the claim un-reintroducible.
+    command: |
+      set -euo pipefail
+      /opt/venv/bin/python3 - <<'PY'
+      import importlib.metadata as md
+      import amplifier_module_tool_context_intelligence_upload as pkg
+
+      assert not hasattr(pkg, "mount"), "upload module unexpectedly exposes mount()"
+
+      eps = [
+          e for e in md.entry_points().select(group="amplifier.modules")
+          if "context_intelligence_upload" in (e.value or "")
+      ]
+      assert not eps, f"upload module unexpectedly registers amplifier.modules entry points: {eps}"
+      print("ready: upload module is CLI-only (no mount, no amplifier.modules entry point)")
+      PY
+
+  - name: upload-cli-help-has-simplified-surface
+    command: "/opt/venv/bin/python3 -m amplifier_module_tool_context_intelligence_upload --help | grep -q -- '--destination' && echo ready"
+
 manual_validation_steps:
   # Install the stub event contributor fixture module from the local bundle
   - name: install-stub-module
