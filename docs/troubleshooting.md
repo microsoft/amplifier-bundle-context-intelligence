@@ -2,8 +2,8 @@
 
 Observed symptom → root cause → fix for the context-intelligence hook's local capture
 and server forwarding. Work from the exact log line, not from guesses — each dispatch
-warning is a precise signal (see the [Auto-recovery dispatch](../README.md#auto-recovery-dispatch)
-state machine and [Server dispatch](../README.md#server-dispatch) in the README).
+warning is a precise signal (see the [Auto-recovery dispatch](configuration-reference.md#auto-recovery-dispatch)
+state machine and [Server dispatch](configuration-reference.md#server-dispatch) in the Configuration reference).
 
 For **remote / Azure-deployed** servers (APIM, Entra, cross-region tuning, the auth probe
 cookbook, and recovering undelivered events), see

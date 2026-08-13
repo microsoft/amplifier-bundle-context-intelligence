@@ -2,6 +2,12 @@
 
 Guidance for AI agents and developers working in **this** bundle repository.
 
+> **Just want to install and *use* this bundle (not develop it)?** This file is
+> contributor/maintainer guidance. For consumer onboarding — install commands,
+> verification, the agents you can call, and configuration — start at the
+> [README Quick start](README.md#quick-start) and the
+> [Configuration & Integration Reference](docs/configuration-reference.md).
+
 ## Known validator false positive — do NOT "fix" it
 
 `validate-bundle-repo` (v3.6.0) reports a mode-advertising **ERROR**:
