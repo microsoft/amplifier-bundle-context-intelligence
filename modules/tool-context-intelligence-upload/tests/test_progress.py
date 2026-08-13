@@ -14,7 +14,6 @@ from amplifier_module_tool_context_intelligence_upload.progress import (
     session_label,
 )
 
-
 # ---------------------------------------------------------------------------
 # TestProgressFilePath
 # ---------------------------------------------------------------------------
@@ -284,9 +283,7 @@ class TestTwoLevelProgressRendererNonTty:
         renderer.session_completed()
         assert "\r" not in stream.getvalue()
 
-    def test_progress_json_file_behaviour_is_unchanged(
-        self, tmp_path: Path, monkeypatch
-    ) -> None:
+    def test_progress_json_file_behaviour_is_unchanged(self, tmp_path: Path, monkeypatch) -> None:
         """The renderer is a ProgressTracker — the JSON contract must still hold."""
         file_path = tmp_path / "progress.json"
         monkeypatch.setattr(sys.stdout, "isatty", lambda: False)
@@ -304,9 +301,7 @@ class TestTwoLevelProgressRendererNonTty:
         assert data["current_session_events_sent"] == 1
         assert data["sessions_completed"] == 1
 
-    def test_unlabelled_session_falls_back_to_session_id(
-        self, tmp_path: Path, monkeypatch
-    ) -> None:
+    def test_unlabelled_session_falls_back_to_session_id(self, tmp_path: Path, monkeypatch) -> None:
         monkeypatch.setattr(sys.stdout, "isatty", lambda: False)
         stream = io.StringIO()
         renderer = TwoLevelProgressRenderer("job-1", tmp_path / "p.json", 1, stream=stream)
@@ -358,9 +353,7 @@ class TestTwoLevelProgressRendererTty:
         assert "50%" in last_frame
         assert "(2/4)" in last_frame
 
-    def test_zero_event_session_does_not_divide_by_zero(
-        self, tmp_path: Path, monkeypatch
-    ) -> None:
+    def test_zero_event_session_does_not_divide_by_zero(self, tmp_path: Path, monkeypatch) -> None:
         renderer, stream = self._renderer(tmp_path, monkeypatch)
         renderer.start_session("s1", events_total=0)
         assert "0%" in stream.getvalue()
@@ -371,3 +364,51 @@ class TestTwoLevelProgressRendererTty:
         renderer.event_sent()
         renderer.session_completed()
         assert stream.getvalue().endswith("\n")
+
+
+# ---------------------------------------------------------------------------
+# TestFinalSummary
+# ---------------------------------------------------------------------------
+
+
+class TestFinalSummary:
+    """The end-of-run summary line block."""
+
+    def _summary(self, tmp_path: Path, monkeypatch) -> str:
+        monkeypatch.setattr(sys.stdout, "isatty", lambda: False)
+        renderer = TwoLevelProgressRenderer("job-1", tmp_path / "p.json", 3, stream=io.StringIO())
+        return renderer.final_summary(
+            destination_name="team",
+            destination_url="https://context-intelligence.team.example.com",
+            sessions_uploaded=3,
+            events_sent=214,
+            events_skipped=7,
+            filtered_out=12,
+            duration_s=42.5,
+        )
+
+    def test_summary_names_destination_and_url(self, tmp_path: Path, monkeypatch) -> None:
+        text = self._summary(tmp_path, monkeypatch)
+        assert "team" in text
+        assert "https://context-intelligence.team.example.com" in text
+
+    def test_summary_reports_sessions_events_and_skipped(self, tmp_path: Path, monkeypatch) -> None:
+        text = self._summary(tmp_path, monkeypatch)
+        assert "3" in text
+        assert "214" in text
+        assert "7" in text
+
+    def test_summary_reports_filtered_out_count(self, tmp_path: Path, monkeypatch) -> None:
+        text = self._summary(tmp_path, monkeypatch)
+        assert "12" in text
+        assert "filtered" in text.lower()
+
+    def test_summary_reports_duration(self, tmp_path: Path, monkeypatch) -> None:
+        text = self._summary(tmp_path, monkeypatch)
+        assert "42.5" in text
+
+    def test_summary_is_returned_not_printed(self, tmp_path: Path, monkeypatch, capsys) -> None:
+        self._summary(tmp_path, monkeypatch)
+        captured = capsys.readouterr()
+        assert captured.out == ""
+        assert captured.err == ""

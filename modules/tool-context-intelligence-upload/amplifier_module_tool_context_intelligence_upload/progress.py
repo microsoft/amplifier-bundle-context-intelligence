@@ -186,6 +186,32 @@ class TwoLevelProgressRenderer(ProgressTracker):
             )
         self._stream.flush()
 
+    def final_summary(
+        self,
+        *,
+        destination_name: str,
+        destination_url: str,
+        sessions_uploaded: int,
+        events_sent: int,
+        events_skipped: int,
+        filtered_out: int,
+        duration_s: float,
+    ) -> str:
+        """Return the end-of-run summary block.
+
+        Returned rather than printed so the caller decides the stream (the CLI
+        writes it to stderr) and so it is trivially testable.
+        """
+        return (
+            "summary:\n"
+            f"  destination:       {destination_name} ({destination_url})\n"
+            f"  sessions uploaded: {sessions_uploaded}\n"
+            f"  events sent:       {events_sent}\n"
+            f"  events skipped:    {events_skipped}\n"
+            f"  filtered out:      {filtered_out}\n"
+            f"  duration:          {duration_s:.1f}s"
+        )
+
     def _redraw(self) -> None:
         """Redraw the outer counter + inner event bar in place (TTY only)."""
         total = self._events_total or 1
