@@ -265,22 +265,6 @@ class TestDetailedHelp:
 
 
 # ---------------------------------------------------------------------------
-# Missing required arguments → exit 2
-# ---------------------------------------------------------------------------
-
-
-class TestMissingRequiredArgs:
-    """Missing required args should exit with code 2."""
-
-    def test_missing_path_exits_2(self, capsys):
-        from amplifier_module_tool_context_intelligence_upload.cli import _build_parser
-
-        with pytest.raises(SystemExit) as exc_info:
-            _build_parser().parse_args(["--server-url", "http://localhost", "--api-key", "key"])
-        assert exc_info.value.code == 2
-
-
-# ---------------------------------------------------------------------------
 # main() — auto-generated job_id
 # ---------------------------------------------------------------------------
 
@@ -1517,3 +1501,49 @@ class TestOperatorSignals:
             cli_mod.main()
 
         assert exc_info.value.code == 0
+
+
+# ---------------------------------------------------------------------------
+# --destination / --auto-approve / optional --path argparse
+# ---------------------------------------------------------------------------
+
+
+class TestDestinationAndAutoApproveArgparse:
+    """The two new flags, and --path becoming optional."""
+
+    def test_destination_defaults_to_none(self):
+        from amplifier_module_tool_context_intelligence_upload.cli import _build_parser
+
+        args = _build_parser().parse_args([])
+        assert args.destination is None
+
+    def test_destination_flag_is_parsed(self):
+        from amplifier_module_tool_context_intelligence_upload.cli import _build_parser
+
+        args = _build_parser().parse_args(["--destination", "team"])
+        assert args.destination == "team"
+
+    def test_auto_approve_defaults_to_false(self):
+        from amplifier_module_tool_context_intelligence_upload.cli import _build_parser
+
+        args = _build_parser().parse_args([])
+        assert args.auto_approve is False
+
+    @pytest.mark.parametrize("flag", ["-y", "--auto-approve"])
+    def test_auto_approve_flag_and_alias_set_true(self, flag):
+        from amplifier_module_tool_context_intelligence_upload.cli import _build_parser
+
+        args = _build_parser().parse_args([flag])
+        assert args.auto_approve is True
+
+    def test_path_is_optional_and_defaults_to_none(self):
+        from amplifier_module_tool_context_intelligence_upload.cli import _build_parser
+
+        args = _build_parser().parse_args([])
+        assert args.path is None
+
+    def test_path_is_still_accepted_when_given(self):
+        from amplifier_module_tool_context_intelligence_upload.cli import _build_parser
+
+        args = _build_parser().parse_args(["--path", "/tmp"])
+        assert args.path == "/tmp"

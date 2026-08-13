@@ -343,9 +343,10 @@ def _build_parser() -> argparse.ArgumentParser:
     # Required flags
     parser.add_argument(
         "--path",
-        required=True,
+        required=False,
+        default=None,
         metavar="PATH",
-        help="File or folder to replay",
+        help="File or folder to replay (default: ~/.amplifier/projects)",
     )
     parser.add_argument(
         "--server-url",
@@ -405,6 +406,30 @@ def _build_parser() -> argparse.ArgumentParser:
         help=(
             "Disable the default replay=true query parameter on POST /events; "
             "re-enables the server's 7-day idempotency cache"
+        ),
+    )
+
+    parser.add_argument(
+        "--destination",
+        default=None,
+        metavar="NAME",
+        dest="destination",
+        help=(
+            "Name of the destination to upload to, from the 'destinations' map in "
+            "~/.amplifier/settings.yaml. Omit to auto-select when exactly one is "
+            "configured, or to be prompted when several are."
+        ),
+    )
+
+    parser.add_argument(
+        "-y",
+        "--auto-approve",
+        action="store_true",
+        default=False,
+        dest="auto_approve",
+        help=(
+            "Skip the 'Proceed? [y/N]' confirmation shown before a destination-mode "
+            "upload. Required for non-interactive/CI use."
         ),
     )
 
