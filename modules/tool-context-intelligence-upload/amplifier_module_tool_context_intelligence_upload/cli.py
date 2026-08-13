@@ -684,6 +684,17 @@ def _resolve_connection(args: argparse.Namespace) -> _Connection:
     destinations = read_destinations()
 
     if not destinations:
+        if args.destination is not None:
+            # An EXPLICIT --destination must never be silently ignored just
+            # because zero destinations are configured -- that would upload
+            # to whatever the legacy fallback resolves to, not the place the
+            # user named. Fail loudly instead.
+            raise DestinationSelectionError(
+                f"Unknown destination {args.destination!r}. No context-intelligence "
+                "destinations are configured. Add one under "
+                "overrides.hook-context-intelligence.config.destinations in "
+                "~/.amplifier/settings.yaml, or pass --server-url/--api-key."
+            )
         # D2: no destinations map, but a legacy flat settings.yaml config may
         # still exist. resolve_config raises SystemExit when nothing at all is
         # configured -- that is the design's "0 destinations + no args" error.

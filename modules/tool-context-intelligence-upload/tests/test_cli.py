@@ -1741,6 +1741,39 @@ class TestConnectionResolution:
         assert "settings.yaml" in err
         assert "--server-url" in err
 
+    def test_explicit_destination_errors_when_zero_destinations_configured(
+        self, tmp_path, isolated_home, capsys
+    ):
+        """An explicit --destination must error, never silently fall back to legacy config."""
+        from amplifier_module_tool_context_intelligence_upload.cli import main
+
+        with (
+            patch(
+                "sys.argv",
+                [
+                    "context-intelligence-upload",
+                    "--path",
+                    str(tmp_path),
+                    "--destination",
+                    "nonexistent",
+                ],
+            ),
+            patch(
+                "amplifier_module_tool_context_intelligence_upload.cli.read_destinations",
+                return_value={},
+            ),
+            patch(
+                "amplifier_module_tool_context_intelligence_upload.cli.load_keys_env_into_environ"
+            ),
+            pytest.raises(SystemExit) as exc_info,
+        ):
+            main()
+
+        assert exc_info.value.code == 2
+        err = capsys.readouterr().err
+        assert "nonexistent" in err
+        assert "no context-intelligence destinations are configured" in err.lower()
+
     def test_zero_destinations_falls_back_to_legacy_settings_scalars(self, tmp_path, isolated_home):
         """D2: a legacy flat settings.yaml config still works (no destination selected)."""
         from amplifier_module_tool_context_intelligence_upload.cli import main
