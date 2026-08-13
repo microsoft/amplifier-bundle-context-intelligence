@@ -280,9 +280,7 @@ def test_a_backup_path_fallback_never_overrides_recorded_dirs_in_a_mixed_list(
     recorded_excluded = (tmp_path / "a", {"working_dir": "/opt/other"})
     slug_excluded = (tmp_path / "b", {"workspace": "-opt-other"})
 
-    kept, filtered_out = filter_sessions(
-        [recorded_excluded, slug_excluded], TEAM_DEST, backup_path
-    )
+    kept, filtered_out = filter_sessions([recorded_excluded, slug_excluded], TEAM_DEST, backup_path)
 
     assert kept == []
     assert filtered_out == 2
