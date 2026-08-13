@@ -354,3 +354,64 @@ class TestNonGoalsSection:
 
     def test_no_all_flag_documented(self, readme_content):
         assert "`--all`" in readme_content
+
+
+class TestHelpReadmeParity:
+    """`--help` and README.md must document the same surface.
+
+    Both documents are asserted against the SAME module-level constants, so a
+    flag that is renamed, dropped, or added in only one of the two fails here.
+    Invokes the real parser and captures the SystemExit-on-help path.
+    """
+
+    @pytest.fixture
+    def detailed_help_output(self, capsys) -> str:
+        from amplifier_module_tool_context_intelligence_upload.cli import _build_parser
+
+        with pytest.raises(SystemExit):
+            _build_parser().parse_args(["--help"])
+        return capsys.readouterr().out
+
+    def test_help_documents_destination_flag(self, detailed_help_output):
+        assert FLAG_DESTINATION in detailed_help_output
+
+    def test_help_documents_auto_approve_flag(self, detailed_help_output):
+        assert FLAG_AUTO_APPROVE in detailed_help_output
+
+    def test_help_documents_auto_approve_short_flag(self, detailed_help_output):
+        assert " -y" in detailed_help_output
+
+    def test_help_documents_settings_path(self, detailed_help_output):
+        assert SETTINGS_PATH in detailed_help_output
+
+    def test_help_documents_keys_env_path(self, detailed_help_output):
+        assert KEYS_ENV_PATH in detailed_help_output
+
+    def test_help_documents_default_scan_root(self, detailed_help_output):
+        assert DEFAULT_SCAN_ROOT in detailed_help_output
+
+    def test_help_documents_confirm_prompt(self, detailed_help_output):
+        assert CONFIRM_PROMPT in detailed_help_output
+
+    def test_help_documents_destinations_config_key(self, detailed_help_output):
+        assert "destinations" in detailed_help_output
+
+    def test_help_does_not_document_phantom_start_tool(self, detailed_help_output):
+        assert PHANTOM_TOOL_START not in detailed_help_output
+
+    def test_help_does_not_document_phantom_status_tool(self, detailed_help_output):
+        assert PHANTOM_TOOL_STATUS not in detailed_help_output
+
+    def test_readme_and_help_agree_on_destination_flag(
+        self, readme_content, detailed_help_output
+    ):
+        assert (FLAG_DESTINATION in readme_content) == (
+            FLAG_DESTINATION in detailed_help_output
+        )
+
+    def test_readme_and_help_agree_on_auto_approve_flag(
+        self, readme_content, detailed_help_output
+    ):
+        assert (FLAG_AUTO_APPROVE in readme_content) == (
+            FLAG_AUTO_APPROVE in detailed_help_output
+        )
