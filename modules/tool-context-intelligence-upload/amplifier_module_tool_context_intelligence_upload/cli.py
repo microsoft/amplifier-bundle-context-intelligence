@@ -22,6 +22,7 @@ from .destinations import DestinationSelectionError, read_destinations, select_d
 from .formats import FORMATS
 from .keys_env import load_keys_env_into_environ
 from .logging_hook_format import discover_legacy
+from .preview import ConfirmationRequiredError, build_preview_text, confirm_upload
 from .progress import ProgressTracker, progress_file_path
 from .reconciliation import reconciliation_summary
 from .session_filter import default_scan_root, filter_sessions
@@ -764,6 +765,48 @@ def main() -> None:
         }
         sys.stdout.write(json.dumps(result, indent=2) + "\n")
         sys.exit(0)
+
+    # 4b. Preview + confirm -- destination mode only.  With explicit
+    #     --server-url/--api-key the user already said "send here", so the
+    #     original behavior is preserved byte-for-byte (no preview, no prompt).
+    if conn.destination is not None:
+        approx_event_count = 0
+        for session_dir, _session_metadata in sessions:
+            events_file = session_dir / "events.jsonl"
+            if events_file.exists():
+                approx_event_count += _count_lines(events_file)
+
+        print(
+            build_preview_text(
+                conn.destination,
+                len(sessions),
+                approx_event_count,
+                sessions_filtered_out,
+            ),
+            file=sys.stderr,
+        )
+
+        try:
+            approved = confirm_upload(
+                auto_approve=args.auto_approve,
+                interactive=sys.stdin.isatty() and sys.stdout.isatty(),
+            )
+        except ConfirmationRequiredError:
+            print(
+                "error: confirmation required -- pass --auto-approve for non-interactive use",
+                file=sys.stderr,
+            )
+            sys.exit(2)
+
+        if not approved:
+            print("aborted -- nothing uploaded.", file=sys.stderr)
+            result = {
+                "status": "aborted",
+                "sessions_uploaded": 0,
+                "events_uploaded": 0,
+            }
+            sys.stdout.write(json.dumps(result, indent=2) + "\n")
+            sys.exit(0)
 
     # 5. Create progress tracker
     prog_path = progress_file_path(job_id, override=args.progress)

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+import sys
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -2089,3 +2090,196 @@ class TestSessionFiltering:
 
         assert exc_info.value.code == 0
         assert mock_filter.call_count == 0
+
+
+# ---------------------------------------------------------------------------
+# main() -- preview + confirmation gate (destination mode only)
+# ---------------------------------------------------------------------------
+
+
+class TestPreviewAndConfirmation:
+    """The preview + confirm gate is wired in for destination mode only,
+    after the empty-sessions guard and before progress-tracker construction.
+    """
+
+    def test_preview_is_printed_before_upload(self, tmp_path, isolated_home, capsys):
+        from amplifier_module_tool_context_intelligence_upload.cli import main
+
+        discovered = [(tmp_path / "a", {"session_id": "a"})]
+
+        with (
+            patch("sys.argv", ["context-intelligence-upload", "--path", str(tmp_path), "-y"]),
+            patch(
+                "amplifier_module_tool_context_intelligence_upload.cli.read_destinations",
+                return_value={"team": _dest("team", "https://team.example.com")},
+            ),
+            patch(
+                "amplifier_module_tool_context_intelligence_upload.cli.load_keys_env_into_environ"
+            ),
+            patch(
+                "amplifier_module_tool_context_intelligence_upload.cli.resolve_upload_sessions",
+                return_value=_fake_scope(discovered),
+            ),
+            patch(
+                "amplifier_module_tool_context_intelligence_upload.cli.filter_sessions",
+                return_value=(discovered, 3),
+            ),
+            patch(
+                "amplifier_module_tool_context_intelligence_upload.cli.run_upload",
+                return_value=_make_upload_result(),
+            ),
+            pytest.raises(SystemExit) as exc_info,
+        ):
+            main()
+
+        assert exc_info.value.code == 0
+        err = capsys.readouterr().err
+        assert "about to upload" in err
+        assert "team" in err
+        assert "https://team.example.com" in err
+
+    def test_declining_the_prompt_uploads_nothing_and_exits_0(
+        self, tmp_path, isolated_home, monkeypatch, capsys
+    ):
+        from amplifier_module_tool_context_intelligence_upload.cli import main
+
+        discovered = [(tmp_path / "a", {"session_id": "a"})]
+        monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
+        monkeypatch.setattr(sys.stdout, "isatty", lambda: True)
+        monkeypatch.setattr("builtins.input", lambda: "n")
+
+        with (
+            patch("sys.argv", ["context-intelligence-upload", "--path", str(tmp_path)]),
+            patch(
+                "amplifier_module_tool_context_intelligence_upload.cli.read_destinations",
+                return_value={"team": _dest("team", "https://team.example.com")},
+            ),
+            patch(
+                "amplifier_module_tool_context_intelligence_upload.cli.load_keys_env_into_environ"
+            ),
+            patch(
+                "amplifier_module_tool_context_intelligence_upload.cli.resolve_upload_sessions",
+                return_value=_fake_scope(discovered),
+            ),
+            patch(
+                "amplifier_module_tool_context_intelligence_upload.cli.filter_sessions",
+                return_value=(discovered, 0),
+            ),
+            patch(
+                "amplifier_module_tool_context_intelligence_upload.cli.run_upload",
+            ) as mock_upload,
+            pytest.raises(SystemExit) as exc_info,
+        ):
+            main()
+
+        assert exc_info.value.code == 0
+        assert mock_upload.call_count == 0
+
+    def test_accepting_the_prompt_uploads(self, tmp_path, isolated_home, monkeypatch, capsys):
+        from amplifier_module_tool_context_intelligence_upload.cli import main
+
+        discovered = [(tmp_path / "a", {"session_id": "a"})]
+        monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
+        monkeypatch.setattr(sys.stdout, "isatty", lambda: True)
+        monkeypatch.setattr("builtins.input", lambda: "y")
+
+        with (
+            patch("sys.argv", ["context-intelligence-upload", "--path", str(tmp_path)]),
+            patch(
+                "amplifier_module_tool_context_intelligence_upload.cli.read_destinations",
+                return_value={"team": _dest("team", "https://team.example.com")},
+            ),
+            patch(
+                "amplifier_module_tool_context_intelligence_upload.cli.load_keys_env_into_environ"
+            ),
+            patch(
+                "amplifier_module_tool_context_intelligence_upload.cli.resolve_upload_sessions",
+                return_value=_fake_scope(discovered),
+            ),
+            patch(
+                "amplifier_module_tool_context_intelligence_upload.cli.filter_sessions",
+                return_value=(discovered, 0),
+            ),
+            patch(
+                "amplifier_module_tool_context_intelligence_upload.cli.run_upload",
+                return_value=_make_upload_result(),
+            ) as mock_upload,
+            pytest.raises(SystemExit) as exc_info,
+        ):
+            main()
+
+        assert exc_info.value.code == 0
+        assert mock_upload.call_count == 1
+
+    def test_non_interactive_without_auto_approve_exits_2_with_guidance(
+        self, tmp_path, isolated_home, capsys
+    ):
+        from amplifier_module_tool_context_intelligence_upload.cli import main
+
+        discovered = [(tmp_path / "a", {"session_id": "a"})]
+
+        with (
+            patch("sys.argv", ["context-intelligence-upload", "--path", str(tmp_path)]),
+            patch(
+                "amplifier_module_tool_context_intelligence_upload.cli.read_destinations",
+                return_value={"team": _dest("team", "https://team.example.com")},
+            ),
+            patch(
+                "amplifier_module_tool_context_intelligence_upload.cli.load_keys_env_into_environ"
+            ),
+            patch(
+                "amplifier_module_tool_context_intelligence_upload.cli.resolve_upload_sessions",
+                return_value=_fake_scope(discovered),
+            ),
+            patch(
+                "amplifier_module_tool_context_intelligence_upload.cli.filter_sessions",
+                return_value=(discovered, 0),
+            ),
+            patch(
+                "amplifier_module_tool_context_intelligence_upload.cli.run_upload",
+            ) as mock_upload,
+            pytest.raises(SystemExit) as exc_info,
+        ):
+            main()
+
+        assert exc_info.value.code == 2
+        assert mock_upload.call_count == 0
+        assert "--auto-approve" in capsys.readouterr().err
+
+    def test_no_confirmation_gate_without_a_destination(self, tmp_path, isolated_home, capsys):
+        """Explicit flags -> byte-for-byte old behavior: no preview, no prompt."""
+        from amplifier_module_tool_context_intelligence_upload.cli import main
+
+        fake_sessions = [(tmp_path, {"session_id": "s1"})]
+
+        with (
+            patch(
+                "sys.argv",
+                [
+                    "context-intelligence-upload",
+                    "--path",
+                    str(tmp_path),
+                    "--server-url",
+                    "http://explicit:9000",
+                    "--api-key",
+                    "explicit-key",
+                ],
+            ),
+            patch(
+                "amplifier_module_tool_context_intelligence_upload.cli.read_destinations",
+            ),
+            patch(
+                "amplifier_module_tool_context_intelligence_upload.cli.resolve_upload_sessions",
+                return_value=_fake_scope(fake_sessions),
+            ),
+            patch(
+                "amplifier_module_tool_context_intelligence_upload.cli.run_upload",
+                return_value=_make_upload_result(),
+            ) as mock_upload,
+            pytest.raises(SystemExit) as exc_info,
+        ):
+            main()
+
+        assert exc_info.value.code == 0
+        assert mock_upload.call_count == 1
+        assert "about to upload" not in capsys.readouterr().err
