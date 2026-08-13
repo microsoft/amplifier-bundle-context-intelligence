@@ -692,44 +692,107 @@ class HookConfigResolver:
         return self.base_path / self.project_slug / "sessions"
 
     def validate_destinations(self) -> dict[str, Destination]:
-        """Validate and return all configured destinations. Fail-fast (C3).
+        """Validate configured destinations, degrading per-destination on failure (C3).
 
         Per-target XOR auth validation:
         - auth_mode="static" (default): api_key must be non-empty.
         - auth_mode="entra":           auth_resource must be non-empty; api_key is not required.
-        - unknown auth_mode:           always raises.
+        - unknown auth_mode:           destination is dropped.
         - url must always be non-empty.
 
-        Raises:
-            ValueError: naming the offending destination(s) and the empty field(s).
+        Never raises. ``mount()`` (``__init__.py``) calls this with no
+        try/except, so an exception here would abort the ENTIRE hook \u2014
+        including local JSONL capture, which has no dependency on any
+        destination. A misconfigured remote destination must only cost
+        *that destination* its dispatch, never local capture or any other,
+        correctly-configured destination. This mirrors the back-compat
+        legacy-scalar synthesis just above (this file, ~line 630): a legacy
+        url with no usable key already degrades to local-only with a logged
+        WARNING instead of raising, specifically to avoid this exact
+        "misconfigured server config kills local-only capture" regression.
+        The dict-based ``destinations:`` path now gets the same treatment,
+        applied per-entry instead of to a single synthesized destination.
+
+        Loudness is differentiated by how a destination went bad, not treated
+        uniformly:
+        - unusable api_key (static): WARNING. This is the condition the
+          legacy path already normalizes as routine \u2014 it's commonly an
+          environment/secret-injection problem (an unexpanded ``${VAR}``, a
+          CI runner without the repo's secrets, a resumed session's
+          persisted "[REDACTED]" snapshot) rather than a hand-authored
+          mistake, and is expected to occur transiently in ways a
+          hand-typed field is not.
+        - missing url / unknown auth_mode / missing auth_resource (entra):
+          ERROR. These are only reachable by literally typing a bad value
+          into ``destinations.<name>.*`` \u2014 there is no environmental path
+          to ``auth_mode: kerberos`` or an empty url the way there is to an
+          api_key that failed ``${VAR}`` expansion. They warrant the louder
+          signal so the operator notices the typo immediately, without the
+          noise (or the traceback) of a hard crash.
+
+        If EVERY configured destination is dropped (N configured, 0
+        survive), an additional summary ERROR is emitted. A user who
+        explicitly configured N remote destinations and ended up with none
+        working is in a materially different situation than a user who never
+        configured any destination at all (the latter is this method's
+        ordinary, silent local-only case per the Returns note below).
+
         Returns:
-            The validated destinations dict (possibly empty -> local-only, OK).
+            The validated (surviving) destinations dict \u2014 possibly empty,
+            which is always OK (local-only, S4). Never raises.
         """
         dests = self.destinations
-        problems: list[str] = []
+        valid: dict[str, Destination] = {}
+        dropped: list[str] = []
+
         for name, dest in dests.items():
+            reasons: list[str] = []
+            severity = logging.WARNING
+
             if is_unusable_secret(dest.url):
-                problems.append(f"{name}: missing url")
+                reasons.append("missing url")
+                severity = logging.ERROR
+
             if dest.auth_mode == "static":
                 if is_unusable_secret(dest.api_key):
-                    problems.append(
-                        f"{name}: api_key is unusable (redacted/unexpanded/empty) "
-                        f"\u2014 dispatch disabled, local JSONL only"
-                    )
+                    reasons.append("api_key is unusable (redacted/unexpanded/empty)")
+                    # Severity is NOT downgraded back to WARNING here if url
+                    # already escalated it to ERROR above -- the most severe
+                    # reason present wins.
             elif dest.auth_mode == "entra":
                 if not dest.auth_resource:
-                    problems.append(f"{name}: missing auth_resource (required for auth_mode=entra)")
+                    reasons.append("missing auth_resource (required for auth_mode=entra)")
+                    severity = logging.ERROR
             else:
-                problems.append(
-                    f"{name}: unknown auth_mode {dest.auth_mode!r} (valid: 'static', 'entra')"
+                reasons.append(f"unknown auth_mode {dest.auth_mode!r} (valid: 'static', 'entra')")
+                severity = logging.ERROR
+
+            if reasons:
+                dropped.append(name)
+                log.log(
+                    severity,
+                    "context-intelligence destination %r misconfigured: %s \u2014 dispatch "
+                    "disabled for this destination only; local JSONL and any other "
+                    "configured destinations are unaffected. Fix under "
+                    "overrides.hook-context-intelligence.config.destinations.%s.",
+                    name,
+                    "; ".join(reasons),
+                    name,
                 )
-        if problems:
-            raise ValueError(
-                f"context-intelligence destinations misconfigured: {', '.join(problems)}. "
-                f"Set url and api_key (static) or auth_resource (entra) under "
-                f"overrides.hook-context-intelligence.config.destinations.<name>."
+                continue
+
+            valid[name] = dest
+
+        if dests and not valid:
+            log.error(
+                "context-intelligence: all %d configured destination(s) (%s) failed "
+                "validation \u2014 dispatch disabled entirely, local JSONL capture "
+                "continues. See the per-destination message(s) above for specifics.",
+                len(dests),
+                ", ".join(dropped),
             )
-        return dests
+
+        return valid
 
 
 # ---------------------------------------------------------------------------
