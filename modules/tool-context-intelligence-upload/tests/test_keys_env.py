@@ -82,3 +82,42 @@ def test_whitespace_around_the_key_is_stripped(tmp_path: Path, clean_environ: No
     load_keys_env_into_environ(keys_env)
 
     assert os.environ["CI_TOKEN"] == "padded-key"
+
+
+def test_blank_comment_and_malformed_lines_are_skipped(tmp_path: Path, clean_environ: None) -> None:
+    keys_env = tmp_path / "keys.env"
+    keys_env.write_text(
+        "\n# a leading comment\n   \nNOT_A_PAIR\n#COMMENTED_OUT=nope\nGOOD=value\n",
+        encoding="utf-8",
+    )
+    for key in ("NOT_A_PAIR", "COMMENTED_OUT", "GOOD"):
+        os.environ.pop(key, None)
+
+    load_keys_env_into_environ(keys_env)
+
+    assert os.environ["GOOD"] == "value"
+    assert "NOT_A_PAIR" not in os.environ
+    assert "COMMENTED_OUT" not in os.environ
+
+
+def test_a_value_containing_equals_splits_on_the_first_equals_only(
+    tmp_path: Path, clean_environ: None
+) -> None:
+    keys_env = tmp_path / "keys.env"
+    keys_env.write_text("CI_TOKEN=abc=def=ghi\n", encoding="utf-8")
+    os.environ.pop("CI_TOKEN", None)
+
+    load_keys_env_into_environ(keys_env)
+
+    assert os.environ["CI_TOKEN"] == "abc=def=ghi"
+
+
+def test_the_export_prefix_is_not_supported(tmp_path: Path, clean_environ: None) -> None:
+    """app-cli has no `export ` handling, so neither do we — parity over convenience."""
+    keys_env = tmp_path / "keys.env"
+    keys_env.write_text("export CI_TOKEN=v\n", encoding="utf-8")
+    os.environ.pop("CI_TOKEN", None)
+
+    load_keys_env_into_environ(keys_env)
+
+    assert "CI_TOKEN" not in os.environ
