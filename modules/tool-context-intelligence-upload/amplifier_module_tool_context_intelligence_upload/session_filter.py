@@ -14,6 +14,12 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from amplifier_module_hook_context_intelligence.config_resolver import Destination
+from amplifier_module_hook_context_intelligence.fanout import (
+    destination_is_active,
+    normalize_match_key,
+)
+
 from .legacy_transform import unslug_approximate
 
 
@@ -71,3 +77,48 @@ def resolve_session_working_dir(
         return path_fallback
 
     return None
+
+
+def filter_sessions(
+    sessions: list[tuple[Path, dict[str, Any]]],
+    destination: Destination,
+    path_fallback: str | None,
+) -> tuple[list[tuple[Path, dict[str, Any]]], int]:
+    """Keep the sessions *destination* should receive; count the ones it should not.
+
+    Returns ``(kept_sessions, filtered_out_count)``. Input order and tuple
+    identity are preserved for the kept sessions.
+
+    Each session's working directory is resolved by
+    :func:`resolve_session_working_dir` (recorded dir first, ``--path`` last),
+    then normalized and matched with the hook's OWN capture-time helpers, so
+    the include/exclude decision here is identical to the one the hook made
+    when the session was captured.
+
+    A session whose working directory cannot be derived (or cannot be
+    normalized) is INCLUDED, never silently dropped: an undecidable session is
+    surfaced to the user rather than disappearing.
+    """
+    kept: list[tuple[Path, dict[str, Any]]] = []
+    filtered_out = 0
+
+    for session_dir, metadata in sessions:
+        working_dir = resolve_session_working_dir(session_dir, metadata, path_fallback)
+        if not working_dir:
+            # Undecidable -> include rather than drop.
+            kept.append((session_dir, metadata))
+            continue
+
+        try:
+            match_key = normalize_match_key(working_dir)
+        except (ValueError, OSError):
+            # Un-normalizable path -> include rather than drop.
+            kept.append((session_dir, metadata))
+            continue
+
+        if destination_is_active(destination, match_key):
+            kept.append((session_dir, metadata))
+        else:
+            filtered_out += 1
+
+    return kept, filtered_out
