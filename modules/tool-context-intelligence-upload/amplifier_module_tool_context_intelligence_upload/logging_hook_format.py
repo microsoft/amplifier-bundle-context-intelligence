@@ -338,6 +338,11 @@ def discover_legacy(target_path: Path) -> LegacyDiscovery:
             "session_id": session_id,
             "format": "logging-hook",
             "workspace": workspace,
+            # The RAW working directory (not the lossy slug). The upload-time
+            # destination filter matches on the session's own recorded working
+            # dir; the slug cannot be inverted reliably. Sessions that reach
+            # this point always have a resolved working_dir (line ~313).
+            "working_dir": working_dir,
         }
         sessions.append((session_dir, metadata))
 

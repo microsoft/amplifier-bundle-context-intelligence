@@ -283,3 +283,45 @@ def test_legacy_discovered_under_oddly_named_folder(tmp_path: Path) -> None:
     sessions = legacy_discover(tmp_path)
     session_ids = {meta["session_id"] for _, meta in sessions}
     assert "odd1" in session_ids
+
+
+# ---------------------------------------------------------------------------
+# Phase 2 / Q4: discovery surfaces the session's REAL working_dir in metadata
+# ---------------------------------------------------------------------------
+
+
+def test_discovery_metadata_carries_the_sessions_real_working_dir(tmp_path: Path) -> None:
+    """Legacy discovery records the raw working_dir alongside the derived slug.
+
+    The upload-time filter matches on the session's OWN recorded working
+    directory (never on --path), so discovery must surface it. The slug is
+    lossy; the raw path is not.
+    """
+    build_legacy_session(tmp_path, session_id="wd1", working_dir="/x/y")
+
+    result = discover_legacy(tmp_path)
+
+    ((_, meta),) = result.sessions
+    assert meta["working_dir"] == "/x/y"
+    # The existing keys are untouched.
+    assert meta["workspace"] == "-x-y"
+    assert meta["format"] == "logging-hook"
+    assert meta["session_id"] == "wd1"
+
+
+def test_unresolvable_session_is_still_skipped_not_surfaced_with_empty_working_dir(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A session whose working_dir cannot be resolved is skipped + counted as
+    before -- it must NOT be surfaced with an empty/None working_dir now that
+    the key exists. Only the resolvable session comes back.
+    """
+    build_legacy_session(tmp_path, session_id="ok1", working_dir="/x/y")
+    build_legacy_session(tmp_path, session_id="bad1", working_dir=None)
+
+    result = discover_legacy(tmp_path)
+
+    assert [meta["session_id"] for _, meta in result.sessions] == ["ok1"]
+    assert result.unresolved_workspace == 1
+    assert all(meta["working_dir"] for _, meta in result.sessions)
+    assert "resolve workspace" in capsys.readouterr().err
