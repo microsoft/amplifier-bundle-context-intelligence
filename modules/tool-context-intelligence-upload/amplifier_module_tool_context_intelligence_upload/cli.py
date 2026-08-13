@@ -14,11 +14,17 @@ import json
 import sys
 import uuid
 from pathlib import Path
+from typing import NamedTuple
 
+from amplifier_module_hook_context_intelligence.config_resolver import Destination
+
+from .destinations import DestinationSelectionError, read_destinations, select_destination
 from .formats import FORMATS
+from .keys_env import load_keys_env_into_environ
 from .logging_hook_format import discover_legacy
 from .progress import ProgressTracker, progress_file_path
 from .reconciliation import reconciliation_summary
+from .session_filter import default_scan_root, filter_sessions  # noqa: F401
 from .session_graph import ScopeError, resolve_upload_sessions
 from .uploader import _count_lines, run_upload
 
@@ -489,20 +495,40 @@ def _build_parser() -> argparse.ArgumentParser:
 
 
 # ---------------------------------------------------------------------------
-# Entry point
+# Connection resolution
 # ---------------------------------------------------------------------------
 
 
-def main() -> None:
-    """CLI entry point — synchronous, exits with an appropriate code."""
+class _Connection(NamedTuple):
+    """The resolved upload connection.
+
+    ``destination`` is None when the connection came from explicit flags, env
+    vars, or legacy settings.yaml scalars.  A None destination means NO
+    include/exclude filtering and NO confirmation gate (design: "both present
+    as before -> original behavior, byte-for-byte").
+    """
+
+    server_url: str
+    api_key: str
+    auth_mode: str
+    auth_resource: str
+    destination: Destination | None
+
+
+def _resolve_connection(args: argparse.Namespace) -> _Connection:
+    """Resolve the upload connection.
+
+    Precedence:
+      1. explicit CLI flags (--server-url/--api-key/--auth-mode/--auth-resource)
+      2. AMPLIFIER_CONTEXT_INTELLIGENCE_* env vars
+      3. the 'destinations' map in ~/.amplifier/settings.yaml, with ${VAR}
+         resolved from ~/.amplifier/keys.env
+
+    ``--destination NAME`` forces tier 3 regardless of env vars.
+    """
     import os
 
-    parser = _build_parser()
-    args = parser.parse_args()
-
-    # 0a. Resolve auth mode / resource — CLI flags > env vars
-    # Apply _expand_env_placeholders so ${VAR} in settings / env-var values expands correctly.
-    from context_intelligence.config import _expand_env_placeholders
+    from context_intelligence.config import _expand_env_placeholders, resolve_config
 
     auth_mode: str = args.auth_mode or os.environ.get(
         "AMPLIFIER_CONTEXT_INTELLIGENCE_AUTH_MODE", "static"
@@ -513,28 +539,90 @@ def main() -> None:
         or ""
     )
 
-    # 0b. Resolve server config — CLI flags > env vars > settings.yaml
-    from context_intelligence.config import resolve_config
-
-    server_url, api_key = resolve_config(
-        server_url=args.server_url,
-        api_key=args.api_key,
-        auth_mode=auth_mode,
+    explicit = bool(args.server_url or args.api_key)
+    env_configured = bool(
+        os.environ.get("AMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_URL")
+        or os.environ.get("AMPLIFIER_CONTEXT_INTELLIGENCE_API_KEY")
     )
-    # Apply placeholder expansion to the resolved URL and key as well (for consistency:
-    # a settings.yaml value like `context_intelligence_server_url: "http://${MY_HOST}:8000"`
-    # is already app-expanded by app-cli in hook mode, but the upload CLI reads settings.yaml
-    # directly via resolve_config → _parse_settings_yaml which does NOT expand placeholders).
-    server_url = _expand_env_placeholders(server_url)
-    api_key = _expand_env_placeholders(api_key)
 
-    # 0c. Build auth strategy — fail loud on misconfiguration
+    # Tiers 1 + 2 -- today's behavior, unchanged, no destination object.
+    if not args.destination and (explicit or env_configured):
+        server_url, api_key = resolve_config(
+            server_url=args.server_url,
+            api_key=args.api_key,
+            auth_mode=auth_mode,
+        )
+        return _Connection(
+            _expand_env_placeholders(server_url),
+            _expand_env_placeholders(api_key),
+            auth_mode,
+            auth_resource,
+            None,
+        )
+
+    # Tier 3 -- the destinations map (keys.env expands ${VAR} for it).
+    load_keys_env_into_environ()
+    destinations = read_destinations()
+
+    if not destinations:
+        # D2: no destinations map, but a legacy flat settings.yaml config may
+        # still exist. resolve_config raises SystemExit when nothing at all is
+        # configured -- that is the design's "0 destinations + no args" error.
+        try:
+            server_url, api_key = resolve_config(server_url=None, api_key=None, auth_mode=auth_mode)
+        except SystemExit:
+            print(
+                "error: no context-intelligence destination configured. Configure a "
+                "destination under overrides.hook-context-intelligence.config.destinations "
+                "in ~/.amplifier/settings.yaml, or pass --server-url/--api-key.",
+                file=sys.stderr,
+            )
+            sys.exit(2)
+        return _Connection(
+            _expand_env_placeholders(server_url),
+            _expand_env_placeholders(api_key),
+            auth_mode,
+            auth_resource,
+            None,
+        )
+
+    interactive = sys.stdin.isatty() and sys.stdout.isatty()
+    destination = select_destination(destinations, args.destination, interactive)
+    return _Connection(
+        destination.url,
+        destination.api_key,
+        destination.auth_mode or auth_mode,
+        destination.auth_resource or auth_resource,
+        destination,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Entry point
+# ---------------------------------------------------------------------------
+
+
+def main() -> None:
+    """CLI entry point — synchronous, exits with an appropriate code."""
+    parser = _build_parser()
+    args = parser.parse_args()
+
+    # 0. Resolve the connection: explicit flags > env vars > destinations map.
+    try:
+        conn = _resolve_connection(args)
+    except DestinationSelectionError as e:
+        print(f"error: {e}", file=sys.stderr)
+        sys.exit(2)
+
+    server_url = conn.server_url
+    api_key = conn.api_key
+
     from context_intelligence.auth import build_auth_strategy
 
     auth_strategy = build_auth_strategy(
-        auth_mode=auth_mode,
-        api_key=api_key,
-        auth_resource=auth_resource,
+        auth_mode=conn.auth_mode,
+        api_key=conn.api_key,
+        auth_resource=conn.auth_resource,
     )
 
     # 1. Auto-generate job_id if not provided

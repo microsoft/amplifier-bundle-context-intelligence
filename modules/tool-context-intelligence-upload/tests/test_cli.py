@@ -1547,3 +1547,266 @@ class TestDestinationAndAutoApproveArgparse:
 
         args = _build_parser().parse_args(["--path", "/tmp"])
         assert args.path == "/tmp"
+
+
+# ---------------------------------------------------------------------------
+# main() — connection precedence + destination selection
+# ---------------------------------------------------------------------------
+
+
+def _dest(name: str, url: str, **overrides):
+    """Build a hook Destination for CLI wiring tests."""
+    from amplifier_module_hook_context_intelligence.config_resolver import Destination
+
+    fields: dict = {
+        "name": name,
+        "url": url,
+        "api_key": f"{name}-key",
+        "include": ("**",),
+        "exclude": (),
+    }
+    fields.update(overrides)
+    return Destination(**fields)
+
+
+@pytest.fixture
+def isolated_home(tmp_path, monkeypatch):
+    """Isolate a main() run from the developer's real machine.
+
+    - HOME -> tmp_path, so anything calling Path.home() lands in the sandbox.
+    - AMPLIFIER_CONTEXT_INTELLIGENCE_* cleared, so destination mode is reached.
+    - progress file redirected into tmp_path, so the real progress renderer
+      (which main() now always constructs) does not litter /tmp.
+    """
+    monkeypatch.setenv("HOME", str(tmp_path))
+    for var in (
+        "AMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_URL",
+        "AMPLIFIER_CONTEXT_INTELLIGENCE_API_KEY",
+        "AMPLIFIER_CONTEXT_INTELLIGENCE_AUTH_MODE",
+        "AMPLIFIER_CONTEXT_INTELLIGENCE_AUTH_RESOURCE",
+    ):
+        monkeypatch.delenv(var, raising=False)
+    monkeypatch.setattr(
+        "amplifier_module_tool_context_intelligence_upload.cli.progress_file_path",
+        lambda job_id, override=None: tmp_path / "progress.json",
+    )
+    return tmp_path
+
+
+class TestConnectionResolution:
+    """Precedence: explicit flags > env vars > the destinations map."""
+
+    def test_single_destination_is_auto_selected_without_prompting(
+        self, tmp_path, isolated_home, monkeypatch
+    ):
+        from amplifier_module_tool_context_intelligence_upload.cli import main
+
+        def _boom(*args, **kwargs):
+            raise AssertionError("must not prompt when exactly one destination exists")
+
+        monkeypatch.setattr("builtins.input", _boom)
+        fake_sessions = [(tmp_path, {"session_id": "s1"})]
+
+        with (
+            patch("sys.argv", ["context-intelligence-upload", "--path", str(tmp_path), "-y"]),
+            patch(
+                "amplifier_module_tool_context_intelligence_upload.cli.read_destinations",
+                return_value={"team": _dest("team", "https://team.example.com")},
+            ),
+            patch(
+                "amplifier_module_tool_context_intelligence_upload.cli.load_keys_env_into_environ"
+            ),
+            patch(
+                "amplifier_module_tool_context_intelligence_upload.cli.filter_sessions",
+                return_value=(fake_sessions, 0),
+            ),
+            patch(
+                "amplifier_module_tool_context_intelligence_upload.cli.resolve_upload_sessions",
+                return_value=_fake_scope(fake_sessions),
+            ),
+            patch(
+                "amplifier_module_tool_context_intelligence_upload.cli.run_upload",
+                return_value=_make_upload_result(),
+            ) as mock_upload,
+            pytest.raises(SystemExit) as exc_info,
+        ):
+            main()
+
+        assert exc_info.value.code == 0
+        assert mock_upload.call_args.kwargs["server_url"] == "https://team.example.com"
+        assert mock_upload.call_args.kwargs["api_key"] == "team-key"
+
+    def test_named_destination_is_selected_when_several_exist(
+        self, tmp_path, isolated_home, monkeypatch
+    ):
+        from amplifier_module_tool_context_intelligence_upload.cli import main
+
+        destinations = {
+            "team": _dest("team", "https://team.example.com"),
+            "personal": _dest("personal", "https://personal.example.com"),
+        }
+        fake_sessions = [(tmp_path, {"session_id": "s1"})]
+
+        with (
+            patch(
+                "sys.argv",
+                [
+                    "context-intelligence-upload",
+                    "--path",
+                    str(tmp_path),
+                    "--destination",
+                    "personal",
+                    "-y",
+                ],
+            ),
+            patch(
+                "amplifier_module_tool_context_intelligence_upload.cli.read_destinations",
+                return_value=destinations,
+            ),
+            patch(
+                "amplifier_module_tool_context_intelligence_upload.cli.load_keys_env_into_environ"
+            ),
+            patch(
+                "amplifier_module_tool_context_intelligence_upload.cli.filter_sessions",
+                return_value=(fake_sessions, 0),
+            ),
+            patch(
+                "amplifier_module_tool_context_intelligence_upload.cli.resolve_upload_sessions",
+                return_value=_fake_scope(fake_sessions),
+            ),
+            patch(
+                "amplifier_module_tool_context_intelligence_upload.cli.run_upload",
+                return_value=_make_upload_result(),
+            ) as mock_upload,
+            pytest.raises(SystemExit) as exc_info,
+        ):
+            main()
+
+        assert exc_info.value.code == 0
+        assert mock_upload.call_args.kwargs["server_url"] == "https://personal.example.com"
+
+    def test_ambiguous_destinations_without_flag_exits_2(self, tmp_path, isolated_home):
+        """select_destination raises DestinationSelectionError -> exit 2, listing names."""
+        from amplifier_module_tool_context_intelligence_upload.cli import main
+        from amplifier_module_tool_context_intelligence_upload.destinations import (
+            DestinationSelectionError,
+        )
+
+        with (
+            patch("sys.argv", ["context-intelligence-upload", "--path", str(tmp_path), "-y"]),
+            patch(
+                "amplifier_module_tool_context_intelligence_upload.cli.read_destinations",
+                return_value={
+                    "team": _dest("team", "https://team.example.com"),
+                    "personal": _dest("personal", "https://personal.example.com"),
+                },
+            ),
+            patch(
+                "amplifier_module_tool_context_intelligence_upload.cli.load_keys_env_into_environ"
+            ),
+            patch(
+                "amplifier_module_tool_context_intelligence_upload.cli.select_destination",
+                side_effect=DestinationSelectionError(
+                    "several destinations configured: personal, team"
+                ),
+            ),
+            pytest.raises(SystemExit) as exc_info,
+        ):
+            main()
+
+        assert exc_info.value.code == 2
+
+    def test_zero_destinations_and_nothing_configured_exits_2_with_guidance(
+        self, tmp_path, isolated_home, capsys
+    ):
+        from amplifier_module_tool_context_intelligence_upload.cli import main
+
+        with (
+            patch("sys.argv", ["context-intelligence-upload", "--path", str(tmp_path)]),
+            patch(
+                "amplifier_module_tool_context_intelligence_upload.cli.read_destinations",
+                return_value={},
+            ),
+            patch(
+                "amplifier_module_tool_context_intelligence_upload.cli.load_keys_env_into_environ"
+            ),
+            patch("context_intelligence.config.SETTINGS_PATH", tmp_path / "nosettings.yaml"),
+            pytest.raises(SystemExit) as exc_info,
+        ):
+            main()
+
+        assert exc_info.value.code == 2
+        err = capsys.readouterr().err
+        assert "settings.yaml" in err
+        assert "--server-url" in err
+
+    def test_zero_destinations_falls_back_to_legacy_settings_scalars(self, tmp_path, isolated_home):
+        """D2: a legacy flat settings.yaml config still works (no destination selected)."""
+        from amplifier_module_tool_context_intelligence_upload.cli import main
+
+        fake_sessions = [(tmp_path, {"session_id": "s1"})]
+
+        with (
+            patch("sys.argv", ["context-intelligence-upload", "--path", str(tmp_path)]),
+            patch(
+                "amplifier_module_tool_context_intelligence_upload.cli.read_destinations",
+                return_value={},
+            ),
+            patch(
+                "amplifier_module_tool_context_intelligence_upload.cli.load_keys_env_into_environ"
+            ),
+            patch(
+                "context_intelligence.config.resolve_config",
+                return_value=("http://legacy:8000", "legacy-key"),
+            ),
+            patch(
+                "amplifier_module_tool_context_intelligence_upload.cli.resolve_upload_sessions",
+                return_value=_fake_scope(fake_sessions),
+            ),
+            patch(
+                "amplifier_module_tool_context_intelligence_upload.cli.run_upload",
+                return_value=_make_upload_result(),
+            ) as mock_upload,
+            pytest.raises(SystemExit) as exc_info,
+        ):
+            main()
+
+        assert exc_info.value.code == 0
+        assert mock_upload.call_args.kwargs["server_url"] == "http://legacy:8000"
+
+    def test_explicit_flags_bypass_destination_resolution_entirely(self, tmp_path, isolated_home):
+        from amplifier_module_tool_context_intelligence_upload.cli import main
+
+        fake_sessions = [(tmp_path, {"session_id": "s1"})]
+
+        with (
+            patch(
+                "sys.argv",
+                [
+                    "context-intelligence-upload",
+                    "--path",
+                    str(tmp_path),
+                    "--server-url",
+                    "http://explicit:9000",
+                    "--api-key",
+                    "explicit-key",
+                ],
+            ),
+            patch(
+                "amplifier_module_tool_context_intelligence_upload.cli.read_destinations",
+            ) as mock_read,
+            patch(
+                "amplifier_module_tool_context_intelligence_upload.cli.resolve_upload_sessions",
+                return_value=_fake_scope(fake_sessions),
+            ),
+            patch(
+                "amplifier_module_tool_context_intelligence_upload.cli.run_upload",
+                return_value=_make_upload_result(),
+            ) as mock_upload,
+            pytest.raises(SystemExit) as exc_info,
+        ):
+            main()
+
+        assert exc_info.value.code == 0
+        assert mock_read.call_count == 0
+        assert mock_upload.call_args.kwargs["server_url"] == "http://explicit:9000"
