@@ -7,7 +7,7 @@ Destination type -- proving reuse rather than a lookalike reimplementation.
 
 from __future__ import annotations
 
-import os  # noqa: F401 -- kept for parity with future destination-selection tests in this module
+import os
 from pathlib import Path
 
 import pytest
@@ -82,3 +82,81 @@ def test_read_destinations_parses_the_multi_destination_map(tmp_path: Path) -> N
     assert personal.url == "https://personal.example.com"
     assert personal.include == ("**",)
     assert personal.exclude == ()
+
+
+EXPANSION_SETTINGS = """
+overrides:
+  hook-context-intelligence:
+    config:
+      destinations:
+        team:
+          url: "https://${CI_HOST_FROM_KEYS_ENV}/api"
+          api_key: "${CI_TOKEN_FROM_KEYS_ENV}"
+          auth_resource: "api://${CI_APP_ID_FROM_KEYS_ENV}"
+          include: ["**"]
+"""
+
+
+def test_placeholders_expand_from_values_that_only_keys_env_supplies(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, clean_environ: None
+) -> None:
+    """read_destinations must call the keys.env loader BEFORE expanding ${VAR}.
+
+    The three variables exist nowhere but the (stubbed) keys.env loader, so
+    if read_destinations skipped the load step the placeholders would expand
+    to "".
+    """
+    os.environ.pop("CI_HOST_FROM_KEYS_ENV", None)
+    os.environ.pop("CI_TOKEN_FROM_KEYS_ENV", None)
+    os.environ.pop("CI_APP_ID_FROM_KEYS_ENV", None)
+
+    def fake_loader() -> None:
+        os.environ.setdefault("CI_HOST_FROM_KEYS_ENV", "team.example.com")
+        os.environ.setdefault("CI_TOKEN_FROM_KEYS_ENV", "sk-from-keys-env")
+        os.environ.setdefault("CI_APP_ID_FROM_KEYS_ENV", "abc-123")
+
+    monkeypatch.setattr(destinations_mod, "load_keys_env_into_environ", fake_loader)
+    settings_path = write_settings(tmp_path, EXPANSION_SETTINGS)
+
+    result = read_destinations(settings_path)
+
+    team = result["team"]
+    assert team.url == "https://team.example.com/api"
+    assert team.api_key == "sk-from-keys-env"
+    assert team.auth_resource == "api://abc-123"
+
+
+def test_the_real_keys_env_loader_feeds_placeholder_expansion_end_to_end(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, clean_environ: None
+) -> None:
+    """Same wiring as above, but through the real loader reading a real keys.env file."""
+    from amplifier_module_tool_context_intelligence_upload.keys_env import (
+        load_keys_env_into_environ,
+    )
+
+    os.environ.pop("CI_HOST_FROM_KEYS_ENV", None)
+    os.environ.pop("CI_TOKEN_FROM_KEYS_ENV", None)
+    os.environ.pop("CI_APP_ID_FROM_KEYS_ENV", None)
+
+    keys_env = tmp_path / "keys.env"
+    keys_env.write_text(
+        "# team server\n"
+        "CI_HOST_FROM_KEYS_ENV=team.example.com\n"
+        'CI_TOKEN_FROM_KEYS_ENV="sk-from-keys-env"\n'
+        "CI_APP_ID_FROM_KEYS_ENV=abc-123\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(
+        destinations_mod,
+        "load_keys_env_into_environ",
+        lambda: load_keys_env_into_environ(keys_env),
+    )
+    settings_path = write_settings(tmp_path, EXPANSION_SETTINGS)
+
+    result = read_destinations(settings_path)
+
+    team = result["team"]
+    assert team.url == "https://team.example.com/api"
+    assert team.api_key == "sk-from-keys-env"
+    assert team.auth_resource == "api://abc-123"
