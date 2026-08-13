@@ -352,3 +352,22 @@ def test_an_invalid_prompt_answer_raises_and_lists_the_valid_names(
     message = str(excinfo.value)
     assert "personal" in message
     assert "team" in message
+
+
+def test_non_interactive_ambiguity_raises_instead_of_blocking_on_stdin(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Scripts must be explicit: 2+ destinations with no --destination is an error.
+
+    Blocking on input() here would hang CI forever, so input must never be called.
+    """
+    monkeypatch.setattr("builtins.input", explode_on_input)
+
+    with pytest.raises(DestinationSelectionError) as excinfo:
+        select_destination(two_destinations(), None, interactive=False)
+
+    message = str(excinfo.value)
+    assert "--destination" in message
+    assert "personal" in message
+    assert "team" in message
+    assert capsys.readouterr().out == ""
