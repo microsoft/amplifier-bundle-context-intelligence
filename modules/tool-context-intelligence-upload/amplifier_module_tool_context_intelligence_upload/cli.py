@@ -727,6 +727,21 @@ def _resolve_connection(args: argparse.Namespace) -> _Connection:
     )
 
 
+def _count_total_events(sessions: list[tuple[Path, dict]]) -> int:
+    """Sum non-blank event line counts across each session's events.jsonl.
+
+    Shared by the pre-upload preview estimate and the post-upload
+    reconciliation "read" count -- both need the same independently-measured
+    total, counted fresh from disk rather than rederived from upload results.
+    """
+    total = 0
+    for session_dir, _session_metadata in sessions:
+        events_file = session_dir / "events.jsonl"
+        if events_file.exists():
+            total += _count_lines(events_file)
+    return total
+
+
 # ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
@@ -899,11 +914,7 @@ def main() -> None:
     #     --server-url/--api-key the user already said "send here", so the
     #     original behavior is preserved byte-for-byte (no preview, no prompt).
     if conn.destination is not None:
-        approx_event_count = 0
-        for session_dir, _session_metadata in sessions:
-            events_file = session_dir / "events.jsonl"
-            if events_file.exists():
-                approx_event_count += _count_lines(events_file)
+        approx_event_count = _count_total_events(sessions)
 
         print(
             build_preview_text(
@@ -975,11 +986,7 @@ def main() -> None:
     # 6b. Print the operator reconciliation summary -- independently-measured
     # counts only (read is a fresh non-blank-line count from the events.jsonl
     # files on disk, NOT a rederivation of ingested + skipped).
-    read_total = 0
-    for session_dir, _session_metadata in sessions:
-        events_file = session_dir / "events.jsonl"
-        if events_file.exists():
-            read_total += _count_lines(events_file)
+    read_total = _count_total_events(sessions)
 
     print(
         "reconciliation: "
