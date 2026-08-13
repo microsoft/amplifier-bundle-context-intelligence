@@ -224,3 +224,39 @@ def test_settings_without_usable_destinations_return_an_empty_map(
 
 def test_a_missing_settings_file_returns_an_empty_map(tmp_path: Path) -> None:
     assert read_destinations(tmp_path / "no-such-settings.yaml") == {}
+
+
+def make_destination(name: str, url: str) -> Destination:
+    """Build a Destination directly — selection tests do not need settings.yaml."""
+    return Destination(name=name, url=url, api_key=f"{name}-key", include=("**",))
+
+
+def explode_on_input(_prompt: str = "") -> str:
+    raise AssertionError("select_destination must not prompt in this scenario")
+
+
+def test_selecting_with_no_configured_destinations_raises(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("builtins.input", explode_on_input)
+
+    with pytest.raises(DestinationSelectionError) as excinfo:
+        select_destination({}, None, interactive=True)
+
+    message = str(excinfo.value)
+    assert "settings.yaml" in message
+    assert "--server-url" in message
+
+
+@pytest.mark.parametrize("interactive", [True, False])
+def test_a_single_destination_is_auto_selected_without_prompting(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], interactive: bool
+) -> None:
+    """One destination means there is nothing to disambiguate — so ask nothing."""
+    monkeypatch.setattr("builtins.input", explode_on_input)
+    only = {"team": make_destination("team", "https://team.example.com")}
+
+    chosen = select_destination(only, None, interactive=interactive)
+
+    assert chosen.name == "team"
+    assert capsys.readouterr().out == ""

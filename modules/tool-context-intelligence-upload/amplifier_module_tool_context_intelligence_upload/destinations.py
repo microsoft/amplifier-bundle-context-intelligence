@@ -125,31 +125,59 @@ def read_destinations(settings_path: Path = SETTINGS_PATH) -> dict[str, Destinat
     return HookConfigResolver(_expand_hook_config(config), None).destinations
 
 
+def _format_valid_names(destinations: dict[str, Destination]) -> str:
+    return ", ".join(sorted(destinations)) if destinations else "(none configured)"
+
+
 def select_destination(
-    destinations: dict[str, Destination], requested: str | None = None
+    destinations: dict[str, Destination],
+    requested_name: str | None,
+    interactive: bool,
 ) -> Destination:
     """Select exactly one destination from *destinations*.
 
-    Semantics (matching the query tool):
-    - *requested* given -> look it up by name; unknown name raises.
-    - *requested* is None and exactly one destination configured -> auto-select it.
-    - *requested* is None and 0 or 2+ destinations configured -> raise, naming
-      the available destinations so the caller can disambiguate.
+    Semantics:
+    - 0 destinations configured -> raise ``DestinationSelectionError``; never
+      silently proceed with nothing to upload to.
+    - *requested_name* given -> return that entry, or raise
+      ``DestinationSelectionError`` listing the valid names. An explicit
+      request is NEVER silently redirected to a different destination.
+    - exactly 1 destination configured -> auto-selected with NO prompt,
+      regardless of *interactive*, because there is nothing to disambiguate.
+    - 2+ destinations and *interactive* -> a numbered prompt is written to
+      stdout and answered via ``input()``.
+    - 2+ destinations and not *interactive* -> raise
+      ``DestinationSelectionError`` listing the valid names; never block on
+      stdin in a non-interactive context.
+
+    Note this function handles destination DISAMBIGUATION only -- the
+    separate upload safety confirmation ("Proceed? [y/N]") is a distinct
+    concern and still applies even to a silently auto-selected single
+    destination.
     """
-    if requested is not None:
-        try:
-            return destinations[requested]
-        except KeyError:
+    if not destinations:
+        raise DestinationSelectionError(
+            "No context-intelligence destinations are configured. Add one under "
+            "overrides.hook-context-intelligence.config.destinations in "
+            "~/.amplifier/settings.yaml, or pass --server-url/--api-key."
+        )
+
+    if requested_name is not None:
+        if requested_name not in destinations:
             raise DestinationSelectionError(
-                f"Unknown destination {requested!r}. Available: {sorted(destinations)}"
-            ) from None
+                f"Unknown destination {requested_name!r}. "
+                f"Configured destinations: {_format_valid_names(destinations)}."
+            )
+        return destinations[requested_name]
 
     if len(destinations) == 1:
         return next(iter(destinations.values()))
 
-    if not destinations:
-        raise DestinationSelectionError("No destinations configured.")
+    if not interactive:
+        raise DestinationSelectionError(
+            f"{len(destinations)} destinations are configured and none was requested, "
+            "but this is not an interactive terminal. Pass --destination <name>. "
+            f"Configured destinations: {_format_valid_names(destinations)}."
+        )
 
-    raise DestinationSelectionError(
-        f"Multiple destinations configured ({sorted(destinations)}); specify one explicitly."
-    )
+    return _prompt_for_destination(destinations)
