@@ -197,3 +197,30 @@ def test_legacy_scalars_with_a_url_but_no_api_key_yield_no_destinations(
     )
 
     assert read_destinations(settings_path) == {}
+
+
+@pytest.mark.parametrize(
+    ("label", "body"),
+    [
+        ("empty file", ""),
+        ("no overrides key", "some_other_key: 1\n"),
+        ("no hook override", "overrides:\n  hooks-logging:\n    config:\n      x: 1\n"),
+        ("empty config block", "overrides:\n  hook-context-intelligence:\n    config: {}\n"),
+        (
+            "explicit empty destinations",
+            "overrides:\n  hook-context-intelligence:\n    config:\n      destinations: {}\n",
+        ),
+        ("malformed yaml", "overrides: [:: not yaml at all\n"),
+        ("top-level scalar", "just-a-string\n"),
+    ],
+)
+def test_settings_without_usable_destinations_return_an_empty_map(
+    tmp_path: Path, label: str, body: str
+) -> None:
+    settings_path = write_settings(tmp_path, body)
+
+    assert read_destinations(settings_path) == {}, label
+
+
+def test_a_missing_settings_file_returns_an_empty_map(tmp_path: Path) -> None:
+    assert read_destinations(tmp_path / "no-such-settings.yaml") == {}
