@@ -632,8 +632,8 @@ def main() -> None:
         prog_default = f"/tmp/context-intelligence-upload-{job_id}.json"
         print(f"job_id: {job_id}  progress={prog_default}", file=sys.stderr)
 
-    # 2. Validate path exists
-    target_path = Path(args.path)
+    # 2. Resolve the scan root: --path if given, else ~/.amplifier/projects.
+    target_path = Path(args.path) if args.path else default_scan_root()
     if not target_path.exists():
         print(
             f"error: path does not exist: {target_path}",

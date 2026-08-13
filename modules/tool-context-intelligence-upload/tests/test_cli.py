@@ -1810,3 +1810,76 @@ class TestConnectionResolution:
         assert exc_info.value.code == 0
         assert mock_read.call_count == 0
         assert mock_upload.call_args.kwargs["server_url"] == "http://explicit:9000"
+
+
+# ---------------------------------------------------------------------------
+# main() — default scan root when --path is omitted
+# ---------------------------------------------------------------------------
+
+
+class TestDefaultScanRoot:
+    """With --path omitted, discovery starts at ~/.amplifier/projects."""
+
+    def test_omitted_path_uses_default_scan_root(self, tmp_path, isolated_home):
+        from amplifier_module_tool_context_intelligence_upload.cli import main
+
+        scan_root = tmp_path / "projects"
+        scan_root.mkdir()
+        fake_sessions = [(scan_root, {"session_id": "s1"})]
+
+        with (
+            patch("sys.argv", ["context-intelligence-upload", "-y"]),
+            patch(
+                "amplifier_module_tool_context_intelligence_upload.cli.read_destinations",
+                return_value={"team": _dest("team", "https://team.example.com")},
+            ),
+            patch(
+                "amplifier_module_tool_context_intelligence_upload.cli.load_keys_env_into_environ"
+            ),
+            patch(
+                "amplifier_module_tool_context_intelligence_upload.cli.default_scan_root",
+                return_value=scan_root,
+            ),
+            patch(
+                "amplifier_module_tool_context_intelligence_upload.cli.filter_sessions",
+                return_value=(fake_sessions, 0),
+            ),
+            patch(
+                "amplifier_module_tool_context_intelligence_upload.cli.resolve_upload_sessions",
+                return_value=_fake_scope(fake_sessions),
+            ) as mock_resolve,
+            patch(
+                "amplifier_module_tool_context_intelligence_upload.cli.run_upload",
+                return_value=_make_upload_result(),
+            ),
+            pytest.raises(SystemExit) as exc_info,
+        ):
+            main()
+
+        assert exc_info.value.code == 0
+        assert mock_resolve.call_args.args[0] == scan_root
+
+    def test_missing_default_scan_root_exits_2(self, tmp_path, isolated_home, capsys):
+        from amplifier_module_tool_context_intelligence_upload.cli import main
+
+        missing = tmp_path / "no-projects-dir"
+
+        with (
+            patch("sys.argv", ["context-intelligence-upload", "-y"]),
+            patch(
+                "amplifier_module_tool_context_intelligence_upload.cli.read_destinations",
+                return_value={"team": _dest("team", "https://team.example.com")},
+            ),
+            patch(
+                "amplifier_module_tool_context_intelligence_upload.cli.load_keys_env_into_environ"
+            ),
+            patch(
+                "amplifier_module_tool_context_intelligence_upload.cli.default_scan_root",
+                return_value=missing,
+            ),
+            pytest.raises(SystemExit) as exc_info,
+        ):
+            main()
+
+        assert exc_info.value.code == 2
+        assert "does not exist" in capsys.readouterr().err
