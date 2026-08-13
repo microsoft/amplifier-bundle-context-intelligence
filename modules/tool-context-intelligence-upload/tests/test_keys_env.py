@@ -13,7 +13,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-import pytest  # noqa: F401 -- required by spec; clean_environ fixture is used via parameter only
+import pytest
 
 from amplifier_module_tool_context_intelligence_upload.keys_env import (
     DEFAULT_KEYS_ENV_PATH,
@@ -50,3 +50,35 @@ def test_process_environment_wins_over_the_keys_env_file(
     load_keys_env_into_environ(keys_env)
 
     assert os.environ["CI_TOKEN"] == "from-process"
+
+
+@pytest.mark.parametrize(
+    ("line", "expected"),
+    [
+        ("CI_TOKEN=bare", "bare"),
+        ('CI_TOKEN="double-quoted"', "double-quoted"),
+        ("CI_TOKEN='single-quoted'", "single-quoted"),
+        ("CI_TOKEN=   surrounded-by-spaces   ", "surrounded-by-spaces"),
+        ('CI_TOKEN=  "  inner spaces kept  "  ', "  inner spaces kept  "),
+    ],
+)
+def test_value_whitespace_then_quotes_are_stripped_in_that_order(
+    tmp_path: Path, clean_environ: None, line: str, expected: str
+) -> None:
+    keys_env = tmp_path / "keys.env"
+    keys_env.write_text(line + "\n", encoding="utf-8")
+    os.environ.pop("CI_TOKEN", None)
+
+    load_keys_env_into_environ(keys_env)
+
+    assert os.environ["CI_TOKEN"] == expected
+
+
+def test_whitespace_around_the_key_is_stripped(tmp_path: Path, clean_environ: None) -> None:
+    keys_env = tmp_path / "keys.env"
+    keys_env.write_text("  CI_TOKEN  =padded-key\n", encoding="utf-8")
+    os.environ.pop("CI_TOKEN", None)
+
+    load_keys_env_into_environ(keys_env)
+
+    assert os.environ["CI_TOKEN"] == "padded-key"
