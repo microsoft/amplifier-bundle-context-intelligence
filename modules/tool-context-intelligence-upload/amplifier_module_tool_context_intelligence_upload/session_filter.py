@@ -12,6 +12,9 @@ reimplemented here.
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
+
+from .legacy_transform import unslug_approximate
 
 
 def default_scan_root() -> Path:
@@ -22,3 +25,49 @@ def default_scan_root() -> Path:
     gesture). Pure path computation -- the directory need not exist.
     """
     return Path.home() / ".amplifier" / "projects"
+
+
+def resolve_session_working_dir(
+    session_dir: Path,
+    metadata: dict[str, Any],
+    path_fallback: str | None,
+) -> str | None:
+    """Return the working directory to match this session against, or ``None``.
+
+    Precedence -- the SESSION'S OWN recorded working directory always wins:
+
+    1. ``metadata["working_dir"]`` -- the exact recorded path. CI-native
+       sessions always carry it; legacy sessions carry it since discovery
+       started surfacing it.
+    2. ``unslug_approximate(metadata["workspace"])`` -- an APPROXIMATE path
+       reconstructed from the lossy slug, for the rare session that has a
+       slug but no recorded path.
+    3. *path_fallback* (the ``--path`` value) -- LAST RESORT only.
+    4. ``None`` -- nothing derivable. Callers must INCLUDE such a session
+       rather than silently dropping it.
+
+    Why ``--path`` is never the primary discriminator: it may point at a
+    backup or copy folder that does not represent where the session actually
+    ran, so matching include/exclude against it would filter the wrong way.
+    ``--path`` scopes WHICH files are discovered; the recorded working dir
+    decides matching.
+
+    *session_dir* is accepted for call-site symmetry and future diagnostics;
+    the decision is made purely from *metadata* and *path_fallback*.
+    """
+    _ = session_dir
+
+    recorded = metadata.get("working_dir")
+    if isinstance(recorded, str) and recorded:
+        return recorded
+
+    slug = metadata.get("workspace")
+    if isinstance(slug, str) and slug:
+        approximate = unslug_approximate(slug)
+        if approximate:
+            return approximate
+
+    if path_fallback:
+        return path_fallback
+
+    return None
