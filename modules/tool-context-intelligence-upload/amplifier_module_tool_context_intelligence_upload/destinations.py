@@ -181,3 +181,29 @@ def select_destination(
         )
 
     return _prompt_for_destination(destinations)
+
+
+def _prompt_for_destination(destinations: dict[str, Destination]) -> Destination:
+    """Print a numbered menu of *destinations* and read one choice from stdin.
+
+    Accepts either the 1-based menu number or the destination name. Names are listed
+    in sorted order so the numbering is stable across runs (dict insertion order
+    follows settings.yaml, which a user may reorder at any time).
+    """
+    names = sorted(destinations)
+    print("Multiple context-intelligence destinations are configured:")
+    for index, name in enumerate(names, start=1):
+        print(f"  {index}. {name}  ({destinations[name].url})")
+    answer = input(f"Select a destination [1-{len(names)}]: ").strip()
+
+    if answer.isdigit():
+        choice = int(answer)
+        if 1 <= choice <= len(names):
+            return destinations[names[choice - 1]]
+    if answer in destinations:
+        return destinations[answer]
+
+    raise DestinationSelectionError(
+        f"Invalid selection {answer!r}. "
+        f"Configured destinations: {_format_valid_names(destinations)}."
+    )

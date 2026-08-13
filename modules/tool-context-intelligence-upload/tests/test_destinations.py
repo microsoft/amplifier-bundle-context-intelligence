@@ -304,3 +304,51 @@ def test_an_unknown_name_against_a_single_destination_still_raises() -> None:
 
     with pytest.raises(DestinationSelectionError):
         select_destination(only, "typo", interactive=False)
+
+
+def test_the_interactive_prompt_lists_every_destination_with_its_url(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr("builtins.input", lambda _prompt="": "1")
+
+    select_destination(two_destinations(), None, interactive=True)
+
+    out = capsys.readouterr().out
+    assert "1. personal" in out
+    assert "2. team" in out
+    assert "https://personal.example.com" in out
+    assert "https://team.example.com" in out
+
+
+@pytest.mark.parametrize(
+    ("answer", "expected_name"),
+    [
+        ("1", "personal"),  # names are listed in sorted order
+        ("2", "team"),
+        (" 2 ", "team"),
+        ("team", "team"),
+        ("personal", "personal"),
+    ],
+)
+def test_the_interactive_prompt_returns_the_chosen_destination(
+    monkeypatch: pytest.MonkeyPatch, answer: str, expected_name: str
+) -> None:
+    monkeypatch.setattr("builtins.input", lambda _prompt="": answer)
+
+    chosen = select_destination(two_destinations(), None, interactive=True)
+
+    assert chosen.name == expected_name
+
+
+@pytest.mark.parametrize("answer", ["", "0", "3", "-1", "nope"])
+def test_an_invalid_prompt_answer_raises_and_lists_the_valid_names(
+    monkeypatch: pytest.MonkeyPatch, answer: str
+) -> None:
+    monkeypatch.setattr("builtins.input", lambda _prompt="": answer)
+
+    with pytest.raises(DestinationSelectionError) as excinfo:
+        select_destination(two_destinations(), None, interactive=True)
+
+    message = str(excinfo.value)
+    assert "personal" in message
+    assert "team" in message
