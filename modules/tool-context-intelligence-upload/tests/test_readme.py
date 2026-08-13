@@ -12,6 +12,28 @@ import pytest
 
 README_PATH = Path(__file__).parent.parent / "README.md"
 
+# ---------------------------------------------------------------------------
+# Shared documented-surface constants.
+#
+# These drive BOTH the README assertions below AND the --help parity
+# assertions (TestHelpReadmeParity).  One definition, two consumers: a flag
+# that is renamed in only one of the two documents fails the parity test.
+# ---------------------------------------------------------------------------
+
+FLAG_DESTINATION = "--destination"
+FLAG_AUTO_APPROVE = "--auto-approve"
+FLAG_AUTO_APPROVE_SHORT = "`-y`"
+DEFAULT_SCAN_ROOT = "~/.amplifier/projects"
+SETTINGS_PATH = "~/.amplifier/settings.yaml"
+KEYS_ENV_PATH = "~/.amplifier/keys.env"
+DESTINATIONS_CONFIG_KEY = "overrides.hook-context-intelligence.config.destinations"
+CONFIRM_PROMPT = "Proceed? [y/N]"
+
+# In-agent tools that DO NOT EXIST in this module (no mount(), no
+# amplifier.modules entry point).  The README must never mention them.
+PHANTOM_TOOL_START = "context_intelligence_upload_start"
+PHANTOM_TOOL_STATUS = "context_intelligence_upload_status"
+
 
 @pytest.fixture(scope="module")
 def readme_content() -> str:
@@ -94,19 +116,22 @@ class TestCLIUsageSection:
         assert "recovery" in lower
 
 
-class TestAmplifierSessionUsageSection:
-    """Amplifier Session Usage section must be present."""
+class TestNoPhantomTools:
+    """The README must not document in-session tools that do not exist.
 
-    def test_amplifier_session_usage_section_present(self, readme_content):
-        assert "Session Usage" in readme_content or "Amplifier Session" in readme_content
+    This module ships a console script ONLY.  There is no mount() and no
+    amplifier.modules entry point, so no tool is exposed inside an Amplifier
+    session.  Documenting one is a correctness bug, not a style nit.
+    """
 
-    def test_upload_start_subsection_present(self, readme_content):
-        # Should show starting an upload
-        assert "context_intelligence_upload_start" in readme_content
+    def test_upload_start_tool_absent(self, readme_content):
+        assert PHANTOM_TOOL_START not in readme_content
 
-    def test_upload_status_subsection_present(self, readme_content):
-        # Should show checking progress / status
-        assert "context_intelligence_upload_status" in readme_content
+    def test_upload_status_tool_absent(self, readme_content):
+        assert PHANTOM_TOOL_STATUS not in readme_content
+
+    def test_cli_only_reality_stated(self, readme_content):
+        assert "CLI-only" in readme_content
 
 
 class TestRecoveryScenariosSection:
