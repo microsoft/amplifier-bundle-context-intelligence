@@ -210,3 +210,79 @@ def test_a_destination_with_no_include_patterns_matches_nothing(tmp_path: Path) 
 
     assert kept == []
     assert filtered_out == 1
+
+
+# ---------------------------------------------------------------------------
+# Never silently drop; treat CI-native and legacy sessions uniformly
+# ---------------------------------------------------------------------------
+
+
+def test_session_with_no_derivable_working_dir_is_included_not_dropped(tmp_path: Path) -> None:
+    """An undecidable session is surfaced, never silently discarded."""
+    undecidable = (tmp_path / "mystery", {"session_id": "s1", "format": "logging-hook"})
+
+    kept, filtered_out = filter_sessions([undecidable], TEAM_DEST, None)
+
+    assert kept == [undecidable]
+    assert filtered_out == 0
+
+
+def test_undecidable_sessions_are_included_alongside_matched_ones(tmp_path: Path) -> None:
+    matched = (tmp_path / "a", {"working_dir": "/Users/me/project"})
+    undecidable = (tmp_path / "b", {})
+    excluded = (tmp_path / "c", {"working_dir": "/opt/other"})
+
+    kept, filtered_out = filter_sessions([matched, undecidable, excluded], TEAM_DEST, None)
+
+    assert kept == [matched, undecidable]
+    assert filtered_out == 1
+
+
+def test_ci_native_and_legacy_sessions_are_filtered_by_the_same_rule(tmp_path: Path) -> None:
+    """Format is irrelevant to the decision -- only the resolved working dir
+    matters, whether it came from a recorded path or an unslugged slug.
+    """
+    ci_kept = (
+        tmp_path / "ci-in",
+        {"format": "context-intelligence", "working_dir": "/Users/me/project"},
+    )
+    ci_dropped = (
+        tmp_path / "ci-out",
+        {"format": "context-intelligence", "working_dir": "/opt/other"},
+    )
+    legacy_kept = (
+        tmp_path / "legacy-in",
+        {"format": "logging-hook", "workspace": "-Users-me-project"},
+    )
+    legacy_dropped = (
+        tmp_path / "legacy-out",
+        {"format": "logging-hook", "workspace": "-opt-other"},
+    )
+
+    kept, filtered_out = filter_sessions(
+        [ci_kept, ci_dropped, legacy_kept, legacy_dropped], TEAM_DEST, None
+    )
+
+    assert kept == [ci_kept, legacy_kept]
+    assert filtered_out == 2
+
+
+def test_a_backup_path_fallback_never_overrides_recorded_dirs_in_a_mixed_list(
+    tmp_path: Path,
+) -> None:
+    """End-to-end of the D decision: pass a --path pointing at a backup folder
+    that the destination WOULD match, and confirm it changes nothing for
+    sessions that recorded their own working dir.
+    """
+    backup_path = "/Users/me/backups-of-everything"
+    assert destination_is_active(TEAM_DEST, normalize_match_key(backup_path)) is True
+
+    recorded_excluded = (tmp_path / "a", {"working_dir": "/opt/other"})
+    slug_excluded = (tmp_path / "b", {"workspace": "-opt-other"})
+
+    kept, filtered_out = filter_sessions(
+        [recorded_excluded, slug_excluded], TEAM_DEST, backup_path
+    )
+
+    assert kept == []
+    assert filtered_out == 2
