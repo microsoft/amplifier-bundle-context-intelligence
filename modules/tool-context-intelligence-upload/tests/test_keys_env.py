@@ -37,3 +37,16 @@ def test_key_value_lines_are_loaded_into_the_process_environment(
 
     assert os.environ["ANTHROPIC_API_KEY"] == "sk-ant-123"
     assert os.environ["CI_TOKEN"] == "tok-456"
+
+
+def test_process_environment_wins_over_the_keys_env_file(
+    tmp_path: Path, clean_environ: None
+) -> None:
+    """A value already exported in the shell must not be clobbered by the file."""
+    keys_env = tmp_path / "keys.env"
+    keys_env.write_text("CI_TOKEN=from-file\n", encoding="utf-8")
+    os.environ["CI_TOKEN"] = "from-process"
+
+    load_keys_env_into_environ(keys_env)
+
+    assert os.environ["CI_TOKEN"] == "from-process"
