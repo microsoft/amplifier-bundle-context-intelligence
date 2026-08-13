@@ -314,3 +314,60 @@ class TestTwoLevelProgressRendererNonTty:
         renderer.event_sent()
         renderer.session_completed()
         assert "unknown-id" in stream.getvalue()
+
+
+# ---------------------------------------------------------------------------
+# TestTwoLevelProgressRendererTty
+# ---------------------------------------------------------------------------
+
+
+class TestTwoLevelProgressRendererTty:
+    """When stdout IS a TTY: outer counter + inner bar redrawn in place."""
+
+    def _renderer(self, tmp_path: Path, monkeypatch, sessions_total: int = 2):
+        monkeypatch.setattr(sys.stdout, "isatty", lambda: True)
+        stream = io.StringIO()
+        renderer = TwoLevelProgressRenderer(
+            "job-1",
+            tmp_path / "progress.json",
+            sessions_total,
+            labels={"s1": "proj/s1"},
+            stream=stream,
+        )
+        return renderer, stream
+
+    def test_redraws_in_place_with_carriage_return(self, tmp_path: Path, monkeypatch) -> None:
+        renderer, stream = self._renderer(tmp_path, monkeypatch)
+        renderer.start_session("s1", events_total=4)
+        renderer.event_sent()
+        assert stream.getvalue().count("\r") >= 2  # one on start, one per event
+
+    def test_outer_counter_and_label_are_shown(self, tmp_path: Path, monkeypatch) -> None:
+        renderer, stream = self._renderer(tmp_path, monkeypatch)
+        renderer.start_session("s1", events_total=4)
+        out = stream.getvalue()
+        assert "[1/2]" in out
+        assert "proj/s1" in out
+
+    def test_inner_bar_shows_percentage_of_events_sent(self, tmp_path: Path, monkeypatch) -> None:
+        renderer, stream = self._renderer(tmp_path, monkeypatch)
+        renderer.start_session("s1", events_total=4)
+        renderer.event_sent()
+        renderer.event_sent()
+        last_frame = stream.getvalue().split("\r")[-1]
+        assert "50%" in last_frame
+        assert "(2/4)" in last_frame
+
+    def test_zero_event_session_does_not_divide_by_zero(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        renderer, stream = self._renderer(tmp_path, monkeypatch)
+        renderer.start_session("s1", events_total=0)
+        assert "0%" in stream.getvalue()
+
+    def test_session_completion_terminates_the_line(self, tmp_path: Path, monkeypatch) -> None:
+        renderer, stream = self._renderer(tmp_path, monkeypatch)
+        renderer.start_session("s1", events_total=1)
+        renderer.event_sent()
+        renderer.session_completed()
+        assert stream.getvalue().endswith("\n")
