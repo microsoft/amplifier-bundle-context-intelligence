@@ -8,7 +8,9 @@ An Amplifier tool module that replays context-intelligence session events to the
 
 ### As an Amplifier module (recommended)
 
-This module is included in the `amplifier-bundle-context-intelligence` bundle. When the bundle is configured, both tools (`context_intelligence_upload_start` and `context_intelligence_upload_status`) are automatically available in every Amplifier session — no separate installation is required.
+This module is included in the `amplifier-bundle-context-intelligence` bundle. Adding the bundle brings the module into your Amplifier installation.
+
+> **This module is CLI-only.** It ships the standalone `context-intelligence-upload` console script and **no in-session Amplifier tools** — there is no `mount()` and no `amplifier.modules` entry point, so nothing from this module appears inside an Amplifier session. Run it from your shell.
 
 ```bash
 amplifier bundle add git+https://github.com/microsoft/amplifier-bundle-context-intelligence@main
@@ -130,60 +132,6 @@ context-intelligence-upload --server-url https://ci.example.com \
 > **Server-side prerequisite.** Entra mode requires the **server** to be configured to validate Entra tokens. Against a server that only accepts static keys, use `--auth-mode static`.
 
 ---
-
-## Amplifier Session Usage
-
-When the bundle is loaded, two tools are available inside every Amplifier session.
-
-### Starting an upload
-
-The agent calls `context_intelligence_upload_start` and receives a `job_id` and `progress_file` path immediately. The upload runs in a detached background subprocess so the session is not blocked.
-
-Example conversation:
-
-> **User:** Upload the sessions from my-project to the CI server.
->
-> **Agent:** I'll start a background upload job now.
->
-> *(calls `context_intelligence_upload_start` with `path=~/.amplifier/projects/my-project`)*
->
-> **Tool result:**
-> ```json
-> {
->   "job_id": "f47ac10b-58cc-4372-a567-0e02b2c3d479",
->   "progress_file": "/tmp/context-intelligence-upload-f47ac10b-58cc-4372-a567-0e02b2c3d479.json",
->   "message": "Upload job f47ac10b-... started in the background. Poll context_intelligence_upload_status with job_id='f47ac10b-...' to check progress."
-> }
-> ```
->
-> **Agent:** Upload job started. Job ID is `f47ac10b-...`. I'll check the progress in a moment.
-
-### Checking progress
-
-The agent calls `context_intelligence_upload_status` with the `job_id` to poll the progress file.
-
-Example conversation:
-
-> **User:** How is the upload going?
->
-> **Agent:** Let me check the upload status.
->
-> *(calls `context_intelligence_upload_status` with `job_id="f47ac10b-58cc-4372-a567-0e02b2c3d479"`)*
->
-> **Tool result:**
-> ```json
-> {
->   "job_id": "f47ac10b-58cc-4372-a567-0e02b2c3d479",
->   "status": "running",
->   "sessions_total": 12,
->   "sessions_completed": 7,
->   "current_session_id": "sess-abc123",
->   "current_session_events_total": 84,
->   "current_session_events_sent": 42
-> }
-> ```
->
-> **Agent:** The upload is in progress: 7 of 12 sessions completed. Currently uploading session `sess-abc123` (42 of 84 events sent).
 
 ---
 
