@@ -160,3 +160,40 @@ def test_the_real_keys_env_loader_feeds_placeholder_expansion_end_to_end(
     assert team.url == "https://team.example.com/api"
     assert team.api_key == "sk-from-keys-env"
     assert team.auth_resource == "api://abc-123"
+
+
+def test_legacy_scalar_config_synthesizes_a_single_default_destination(
+    tmp_path: Path,
+) -> None:
+    """Back-compat: the pre-fan-out flat keys still yield one usable destination.
+
+    The synthesis is the hook resolver's own (config_resolver.py:629-649) — we
+    inherit it by reusing HookConfigResolver rather than re-deriving it here.
+    """
+    settings_path = write_settings(tmp_path, LEGACY_SCALAR_SETTINGS)
+
+    result = read_destinations(settings_path)
+
+    assert list(result) == ["default"]
+    default = result["default"]
+    assert isinstance(default, Destination)
+    assert default.name == "default"
+    assert default.url == "https://legacy.example.com"
+    assert default.api_key == "legacy-key"
+    assert default.include == ("**",)
+    assert default.exclude == ()
+
+
+def test_legacy_scalars_with_a_url_but_no_api_key_yield_no_destinations(
+    tmp_path: Path,
+) -> None:
+    """Matches hook behavior: url-without-key degrades to local-only, never raises."""
+    settings_path = write_settings(
+        tmp_path,
+        "overrides:\n"
+        "  hook-context-intelligence:\n"
+        "    config:\n"
+        "      context_intelligence_server_url: https://legacy.example.com\n",
+    )
+
+    assert read_destinations(settings_path) == {}
