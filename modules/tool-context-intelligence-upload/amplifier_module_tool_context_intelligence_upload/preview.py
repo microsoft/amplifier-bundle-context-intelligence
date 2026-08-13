@@ -6,7 +6,35 @@ stderr because stdout is reserved for the machine-readable result JSON.
 
 from __future__ import annotations
 
+import sys
+
 from amplifier_module_hook_context_intelligence.config_resolver import Destination
+
+
+class ConfirmationRequiredError(Exception):
+    """Raised when confirmation is required but cannot be obtained.
+
+    Happens when the process is not interactive (stdin/stdout are not a TTY)
+    and ``--auto-approve`` was not passed: we must neither hang on ``input()``
+    nor silently upload.
+    """
+
+
+def confirm_upload(*, auto_approve: bool, interactive: bool) -> bool:
+    """Ask the operator whether to proceed.  The default answer is NO.
+
+    - ``auto_approve=True``  -> return True without prompting (CI/automation).
+    - ``interactive=True``   -> prompt ``Proceed? [y/N]`` on stderr and read stdin.
+    - otherwise              -> raise :class:`ConfirmationRequiredError`.
+    """
+    if auto_approve:
+        return True
+    if not interactive:
+        raise ConfirmationRequiredError("confirmation required but stdin/stdout is not a TTY")
+    sys.stderr.write("Proceed? [y/N] ")
+    sys.stderr.flush()
+    answer = input()
+    return answer.strip().lower() in {"y", "yes"}
 
 
 def build_preview_text(
