@@ -237,7 +237,13 @@ provision:
       export PATH="/root/.local/bin:$PATH"
       context-intelligence-upload --help >/dev/null
       context-intelligence-upload --help | grep -q 'logging-hook'
-      echo "ready: context-intelligence-upload on PATH, advertises --format logging-hook"
+      # Simplified-gesture surface must survive in the INSTALLED artifact, and
+      # the phantom in-session tools must never reappear in the help text.
+      context-intelligence-upload --help | grep -q -- '--destination'
+      context-intelligence-upload --help | grep -q -- '--auto-approve'
+      ! context-intelligence-upload --help | grep -q 'context_intelligence_upload_start'
+      ! context-intelligence-upload --help | grep -q 'context_intelligence_upload_status'
+      echo "ready: context-intelligence-upload on PATH, advertises --format logging-hook, --destination, --auto-approve; no phantom tools"
 
 # -----------------------------------------------------------------------------
 # READINESS (deterministic, poll-safe, no LLM). Every check here re-runs on
@@ -253,6 +259,12 @@ provision:
 readiness:
   - name: upload-cli-present
     command: "context-intelligence-upload --help | grep -q logging-hook && echo ready"
+
+  - name: upload-cli-simplified-surface-present
+    # Regression gate for the simplified gesture: the installed artifact must
+    # advertise the new flags. The full destinations matrix lives in
+    # context-intelligence-upload-destinations-e2e.yaml, not here.
+    command: "context-intelligence-upload --help | grep -q -- '--destination' && context-intelligence-upload --help | grep -q -- '--auto-approve' && echo ready"
 
   - name: server-reachable-from-dtu
     command: >
