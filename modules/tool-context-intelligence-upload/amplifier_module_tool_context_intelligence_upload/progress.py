@@ -25,6 +25,25 @@ def progress_file_path(job_id: str, override: str | None = None) -> Path:
     return Path(f"/tmp/context-intelligence-upload-{job_id}.json")
 
 
+def session_label(session_dir: Path, metadata: dict[str, Any]) -> str:
+    """Return the human label for a session: ``<project>/<session_id>``.
+
+    Context-intelligence-native sessions live at
+    ``.../<project>/sessions/<id>/context-intelligence`` so the project name is
+    the path component immediately before ``sessions``.  Layouts without a
+    ``sessions`` component (e.g. legacy hooks-logging) fall back to the bare
+    session id, and a session with no recorded id falls back to its directory
+    name.
+    """
+    session_id = str(metadata.get("session_id") or session_dir.name)
+    parts = session_dir.parts
+    if "sessions" in parts:
+        index = parts.index("sessions")
+        if index > 0:
+            return f"{parts[index - 1]}/{session_id}"
+    return session_id
+
+
 class ProgressTracker:
     """Track and persist the progress of an upload job.
 

@@ -8,6 +8,7 @@ from pathlib import Path
 from amplifier_module_tool_context_intelligence_upload.progress import (
     ProgressTracker,
     progress_file_path,
+    session_label,
 )
 
 
@@ -198,3 +199,27 @@ class TestProgressTrackerReadFile:
         ProgressTracker("job-1", file_path, sessions_total=2)
         result = ProgressTracker.read_file(file_path)
         assert isinstance(result, dict)
+
+
+# ---------------------------------------------------------------------------
+# TestSessionLabel
+# ---------------------------------------------------------------------------
+
+
+class TestSessionLabel:
+    """The human label rendered in the outer progress line."""
+
+    def test_ci_native_layout_yields_project_slash_session_id(self, tmp_path: Path) -> None:
+        session_dir = tmp_path / "projects" / "my-project" / "sessions" / "abc123"
+        session_dir.mkdir(parents=True)
+        assert session_label(session_dir, {"session_id": "abc123"}) == "my-project/abc123"
+
+    def test_flat_layout_falls_back_to_session_id(self, tmp_path: Path) -> None:
+        session_dir = tmp_path / "abc123"
+        session_dir.mkdir()
+        assert session_label(session_dir, {"session_id": "abc123"}) == "abc123"
+
+    def test_missing_session_id_falls_back_to_directory_name(self, tmp_path: Path) -> None:
+        session_dir = tmp_path / "dir-name"
+        session_dir.mkdir()
+        assert session_label(session_dir, {}) == "dir-name"
