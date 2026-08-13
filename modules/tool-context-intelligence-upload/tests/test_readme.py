@@ -206,3 +206,151 @@ class TestWorkspaceBehaviourSection:
         lower = readme_content.lower()
         # Should say workspace comes from events.jsonl and is never overridden
         assert "never" in lower or "not override" in lower or "unchanged" in lower
+
+
+class TestZeroArgGestureSection:
+    """The zero-argument gesture must be documented."""
+
+    def test_zero_argument_section_present(self, readme_content):
+        assert "## Zero-Argument Usage" in readme_content
+
+    def test_zero_arg_invocation_shown(self, readme_content):
+        assert "$ context-intelligence-upload\n" in readme_content
+
+
+class TestConnectionResolutionSection:
+    """Where connection config comes from must be documented."""
+
+    def test_connection_resolution_section_present(self, readme_content):
+        assert "## Where Connection Config Comes From" in readme_content
+
+    def test_settings_path_documented(self, readme_content):
+        assert SETTINGS_PATH in readme_content
+
+    def test_keys_env_path_documented(self, readme_content):
+        assert KEYS_ENV_PATH in readme_content
+
+    def test_destinations_config_key_documented(self, readme_content):
+        assert DESTINATIONS_CONFIG_KEY in readme_content
+
+    def test_var_expansion_documented(self, readme_content):
+        # NOTE: a bare "${VAR}" already appears in the auth section, so this
+        # asserts the keys.env-backed sentence specifically.
+        assert f"expanded from `{KEYS_ENV_PATH}`" in readme_content
+
+    def test_amplifier_home_only_documented(self, readme_content):
+        assert "Amplifier home only" in readme_content
+
+    def test_project_local_not_consulted_documented(self, readme_content):
+        assert "not consulted" in readme_content
+
+    def test_zero_destinations_error_documented(self, readme_content):
+        assert "no destinations are configured" in readme_content
+
+
+class TestDestinationSelectionSection:
+    """Selection semantics (1 = silent, 2+ = prompt, --destination) documented."""
+
+    def test_destination_selection_section_present(self, readme_content):
+        assert "## Choosing a Destination" in readme_content
+
+    def test_single_destination_no_prompt_documented(self, readme_content):
+        assert "no prompt" in readme_content
+
+    def test_destination_flag_documented(self, readme_content):
+        assert FLAG_DESTINATION in readme_content
+
+    def test_non_interactive_ambiguity_documented(self, readme_content):
+        # NOTE: "non-interactive" alone already appears in the Entra auth note,
+        # so this asserts the ambiguity row of the selection table.
+        assert "Two or more, **non-interactive**" in readme_content
+
+
+class TestAutoDiscoverySection:
+    """Auto-discovery, the default scan root, and per-format layouts."""
+
+    def test_auto_discovery_section_present(self, readme_content):
+        assert "## Session Auto-Discovery" in readme_content
+
+    def test_default_scan_root_documented(self, readme_content):
+        # NOTE: the bare path already appears in the old examples, so this
+        # asserts the auto-discovery sentence specifically.
+        assert f"discovers sessions under `{DEFAULT_SCAN_ROOT}`" in readme_content
+
+    def test_path_omitted_documented(self, readme_content):
+        assert "When `--path` is omitted" in readme_content
+
+
+class TestDestinationFilteringSection:
+    """include/exclude filtering by the session's recorded working_dir."""
+
+    def test_filtering_section_present(self, readme_content):
+        assert "## Destination Filtering" in readme_content
+
+    def test_recorded_working_dir_is_the_discriminator(self, readme_content):
+        assert "recorded `working_dir`" in readme_content
+
+    def test_path_is_not_the_discriminator(self, readme_content):
+        assert "`--path` never decides filtering" in readme_content
+
+    def test_legacy_approximation_documented(self, readme_content):
+        assert "approximate" in readme_content
+
+    def test_filtered_out_count_documented(self, readme_content):
+        assert "filtered-out" in readme_content
+
+    def test_raw_flags_skip_filtering_documented(self, readme_content):
+        assert "no filtering is applied" in readme_content
+
+
+class TestPreviewConfirmSection:
+    """Preview + confirmation, and the automation escape hatch."""
+
+    def test_preview_section_present(self, readme_content):
+        assert "## Preview and Confirmation" in readme_content
+
+    def test_confirm_prompt_documented(self, readme_content):
+        assert CONFIRM_PROMPT in readme_content
+
+    def test_auto_approve_flag_documented(self, readme_content):
+        assert FLAG_AUTO_APPROVE in readme_content
+
+    def test_auto_approve_short_flag_documented(self, readme_content):
+        assert FLAG_AUTO_APPROVE_SHORT in readme_content
+
+    def test_non_tty_without_auto_approve_errors(self, readme_content):
+        # NOTE: "exit code 2" alone already appears in the legacy-format
+        # section, so this asserts the preview table's row specifically.
+        assert (
+            "Error telling you to pass `--auto-approve`, **exit code 2**"
+            in readme_content
+        )
+
+
+class TestProgressOutputSection:
+    """Two-level TTY-aware progress and the final summary."""
+
+    def test_progress_output_section_present(self, readme_content):
+        assert "## Progress Output" in readme_content
+
+    def test_two_level_progress_documented(self, readme_content):
+        assert "two-level" in readme_content
+
+    def test_piped_fallback_documented(self, readme_content):
+        assert "one plain line per session" in readme_content
+
+    def test_final_summary_documented(self, readme_content):
+        assert "final summary" in readme_content
+
+
+class TestNonGoalsSection:
+    """v1 non-goals must be stated so users do not expect fan-out."""
+
+    def test_non_goals_section_present(self, readme_content):
+        assert "## Non-Goals (v1)" in readme_content
+
+    def test_no_fanout_documented(self, readme_content):
+        assert "no fan-out" in readme_content
+
+    def test_no_all_flag_documented(self, readme_content):
+        assert "`--all`" in readme_content
