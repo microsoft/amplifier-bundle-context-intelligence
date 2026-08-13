@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import io
 import json
+import sys
 from pathlib import Path
 
 from amplifier_module_tool_context_intelligence_upload.progress import (
     ProgressTracker,
+    TwoLevelProgressRenderer,
     progress_file_path,
     session_label,
 )
@@ -223,3 +226,91 @@ class TestSessionLabel:
         session_dir = tmp_path / "dir-name"
         session_dir.mkdir()
         assert session_label(session_dir, {}) == "dir-name"
+
+
+# ---------------------------------------------------------------------------
+# TestTwoLevelProgressRendererNonTty
+# ---------------------------------------------------------------------------
+
+
+class TestTwoLevelProgressRendererNonTty:
+    """When stdout is not a TTY: one plain completion line per session, no ANSI."""
+
+    def _renderer(self, tmp_path: Path, monkeypatch, sessions_total: int = 2):
+        monkeypatch.setattr(sys.stdout, "isatty", lambda: False)
+        stream = io.StringIO()
+        renderer = TwoLevelProgressRenderer(
+            "job-1",
+            tmp_path / "progress.json",
+            sessions_total,
+            labels={"s1": "proj/s1", "s2": "proj/s2"},
+            stream=stream,
+        )
+        return renderer, stream
+
+    def test_one_plain_line_per_completed_session(self, tmp_path: Path, monkeypatch) -> None:
+        renderer, stream = self._renderer(tmp_path, monkeypatch)
+
+        renderer.start_session("s1", events_total=2)
+        renderer.event_sent()
+        renderer.event_sent()
+        renderer.session_completed()
+
+        renderer.start_session("s2", events_total=1)
+        renderer.event_sent()
+        renderer.session_completed()
+
+        lines = [line for line in stream.getvalue().splitlines() if line.strip()]
+        assert len(lines) == 2
+
+    def test_plain_line_carries_counter_label_and_event_counts(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        renderer, stream = self._renderer(tmp_path, monkeypatch)
+        renderer.start_session("s1", events_total=2)
+        renderer.event_sent()
+        renderer.event_sent()
+        renderer.session_completed()
+
+        line = stream.getvalue().splitlines()[0]
+        assert "[1/2]" in line
+        assert "proj/s1" in line
+        assert "2/2" in line
+
+    def test_non_tty_output_has_no_carriage_return(self, tmp_path: Path, monkeypatch) -> None:
+        renderer, stream = self._renderer(tmp_path, monkeypatch)
+        renderer.start_session("s1", events_total=1)
+        renderer.event_sent()
+        renderer.session_completed()
+        assert "\r" not in stream.getvalue()
+
+    def test_progress_json_file_behaviour_is_unchanged(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        """The renderer is a ProgressTracker — the JSON contract must still hold."""
+        file_path = tmp_path / "progress.json"
+        monkeypatch.setattr(sys.stdout, "isatty", lambda: False)
+        renderer = TwoLevelProgressRenderer("job-9", file_path, 3, stream=io.StringIO())
+
+        renderer.start_session("sess-abc", events_total=10)
+        renderer.event_sent()
+        renderer.session_completed()
+
+        data = json.loads(file_path.read_text())
+        assert data["job_id"] == "job-9"
+        assert data["sessions_total"] == 3
+        assert data["current_session_id"] == "sess-abc"
+        assert data["current_session_events_total"] == 10
+        assert data["current_session_events_sent"] == 1
+        assert data["sessions_completed"] == 1
+
+    def test_unlabelled_session_falls_back_to_session_id(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        monkeypatch.setattr(sys.stdout, "isatty", lambda: False)
+        stream = io.StringIO()
+        renderer = TwoLevelProgressRenderer("job-1", tmp_path / "p.json", 1, stream=stream)
+        renderer.start_session("unknown-id", events_total=1)
+        renderer.event_sent()
+        renderer.session_completed()
+        assert "unknown-id" in stream.getvalue()

@@ -9,9 +9,10 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, TextIO
 
 
 def progress_file_path(job_id: str, override: str | None = None) -> Path:
@@ -121,3 +122,78 @@ class ProgressTracker:
         if not file_path.exists():
             return None
         return json.loads(file_path.read_text(encoding="utf-8"))
+
+
+class TwoLevelProgressRenderer(ProgressTracker):
+    """A ProgressTracker that also renders human-facing progress to a stream.
+
+    Subclasses :class:`ProgressTracker` so the machine-readable JSON progress
+    file behaves EXACTLY as before (every override calls ``super()`` first);
+    the terminal rendering is layered on top and ``uploader.run_upload`` needs
+    no changes.
+
+    Rendering goes to *stream* (default ``sys.stderr``) because stdout is
+    reserved for the result JSON.  TTY-awareness is decided by
+    ``sys.stdout.isatty()``: on a TTY we redraw an inner event bar in place;
+    when stdout is piped we emit one plain completion line per session and no
+    ANSI/carriage-return control characters at all.
+    """
+
+    _BAR_CELLS = 20
+
+    def __init__(
+        self,
+        job_id: str,
+        file_path: Path,
+        sessions_total: int,
+        *,
+        labels: dict[str, str] | None = None,
+        stream: TextIO | None = None,
+    ) -> None:
+        self._labels = labels or {}
+        self._stream: TextIO = stream if stream is not None else sys.stderr
+        self._tty = sys.stdout.isatty()
+        self._sessions_total = sessions_total
+        self._session_index = 0
+        self._current_label = ""
+        self._events_total = 0
+        self._events_sent = 0
+        super().__init__(job_id, file_path, sessions_total)
+
+    def start_session(self, session_id: str, events_total: int) -> None:
+        super().start_session(session_id, events_total)
+        self._session_index += 1
+        self._current_label = self._labels.get(session_id, session_id)
+        self._events_total = events_total
+        self._events_sent = 0
+        if self._tty:
+            self._redraw()
+
+    def event_sent(self) -> None:
+        super().event_sent()
+        self._events_sent += 1
+        if self._tty:
+            self._redraw()
+
+    def session_completed(self) -> None:
+        super().session_completed()
+        if self._tty:
+            self._stream.write("\n")
+        else:
+            self._stream.write(
+                f"[{self._session_index}/{self._sessions_total}] {self._current_label} "
+                f"{self._events_sent}/{self._events_total} events\n"
+            )
+        self._stream.flush()
+
+    def _redraw(self) -> None:
+        """Redraw the outer counter + inner event bar in place (TTY only)."""
+        total = self._events_total or 1
+        percent = int(self._events_sent * 100 / total)
+        filled = int(self._BAR_CELLS * percent / 100)
+        bar = "#" * filled + "-" * (self._BAR_CELLS - filled)
+        self._stream.write(
+            f"\r[{self._session_index}/{self._sessions_total}] {self._current_label} "
+            f"|{bar}| {percent}% ({self._events_sent}/{self._events_total})"
+        )
+        self._stream.flush()
