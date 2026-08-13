@@ -178,7 +178,7 @@ digraph LoggingHandlerFlow {
         // ─── Server dispatch ────────────────────────────────────────
         node [shape=box, style="rounded,filled", penwidth=2];
         dispatch [
-            label="_enqueue_dispatch()\n───────────────────\nput_nowait(event, sanitized data)\ninto bounded queue\nspawn shared worker if needed\nqueue full => disable dispatch\nlocal JSONL remains durable",
+            label="_enqueue_dispatch()\n───────────────────\nput_nowait(event, sanitized data)\ninto bounded queue\nspawn shared worker if needed\nqueue full: newest event dropped\nlocal JSONL remains durable",
             fillcolor="#E0F7FA",
             color="#00838F"
         ];
@@ -295,7 +295,7 @@ digraph LoggingHandlerFlow {
                 <TR><TD ALIGN="LEFT">deterministic key supports server dedup</TD></TR>
                 <TR><TD ALIGN="LEFT">───────────────────────────</TD></TR>
                 <TR><TD ALIGN="LEFT">httpx.AsyncClient(connect=0.5s, write=10s, read=3s)</TD></TR>
-                <TR><TD ALIGN="LEFT">bounded queue: failure/full => disable dispatch</TD></TR>
+                <TR><TD ALIGN="LEFT">bounded queue: on failure/full, newest event dropped (durable in events.jsonl)</TD></TR>
             </TABLE>>,
             fillcolor="#E0F7FA",
             color="#00838F"
