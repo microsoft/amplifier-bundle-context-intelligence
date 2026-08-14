@@ -29,9 +29,11 @@ class TestValidateDestinations:
     def test_missing_url_dropped_and_logged_as_error(
         self, caplog: pytest.LogCaptureFixture
     ) -> None:
-        """A destination with no url is dropped -- and logged at ERROR (typo-class:
-        there is no environmental path to an empty url the way there is for an
-        api_key that failed ${VAR} expansion)."""
+        """A destination with a genuinely absent url is dropped -- and logged at
+        ERROR (typo-class: there is no environmental path to an absent url the
+        way there is for a field that failed ${VAR} expansion; a url that IS
+        present but unexpanded stays at WARNING -- see
+        test_unexpanded_placeholder_url_dropped_as_warning)."""
         r = _resolver({"destinations": {"broken": {"url": "", "api_key": "k"}}})
         with caplog.at_level(logging.WARNING):
             result = r.validate_destinations()
@@ -96,6 +98,25 @@ class TestValidateDestinations:
             "broken" in rec.message and "api_key is unusable" in rec.message
             for rec in caplog.records
         )
+
+    def test_unexpanded_placeholder_url_dropped_as_warning_not_error(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """An unexpanded ${VAR} url is an environment/secret-injection failure --
+        exactly the same class as an api_key that failed ${VAR} expansion -- so
+        it is dropped at WARNING, not escalated to typo-class ERROR.
+
+        This is the CI/dev-container case: the config is authored correctly, but
+        the variable is not set in that environment. Only a genuinely absent url
+        (hand-authored that way) is ERROR."""
+        r = _resolver({"destinations": {"broken": {"url": "${CI_URL}", "api_key": "k"}}})
+        with caplog.at_level(logging.WARNING):
+            result = r.validate_destinations()
+        assert result == {}
+        per_dest = [rec for rec in caplog.records if "misconfigured" in rec.message]
+        assert per_dest, "expected a per-destination log record"
+        assert "url is unusable" in per_dest[0].message
+        assert per_dest[0].levelno == logging.WARNING
 
     def test_both_missing_dropped_with_both_reasons_listed_at_error(
         self, caplog: pytest.LogCaptureFixture

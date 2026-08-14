@@ -715,20 +715,24 @@ class HookConfigResolver:
 
         Loudness is differentiated by how a destination went bad, not treated
         uniformly:
-        - unusable api_key (static): WARNING. This is the condition the
-          legacy path already normalizes as routine \u2014 it's commonly an
-          environment/secret-injection problem (an unexpanded ``${VAR}``, a
-          CI runner without the repo's secrets, a resumed session's
-          persisted "[REDACTED]" snapshot) rather than a hand-authored
-          mistake, and is expected to occur transiently in ways a
-          hand-typed field is not.
-        - missing url / unknown auth_mode / missing auth_resource (entra):
-          ERROR. These are only reachable by literally typing a bad value
-          into ``destinations.<name>.*`` \u2014 there is no environmental path
-          to ``auth_mode: kerberos`` or an empty url the way there is to an
-          api_key that failed ``${VAR}`` expansion. They warrant the louder
-          signal so the operator notices the typo immediately, without the
-          noise (or the traceback) of a hard crash.
+        - unusable api_key (static), or a url that is present but unusable
+          (an unexpanded ``${VAR}``, a "[REDACTED]" snapshot): WARNING.
+          This is the condition the legacy path already normalizes as
+          routine \u2014 it's commonly an environment/secret-injection problem
+          (an unexpanded ``${VAR}``, a CI runner without the repo's
+          secrets, a resumed session's persisted "[REDACTED]" snapshot)
+          rather than a hand-authored mistake, and is expected to occur
+          transiently in ways a hand-typed field is not. A url that failed
+          ``${VAR}`` expansion is the same failure as an api_key that
+          failed it, so it is classified the same way.
+        - genuinely absent url / unknown auth_mode / missing auth_resource
+          (entra): ERROR. These are only reachable by literally typing a
+          bad value into ``destinations.<name>.*`` \u2014 there is no
+          environmental path to ``auth_mode: kerberos`` or to an absent url
+          the way there is to a field that failed ``${VAR}`` expansion.
+          They warrant the louder signal so the operator notices the typo
+          immediately, without the noise (or the traceback) of a hard
+          crash.
 
         If EVERY configured destination is dropped (N configured, 0
         survive), an additional summary ERROR is emitted. A user who
@@ -749,9 +753,17 @@ class HookConfigResolver:
             reasons: list[str] = []
             severity = logging.WARNING
 
-            if is_unusable_secret(dest.url):
+            if not dest.url or not dest.url.strip():
                 reasons.append("missing url")
                 severity = logging.ERROR
+            elif is_unusable_secret(dest.url):
+                # Present but unusable: an unexpanded ``${VAR}`` (or, in
+                # principle, a redacted snapshot). That is the same
+                # environmental/secret-injection failure as an unusable
+                # api_key below, so it stays at WARNING. Only a genuinely
+                # absent url -- which requires hand-authoring the config
+                # that way -- escalates to ERROR.
+                reasons.append("url is unusable (unexpanded/redacted)")
 
             if dest.auth_mode == "static":
                 if is_unusable_secret(dest.api_key):
