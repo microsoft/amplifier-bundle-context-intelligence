@@ -74,6 +74,33 @@ class TestInstallationSection:
         assert "git+" in readme_content or "git+https" in readme_content
 
 
+class TestInstallationAccuracy:
+    """The Installation section must accurately reflect what each path installs.
+
+    ``amplifier bundle add`` brings this module into an Amplifier installation,
+    but the module ships no ``mount()`` and no ``amplifier.modules`` entry
+    point -- so bundle add never places ``context-intelligence-upload`` on
+    ``PATH``. Only the standalone `uv tool install` command does that. The
+    README must say this explicitly rather than implying the CLI comes from
+    the bundle.
+    """
+
+    UV_TOOL_INSTALL_CMD = (
+        'uv tool install "amplifier-module-tool-context-intelligence-upload '
+        "@ git+https://github.com/microsoft/amplifier-bundle-context-intelligence@main"
+        '#subdirectory=modules/tool-context-intelligence-upload"'
+    )
+    BUNDLE_ADD_NO_PATH_CAVEAT = (
+        "does not place the `context-intelligence-upload` command on your `PATH`"
+    )
+
+    def test_uv_tool_install_command_present(self, readme_content):
+        assert self.UV_TOOL_INSTALL_CMD in readme_content
+
+    def test_bundle_add_does_not_install_cli_on_path(self, readme_content):
+        assert self.BUNDLE_ADD_NO_PATH_CAVEAT in readme_content
+
+
 class TestCLIUsageSection:
     """CLI Usage section with flags table and examples must be present."""
 
@@ -321,10 +348,7 @@ class TestPreviewConfirmSection:
     def test_non_tty_without_auto_approve_errors(self, readme_content):
         # NOTE: "exit code 2" alone already appears in the legacy-format
         # section, so this asserts the preview table's row specifically.
-        assert (
-            "Error telling you to pass `--auto-approve`, **exit code 2**"
-            in readme_content
-        )
+        assert "Error telling you to pass `--auto-approve`, **exit code 2**" in readme_content
 
 
 class TestProgressOutputSection:
@@ -402,16 +426,8 @@ class TestHelpReadmeParity:
     def test_help_does_not_document_phantom_status_tool(self, detailed_help_output):
         assert PHANTOM_TOOL_STATUS not in detailed_help_output
 
-    def test_readme_and_help_agree_on_destination_flag(
-        self, readme_content, detailed_help_output
-    ):
-        assert (FLAG_DESTINATION in readme_content) == (
-            FLAG_DESTINATION in detailed_help_output
-        )
+    def test_readme_and_help_agree_on_destination_flag(self, readme_content, detailed_help_output):
+        assert (FLAG_DESTINATION in readme_content) == (FLAG_DESTINATION in detailed_help_output)
 
-    def test_readme_and_help_agree_on_auto_approve_flag(
-        self, readme_content, detailed_help_output
-    ):
-        assert (FLAG_AUTO_APPROVE in readme_content) == (
-            FLAG_AUTO_APPROVE in detailed_help_output
-        )
+    def test_readme_and_help_agree_on_auto_approve_flag(self, readme_content, detailed_help_output):
+        assert (FLAG_AUTO_APPROVE in readme_content) == (FLAG_AUTO_APPROVE in detailed_help_output)

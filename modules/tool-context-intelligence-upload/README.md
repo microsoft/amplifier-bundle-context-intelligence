@@ -6,19 +6,9 @@ An Amplifier tool module that replays context-intelligence session events to the
 
 ## Installation
 
-### As an Amplifier module (recommended)
+### As a standalone CLI (recommended)
 
-This module is included in the `amplifier-bundle-context-intelligence` bundle. Adding the bundle brings the module into your Amplifier installation.
-
-> **This module is CLI-only.** It ships the standalone `context-intelligence-upload` console script and **no in-session Amplifier tools** — there is no `mount()` and no `amplifier.modules` entry point, so nothing from this module appears inside an Amplifier session. Run it from your shell.
-
-```bash
-amplifier bundle add git+https://github.com/microsoft/amplifier-bundle-context-intelligence@main
-```
-
-### As a standalone CLI
-
-Install as a standalone command-line tool using `uv`:
+Install as a standalone command-line tool using `uv`. **This is the install path that actually puts `context-intelligence-upload` on your `PATH`:**
 
 ```bash
 # Install as a uv tool (adds context-intelligence-upload to PATH)
@@ -32,6 +22,16 @@ uv pip install "amplifier-module-tool-context-intelligence-upload @ git+https://
 ```
 
 After installation, the `context-intelligence-upload` command is available in your shell.
+
+### As an Amplifier module
+
+This module is included in the `amplifier-bundle-context-intelligence` bundle, which brings the in-session context-intelligence hook and query tools into your Amplifier installation:
+
+```bash
+amplifier bundle add git+https://github.com/microsoft/amplifier-bundle-context-intelligence@main
+```
+
+> **This does not install the CLI.** This module is CLI-only — it ships the standalone `context-intelligence-upload` console script and **no in-session Amplifier tools**: there is no `mount()` and no `amplifier.modules` entry point, so `amplifier bundle add` does not place the `context-intelligence-upload` command on your `PATH`. Use the `uv tool install` command above to get the CLI.
 
 ---
 
