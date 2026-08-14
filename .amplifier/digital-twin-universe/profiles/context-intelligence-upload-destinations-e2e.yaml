@@ -36,9 +36,13 @@
 #
 # HOW TO RUN (three-step; each backend is REUSED across every readiness poll
 # and every scenario in this profile, never relaunched or duplicated)
-#   # 1. stand up BOTH backends first, FRESH, on distinct host ports (see
+#   # 1. stand up ALL THREE backends first, FRESH, on distinct host ports (see
 #   #    context-intelligence-backend.yaml for the full non-compose recipe +
-#   #    pinned versions):
+#   #    pinned versions). Backend C is the DEDICATED clean backend for the
+#   #    filter-parity scenarios S5/S6: they make ABSOLUTE assertions ("SKIP
+#   #    workspace absent, only KEEP present"), which are only satisfiable on a
+#   #    backend no other scenario writes to -- A and B both receive WS_SKIP via
+#   #    the dual-destination include "**" in S3/S4, so S5/S6 cannot share them:
 #   amplifier-digital-twin launch \
 #     .amplifier/digital-twin-universe/profiles/context-intelligence-backend.yaml \
 #     --name ci-dest-backend-a --var HOST_PORT=38001 \
@@ -49,10 +53,17 @@
 #     --name ci-dest-backend-b --var HOST_PORT=38002 \
 #     --var NEO4J_PASSWORD=<pw-b> --var API_KEY=<token-b> \
 #     --var SERVER_REF=766a9691850e6d7c29e7d4e90b537e88e69736bf
-#   #    Confirm both are reachable from the Incus host-gateway IP (find it via
-#   #    `incus list` or `ip route | grep default` inside this DTU once launched):
+#   amplifier-digital-twin launch \
+#     .amplifier/digital-twin-universe/profiles/context-intelligence-backend.yaml \
+#     --name ci-dest-backend-c --var HOST_PORT=38003 \
+#     --var NEO4J_PASSWORD=<pw-c> --var API_KEY=<token-c> \
+#     --var SERVER_REF=766a9691850e6d7c29e7d4e90b537e88e69736bf
+#   #    Confirm all three are reachable from the Incus host-gateway IP (find it
+#   #    via `incus list` or `ip route | grep default` inside this DTU once
+#   #    launched):
 #   #      curl -sf http://<incus-gateway-ip>:38001/status
 #   #      curl -sf http://<incus-gateway-ip>:38002/status
+#   #      curl -sf http://<incus-gateway-ip>:38003/status
 #   # 2. export a GitHub token so the branch install can authenticate, and
 #   #    launch this profile:
 #   export GH_TOKEN=$(gh auth token)
@@ -63,7 +74,9 @@
 #     --var server_a_url=http://<incus-gateway-ip>:38001 \
 #     --var server_a_token=<token-a> \
 #     --var server_b_url=http://<incus-gateway-ip>:38002 \
-#     --var server_b_token=<token-b>
+#     --var server_b_token=<token-b> \
+#     --var server_c_url=http://<incus-gateway-ip>:38003 \
+#     --var server_c_token=<token-c>
 #   # 3. wait for `check-readiness` to pass (this gates ONLY the environment --
 #   #    CLI installed, both servers reachable AND fresh, fixtures + config in
 #   #    place -- it does NOT run the scenario matrix), then run each scenario
@@ -88,6 +101,10 @@
 #   --var server_b_url=<url>      Context-Intelligence server B URL, from the
 #                                 Incus host-gateway IP of backend B above.
 #   --var server_b_token=<token>  Bearer token for backend B's static API_KEY
+#   --var server_c_url=<url>      Context-Intelligence server C URL (DEDICATED
+#                                 clean backend for S5/S6 filter-parity), from
+#                                 the Incus host-gateway IP of backend C above.
+#   --var server_c_token=<token>  Bearer token for backend C's static API_KEY
 #
 # DESIGN DECISION (resolve the convention tension once, up front -- identical
 # reasoning to context-intelligence-upload-format-validation.yaml, repeated
@@ -274,6 +291,25 @@ provision:
                   - "**/skip-me/"
       SINGLEEOF
 
+      # single_c.yaml: the SAME one-destination filter shape as single.yaml,
+      # but pointed at the DEDICATED clean backend C. S5/S6 (filter parity)
+      # assert ABSOLUTELY that WS_SKIP is absent and only WS_KEEP is present --
+      # only satisfiable on a backend no other scenario writes to. A and B both
+      # receive WS_SKIP via the dual include "**" in S3/S4, so S5/S6 use C.
+      cat > /root/dest-e2e/settings/single_c.yaml << 'SINGLECEOF'
+      overrides:
+        hook-context-intelligence:
+          config:
+            destinations:
+              solo:
+                url: ${server_c_url}
+                api_key: ${server_c_token}
+                include:
+                  - "/home/amplifier/workspaces/keep-me/"
+                exclude:
+                  - "**/skip-me/"
+      SINGLECEOF
+
       # single_varkey.yaml: api_key is the LITERAL text "${TEAM_CI_KEY}" -- a
       # quoted heredoc delimiter stops bash from expanding it while writing
       # this file (TEAM_CI_KEY is not a declared DTU --var, so the profile
@@ -332,6 +368,8 @@ provision:
       export SRV_A_TOKEN="${server_a_token}"
       export SRV_B_URL="${server_b_url}"
       export SRV_B_TOKEN="${server_b_token}"
+      export SRV_C_URL="${server_c_url}"
+      export SRV_C_TOKEN="${server_c_token}"
       export TOOL_PY="$TOOL_PY"
       export WS_KEEP="${WS_KEEP}"
       export WS_SKIP="${WS_SKIP}"
@@ -342,8 +380,8 @@ provision:
       use_settings() {
         local variant="$1"
         case "$variant" in
-          none|single|single_varkey|dual) ;;
-          *) echo "FATAL: use_settings: unknown variant '$variant' (expected none|single|single_varkey|dual)" >&2; exit 1 ;;
+          none|single|single_varkey|single_c|dual) ;;
+          *) echo "FATAL: use_settings: unknown variant '$variant' (expected none|single|single_varkey|single_c|dual)" >&2; exit 1 ;;
         esac
         cp "/root/dest-e2e/settings/${variant}.yaml" /root/.amplifier/settings.yaml
       }
@@ -373,24 +411,28 @@ readiness:
       && context-intelligence-upload --help | grep -q -- '--auto-approve'
       && echo ready
 
-  - name: both-servers-reachable
+  - name: all-servers-reachable
     command: |
       source /root/dest-e2e/env.sh
       curl -sf "$SRV_A_URL/status" \
         | python3 -c "import sys,json;d=json.load(sys.stdin);assert d['status']=='ok' and d['neo4j_connected'];print('server A ready')"
       curl -sf "$SRV_B_URL/status" \
         | python3 -c "import sys,json;d=json.load(sys.stdin);assert d['status']=='ok' and d['neo4j_connected'];print('server B ready')"
-      echo "ready: both servers reachable and neo4j_connected"
+      curl -sf "$SRV_C_URL/status" \
+        | python3 -c "import sys,json;d=json.load(sys.stdin);assert d['status']=='ok' and d['neo4j_connected'];print('server C ready')"
+      echo "ready: all three servers reachable and neo4j_connected"
 
-  - name: both-backends-fresh
+  - name: all-backends-fresh
     # Hard isolation prerequisite: every scenario's growth/no-growth logic
-    # assumes empty backends at the start of the run.
+    # assumes empty backends at the start of the run. Backend C in particular
+    # MUST be pristine -- S5/S6 assert the ABSOLUTE absence of WS_SKIP on it.
     command: |
       source /root/dest-e2e/env.sh
       source /root/dest-e2e/dest_assert.sh
       assert_fresh_at "$SRV_A_URL" "$SRV_A_TOKEN"
       assert_fresh_at "$SRV_B_URL" "$SRV_B_TOKEN"
-      echo "ready: both backends fresh (count_all==0)"
+      assert_fresh_at "$SRV_C_URL" "$SRV_C_TOKEN"
+      echo "ready: all three backends fresh (count_all==0)"
 
   - name: fixtures-and-config-in-place
     command: |

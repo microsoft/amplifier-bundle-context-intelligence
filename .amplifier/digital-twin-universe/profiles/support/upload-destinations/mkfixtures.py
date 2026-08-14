@@ -34,13 +34,43 @@ _EVENTS = [
     ("tool:result", "2026-02-01T00:00:02.000+00:00", {"tool_name": "bash"}),
 ]
 
+# Legacy (hooks-logging) discovery classifies any session with NO terminal
+# event as live/in-progress and SKIPS it -- see logging_hook_format.py:
+# _has_terminal_event / _TERMINAL_EVENTS = {"session:end",
+# "orchestrator:complete", "execution:end"}. A finished, hook-logged session on
+# disk always closes with one of those; a fixture that omits it is not a
+# completed session, so every legacy fixture would be skipped and S6 would
+# discover 0 sessions (exercising nothing). Append a real terminal event so the
+# legacy fixtures are genuinely complete and discoverable.
+_LEGACY_TERMINAL = (
+    "session:end",
+    "2026-02-01T00:00:03.000+00:00",
+    {"status": "completed"},
+)
+
 
 def write_native(root: Path, project: str, sid: str, working_dir: str) -> str:
     ws = derive_workspace(working_dir)
     d = root / project / "sessions" / sid / "context-intelligence"
     d.mkdir(parents=True, exist_ok=True)
+    # Real CI-native events carry the timestamp BOTH at the top level and
+    # inside `data` (verified against genuine ~/.amplifier/projects/**/
+    # context-intelligence/events.jsonl, whose data keys are
+    # metadata,parent,parent_id,raw,session_id,timestamp). The ingest server
+    # hard-requires `data.timestamp` -- see context_intelligence_server/
+    # main.py:_validate_data_timestamp, whose own docstring records
+    # "Real Amplifier clients always supply data.timestamp (verified:
+    # 224,530 events on disk, 0 missing)". A fixture that omits it is not a
+    # native event, so reproduce the real shape here.
     lines = [
-        json.dumps({"event": name, "timestamp": ts, "workspace": ws, "data": data})
+        json.dumps(
+            {
+                "event": name,
+                "timestamp": ts,
+                "workspace": ws,
+                "data": {**data, "timestamp": ts, "session_id": sid},
+            }
+        )
         for name, ts, data in _EVENTS
     ]
     (d / "events.jsonl").write_text("\n".join(lines) + "\n", encoding="utf-8")
@@ -66,7 +96,10 @@ def write_legacy(root: Path, project: str, sid: str, working_dir: str) -> str:
     d = root / project / "sessions" / sid
     d.mkdir(parents=True, exist_ok=True)
     lines = []
-    for name, ts, data in _EVENTS:
+    # The session:start body plus a terminal session:end make this a COMPLETE
+    # legacy session; without the terminal event discovery skips it as
+    # live/in-progress (see _LEGACY_TERMINAL above).
+    for name, ts, data in (*_EVENTS, _LEGACY_TERMINAL):
         payload = dict(data)
         if name == "session:start":
             payload["working_dir"] = working_dir
