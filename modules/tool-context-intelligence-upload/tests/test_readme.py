@@ -51,15 +51,16 @@ class TestReadmeExists:
 
 
 class TestInstallationSection:
-    """Installation section with two subsections must be present."""
+    """Installation section documenting the standalone CLI must be present.
+
+    The module is CLI-only: there is no `mount()` and no `amplifier.modules`
+    entry point, so the README documents exactly one install path (the
+    standalone `uv tool install` / `uv pip install` commands) rather than a
+    separate "as an Amplifier module" / `amplifier bundle add` subsection.
+    """
 
     def test_installation_section_present(self, readme_content):
         assert "## Installation" in readme_content or "# Installation" in readme_content
-
-    def test_as_amplifier_module_subsection_present(self, readme_content):
-        # Must explain it's included in the bundle
-        assert "Amplifier module" in readme_content or "amplifier module" in readme_content.lower()
-        assert "bundle" in readme_content.lower()
 
     def test_standalone_cli_subsection_present(self, readme_content):
         assert "standalone" in readme_content.lower() or "CLI" in readme_content
@@ -75,14 +76,14 @@ class TestInstallationSection:
 
 
 class TestInstallationAccuracy:
-    """The Installation section must accurately reflect what each path installs.
+    """The Installation section documents the standalone CLI only.
 
-    ``amplifier bundle add`` brings this module into an Amplifier installation,
-    but the module ships no ``mount()`` and no ``amplifier.modules`` entry
-    point -- so bundle add never places ``context-intelligence-upload`` on
-    ``PATH``. Only the standalone `uv tool install` command does that. The
-    README must say this explicitly rather than implying the CLI comes from
-    the bundle.
+    This module ships no ``mount()`` and no ``amplifier.modules`` entry
+    point -- it is a console-script-only package. The old README used to
+    also describe an "As an Amplifier module" / ``amplifier bundle add``
+    path, but that framing was irrelevant (bundle add never puts the CLI on
+    ``PATH``) and has been removed entirely. The README must not reintroduce
+    that framing.
     """
 
     UV_TOOL_INSTALL_CMD = (
@@ -90,15 +91,12 @@ class TestInstallationAccuracy:
         "@ git+https://github.com/microsoft/amplifier-bundle-context-intelligence@main"
         '#subdirectory=modules/tool-context-intelligence-upload"'
     )
-    BUNDLE_ADD_NO_PATH_CAVEAT = (
-        "does not place the `context-intelligence-upload` command on your `PATH`"
-    )
 
     def test_uv_tool_install_command_present(self, readme_content):
         assert self.UV_TOOL_INSTALL_CMD in readme_content
 
-    def test_bundle_add_does_not_install_cli_on_path(self, readme_content):
-        assert self.BUNDLE_ADD_NO_PATH_CAVEAT in readme_content
+    def test_bundle_add_framing_absent(self, readme_content):
+        assert "amplifier bundle add" not in readme_content
 
 
 class TestCLIUsageSection:

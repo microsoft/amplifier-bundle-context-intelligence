@@ -762,7 +762,7 @@ print('YAML validates OK')
 - [amplifier-context-intelligence](https://github.com/microsoft/amplifier-context-intelligence) — the CI server (Neo4j + blob storage + dashboard)
 - [amplifier-app-cli](https://github.com/microsoft/amplifier-app-cli) — CLI that sends `project_slug` used for workspace resolution
 - [amplifier](https://github.com/microsoft/amplifier) — the Amplifier framework
-- [`context-intelligence-upload`](modules/tool-context-intelligence-upload/README.md#installation) — standalone CLI to replay `events.jsonl` sessions to the CI server; **not** installed by `amplifier bundle add` — install it with `uv tool install "amplifier-module-tool-context-intelligence-upload @ git+https://github.com/microsoft/amplifier-bundle-context-intelligence@main#subdirectory=modules/tool-context-intelligence-upload"`
+- [`context-intelligence-upload`](modules/tool-context-intelligence-upload/README.md#installation) — standalone CLI to replay `events.jsonl` sessions to the CI server; install it with `uv tool install "amplifier-module-tool-context-intelligence-upload @ git+https://github.com/microsoft/amplifier-bundle-context-intelligence@main#subdirectory=modules/tool-context-intelligence-upload"`
 
 
 ## Contributing
