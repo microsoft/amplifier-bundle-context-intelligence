@@ -25,45 +25,20 @@ from amplifier_module_hook_context_intelligence.config_resolver import (
     Destination,
     HookConfigResolver,
 )
-from context_intelligence.config import SETTINGS_PATH, _expand_env_placeholders
+from context_intelligence.config import (
+    SETTINGS_PATH,
+    _expand_env_placeholders,
+    read_hook_config_block,
+)
 
 from .keys_env import load_keys_env_into_environ
 
-_HOOK_OVERRIDE_KEY = "hook-context-intelligence"
 _EXPANDABLE_DESTINATION_FIELDS = ("url", "api_key", "auth_resource")
 _EXPANDABLE_LEGACY_KEYS = ("context_intelligence_server_url", "context_intelligence_api_key")
 
 
 class DestinationSelectionError(Exception):
     """Raised when a destination cannot be resolved to exactly one entry."""
-
-
-def _read_hook_config_block(settings_path: Path) -> dict[str, Any]:
-    """Return ``overrides.hook-context-intelligence.config`` from *settings_path*.
-
-    Returns ``{}`` when the file is missing, unparseable, or has no such
-    block -- a malformed settings.yaml must never crash an upload run.
-    """
-    if not settings_path.is_file():
-        return {}
-
-    try:
-        import yaml
-
-        data = yaml.safe_load(settings_path.read_text(encoding="utf-8"))
-    except Exception:
-        return {}
-
-    if not isinstance(data, dict):
-        return {}
-    overrides = data.get("overrides")
-    if not isinstance(overrides, dict):
-        return {}
-    hook_override = overrides.get(_HOOK_OVERRIDE_KEY)
-    if not isinstance(hook_override, dict):
-        return {}
-    config = hook_override.get("config")
-    return config if isinstance(config, dict) else {}
 
 
 def _expand_hook_config(config: dict[str, Any]) -> dict[str, Any]:
@@ -127,7 +102,7 @@ def read_destinations(settings_path: Path = SETTINGS_PATH) -> dict[str, Destinat
     malformed settings.yaml.
     """
     load_keys_env_into_environ()
-    config = _read_hook_config_block(settings_path)
+    config = read_hook_config_block(settings_path)
     if not config:
         return {}
     # coordinator=None is safe because HookConfigResolver only reaches the
