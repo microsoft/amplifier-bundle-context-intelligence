@@ -116,9 +116,7 @@ def write_legacy(root: Path, project: str, sid: str, working_dir: str) -> str:
             )
         )
     (d / "events.jsonl").write_text("\n".join(lines) + "\n", encoding="utf-8")
-    (d / "metadata.json").write_text(
-        json.dumps({"working_dir": working_dir}), encoding="utf-8"
-    )
+    (d / "metadata.json").write_text(json.dumps({"working_dir": working_dir}), encoding="utf-8")
     return ws
 
 
