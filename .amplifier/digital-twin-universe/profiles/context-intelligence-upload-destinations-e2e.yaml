@@ -1,0 +1,485 @@
+# context-intelligence-upload-destinations-e2e.yaml
+#
+# RUNNABLE amplifier-digital-twin profile (base + provision + manual_validation_steps).
+# End-to-end proof of the standalone `context-intelligence-upload` CLI's
+# multi-destination surface: settings.yaml-driven destinations, `${VAR}`
+# expansion from ~/.amplifier/keys.env, zero-arg / --destination / interactive
+# selection, capture-time include/exclude filtering across BOTH the CI-native
+# and legacy `--format logging-hook` layouts, idempotency, TTY-aware progress
+# rendering, and every documented failure mode -- each asserted against REAL
+# Context-Intelligence servers, never mocked.
+#
+# Modeled directly on context-intelligence-upload-format-validation.yaml: same
+# install-from-Gitea decision, same TOOL_PY resolution discipline, same
+# runtime-derived-values discipline (nothing measured on any host is pinned;
+# every workspace slug and count consumed by a scenario is computed AT RUNTIME
+# by the tool's own code against the shipped fixtures). Extended here to TWO
+# backends, and carrying the `use_settings` helper every scenario script calls
+# to switch which settings.yaml variant is active before it runs.
+#
+# TOPOLOGY (three containers -- there is no shared-include mechanism in the DTU
+# profile schema, so this is spelled out fully, same as every other
+# server-backed profile in this directory):
+#   host: TWO real Context-Intelligence servers (Neo4j + API), each stood up
+#         NON-COMPOSE by launching THIS BUNDLE'S OWN
+#         context-intelligence-backend.yaml DTU profile, launched FRESH, on
+#         distinct HOST_PORTs -- two FULLY SEPARATE Incus containers (separate
+#         Neo4j, separate context-intelligence-server process) so events can
+#         NEVER cross between them. Both are reachable from this DTU at the
+#         Incus host-gateway IP (find it per-run, see HOW TO RUN below).
+#   DTU:  the standalone `context-intelligence-upload` CLI, installed from the
+#         branch under test (resolved through Gitea -- see DESIGN DECISION
+#         below, copied verbatim from context-intelligence-upload-format-
+#         validation.yaml). No `amplifier` CLI session runs here -- this
+#         profile drives the upload tool directly, never a full amplifier
+#         bundle load.
+#
+# HOW TO RUN (three-step; each backend is REUSED across every readiness poll
+# and every scenario in this profile, never relaunched or duplicated)
+#   # 1. stand up ALL THREE backends first, FRESH, on distinct host ports (see
+#   #    context-intelligence-backend.yaml for the full non-compose recipe +
+#   #    pinned versions). Backend C is the DEDICATED clean backend for the
+#   #    filter-parity scenarios S5/S6: they make ABSOLUTE assertions ("SKIP
+#   #    workspace absent, only KEEP present"), which are only satisfiable on a
+#   #    backend no other scenario writes to -- A and B both receive WS_SKIP via
+#   #    the dual-destination include "**" in S3/S4, so S5/S6 cannot share them:
+#   amplifier-digital-twin launch \
+#     .amplifier/digital-twin-universe/profiles/context-intelligence-backend.yaml \
+#     --name ci-dest-backend-a --var HOST_PORT=38001 \
+#     --var NEO4J_PASSWORD=<pw-a> --var API_KEY=<token-a> \
+#     --var SERVER_REF=766a9691850e6d7c29e7d4e90b537e88e69736bf
+#   amplifier-digital-twin launch \
+#     .amplifier/digital-twin-universe/profiles/context-intelligence-backend.yaml \
+#     --name ci-dest-backend-b --var HOST_PORT=38002 \
+#     --var NEO4J_PASSWORD=<pw-b> --var API_KEY=<token-b> \
+#     --var SERVER_REF=766a9691850e6d7c29e7d4e90b537e88e69736bf
+#   amplifier-digital-twin launch \
+#     .amplifier/digital-twin-universe/profiles/context-intelligence-backend.yaml \
+#     --name ci-dest-backend-c --var HOST_PORT=38003 \
+#     --var NEO4J_PASSWORD=<pw-c> --var API_KEY=<token-c> \
+#     --var SERVER_REF=766a9691850e6d7c29e7d4e90b537e88e69736bf
+#   #    Confirm all three are reachable from the Incus host-gateway IP (find it
+#   #    via `incus list` or `ip route | grep default` inside this DTU once
+#   #    launched):
+#   #      curl -sf http://<incus-gateway-ip>:38001/status
+#   #      curl -sf http://<incus-gateway-ip>:38002/status
+#   #      curl -sf http://<incus-gateway-ip>:38003/status
+#   # 2. export a GitHub token so the branch install can authenticate, and
+#   #    launch this profile:
+#   export GH_TOKEN=$(gh auth token)
+#   amplifier-digital-twin launch \
+#     .amplifier/digital-twin-universe/profiles/context-intelligence-upload-destinations-e2e.yaml \
+#     --name ci-upload-dest-e2e \
+#     --var gitea_host=<gitea-base-url> \
+#     --var server_a_url=http://<incus-gateway-ip>:38001 \
+#     --var server_a_token=<token-a> \
+#     --var server_b_url=http://<incus-gateway-ip>:38002 \
+#     --var server_b_token=<token-b> \
+#     --var server_c_url=http://<incus-gateway-ip>:38003 \
+#     --var server_c_token=<token-c>
+#   # 3. wait for `check-readiness` to pass (this gates ONLY the environment --
+#   #    CLI installed, both servers reachable AND fresh, fixtures + config in
+#   #    place -- it does NOT run the scenario matrix), then run each scenario
+#   #    as an explicit exec step, IN ORDER (S1 first -- it asserts server B is
+#   #    still untouched; S9 is safe at any point):
+#   for s in s1_zero_arg s2_keys_env s3_interactive_pick s4_named_destination \
+#            s5_filter_native s6_filter_legacy s7_idempotency s8_progress \
+#            s9_failure_modes; do
+#     amplifier-digital-twin exec ci-upload-dest-e2e -- \
+#       bash /root/dest-e2e/scenarios/${s}.sh
+#   done
+#
+# REQUIRED --var (the DTU substitution engine does exact ${VAR} text-replacement
+# with NO fallback/default syntax -- confirmed against the engine's `_VAR_RE`
+# regex, which has no `:-default` support -- so every var below must be passed
+# explicitly at launch):
+#   --var gitea_host=<url>        Gitea mirror base URL (e.g. http://localhost:10110)
+#   --var server_a_url=<url>      Context-Intelligence server A URL, from the
+#                                 Incus host-gateway IP of backend A above --
+#                                 NEVER the host's own :8000.
+#   --var server_a_token=<token>  Bearer token for backend A's static API_KEY
+#   --var server_b_url=<url>      Context-Intelligence server B URL, from the
+#                                 Incus host-gateway IP of backend B above.
+#   --var server_b_token=<token>  Bearer token for backend B's static API_KEY
+#   --var server_c_url=<url>      Context-Intelligence server C URL (DEDICATED
+#                                 clean backend for S5/S6 filter-parity), from
+#                                 the Incus host-gateway IP of backend C above.
+#   --var server_c_token=<token>  Bearer token for backend C's static API_KEY
+#
+# DESIGN DECISION (resolve the convention tension once, up front -- identical
+# reasoning to context-intelligence-upload-format-validation.yaml, repeated
+# here because there is no shared-include mechanism):
+#   The bundle convention elsewhere in this directory is "load through the
+#   Amplifier CLI via `amplifier bundle add` from a Gitea mirror." But the
+#   artifact under test here is a STANDALONE CLI (`context-intelligence-upload`),
+#   whose documented real-user install (modules/tool-context-intelligence-upload/
+#   README.md, "As a standalone CLI") is `uv tool install "... @ git+https://
+#   github.com/.../amplifier-bundle-context-intelligence@main#subdirectory=
+#   modules/tool-context-intelligence-upload"`. `amplifier bundle add` does NOT
+#   put the `context-intelligence-upload` console script on PATH -- it only
+#   registers the bundle's behaviors/agents for an `amplifier` session, which
+#   this profile does not start. So the honest reconciliation for THIS profile
+#   is:
+#
+#   Install the upload CLI from the branch code, resolved through Gitea, via
+#   the tool's own `uv tool install` path -- and exercise the ACTUAL
+#   `context-intelligence-upload` CLI end to end, across both backends:
+#     1. The profile installs `@main` (the permanent, post-merge form) plus the
+#        same `git config --global url."${gitea_host}/...".insteadOf
+#        "https://github.com/..."` redirect the other profiles use, so a
+#        developer's local branch (mirrored into Gitea) is what actually installs.
+#     2. Because `uv` has a "GitHub fast path" that can bypass the git-level
+#        `insteadOf` redirect for `github.com` URLs, the profile EXPORTS
+#        `UV_NO_GITHUB_FAST_PATH=true` before `uv tool install` (documented in
+#        @digital-twin-universe:docs/profiles.md under `allow_uv_github_fast_path`).
+#     3. Once installed, the profile resolves TOOL_PY -- the python interpreter
+#        INSIDE the tool's own uv-managed venv (`$(uv tool dir)/<pkg>/bin/python`)
+#        -- and uses it (never the system python3) to run the tool's own
+#        `derive_workspace` when generating runtime fixtures (mkfixtures.py),
+#        keeping the fixture-vs-transform relationship exact: the SAME code
+#        under test produces every "expected" workspace slug consumed by the
+#        scenario scripts, so nothing here is hand-authored or pinned.
+#     This keeps both truths intact: the CLI under test is exercised through
+#     its real, documented install path, and the code under test is the
+#     BRANCH (via Gitea), not upstream GitHub `main`.
+#
+# NOTE ON SCOPE: readiness gates ONLY the environment (CLI present, both
+# servers reachable AND fresh, fixtures + config in place) -- it deliberately
+# does NOT run the nine-scenario matrix. Each scenario is destructive/stateful
+# in a way the others depend on running in order (S1 must run first because it
+# asserts server B is still completely untouched; later scenarios build on
+# state S1..S_{n-1} left behind), which is incompatible with `check-readiness`
+# re-running a check on every poll. The matrix runs as explicit
+# `manual_validation_steps` exec entries instead -- see HOW TO RUN above.
+
+name: context-intelligence-upload-destinations-e2e
+description: >
+  End-to-end proof of the standalone `context-intelligence-upload` CLI's
+  multi-destination surface (settings.yaml destinations, ${VAR} expansion from
+  keys.env, zero-arg/--destination/interactive selection, capture-time
+  include/exclude filtering across CI-native and legacy layouts, idempotency,
+  TTY-aware progress rendering, and every documented failure mode) against TWO
+  real, fully isolated Context-Intelligence servers. Installs the upload CLI
+  from the branch under test via `uv tool install`, resolved to a Gitea mirror
+  (never GitHub upstream), resolves the tool's own python interpreter
+  (TOOL_PY), and generates runtime fixtures with the tool's own
+  `derive_workspace` so every workspace slug and count asserted by the nine
+  scenario scripts is computed at runtime, never a pinned/committed literal.
+
+base:
+  image: ubuntu:24.04
+
+passthrough:
+  allow_external: true
+  services:
+    - name: github
+      key_env: GH_TOKEN
+
+provision:
+  files:
+    - src: ./support/upload-destinations/dest_assert.sh
+      dest: /root/dest-e2e/dest_assert.sh
+      mode: "0755"
+    - src: ./support/upload-destinations/mkfixtures.py
+      dest: /root/dest-e2e/mkfixtures.py
+      mode: "0644"
+    - src: ./support/upload-destinations/scenarios/
+      dest: /root/dest-e2e/
+      recursive: true
+      # DTU directory-push basename rule (@digital-twin-universe:docs/api-reference.md):
+      # pushing ./support/upload-destinations/scenarios/ to /root/dest-e2e/ lands
+      # it at /root/dest-e2e/scenarios/... (basename preserved), so every
+      # scenario script lands at /root/dest-e2e/scenarios/<name>.sh -- NOT
+      # directly at /root/dest-e2e/<name>.sh.
+
+  setup_cmds:
+    # (1) base tooling + uv + PATH wiring. PATH is written into BOTH
+    # /etc/environment and /root/.bashrc so every subsequent setup_cmds entry --
+    # each its own `bash -lc` login-shell invocation -- picks up /root/.local/bin
+    # automatically.
+    - |
+      apt-get update && apt-get install -y git curl python3 jq util-linux
+      curl -LsSf https://astral.sh/uv/install.sh | sh
+      echo 'export PATH="/root/.local/bin:$PATH"' >> /root/.bashrc
+      echo 'PATH=/root/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin' >> /etc/environment
+
+    # (2) GH_TOKEN netrc + narrow git insteadOf redirect (only the
+    # context-intelligence bundle self-references -> mirror), copied from
+    # context-intelligence-upload-format-validation.yaml.
+    - |
+      if [ -n "${GH_TOKEN:-}" ]; then
+        echo "machine github.com login x-token-auth password $GH_TOKEN" > /root/.netrc
+        chmod 600 /root/.netrc
+        git config --global credential.helper 'store'
+      fi
+
+    - |
+      git config --global \
+        url."${gitea_host}/microsoft/amplifier-bundle-context-intelligence".insteadOf \
+        "https://github.com/microsoft/amplifier-bundle-context-intelligence"
+      echo "insteadOf:"; git config --global --get-regexp insteadOf
+
+    # (3) DESIGN DECISION: install the STANDALONE upload CLI (not `amplifier
+    # bundle add`, which does not expose this console script on PATH) via its
+    # own documented `uv tool install` path. UV_NO_GITHUB_FAST_PATH=true forces
+    # uv down the real git-fetch path so the insteadOf redirect above actually
+    # applies -- otherwise uv's GitHub fast path would resolve @main straight
+    # from upstream GitHub, silently bypassing the Gitea mirror of the branch
+    # under test.
+    - |
+      export UV_NO_GITHUB_FAST_PATH=true
+      uv tool install \
+        "amplifier-module-tool-context-intelligence-upload @ git+https://github.com/microsoft/amplifier-bundle-context-intelligence@main#subdirectory=modules/tool-context-intelligence-upload"
+
+    # (4) Resolve TOOL_PY -- the python interpreter INSIDE the tool's own
+    # uv-managed venv (never system python3) -- fail loud if it can't import
+    # the installed package, then persist it for every later setup_cmds entry
+    # (each its own shell) and for readiness checks to source.
+    - |
+      TOOL_PY="$(uv tool dir)/amplifier-module-tool-context-intelligence-upload/bin/python"
+      "$TOOL_PY" -c "import amplifier_module_tool_context_intelligence_upload" \
+        || { echo "FATAL: TOOL_PY failed to import amplifier_module_tool_context_intelligence_upload: $TOOL_PY" >&2; exit 1; }
+      mkdir -p /root/dest-e2e
+      echo "TOOL_PY=$TOOL_PY" > /root/dest-e2e/tool_py.env
+      echo "== tool_py.env =="; cat /root/dest-e2e/tool_py.env
+
+    # (5) Generate the runtime fixture tree (native + legacy, KEEP + SKIP
+    # working dirs) using the tool's OWN derive_workspace via TOOL_PY -- never
+    # a hand-authored or pre-committed workspace slug. mkfixtures.py prints a
+    # KEY=VALUE block that every downstream scenario sources via fixtures.env.
+    - |
+      source /root/dest-e2e/tool_py.env
+      mkdir -p /root/.amplifier/projects
+      "$TOOL_PY" /root/dest-e2e/mkfixtures.py /root/.amplifier/projects > /root/dest-e2e/fixtures.env
+      echo "== fixtures.env =="; cat /root/dest-e2e/fixtures.env
+
+    # (6) keys.env -- SECRETS ONLY. TEAM_CI_KEY is deliberately NEVER exported
+    # into any shell; scenario S2 proves it is read from this file alone.
+    - |
+      mkdir -p /root/.amplifier
+      cat > /root/.amplifier/keys.env << KEYSEOF
+      TEAM_CI_KEY=${server_a_token}
+      KEYSEOF
+      chmod 600 /root/.amplifier/keys.env
+      echo "== keys.env written (values redacted above) =="
+
+    # (7) Four settings.yaml variants. Filters are ANCHORED ABSOLUTE gitignore
+    # patterns (pathspec gitignore semantics): include
+    # "/home/amplifier/workspaces/keep-me/" matches the keep dir and its
+    # contents; exclude "**/skip-me/" removes the skip dir wherever it appears
+    # (the match key carries a trailing slash, matching a directory).
+    - |
+      mkdir -p /root/dest-e2e/settings
+
+      cat > /root/dest-e2e/settings/none.yaml << 'NONEEOF'
+      overrides:
+        hook-context-intelligence:
+          config: {}
+      NONEEOF
+
+      cat > /root/dest-e2e/settings/single.yaml << 'SINGLEEOF'
+      overrides:
+        hook-context-intelligence:
+          config:
+            destinations:
+              solo:
+                url: ${server_a_url}
+                api_key: ${server_a_token}
+                include:
+                  - "/home/amplifier/workspaces/keep-me/"
+                exclude:
+                  - "**/skip-me/"
+      SINGLEEOF
+
+      # single_c.yaml: the SAME one-destination filter shape as single.yaml,
+      # but pointed at the DEDICATED clean backend C. S5/S6 (filter parity)
+      # assert ABSOLUTELY that WS_SKIP is absent and only WS_KEEP is present --
+      # only satisfiable on a backend no other scenario writes to. A and B both
+      # receive WS_SKIP via the dual include "**" in S3/S4, so S5/S6 use C.
+      cat > /root/dest-e2e/settings/single_c.yaml << 'SINGLECEOF'
+      overrides:
+        hook-context-intelligence:
+          config:
+            destinations:
+              solo:
+                url: ${server_c_url}
+                api_key: ${server_c_token}
+                include:
+                  - "/home/amplifier/workspaces/keep-me/"
+                exclude:
+                  - "**/skip-me/"
+      SINGLECEOF
+
+      # single_varkey.yaml: api_key is the LITERAL text "${TEAM_CI_KEY}" -- a
+      # quoted heredoc delimiter stops bash from expanding it while writing
+      # this file (TEAM_CI_KEY is not a declared DTU --var, so the profile
+      # engine's ${VAR} substitution also leaves it untouched); only the tool's
+      # OWN settings loader expands it, at runtime, from ~/.amplifier/keys.env.
+      cat > /root/dest-e2e/settings/single_varkey.yaml << 'SINGLEVAREOF'
+      overrides:
+        hook-context-intelligence:
+          config:
+            destinations:
+              solo:
+                url: ${server_a_url}
+                api_key: "${TEAM_CI_KEY}"
+                include:
+                  - "/home/amplifier/workspaces/keep-me/"
+                exclude:
+                  - "**/skip-me/"
+      SINGLEVAREOF
+
+      cat > /root/dest-e2e/settings/dual.yaml << 'DUALEOF'
+      overrides:
+        hook-context-intelligence:
+          config:
+            destinations:
+              alpha:
+                url: ${server_a_url}
+                api_key: ${server_a_token}
+                include:
+                  - "**"
+              beta:
+                url: ${server_b_url}
+                api_key: ${server_b_token}
+                include:
+                  - "**"
+      DUALEOF
+
+      echo "== settings variants =="
+      ls -la /root/dest-e2e/settings/
+
+    # (8) env.sh -- runtime env exported for every scenario script, plus the
+    # `use_settings` helper the scenarios call to switch the active
+    # settings.yaml variant. NOTE: server coordinates here are
+    # VERIFICATION-ONLY (used by curl/Cypher assertions in dest_assert.sh);
+    # the tool itself is configured exclusively through settings.yaml + keys.env.
+    - |
+      source /root/dest-e2e/fixtures.env
+      source /root/dest-e2e/tool_py.env
+      # Quoted heredoc delimiter: the DTU profile engine has ALREADY
+      # substituted ${server_a_url}/${server_a_token}/${server_b_url}/
+      # ${server_b_token} to literal values below (declared --var), so
+      # quoting only affects the genuine shell syntax in use_settings()
+      # ($1, $variant, ${variant}) -- it must survive to disk unevaluated so
+      # it works correctly when a scenario script later sources this file.
+      cat > /root/dest-e2e/env.sh << ENVEOF
+      export SRV_A_URL="${server_a_url}"
+      export SRV_A_TOKEN="${server_a_token}"
+      export SRV_B_URL="${server_b_url}"
+      export SRV_B_TOKEN="${server_b_token}"
+      export SRV_C_URL="${server_c_url}"
+      export SRV_C_TOKEN="${server_c_token}"
+      export TOOL_PY="$TOOL_PY"
+      export WS_KEEP="${WS_KEEP}"
+      export WS_SKIP="${WS_SKIP}"
+      ENVEOF
+      cat >> /root/dest-e2e/env.sh << 'ENVFUNCEOF'
+      export PATH="/root/.local/bin:$PATH"
+
+      use_settings() {
+        local variant="$1"
+        case "$variant" in
+          none|single|single_varkey|single_c|dual) ;;
+          *) echo "FATAL: use_settings: unknown variant '$variant' (expected none|single|single_varkey|single_c|dual)" >&2; exit 1 ;;
+        esac
+        cp "/root/dest-e2e/settings/${variant}.yaml" /root/.amplifier/settings.yaml
+      }
+      ENVFUNCEOF
+      chmod 644 /root/dest-e2e/env.sh
+      echo "== env.sh =="; cat /root/dest-e2e/env.sh
+
+    # (9) Fail-loud smoke: the branch CLI is on PATH and advertises the new
+    # multi-destination surface.
+    - |
+      export PATH="/root/.local/bin:$PATH"
+      context-intelligence-upload --help >/dev/null
+      context-intelligence-upload --help | grep -q -- '--destination'
+      context-intelligence-upload --help | grep -q -- '--auto-approve'
+      echo "ready: context-intelligence-upload on PATH, advertises --destination and --auto-approve"
+
+# -----------------------------------------------------------------------------
+# READINESS (deterministic, poll-safe, no LLM). Gates ONLY the environment --
+# CLI installed and advertising the new surface, both servers reachable AND
+# fresh, fixtures + config in place. Does NOT run the scenario matrix -- see
+# NOTE ON SCOPE in the header comment and manual_validation_steps below.
+# -----------------------------------------------------------------------------
+readiness:
+  - name: upload-cli-advertises-new-surface
+    command: >
+      context-intelligence-upload --help | grep -q -- '--destination'
+      && context-intelligence-upload --help | grep -q -- '--auto-approve'
+      && echo ready
+
+  - name: all-servers-reachable
+    command: |
+      source /root/dest-e2e/env.sh
+      curl -sf "$SRV_A_URL/status" \
+        | python3 -c "import sys,json;d=json.load(sys.stdin);assert d['status']=='ok' and d['neo4j_connected'];print('server A ready')"
+      curl -sf "$SRV_B_URL/status" \
+        | python3 -c "import sys,json;d=json.load(sys.stdin);assert d['status']=='ok' and d['neo4j_connected'];print('server B ready')"
+      curl -sf "$SRV_C_URL/status" \
+        | python3 -c "import sys,json;d=json.load(sys.stdin);assert d['status']=='ok' and d['neo4j_connected'];print('server C ready')"
+      echo "ready: all three servers reachable and neo4j_connected"
+
+  - name: all-backends-fresh
+    # Hard isolation prerequisite: every scenario's growth/no-growth logic
+    # assumes empty backends at the start of the run. Backend C in particular
+    # MUST be pristine -- S5/S6 assert the ABSOLUTE absence of WS_SKIP on it.
+    command: |
+      source /root/dest-e2e/env.sh
+      source /root/dest-e2e/dest_assert.sh
+      assert_fresh_at "$SRV_A_URL" "$SRV_A_TOKEN"
+      assert_fresh_at "$SRV_B_URL" "$SRV_B_TOKEN"
+      assert_fresh_at "$SRV_C_URL" "$SRV_C_TOKEN"
+      echo "ready: all three backends fresh (count_all==0)"
+
+  - name: fixtures-and-config-in-place
+    command: |
+      source /root/dest-e2e/env.sh
+      source /root/dest-e2e/fixtures.env
+      [ -n "$WS_KEEP" ] || { echo "FATAL: WS_KEEP empty" >&2; exit 1; }
+      [ -n "$WS_SKIP" ] || { echo "FATAL: WS_SKIP empty" >&2; exit 1; }
+      [ -f /root/.amplifier/keys.env ] || { echo "FATAL: keys.env missing" >&2; exit 1; }
+      find /root/.amplifier/projects -mindepth 1 -maxdepth 1 -type d | grep -q . \
+        || { echo "FATAL: no native fixture project dirs found under /root/.amplifier/projects" >&2; exit 1; }
+      find /root/.amplifier/projects -name events.jsonl -not -path '*/context-intelligence/*' | grep -q . \
+        || { echo "FATAL: no legacy events.jsonl found" >&2; exit 1; }
+      echo "ready: fixtures and config in place (WS_KEEP=$WS_KEEP WS_SKIP=$WS_SKIP)"
+
+# -----------------------------------------------------------------------------
+# MANUAL VALIDATION STEPS (the nine-scenario matrix). Run each with:
+#   amplifier-digital-twin exec <instance-id> -- bash /root/dest-e2e/scenarios/<script>
+# Each script prints exactly one `PASS S<n>: ...` line on success and FATALs
+# (non-zero exit, distinct exit code per failure class) otherwise. ORDER
+# MATTERS: S1 must run first -- it asserts server B is still completely
+# untouched, a precondition every later scenario's own assertions build on.
+# S9's failure-mode checks are safe to run at any point in the sequence.
+# -----------------------------------------------------------------------------
+manual_validation_steps:
+  - name: s1-zero-arg-gesture
+    command: bash /root/dest-e2e/scenarios/s1_zero_arg.sh
+
+  - name: s2-keys-env-var-expansion
+    command: bash /root/dest-e2e/scenarios/s2_keys_env.sh
+
+  - name: s3-interactive-pick
+    command: bash /root/dest-e2e/scenarios/s3_interactive_pick.sh
+
+  - name: s4-named-destination
+    command: bash /root/dest-e2e/scenarios/s4_named_destination.sh
+
+  - name: s5-filter-native
+    command: bash /root/dest-e2e/scenarios/s5_filter_native.sh
+
+  - name: s6-filter-legacy
+    command: bash /root/dest-e2e/scenarios/s6_filter_legacy.sh
+
+  - name: s7-idempotency
+    command: bash /root/dest-e2e/scenarios/s7_idempotency.sh
+
+  - name: s8-progress
+    command: bash /root/dest-e2e/scenarios/s8_progress.sh
+
+  - name: s9-failure-modes
+    command: bash /root/dest-e2e/scenarios/s9_failure_modes.sh

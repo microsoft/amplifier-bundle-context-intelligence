@@ -315,7 +315,7 @@ class TestCliMainEntraMode:
                 "amplifier_module_tool_context_intelligence_upload.cli.run_upload",
                 return_value=mock_result,
             ) as mock_upload,
-            patch("amplifier_module_tool_context_intelligence_upload.cli.ProgressTracker"),
+            patch("amplifier_module_tool_context_intelligence_upload.cli.TwoLevelProgressRenderer"),
             patch(
                 "context_intelligence.auth._make_cli_credential",
                 return_value=fake_cred,
@@ -377,7 +377,7 @@ class TestCliMainEntraMode:
                 "amplifier_module_tool_context_intelligence_upload.cli.run_upload",
                 side_effect=_capture_run_upload,
             ),
-            patch("amplifier_module_tool_context_intelligence_upload.cli.ProgressTracker"),
+            patch("amplifier_module_tool_context_intelligence_upload.cli.TwoLevelProgressRenderer"),
             patch(
                 "context_intelligence.auth._make_cli_credential",
                 return_value=fake_cred,
@@ -435,7 +435,7 @@ class TestCliMainEntraMode:
                 "amplifier_module_tool_context_intelligence_upload.cli.run_upload",
                 side_effect=_capture,
             ),
-            patch("amplifier_module_tool_context_intelligence_upload.cli.ProgressTracker"),
+            patch("amplifier_module_tool_context_intelligence_upload.cli.TwoLevelProgressRenderer"),
             pytest.raises(SystemExit),
         ):
             main()
@@ -444,3 +444,288 @@ class TestCliMainEntraMode:
         strategy = captured_strategy[0]
         assert isinstance(strategy, ApiKeyAuth)
         assert strategy.headers() == {"Authorization": "Bearer sk-static"}
+
+
+# ---------------------------------------------------------------------------
+# main() -- auth_strategy built from the SELECTED DESTINATION's own auth
+# config (destination.auth_mode / destination.auth_resource / destination.api_key),
+# with NO --auth-mode / --auth-resource / --server-url CLI flags at all.
+#
+# This is distinct from TestCliMainEntraMode above, which drives auth purely
+# via CLI flags on the explicit-connection path (Tiers 1/2). These tests
+# exercise Tier 3 (_resolve_connection's destinations-map branch, cli.py
+# ~719-727) where the destination itself is the sole source of auth config.
+# ---------------------------------------------------------------------------
+
+
+def _destination_auth_dest(**overrides: Any) -> Any:
+    """Build a hook Destination for destination-configured-auth CLI tests."""
+    from amplifier_module_hook_context_intelligence.config_resolver import Destination
+
+    fields: dict[str, Any] = {
+        "name": "team",
+        "url": "https://ci.team",
+        "api_key": "",
+        "include": (),
+        "exclude": (),
+    }
+    fields.update(overrides)
+    return Destination(**fields)
+
+
+class TestDestinationConfiguredAuth:
+    """main() must build auth_strategy from the selected destination's own
+    auth_mode/auth_resource/api_key -- not just from CLI flags -- when the
+    user supplies no --auth-mode/--auth-resource/--server-url at all.
+    """
+
+    @pytest.fixture
+    def isolated_home(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+        """Isolate a main() run from the developer's real machine.
+
+        Mirrors tests/test_cli.py's isolated_home fixture (not shared via
+        conftest.py, so redefined locally here).
+        """
+        monkeypatch.setenv("HOME", str(tmp_path))
+        for var in (
+            "AMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_URL",
+            "AMPLIFIER_CONTEXT_INTELLIGENCE_API_KEY",
+            "AMPLIFIER_CONTEXT_INTELLIGENCE_AUTH_MODE",
+            "AMPLIFIER_CONTEXT_INTELLIGENCE_AUTH_RESOURCE",
+        ):
+            monkeypatch.delenv(var, raising=False)
+        monkeypatch.setattr(
+            "amplifier_module_tool_context_intelligence_upload.cli.progress_file_path",
+            lambda job_id, override=None: tmp_path / "progress.json",
+        )
+        return tmp_path
+
+    def test_destination_with_entra_auth_mode_builds_entra_strategy(
+        self, tmp_path: Path, isolated_home: Path
+    ) -> None:
+        """A single destination configured with auth_mode='entra' must produce
+        an EntraTokenAuth targeting that destination's auth_resource -- with
+        NO --auth-mode/--auth-resource/--server-url flags on the command line.
+        """
+        from context_intelligence.auth import EntraTokenAuth
+
+        from amplifier_module_tool_context_intelligence_upload.cli import main
+
+        fake_sessions = [(tmp_path, {"session_id": "s1"})]
+        mock_result = MagicMock()
+        mock_result.success = True
+        mock_result.events_skipped = 0
+        mock_result.events_unmapped = 0
+        mock_result.to_dict.return_value = {
+            "status": "completed",
+            "sessions_uploaded": 1,
+            "events_uploaded": 1,
+        }
+
+        destination = _destination_auth_dest(
+            name="team",
+            url="https://ci.team",
+            api_key="",
+            auth_mode="entra",
+            auth_resource="api://team-app",
+        )
+        fake_cred = FakeCredential("dest-entra-token")
+
+        captured_strategy: list[Any] = []
+
+        def _capture(**kwargs: Any) -> Any:
+            captured_strategy.append(kwargs.get("auth_strategy"))
+            return mock_result
+
+        with (
+            patch(
+                "sys.argv",
+                ["context-intelligence-upload", "--path", str(tmp_path), "-y"],
+            ),
+            patch(
+                "amplifier_module_tool_context_intelligence_upload.cli.read_destinations",
+                return_value={"team": destination},
+            ),
+            patch(
+                "amplifier_module_tool_context_intelligence_upload.cli.load_keys_env_into_environ"
+            ),
+            patch(
+                "amplifier_module_tool_context_intelligence_upload.cli.filter_sessions",
+                return_value=(fake_sessions, 0),
+            ),
+            patch(
+                "amplifier_module_tool_context_intelligence_upload.cli.resolve_upload_sessions",
+                return_value=_fake_scope(fake_sessions),
+            ),
+            patch(
+                "amplifier_module_tool_context_intelligence_upload.cli.run_upload",
+                side_effect=_capture,
+            ),
+            patch(
+                "context_intelligence.auth._make_cli_credential",
+                return_value=fake_cred,
+            ),
+            pytest.raises(SystemExit) as exc_info,
+        ):
+            main()
+
+        assert exc_info.value.code == 0
+        assert len(captured_strategy) == 1
+        strategy = captured_strategy[0]
+        assert isinstance(strategy, EntraTokenAuth)
+        # The strategy must target the DESTINATION's own auth_resource --
+        # not some other resource -- and produce a real bearer header from
+        # the injected credential.
+        headers = strategy.headers()
+        assert headers == {"Authorization": "Bearer dest-entra-token"}
+        assert fake_cred.calls[0] == ("api://team-app/.default",)
+
+    def test_destination_with_static_auth_builds_api_key_strategy(
+        self, tmp_path: Path, isolated_home: Path
+    ) -> None:
+        """A single destination with default auth_mode='static' and its own
+        api_key must produce an ApiKeyAuth carrying that api_key -- with NO
+        auth flags on the command line.
+        """
+        from context_intelligence.auth import ApiKeyAuth
+
+        from amplifier_module_tool_context_intelligence_upload.cli import main
+
+        fake_sessions = [(tmp_path, {"session_id": "s1"})]
+        mock_result = MagicMock()
+        mock_result.success = True
+        mock_result.events_skipped = 0
+        mock_result.events_unmapped = 0
+        mock_result.to_dict.return_value = {
+            "status": "completed",
+            "sessions_uploaded": 1,
+            "events_uploaded": 1,
+        }
+
+        destination = _destination_auth_dest(
+            name="team",
+            url="https://ci.team",
+            api_key="sekret",
+            # auth_mode defaults to "static"
+        )
+
+        captured_strategy: list[Any] = []
+
+        def _capture(**kwargs: Any) -> Any:
+            captured_strategy.append(kwargs.get("auth_strategy"))
+            return mock_result
+
+        with (
+            patch(
+                "sys.argv",
+                ["context-intelligence-upload", "--path", str(tmp_path), "-y"],
+            ),
+            patch(
+                "amplifier_module_tool_context_intelligence_upload.cli.read_destinations",
+                return_value={"team": destination},
+            ),
+            patch(
+                "amplifier_module_tool_context_intelligence_upload.cli.load_keys_env_into_environ"
+            ),
+            patch(
+                "amplifier_module_tool_context_intelligence_upload.cli.filter_sessions",
+                return_value=(fake_sessions, 0),
+            ),
+            patch(
+                "amplifier_module_tool_context_intelligence_upload.cli.resolve_upload_sessions",
+                return_value=_fake_scope(fake_sessions),
+            ),
+            patch(
+                "amplifier_module_tool_context_intelligence_upload.cli.run_upload",
+                side_effect=_capture,
+            ),
+            pytest.raises(SystemExit) as exc_info,
+        ):
+            main()
+
+        assert exc_info.value.code == 0
+        assert len(captured_strategy) == 1
+        strategy = captured_strategy[0]
+        assert isinstance(strategy, ApiKeyAuth)
+        assert strategy.headers() == {"Authorization": "Bearer sekret"}
+
+    def test_destination_auth_mode_is_authoritative_over_absent_flag(
+        self, tmp_path: Path, isolated_home: Path
+    ) -> None:
+        """Precedence proof: with NO --auth-mode flag at all (args.auth_mode is
+        None, so the local computed default would be 'static'), a destination
+        configured with auth_mode='entra' must still win -- proving the
+        destination's own auth_mode decides, not the static default.
+        """
+        from context_intelligence.auth import EntraTokenAuth
+
+        from amplifier_module_tool_context_intelligence_upload.cli import main
+
+        fake_sessions = [(tmp_path, {"session_id": "s1"})]
+        mock_result = MagicMock()
+        mock_result.success = True
+        mock_result.events_skipped = 0
+        mock_result.events_unmapped = 0
+        mock_result.to_dict.return_value = {
+            "status": "completed",
+            "sessions_uploaded": 1,
+            "events_uploaded": 1,
+        }
+
+        destination = _destination_auth_dest(
+            name="team",
+            url="https://ci.team",
+            api_key="",
+            auth_mode="entra",
+            auth_resource="api://precedence-check",
+        )
+        fake_cred = FakeCredential("precedence-token")
+
+        captured_strategy: list[Any] = []
+
+        def _capture(**kwargs: Any) -> Any:
+            captured_strategy.append(kwargs.get("auth_strategy"))
+            return mock_result
+
+        with (
+            patch(
+                # Deliberately NO --auth-mode / --auth-resource / --server-url:
+                # args.auth_mode is None, so the CLI-flag/env-derived local
+                # default ("static") is the ONLY other candidate in play.
+                "sys.argv",
+                ["context-intelligence-upload", "--path", str(tmp_path), "-y"],
+            ),
+            patch(
+                "amplifier_module_tool_context_intelligence_upload.cli.read_destinations",
+                return_value={"team": destination},
+            ),
+            patch(
+                "amplifier_module_tool_context_intelligence_upload.cli.load_keys_env_into_environ"
+            ),
+            patch(
+                "amplifier_module_tool_context_intelligence_upload.cli.filter_sessions",
+                return_value=(fake_sessions, 0),
+            ),
+            patch(
+                "amplifier_module_tool_context_intelligence_upload.cli.resolve_upload_sessions",
+                return_value=_fake_scope(fake_sessions),
+            ),
+            patch(
+                "amplifier_module_tool_context_intelligence_upload.cli.run_upload",
+                side_effect=_capture,
+            ),
+            patch(
+                "context_intelligence.auth._make_cli_credential",
+                return_value=fake_cred,
+            ),
+            pytest.raises(SystemExit) as exc_info,
+        ):
+            main()
+
+        assert exc_info.value.code == 0
+        assert len(captured_strategy) == 1
+        strategy = captured_strategy[0]
+        assert isinstance(strategy, EntraTokenAuth), (
+            "destination.auth_mode='entra' must win over the static default "
+            "when no --auth-mode flag is given"
+        )

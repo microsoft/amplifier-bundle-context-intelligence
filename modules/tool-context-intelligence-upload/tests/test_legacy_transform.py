@@ -27,6 +27,7 @@ from amplifier_module_tool_context_intelligence_upload.legacy_transform import (
     assert_timestamp_present,
     derive_workspace,
     reassemble_event_data,
+    unslug_approximate,
 )
 
 from ._legacy_fixtures import make_legacy_record
@@ -284,3 +285,40 @@ def test_derive_workspace_resolves_symlinked_working_dir(tmp_path: Path) -> None
     # Sanity: the expected value really is derived from the RESOLVED target,
     # not the symlink path itself (proves the test would fail pre-fix).
     assert expected == _hook_slugify_path(str(target_dir.resolve()))
+
+
+# ---------------------------------------------------------------------------
+# Phase 2: approximate slug -> path reconstruction (rare filter fallback)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "slug,expected",
+    [
+        ("-mnt-ws-proj", "/mnt/ws/proj"),
+        ("-Users-me-project", "/Users/me/project"),
+        ("-workspace", "/workspace"),
+        ("mnt-ws", "/mnt/ws"),  # tolerate a missing leading dash
+        ("", ""),  # no slug -> nothing derivable
+        ("default", ""),  # the hook's empty-input sentinel -> nothing derivable
+        ("-", ""),  # degenerate slug -> nothing derivable
+    ],
+)
+def test_unslug_approximate_reconstructs_a_posix_path(slug: str, expected: str) -> None:
+    assert unslug_approximate(slug) == expected
+
+
+def test_unslug_approximate_round_trips_a_path_without_hyphens() -> None:
+    """For directory names free of literal hyphens the reconstruction is exact."""
+    working_dir = "/home/user/repos/app"
+    assert unslug_approximate(derive_workspace(working_dir)) == working_dir
+
+
+def test_unslug_approximate_is_lossy_for_hyphenated_directory_names() -> None:
+    """Documented approximation: a literal '-' in a directory name is
+    indistinguishable from a path separator, so the reconstruction splits it.
+
+    This is why the recorded working_dir always wins and unslug is only a
+    deep fallback.
+    """
+    assert unslug_approximate(derive_workspace("/home/user/my-app")) == "/home/user/my/app"
