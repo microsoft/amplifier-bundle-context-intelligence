@@ -714,10 +714,11 @@ amplifier-bundle-context-intelligence/
 │   └── jsonl-event-schema.md               ← events.jsonl schema contract
 ├── modules/
 │   ├── hook-context-intelligence/      ← the Python hook module — PURE TELEMETRY
-│   └── tool-context-intelligence-query/ ← graph_query + blob_read tools
-│       └── amplifier_module_tool_context_intelligence_query/
-│           ├── graph_query_tool.py     ← Cypher query tool
-│           └── blob_read_tool.py       ← ci-blob:// resolution tool
+│   ├── tool-context-intelligence-query/ ← graph_query + blob_read tools
+│   │   └── amplifier_module_tool_context_intelligence_query/
+│   │       ├── graph_query_tool.py     ← Cypher query tool
+│   │       └── blob_read_tool.py       ← ci-blob:// resolution tool
+│   └── tool-context-intelligence-upload/ ← standalone CLI, not an in-session tool — see its README to install
 ├── docs/
 │   ├── context-intelligence-exploration-guide.md   ← what to explore and how to test
 │   ├── dispatch-circuit-breaker.dot    ← dispatch flow and circuit breaker state machine
@@ -761,6 +762,7 @@ print('YAML validates OK')
 - [amplifier-context-intelligence](https://github.com/microsoft/amplifier-context-intelligence) — the CI server (Neo4j + blob storage + dashboard)
 - [amplifier-app-cli](https://github.com/microsoft/amplifier-app-cli) — CLI that sends `project_slug` used for workspace resolution
 - [amplifier](https://github.com/microsoft/amplifier) — the Amplifier framework
+- [`context-intelligence-upload`](modules/tool-context-intelligence-upload/README.md#installation) — standalone CLI to replay `events.jsonl` sessions to the CI server; **not** installed by `amplifier bundle add` — install it with `uv tool install "amplifier-module-tool-context-intelligence-upload @ git+https://github.com/microsoft/amplifier-bundle-context-intelligence@main#subdirectory=modules/tool-context-intelligence-upload"`
 
 
 ## Contributing
