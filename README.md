@@ -240,6 +240,8 @@ Local capture works with **zero configuration**. Everything beyond the [Quick st
 
 **→ [Configuration & Integration Reference](docs/configuration-reference.md)**
 
+> **Workspace is an organizing label, not a security boundary.** On a shared server every credential can read every workspace — separation is by convention, not enforcement. See [Understanding workspace](docs/configuration-reference.md#understanding-workspace) before relying on it to isolate contributors.
+
 Forwarding warnings map to precise causes. See [`docs/troubleshooting.md`](docs/troubleshooting.md) for the symptom → cause → fix guide, [`docs/remote-server-troubleshooting.md`](docs/remote-server-troubleshooting.md) for remote / Azure-deployed servers, and [`docs/container-dns-troubleshooting.md`](docs/container-dns-troubleshooting.md) when a session runs **inside a DTU / Incus container** and can't reach the server.
 
 ## Documentation

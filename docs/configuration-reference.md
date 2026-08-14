@@ -17,7 +17,9 @@
 
 ## Understanding workspace
 
-**Workspace** is the primary isolation boundary for event data. It is written into every local file and every server POST — sessions in different workspaces are completely independent whether queried locally or via the graph. Typical uses: separate projects (`my-api`, `frontend`), separate environments (`dev`, `staging`, `prod`), or separate teams on a shared server.
+**Workspace** is the primary organizing label for event data. It is written into every local file and every server POST, and it is how you scope a query to one project's sessions. Typical uses: separate projects (`my-api`, `frontend`), separate environments (`dev`, `staging`, `prod`), or separate teams on a shared server.
+
+> **Workspace is not a security boundary.** It is a label the *client* chooses, not an access control. The server does not bind a credential to a workspace, does not validate the `workspace` a client sends, and `graph_query` accepts `workspace: "*"` to read across all of them — as does hand-written Cypher that simply omits the filter. On a shared server, every credential can read every workspace: separation is by convention, not enforcement. If you need one contributor to be unable to read another's data, that has to be enforced at the server or network layer — see [remote-access-sharing.md](https://github.com/microsoft/amplifier-context-intelligence/blob/main/docs/remote-access-sharing.md) in the server repo.
 
 ### How workspace appears in data
 
