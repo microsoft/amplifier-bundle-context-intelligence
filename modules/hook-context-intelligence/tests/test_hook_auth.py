@@ -109,7 +109,13 @@ class TestDestinationDataclass:
 
 
 class TestValidateDestinationsXOR:
-    """Per-target XOR: entra requires auth_resource, static requires api_key."""
+    """Per-target XOR: entra requires auth_resource, static requires api_key.
+
+    validate_destinations() never raises (see config_resolver.py docstring):
+    a misconfigured destination is logged and dropped from the returned dict
+    instead, so a bad destination can never take down local JSONL capture or
+    a sibling destination that IS correctly configured.
+    """
 
     def test_static_valid_passes(self) -> None:
         r = _resolver(
@@ -138,7 +144,9 @@ class TestValidateDestinationsXOR:
         result = r.validate_destinations()  # type: ignore[attr-defined]
         assert "azure" in result
 
-    def test_entra_missing_auth_resource_raises(self) -> None:
+    def test_entra_missing_auth_resource_dropped_and_logged_as_error(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
         r = _resolver(
             {
                 "destinations": {
@@ -151,8 +159,13 @@ class TestValidateDestinationsXOR:
                 }
             }
         )
-        with pytest.raises(ValueError, match="azure.*missing auth_resource"):
-            r.validate_destinations()  # type: ignore[attr-defined]
+        with caplog.at_level(logging.WARNING):
+            result = r.validate_destinations()  # type: ignore[attr-defined]
+        assert "azure" not in result
+        errors = [rec for rec in caplog.records if rec.levelno == logging.ERROR]
+        assert any(
+            "azure" in rec.message and "missing auth_resource" in rec.message for rec in errors
+        )
 
     def test_entra_does_not_require_api_key(self) -> None:
         """Entra mode with valid auth_resource and no api_key must NOT raise."""
@@ -172,7 +185,9 @@ class TestValidateDestinationsXOR:
         result = r.validate_destinations()  # type: ignore[attr-defined]
         assert "azure" in result
 
-    def test_unknown_auth_mode_raises(self) -> None:
+    def test_unknown_auth_mode_dropped_and_logged_as_error(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
         r = _resolver(
             {
                 "destinations": {
@@ -185,8 +200,11 @@ class TestValidateDestinationsXOR:
                 }
             }
         )
-        with pytest.raises(ValueError, match="kerberos"):
-            r.validate_destinations()  # type: ignore[attr-defined]
+        with caplog.at_level(logging.WARNING):
+            result = r.validate_destinations()  # type: ignore[attr-defined]
+        assert "weird" not in result
+        errors = [rec for rec in caplog.records if rec.levelno == logging.ERROR]
+        assert any("kerberos" in rec.message for rec in errors)
 
     def test_mixed_fleet_valid(self) -> None:
         """Static + entra destinations coexist; each validates independently."""
@@ -206,8 +224,12 @@ class TestValidateDestinationsXOR:
         result = r.validate_destinations()  # type: ignore[attr-defined]
         assert set(result.keys()) == {"local", "azure"}
 
-    def test_mixed_fleet_entra_invalid_raises(self) -> None:
-        """Mixed fleet raises if entra dest is missing auth_resource."""
+    def test_mixed_fleet_entra_invalid_drops_only_that_destination(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Mixed fleet: an entra dest missing auth_resource is dropped and logged,
+        but the sibling static destination is unaffected -- proves a broken
+        remote destination cannot take down a correctly-configured one."""
         r = _resolver(
             {
                 "destinations": {
@@ -221,8 +243,11 @@ class TestValidateDestinationsXOR:
                 }
             }
         )
-        with pytest.raises(ValueError, match="azure"):
-            r.validate_destinations()  # type: ignore[attr-defined]
+        with caplog.at_level(logging.WARNING):
+            result = r.validate_destinations()  # type: ignore[attr-defined]
+        assert set(result.keys()) == {"local"}
+        errors = [rec for rec in caplog.records if rec.levelno == logging.ERROR]
+        assert any("azure" in rec.message for rec in errors)
 
 
 # ---------------------------------------------------------------------------
