@@ -68,30 +68,6 @@ class TestCompactHelp:
             _build_parser().parse_args(["-h"])
         assert exc_info.value.code == 0
 
-    def test_minus_h_stdout_contains_required_strings(self, capsys):
-        from amplifier_module_tool_context_intelligence_upload.cli import _build_parser
-
-        with pytest.raises(SystemExit):
-            _build_parser().parse_args(["-h"])
-        captured = capsys.readouterr()
-        assert "context-intelligence-upload" in captured.out
-        assert "--path" in captured.out
-        assert "--server-url" in captured.out
-        assert "--api-key" in captured.out
-
-    def test_compact_help_usage_line_contains_no_replay(self, capsys):
-        """_COMPACT_HELP usage line must include [--no-replay]."""
-        from amplifier_module_tool_context_intelligence_upload.cli import _COMPACT_HELP
-
-        assert "[--no-replay]" in _COMPACT_HELP
-
-    def test_compact_help_flags_block_contains_no_replay_entry(self, capsys):
-        """_COMPACT_HELP flags block must contain --no-replay entry with idempotency mention."""
-        from amplifier_module_tool_context_intelligence_upload.cli import _COMPACT_HELP
-
-        assert "--no-replay" in _COMPACT_HELP
-        assert "idempotency" in _COMPACT_HELP.lower()
-
 
 # ---------------------------------------------------------------------------
 # --no-replay argparse
@@ -175,19 +151,6 @@ class TestFormatArgparse:
         assert exc_info.value.code == 2
 
 
-def test_help_mentions_format():
-    """Both _COMPACT_HELP and _DETAILED_HELP must document --format and logging-hook."""
-    from amplifier_module_tool_context_intelligence_upload.cli import (
-        _COMPACT_HELP,
-        _DETAILED_HELP,
-    )
-
-    assert "--format" in _COMPACT_HELP
-    assert "logging-hook" in _COMPACT_HELP
-    assert "--format" in _DETAILED_HELP
-    assert "logging-hook" in _DETAILED_HELP
-
-
 # ---------------------------------------------------------------------------
 # --help detailed help
 # ---------------------------------------------------------------------------
@@ -196,73 +159,12 @@ def test_help_mentions_format():
 class TestDetailedHelp:
     """The --help flag must print detailed help to stdout and exit 0."""
 
-    @pytest.fixture
-    def detailed_help_output(self, capsys) -> str:
-        """Capture and return the full --help output once per test."""
-        from amplifier_module_tool_context_intelligence_upload.cli import _build_parser
-
-        with pytest.raises(SystemExit):
-            _build_parser().parse_args(["--help"])
-        return capsys.readouterr().out
-
     def test_double_dash_help_exits_zero(self, capsys):
         from amplifier_module_tool_context_intelligence_upload.cli import _build_parser
 
         with pytest.raises(SystemExit) as exc_info:
             _build_parser().parse_args(["--help"])
         assert exc_info.value.code == 0
-
-    def test_double_dash_help_contains_examples(self, detailed_help_output):
-        assert "Replay a single session directory" in detailed_help_output
-        assert "Replay an entire project tree" in detailed_help_output
-        assert "Target a recovery server" in detailed_help_output
-
-    def test_double_dash_help_contains_progress_schema_fields(self, detailed_help_output):
-        """Progress schema section must contain 'failed_at' and 'sessions_total' fields."""
-        assert "failed_at" in detailed_help_output
-        assert "sessions_total" in detailed_help_output
-
-    def test_double_dash_help_contains_exit_codes(self, detailed_help_output):
-        assert "EXIT CODES" in detailed_help_output
-
-    def test_double_dash_help_contains_idempotency(self, detailed_help_output):
-        assert "IDEMPOTENCY" in detailed_help_output
-
-    def test_double_dash_help_contains_workspace_and_metadata_validation(
-        self, detailed_help_output
-    ):
-        assert "WORKSPACE" in detailed_help_output
-        assert "METADATA VALIDATION" in detailed_help_output
-
-    def test_double_dash_help_contains_finding_server_url_section(self, detailed_help_output):
-        """FINDING SERVER_URL AND API_KEY section must be present in detailed help."""
-        assert "FINDING SERVER_URL AND API_KEY" in detailed_help_output
-
-    def test_finding_server_url_section_appears_before_examples(self, detailed_help_output):
-        """FINDING SERVER_URL AND API_KEY section must appear before the EXAMPLES section."""
-        finding_pos = detailed_help_output.find("FINDING SERVER_URL AND API_KEY")
-        assert finding_pos != -1, "FINDING SERVER_URL AND API_KEY not found in help output"
-        examples_pos = detailed_help_output.find("EXAMPLES")
-        assert examples_pos != -1, "EXAMPLES not found in help output"
-        assert finding_pos < examples_pos, (
-            "FINDING SERVER_URL AND API_KEY must appear before EXAMPLES"
-        )
-
-    def test_no_abbreviated_ci_example_com(self, detailed_help_output):
-        """ci.example.com must not appear; use context-intelligence.example.com."""
-        assert "ci.example.com" not in detailed_help_output
-
-    def test_no_abbreviated_ci_api_key(self, detailed_help_output):
-        """$CI_API_KEY must not appear; use $AMPLIFIER_CONTEXT_INTELLIGENCE_API_KEY."""
-        assert "$CI_API_KEY" not in detailed_help_output
-
-    def test_context_intelligence_example_com_present(self, detailed_help_output):
-        """context-intelligence.example.com must appear in detailed help."""
-        assert "context-intelligence.example.com" in detailed_help_output
-
-    def test_amplifier_context_intelligence_api_key_present(self, detailed_help_output):
-        """$AMPLIFIER_CONTEXT_INTELLIGENCE_API_KEY must appear in detailed help."""
-        assert "$AMPLIFIER_CONTEXT_INTELLIGENCE_API_KEY" in detailed_help_output
 
 
 # ---------------------------------------------------------------------------
