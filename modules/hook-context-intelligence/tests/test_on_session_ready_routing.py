@@ -205,6 +205,88 @@ class TestNoDestinations:
         await cleanup()
 
 
+class TestMisconfiguredDestinationSurvivesMount:
+    """Core regression coverage: a misconfigured REMOTE destination must never
+    take down local JSONL capture -- mount() must not raise, and the
+    LoggingHandler (which is what writes local JSONL) must still be
+    registered and reachable regardless of how badly a destination is
+    configured.
+
+    Before the fix, validate_destinations() raised ValueError for exactly
+    this config, which propagated out of mount() uncaught (see __init__.py)
+    -- the hook failed to mount entirely and local JSONL capture was lost
+    for the whole session.
+    """
+
+    async def test_mount_does_not_raise_with_unusable_remote_api_key(self) -> None:
+        """A destination with an unusable (unexpanded/redacted/empty) api_key
+        must not prevent mount() from completing -- local capture must survive."""
+        from amplifier_module_hook_context_intelligence import mount
+
+        config = {
+            "destinations": {
+                "spark-1": {"url": "http://spark-1:8000", "api_key": "${AMPLIFIER_CI_KEY}"},
+            }
+        }
+        coordinator = _make_coordinator()
+        # Must NOT raise -- this is the exact defect: an unusable remote
+        # api_key previously took the whole hook (and local JSONL) down.
+        cleanup = await mount(coordinator, config=config)
+        handler = coordinator._capabilities["context_intelligence._hook_state"]["logging_handler"]
+        assert handler is not None, "LoggingHandler (local JSONL writer) must still be registered"
+        await cleanup()
+
+    async def test_local_jsonl_handler_registered_despite_bad_destination(self) -> None:
+        """After mount() + on_session_ready(), the LoggingHandler must be wired
+        up to receive events (local JSONL keeps working) even though the only
+        configured destination is unusable and yields zero dispatchers."""
+        config = {
+            "destinations": {
+                "spark-1": {"url": "http://spark-1:8000", "api_key": "[REDACTED]"},
+            }
+        }
+        coordinator, handler, cleanup = await _mount_and_ready(config)
+        # The bad destination contributes no dispatcher (dispatch disabled for
+        # it) but the handler itself -- local JSONL -- is alive and registered
+        # for events regardless.
+        assert handler._dispatchers == []
+        assert coordinator.hooks.register.called, (
+            "LoggingHandler must still be registered for events -- local JSONL capture"
+        )
+        await cleanup()
+
+    async def test_good_destination_still_dispatches_when_sibling_is_broken(self) -> None:
+        """Mixed fleet: one misconfigured destination alongside one valid
+        destination -- the valid one must still receive a dispatcher. Proves
+        the blast radius is the single bad destination, not the whole fleet."""
+        config = {
+            "destinations": {
+                "broken": {"url": "http://b:8000", "api_key": ""},
+                "good": {"url": "http://g:8000", "api_key": "gk", "include": ["**"]},
+            }
+        }
+        _, handler, cleanup = await _mount_and_ready(config)
+        assert len(handler._dispatchers) == 1
+        assert handler._dispatchers[0]._name == "good"
+        await cleanup()
+
+    async def test_unknown_auth_mode_does_not_prevent_mount(self) -> None:
+        """A destination with a typo'd/unknown auth_mode must also degrade
+        per-destination, not crash mount() -- local capture survives."""
+        from amplifier_module_hook_context_intelligence import mount
+
+        config = {
+            "destinations": {
+                "typo": {"url": "http://t:8000", "auth_mode": "kerberos", "api_key": "k"},
+            }
+        }
+        coordinator = _make_coordinator()
+        cleanup = await mount(coordinator, config=config)  # must NOT raise
+        handler = coordinator._capabilities["context_intelligence._hook_state"]["logging_handler"]
+        assert handler is not None
+        await cleanup()
+
+
 class TestLegacyUrlWithoutKeyMounts:
     async def test_mount_does_not_raise_with_url_but_no_key(
         self, caplog: pytest.LogCaptureFixture

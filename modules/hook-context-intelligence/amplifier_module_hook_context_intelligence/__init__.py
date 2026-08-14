@@ -92,8 +92,12 @@ async def mount(
 
     unregister_fns: list[Callable[[], None]] = []
 
-    # --- Fail-fast validation (C3) ---
-    all_destinations = resolver.validate_destinations()  # raises ValueError on misconfiguration
+    # --- Per-destination validation (C3) ---
+    # Never raises: a misconfigured destination is logged (per-destination,
+    # loud) and dropped from the returned dict. Local JSONL capture has no
+    # dependency on any destination and must survive regardless of how many
+    # (or all) configured destinations fail validation.
+    all_destinations = resolver.validate_destinations()
 
     # --- Migration warning (S1) ---
     # Detect legacy scalar config key rather than env var (D1: hook no longer reads env).
