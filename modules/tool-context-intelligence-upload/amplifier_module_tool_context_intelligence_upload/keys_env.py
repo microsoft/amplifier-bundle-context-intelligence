@@ -17,6 +17,7 @@ reimplemented from first principles.
 from __future__ import annotations
 
 import os
+import sys
 from pathlib import Path
 
 # keys.env lives beside settings.yaml in the Amplifier home directory
@@ -52,10 +53,15 @@ def load_keys_env_into_environ(path: Path = DEFAULT_KEYS_ENV_PATH) -> None:
     - There is NO handling of a leading ``export `` prefix on a line -- a
       line like ``export FOO=bar`` is not specially recognized; the key
       would literally be ``export FOO``.
-    - Any error reading or decoding the file (file missing, permission
-      denied, undecodable bytes, etc.) is swallowed silently and the
-      function simply returns, loading nothing. This matches app-cli's
-      behavior of failing silently rather than raising.
+    - A MISSING file is silent: having no keys.env is the common, expected
+      case and is not a problem worth reporting.
+    - Any OTHER read or decode error (permission denied, undecodable bytes)
+      also returns without loading anything, but emits a warning to stderr
+      first. Parity with app-cli is preserved where parity matters -- the
+      parsing rules and the resulting os.environ values are unchanged --
+      while a keys.env that EXISTS but cannot be read stops being invisible.
+      Silently skipping it surfaces much later as an authentication failure
+      or an unexpanded ``${VAR}``, with nothing pointing back at this file.
 
     Note: this function only loads raw values from keys.env into
     os.environ. It does NOT perform ``${VAR}``-style placeholder expansion
@@ -63,14 +69,28 @@ def load_keys_env_into_environ(path: Path = DEFAULT_KEYS_ENV_PATH) -> None:
     ``context_intelligence.config._expand_env_placeholders``.
     """
     try:
-        for raw_line in path.read_text(encoding="utf-8").splitlines():
-            line = raw_line.strip()
-            if not line or line.startswith("#") or "=" not in line:
-                continue
-            key, value = line.split("=", 1)
-            key = key.strip()
-            if key not in os.environ:
-                os.environ[key] = value.strip().strip('"').strip("'")
-    except Exception:
-        # Parity with app-cli: any file error fails silently.
+        content = path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        # Having no keys.env is the common, expected case -- silent by design.
         return
+    except (OSError, ValueError) as exc:
+        # The file EXISTS but could not be read or decoded (permission denied,
+        # undecodable bytes -- UnicodeDecodeError is a ValueError). Load
+        # nothing, exactly as before, but say so: otherwise this surfaces much
+        # later as an auth failure or an unexpanded ${VAR} with no breadcrumb.
+        print(
+            f"warning: could not read {path}: {exc}. "
+            "Values from it will be unavailable, and any ${VAR} placeholders "
+            "that depend on them will not expand.",
+            file=sys.stderr,
+        )
+        return
+
+    for raw_line in content.splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key = key.strip()
+        if key not in os.environ:
+            os.environ[key] = value.strip().strip('"').strip("'")

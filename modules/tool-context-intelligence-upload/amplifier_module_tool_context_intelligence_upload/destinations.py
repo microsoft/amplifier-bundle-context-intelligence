@@ -17,6 +17,7 @@ Scope note (design non-goal): ONLY the Amplifier home is read; project-local
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -107,10 +108,20 @@ def read_destinations(settings_path: Path = SETTINGS_PATH) -> dict[str, Destinat
     2. Read the hook config block.
     3. Expand ``${VAR}`` in url/api_key/auth_resource and the two legacy
        scalars.
-    4. Hand the expanded block to the hook's own ``HookConfigResolver``,
-       which parses the destinations map AND performs legacy single-server
-       synthesis (``{"default": Destination(..., include=("**",))}``)
-       exactly as the hook does.
+    4. Hand the expanded block to the hook's own ``HookConfigResolver`` and
+       call ``validate_destinations()``, which parses the destinations map,
+       performs legacy single-server synthesis
+       (``{"default": Destination(..., include=("**",))}``) exactly as the
+       hook does, AND drops any destination whose connection config is
+       unusable.
+
+    Using ``validate_destinations()`` rather than the raw ``destinations``
+    property is what keeps this CLI honest with the live hook: ``mount()``
+    validates, so an upload run must not accept a destination the hook
+    itself would refuse. Since #85 this method degrades per-destination
+    (logs and drops) instead of raising, so a single malformed entry costs
+    only that entry -- preserving the "never raises for a malformed
+    settings.yaml" contract below.
 
     Returns ``{}`` when nothing is configured; never raises for a missing or
     malformed settings.yaml.
@@ -122,7 +133,7 @@ def read_destinations(settings_path: Path = SETTINGS_PATH) -> dict[str, Destinat
     # coordinator=None is safe because HookConfigResolver only reaches the
     # coordinator through getattr(..., default=None) lookups
     # (config_resolver.py:167-195).
-    return HookConfigResolver(_expand_hook_config(config), None).destinations
+    return HookConfigResolver(_expand_hook_config(config), None).validate_destinations()
 
 
 def _format_valid_names(destinations: dict[str, Destination]) -> str:
@@ -145,7 +156,9 @@ def select_destination(
     - exactly 1 destination configured -> auto-selected with NO prompt,
       regardless of *interactive*, because there is nothing to disambiguate.
     - 2+ destinations and *interactive* -> a numbered prompt is written to
-      stdout and answered via ``input()``.
+      stderr and answered via ``input()``. stderr keeps the menu out of the
+      machine-readable result JSON that this CLI writes to stdout (cli.py
+      module docstring: "All human-facing progress output goes to stderr").
     - 2+ destinations and not *interactive* -> raise
       ``DestinationSelectionError`` listing the valid names; never block on
       stdin in a non-interactive context.
@@ -191,10 +204,12 @@ def _prompt_for_destination(destinations: dict[str, Destination]) -> Destination
     follows settings.yaml, which a user may reorder at any time).
     """
     names = sorted(destinations)
-    print("Multiple context-intelligence destinations are configured:")
+    print("Multiple context-intelligence destinations are configured:", file=sys.stderr)
     for index, name in enumerate(names, start=1):
-        print(f"  {index}. {name}  ({destinations[name].url})")
-    answer = input(f"Select a destination [1-{len(names)}]: ").strip()
+        print(f"  {index}. {name}  ({destinations[name].url})", file=sys.stderr)
+    sys.stderr.write(f"Select a destination [1-{len(names)}]: ")
+    sys.stderr.flush()
+    answer = input().strip()
 
     if answer.isdigit():
         choice = int(answer)

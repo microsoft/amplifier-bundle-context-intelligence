@@ -313,11 +313,16 @@ def test_the_interactive_prompt_lists_every_destination_with_its_url(
 
     select_destination(two_destinations(), None, interactive=True)
 
-    out = capsys.readouterr().out
-    assert "1. personal" in out
-    assert "2. team" in out
-    assert "https://personal.example.com" in out
-    assert "https://team.example.com" in out
+    # The menu goes to stderr, not stdout: stdout carries the machine-readable
+    # result JSON (cli.py: "All human-facing progress output goes to stderr"),
+    # so a prompt on stdout would corrupt a piped upload run.
+    captured = capsys.readouterr()
+    err = captured.err
+    assert "1. personal" in err
+    assert "2. team" in err
+    assert "https://personal.example.com" in err
+    assert "https://team.example.com" in err
+    assert captured.out == ""
 
 
 @pytest.mark.parametrize(

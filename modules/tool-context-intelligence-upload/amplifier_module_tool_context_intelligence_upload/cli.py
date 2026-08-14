@@ -649,6 +649,14 @@ def _resolve_connection(args: argparse.Namespace) -> _Connection:
 
     from context_intelligence.config import _expand_env_placeholders, resolve_config
 
+    # keys.env must be loaded before the FIRST ${VAR} expansion, which happens
+    # below for auth_resource and again inside the tier 1+2 return. --server-url,
+    # --api-key and --auth-resource all document ${VAR} support, and tiers 1+2
+    # return before tier 3 is reached -- so loading keys.env at the tier 3 site
+    # left every explicit-flag and env-var caller expanding against an
+    # environment that never saw keys.env.
+    load_keys_env_into_environ()
+
     auth_mode: str = args.auth_mode or os.environ.get(
         "AMPLIFIER_CONTEXT_INTELLIGENCE_AUTH_MODE", "static"
     )
@@ -679,8 +687,7 @@ def _resolve_connection(args: argparse.Namespace) -> _Connection:
             None,
         )
 
-    # Tier 3 -- the destinations map (keys.env expands ${VAR} for it).
-    load_keys_env_into_environ()
+    # Tier 3 -- the destinations map (keys.env, loaded above, expands ${VAR}).
     destinations = read_destinations()
 
     if not destinations:
