@@ -40,6 +40,7 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from amplifier_module_hook_context_intelligence.handlers.logging_handler import (
+    _BREAKER_PROBE_INTERVAL,
     _DEGRADED_ESCALATION_SECONDS,
     _LOG_RATE_LIMIT_SECONDS,
     _TRANSIENT,
@@ -141,7 +142,13 @@ class TestDegradedSinceTracking:
         """Breaker half-open probe DELIVERED path also clears degraded_since."""
         d = _dispatcher()
         d._breaker_open = True
-        d._last_probe_ts = 0.0  # probe immediately due
+        # Force the probe to be immediately due *relative to* time.monotonic()'s
+        # own (unspecified) reference point -- NOT an absolute 0.0. monotonic()'s
+        # reference point is arbitrary (e.g. system boot); on a freshly-booted CI
+        # runner it can itself be well under _BREAKER_PROBE_INTERVAL, in which case
+        # `0.0` would NOT be "due" and the probe would never fire (this previously
+        # passed only because dev machines have long uptimes).
+        d._last_probe_ts = time.monotonic() - _BREAKER_PROBE_INTERVAL - 1.0
         d._degraded_warned = True
         d._degraded_since = time.monotonic() - 10.0
 
