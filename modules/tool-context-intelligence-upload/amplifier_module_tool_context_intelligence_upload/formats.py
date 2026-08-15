@@ -21,8 +21,9 @@ discovery and parsing behavior verbatim.
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 from .logging_hook_format import legacy_discover, make_skip_wrapped_parse
 from .session_graph import resolve_upload_sessions

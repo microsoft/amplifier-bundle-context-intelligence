@@ -32,22 +32,23 @@ from __future__ import annotations
 
 import json
 import sys
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Iterator
+from typing import TYPE_CHECKING, Any
 
 from .legacy_transform import (
+    _SUPPORTED_SCHEMA_MAJOR,
+    _SUPPORTED_SCHEMA_NAME,
     LegacyEventError,
     MissingTimestampError,
     SchemaVersionError,
     WorkspaceDerivationError,
-    _SUPPORTED_SCHEMA_MAJOR,
-    _SUPPORTED_SCHEMA_NAME,
     assert_supported_schema,
     assert_timestamp_present,
     derive_workspace,
-    reassemble_event_data,
     read_working_dir,
+    reassemble_event_data,
 )
 
 if TYPE_CHECKING:

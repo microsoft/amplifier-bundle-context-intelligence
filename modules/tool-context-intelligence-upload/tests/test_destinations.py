@@ -15,9 +15,9 @@ from amplifier_module_hook_context_intelligence.config_resolver import Destinati
 
 from amplifier_module_tool_context_intelligence_upload import destinations as destinations_mod
 from amplifier_module_tool_context_intelligence_upload.destinations import (
-    DestinationSelectionError,  # noqa: F401 -- exercised by select_destination tests
+    DestinationSelectionError,
     read_destinations,
-    select_destination,  # noqa: F401 -- exercised by select_destination tests
+    select_destination,
 )
 
 MULTI_DESTINATION_SETTINGS = """

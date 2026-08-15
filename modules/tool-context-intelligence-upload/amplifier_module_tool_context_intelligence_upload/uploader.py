@@ -3,8 +3,13 @@
 Provides UploadResult, _count_lines, and run_upload for replaying
 session events.jsonl files to the Context Intelligence ingestion endpoint.
 
-CLI context: this module runs as a CLI tool, so user-facing warnings are written
-to stderr via ``print(..., file=sys.stderr)`` rather than the ``logging`` module.
+CLI context: this module runs as a CLI tool.  Per-event/per-attempt problems
+(malformed records, unreadable session files, transient-error retries) are
+NOT printed here -- at up to ~95k events per run, one ``print`` per skip or
+retry sprays into the middle of the live progress block the CLI renders
+(``progress.py::TwoLevelProgressRenderer``) and corrupts it.  Instead they
+are accumulated into counters on :class:`UploadResult` and surfaced ONCE, in
+the completion/failure block the CLI prints after the run ends.
 """
 
 from __future__ import annotations
@@ -13,19 +18,20 @@ import json
 import random
 import socket
 import ssl
-import sys
 import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import httpx
-
 from amplifier_module_hook_context_intelligence.upload import build_payload
+
 from .logging_hook_format import SkipLine
 
 if TYPE_CHECKING:
     from context_intelligence.auth import AuthStrategy
+
     from amplifier_module_tool_context_intelligence_upload.progress import ProgressTracker
+
     from .formats import ParseFn
 
 
@@ -39,15 +45,24 @@ class UploadResult:
         events_uploaded: int,
         events_skipped: int = 0,
         events_unmapped: int = 0,
+        events_malformed: int = 0,
+        events_unreadable: int = 0,
+        retries: int = 0,
         error: str | None = None,
         failed_at: dict[str, Any] | None = None,
     ) -> None:
         self.success = success
         self.sessions_uploaded = sessions_uploaded
         self.events_uploaded = events_uploaded
+        # events_skipped is the combined total (events_malformed + events_unreadable);
+        # kept as its own field for backward compatibility with callers that only
+        # care about the aggregate. The completion block renders the breakdown.
         self.events_skipped = events_skipped
         # Not included in to_dict() (GATE 2) -- inspect this attribute directly.
         self.events_unmapped = events_unmapped
+        self.events_malformed = events_malformed
+        self.events_unreadable = events_unreadable
+        self.retries = retries
         self.error = error
         self.failed_at = failed_at
 
@@ -263,8 +278,10 @@ def run_upload(
     max_retries = max(0, max_retries)
 
     total_events_uploaded = 0
-    total_events_skipped = 0
     total_events_unmapped = 0
+    total_events_malformed = 0
+    total_events_unreadable = 0
+    total_retries = 0
     total_sessions_uploaded = 0
 
     # NOTE (issue #338): auth headers are fetched PER attempt inside the loop
@@ -283,11 +300,10 @@ def run_upload(
             events_file = session_dir / "events.jsonl"
 
             if not events_file.exists():
-                print(
-                    f"WARNING: events.jsonl not found for session {session_id!r} "
-                    f"(path: {events_file}), skipping.",
-                    file=sys.stderr,
-                )
+                # Session-level "unreadable" -- we can't count its events (the file
+                # doesn't exist to count lines in), so it contributes 1 to the
+                # unreadable bucket rather than a per-event count.
+                total_events_unreadable += 1
                 continue
 
             events_total = _count_lines(events_file)
@@ -301,39 +317,26 @@ def run_upload(
                     if not line:
                         continue
 
-                    # Parse the line via parse_fn — skip malformed lines with a warning
+                    # Parse the line via parse_fn — accumulate a counter rather than
+                    # printing per-event (see module docstring): exc is unused for
+                    # display now, but kept named for clarity of which branch fired.
                     try:
                         parsed = parse_fn(line, session_dir, metadata)
-                    except json.JSONDecodeError as exc:
-                        print(
-                            f"WARNING: malformed JSON in {events_file} "
-                            f"at line {event_index}: {exc}",
-                            file=sys.stderr,
-                        )
-                        total_events_skipped += 1
+                    except json.JSONDecodeError:
+                        total_events_malformed += 1
                         tracker.event_sent()
                         event_index += 1
                         continue
-                    except MalformedRecordError as exc:
-                        print(
-                            f"WARNING: skipping malformed record in {events_file} "
-                            f"at line {event_index}: {exc}",
-                            file=sys.stderr,
-                        )
-                        total_events_skipped += 1
+                    except MalformedRecordError:
+                        total_events_malformed += 1
                         tracker.event_sent()
                         event_index += 1
                         continue
                     except SkipLine as exc:
-                        print(
-                            f"WARNING: skipping line in {events_file} "
-                            f"at line {event_index}: {exc.reason}",
-                            file=sys.stderr,
-                        )
                         if exc.category == "unmapped":
                             total_events_unmapped += 1
                         else:
-                            total_events_skipped += 1
+                            total_events_malformed += 1
                         tracker.event_sent()
                         event_index += 1
                         continue
@@ -372,8 +375,11 @@ def run_upload(
                                 success=False,
                                 sessions_uploaded=total_sessions_uploaded,
                                 events_uploaded=total_events_uploaded,
-                                events_skipped=total_events_skipped,
+                                events_skipped=total_events_malformed + total_events_unreadable,
                                 events_unmapped=total_events_unmapped,
+                                events_malformed=total_events_malformed,
+                                events_unreadable=total_events_unreadable,
+                                retries=total_retries,
                                 error=error_msg,
                                 failed_at={
                                     "session_id": session_id,
@@ -396,13 +402,7 @@ def run_upload(
                             # instead of burning the whole backoff budget on a dead host.
                             if not _is_fatal_transport_error(exc) and retry_index < max_retries:
                                 delay = _backoff_delay(retry_index)
-                                print(
-                                    f"WARNING: transient network error uploading session "
-                                    f"{session_id!r} event {event_index} "
-                                    f"(attempt {retry_index + 1}/{max_retries + 1}): {exc}; "
-                                    f"retrying in {delay:.1f}s",
-                                    file=sys.stderr,
-                                )
+                                total_retries += 1
                                 time.sleep(delay)
                                 retry_index += 1
                                 continue
@@ -416,8 +416,11 @@ def run_upload(
                                 success=False,
                                 sessions_uploaded=total_sessions_uploaded,
                                 events_uploaded=total_events_uploaded,
-                                events_skipped=total_events_skipped,
+                                events_skipped=total_events_malformed + total_events_unreadable,
                                 events_unmapped=total_events_unmapped,
+                                events_malformed=total_events_malformed,
+                                events_unreadable=total_events_unreadable,
+                                retries=total_retries,
                                 error=str(exc),
                                 failed_at={
                                     "session_id": session_id,
@@ -433,13 +436,7 @@ def run_upload(
                         # Non-2xx: retry only transient statuses, and only while budget remains.
                         if _is_transient_status(status_code) and retry_index < max_retries:
                             delay = _retry_after_or_backoff(response, retry_index)
-                            print(
-                                f"WARNING: HTTP {status_code} uploading session "
-                                f"{session_id!r} event {event_index} "
-                                f"(attempt {retry_index + 1}/{max_retries + 1}); "
-                                f"retrying in {delay:.1f}s",
-                                file=sys.stderr,
-                            )
+                            total_retries += 1
                             time.sleep(delay)
                             retry_index += 1
                             continue
@@ -459,8 +456,11 @@ def run_upload(
                             success=False,
                             sessions_uploaded=total_sessions_uploaded,
                             events_uploaded=total_events_uploaded,
-                            events_skipped=total_events_skipped,
+                            events_skipped=total_events_malformed + total_events_unreadable,
                             events_unmapped=total_events_unmapped,
+                            events_malformed=total_events_malformed,
+                            events_unreadable=total_events_unreadable,
+                            retries=total_retries,
                             error=error_msg,
                             failed_at={
                                 "session_id": session_id,
@@ -483,6 +483,9 @@ def run_upload(
         success=True,
         sessions_uploaded=total_sessions_uploaded,
         events_uploaded=total_events_uploaded,
-        events_skipped=total_events_skipped,
+        events_skipped=total_events_malformed + total_events_unreadable,
         events_unmapped=total_events_unmapped,
+        events_malformed=total_events_malformed,
+        events_unreadable=total_events_unreadable,
+        retries=total_retries,
     )

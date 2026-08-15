@@ -9,13 +9,11 @@ from unittest.mock import MagicMock, patch
 
 import httpx
 
-
 from amplifier_module_tool_context_intelligence_upload.uploader import (
     UploadResult,
     _count_lines,
     run_upload,
 )
-
 
 # ---------------------------------------------------------------------------
 # Helpers
