@@ -577,9 +577,36 @@ The worker uses lazy creation: it creates an `httpx.AsyncClient` on the first di
 
 **Known limitation:** during a prolonged outage, once the bounded in-memory queue fills, the newest events are dropped from the queue but remain durable in `events.jsonl`. Recover them after the outage with `context-intelligence-upload --path <real storage path>` (--server-url/--api-key come from flags or env/config).
 
+**Sustained-outage visibility.** The circuit breaker described above only opens on a *hard* (deterministic auth) failure ratio — a down/unreachable server produces *transient* network-error/timeout outcomes, which never feed that breaker, so it can retry the same event silently forever with capped backoff. This is exactly what happened in a real incident: a server was down for ~2 days and the only signal was a single rate-limited INFO line per session — nobody noticed for two days. Two independent, additive signals close that gap without changing retry/backoff timing or breaker state:
+
+- **Escalation to ERROR.** Once a destination has been continuously DEGRADED for more than 5 minutes (`_DEGRADED_ESCALATION_SECONDS`), the routine per-episode INFO notice escalates to a rate-limited (60 s) `logger.error()` naming events dropped so far, whether the circuit breaker is open, and how long delivery has been failing.
+- **Durable `forwarding-YYYY-MM-DD.jsonl` records.** The same escalation, and every degraded/undelivered session shutdown, also writes a durable record (`sustained_delivery_failure` while a session runs; `shutdown_undelivered` when it ends) to the consolidated forwarding-diagnostics log described in the config table above. Console warnings vanish once a process exits; these records don't — every short-lived session that ends mid-outage leaves one line in that day's file, so a multi-day outage across many discrete sessions (the exact shape of the real incident: no single long-lived process to watch) still leaves an aggregable trail an operator (or a monitoring script tailing/grepping that file) can find.
+
 > Recovering an older **legacy `hooks-logging`** archive instead of a native one? It can be imported non-destructively with `--format logging-hook` — see [Legacy hooks-logging import](modules/tool-context-intelligence-upload/README.md#legacy-hooks-logging-import---format-logging-hook) in the upload tool README.
 
 See [`docs/dispatch-circuit-breaker.dot`](docs/dispatch-circuit-breaker.dot) for the updated dispatch flow and [`docs/dispatch-auto-recovery-lifecycle.dot`](docs/dispatch-auto-recovery-lifecycle.dot) for the consolidated auto-recovery lifecycle (HEALTHY → DEGRADED → RECOVERY → OVERFLOW → SHUTDOWN).
+
+### Client queue vs. server spool — two different backlogs
+
+This distinction is easy to conflate and has real diagnostic cost when it is: **two entirely different queues sit on either side of the wire**, and a healthy client tells you *nothing* about the health of the other one.
+
+| | **Client-side dispatch queue** (this hook) | **Server-side spool** (Context Intelligence server) |
+|---|---|---|
+| What it is | An in-memory `asyncio.Queue` per destination, inside this process | The server's own durable on-disk ingest spool |
+| Bounded? | Yes — `dispatch_queue_capacity` (default 256) | No — unbounded by default |
+| On overflow | Drops the newest event (see **Overflow** above); event remains durable in local `events.jsonl` | Grows without limit |
+| Survives process exit? | No — purely in-memory, gone the instant this process exits | Yes — durable on disk |
+| Visible to this client? | Yes — this is what `dispatch_queue_capacity`, `_overflow_dropped`, and the visibility signals above describe | **No — completely invisible to the client.** The hook has no capability to observe, query, or bound the server's spool. |
+
+This is not a hypothetical distinction: in the same real incident referenced above, the server's own on-disk spool grew to **38 GB and OOM-killed the server process** — a failure mode entirely on the server side of the wire, which nothing described in this README (client queue depth, circuit breaker state, dispatch backoff) can detect or report, because the client never sees it. A healthy-looking client (durable local JSONL, isolated per-destination queues, no dropped events) tells you only that *this side* is working; it says nothing about whether the server is keeping up with what it's receiving.
+
+**Recovering after an outage on either side:** local `events.jsonl` is the durable source of truth regardless of which side failed. Once the server (and its spool) are healthy again, replay any events this client dropped (or that accumulated while dispatch was disabled) with:
+
+```bash
+context-intelligence-upload --path <storage path> --server-url <url> --api-key <key>
+```
+
+(`--server-url`/`--api-key` may also come from env/config — see `context-intelligence-upload --help`.) This reads directly from `events.jsonl`, so it recovers correctly whether the gap was caused by the client's bounded queue dropping events, the destination being unreachable for the whole session, or the server having been down/unhealthy in a way the client could never observe.
 
 ---
 
