@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 
 from amplifier_module_hook_context_intelligence.upload import build_payload
+
 from amplifier_module_tool_context_intelligence_upload.logging_hook_format import (
     legacy_parse_line,
 )

@@ -211,6 +211,7 @@ def build_preview_text(
     filtered_out: int,
     *,
     source_format: str,
+    dangling_parent_count: int = 0,
 ) -> str:
     """Return the multi-line preview summary shown before upload.
 
@@ -226,6 +227,15 @@ def build_preview_text(
     required on purpose: both formats POST to the same ``/events`` endpoint but
     differ in replay semantics, so a defaulted value could silently mislabel
     the run.  Callers must state which pipeline they are running.
+
+    *dangling_parent_count* is the number of parent sessions referenced by
+    sessions in *folder_entries* that are themselves not part of this upload.
+    They still show up server-side as placeholders until their own session is
+    uploaded -- worth surfacing here (in "what will be sent:", where the
+    operator is already reasoning about what's included) rather than as a
+    separate top-level note the operator has to hunt for. Zero suppresses the
+    line entirely; this is the common case and adding noise for it would
+    violate the "nothing on the happy path" bar the rest of this block holds.
     """
     session_count = len(folder_entries)
     event_count = sum(events for _, events in folder_entries)
@@ -251,8 +261,19 @@ def build_preview_text(
             f"{filtered_out:,} {filtered_word}  "
             f"(excluded by this destination's include/exclude rules)",
         ),
-        "",
     ]
+
+    if dangling_parent_count:
+        parent_word = "parent" if dangling_parent_count == 1 else "parents"
+        lines.append(
+            _labeled(
+                "  placeholders:",
+                f"{dangling_parent_count:,} {parent_word} not included in this run "
+                f"will appear as placeholders until uploaded",
+            )
+        )
+
+    lines.append("")
 
     lines.extend(_pattern_lines("  include:", destination.include, _NO_INCLUDE_NOTE))
     lines.extend(_pattern_lines("  exclude:", destination.exclude, "(none)"))

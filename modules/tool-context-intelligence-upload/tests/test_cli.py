@@ -43,8 +43,17 @@ def _make_upload_result(sessions_uploaded: int = 1, events_uploaded: int = 0) ->
     """
     mock_result = MagicMock()
     mock_result.success = True
+    mock_result.sessions_uploaded = sessions_uploaded
+    mock_result.events_uploaded = events_uploaded
     mock_result.events_skipped = 0
     mock_result.events_unmapped = 0
+    # Pinned to real ints (not left as auto-speccing MagicMock attributes)
+    # because completion_block()/failure_block() apply thousands-separator
+    # formatting (f"{n:,}") to each of these -- an unformatted MagicMock
+    # raises TypeError from __format__.
+    mock_result.events_malformed = 0
+    mock_result.events_unreadable = 0
+    mock_result.retries = 0
     mock_result.to_dict.return_value = {
         "status": "completed",
         "sessions_uploaded": sessions_uploaded,
@@ -189,6 +198,7 @@ class TestJobIdAutoGeneration:
                     "http://localhost",
                     "--api-key",
                     "key",
+                    "--verbose",  # job_id/progress= diagnostic is now verbose-only
                 ],
             ),
             patch(
@@ -592,31 +602,39 @@ class TestEnvVarConfigResolution:
 class TestScopeResolutionWiring:
     """CLI must emit a loud resolved-scope line and handle ScopeError \u2192 exit 2."""
 
-    def _run(self, tmp_path, scope, mock_result=None):
+    def _run(self, tmp_path, scope, mock_result=None, verbose=False):
         from amplifier_module_tool_context_intelligence_upload.cli import main
 
         if mock_result is None:
             mock_result = MagicMock()
             mock_result.success = True
+            mock_result.sessions_uploaded = scope.selected_count
+            mock_result.events_uploaded = 0
+            mock_result.events_skipped = 0
+            mock_result.events_unmapped = 0
+            mock_result.events_malformed = 0
+            mock_result.events_unreadable = 0
+            mock_result.retries = 0
             mock_result.to_dict.return_value = {
                 "status": "completed",
                 "sessions_uploaded": scope.selected_count,
                 "events_uploaded": 0,
             }
 
+        argv = [
+            "context-intelligence-upload",
+            "--path",
+            str(tmp_path),
+            "--server-url",
+            "http://localhost",
+            "--api-key",
+            "key",
+        ]
+        if verbose:
+            argv.append("--verbose")
+
         with (
-            patch(
-                "sys.argv",
-                [
-                    "context-intelligence-upload",
-                    "--path",
-                    str(tmp_path),
-                    "--server-url",
-                    "http://localhost",
-                    "--api-key",
-                    "key",
-                ],
-            ),
+            patch("sys.argv", argv),
             patch(
                 "amplifier_module_tool_context_intelligence_upload.cli.resolve_upload_sessions",
                 return_value=scope,
@@ -632,26 +650,48 @@ class TestScopeResolutionWiring:
         return exc_info
 
     def test_scope_line_printed_to_stderr(self, tmp_path, capsys):
+        # scope: diagnostic line is now gated behind --verbose (Part 6 of the
+        # upload UX redesign) -- the happy path shows only the preview + prompt.
+        # Reworded so it can't be mistaken for the post-filter upload count
+        # (it reports scope.total_discovered, a pre-filter number).
         fake_sessions = [(tmp_path, {"session_id": "root"}), (tmp_path, {"session_id": "child"})]
         scope = _fake_scope(fake_sessions, mode="single")
 
-        self._run(tmp_path, scope)
+        self._run(tmp_path, scope, verbose=True)
 
         captured = capsys.readouterr()
         assert "scope:" in captured.err
         assert "mode=single" in captured.err
-        assert "root(s)=root" in captured.err
-        assert "uploading 2 of 2" in captured.err
+        assert "before destination filtering" in captured.err
 
     def test_dangling_parent_note_printed_when_present(self, tmp_path, capsys):
+        # The dangling-parent note is no longer a standalone cli.py stderr
+        # line -- it is folded into preview.py's "what will be sent:" block
+        # as a "placeholders:" line (count only, not individual IDs). That
+        # block only renders in destination mode, so wire a destination.
         fake_sessions = [(tmp_path, {"session_id": "mid"}), (tmp_path, {"session_id": "leaf"})]
         scope = _fake_scope(fake_sessions, mode="single", dangling_parent_ids=["root"])
+        dest = _dest("team", "http://localhost:9000")
 
-        self._run(tmp_path, scope)
+        from amplifier_module_tool_context_intelligence_upload.cli import _Connection
+
+        conn = _Connection(
+            server_url=dest.url,
+            api_key=dest.api_key,
+            auth_mode="static",
+            auth_resource="",
+            destination=dest,
+        )
+
+        with patch(
+            "amplifier_module_tool_context_intelligence_upload.cli._resolve_connection",
+            return_value=conn,
+        ):
+            self._run(tmp_path, scope)
 
         captured = capsys.readouterr()
-        assert "note:" in captured.err
-        assert "root" in captured.err
+        assert "placeholders:" in captured.err
+        assert "1 parent" in captured.err
         assert "placeholder" in captured.err.lower()
 
     def test_no_dangling_note_when_absent(self, tmp_path, capsys):
@@ -1014,7 +1054,10 @@ class TestReconciliationSummary:
         # run completed WITH issues -- exit 3, not 0.
         assert exc_info.value.code == 3
         captured = capsys.readouterr()
-        assert "reconciliation:" in captured.err
+        # Part 2 of the redesign: the reconciliation line only surfaces when
+        # read != ingested (a discrepancy worth a warning) -- here read=5,
+        # ingested=4, so it fires as "warning: reconciliation mismatch -- ...".
+        assert "warning: reconciliation mismatch" in captured.err
         assert "5 read" in captured.err
         assert "4 ingested" in captured.err
         assert "1 skipped" in captured.err
@@ -1143,7 +1186,9 @@ class TestReconciliationSummary:
             cli_mod.main()
 
         captured = capsys.readouterr()
-        assert "reconciliation:" in captured.err
+        # read (5) != ingested (3) -- Part 2: this discrepancy is exactly
+        # what the warning exists to surface.
+        assert "warning: reconciliation mismatch" in captured.err
         # read == ingested + skipped + unmapped == 3 + 1 + 1 == 5, exactly.
         assert "5 read" in captured.err
         assert "3 ingested" in captured.err
@@ -1152,7 +1197,9 @@ class TestReconciliationSummary:
 
     def test_main_reconciliation_default_format_zero_live_sessions_skipped(self, tmp_path, capsys):
         """The default context-intelligence path has no discovery object, so
-        live-sessions-skipped must be 0 without raising."""
+        live-sessions-skipped must be 0 without raising. read == ingested
+        here (1 == 1), so per Part 2 the reconciliation warning must NOT
+        print at all -- no discrepancy, no noise on the happy path."""
         from amplifier_module_tool_context_intelligence_upload import cli as cli_mod
         from amplifier_module_tool_context_intelligence_upload.uploader import UploadResult
 
@@ -1191,8 +1238,9 @@ class TestReconciliationSummary:
             cli_mod.main()
 
         captured = capsys.readouterr()
-        assert "reconciliation:" in captured.err
-        assert "0 live-sessions-skipped" in captured.err
+        # read (1) == ingested (1) -- no discrepancy, so Part 2 says: print
+        # nothing. The prior "reconciliation:" line every run is gone.
+        assert "reconciliation" not in captured.err
 
 
 # ---------------------------------------------------------------------------
@@ -1236,6 +1284,9 @@ class TestOperatorSignals:
                     "key",
                     "--format",
                     "logging-hook",
+                    # Part 6: the "scope:" diagnostic line is now gated
+                    # behind --verbose.
+                    "--verbose",
                 ],
             ),
             patch.object(cli_mod, "discover_legacy", return_value=fake_discovery),
@@ -1293,6 +1344,9 @@ class TestOperatorSignals:
                     "key",
                     "--format",
                     "logging-hook",
+                    # Part 6: the live-skipped-ids note is now gated
+                    # behind --verbose.
+                    "--verbose",
                 ],
             ),
             patch.object(cli_mod, "discover_legacy", return_value=fake_discovery),
@@ -2255,10 +2309,11 @@ class TestProgressRendererWiring:
 
         assert exc_info.value.code == 0
         err = capsys.readouterr().err
-        assert "summary:" in err
+        # Part 2 redesign: "summary:" -> "upload complete" block.
+        assert "upload complete" in err
         assert "team" in err
-        assert "filtered out:      4" in err
-        assert "duration:" in err
+        assert "filtered out:   4" in err
+        assert "took:" in err
 
     def test_renderer_is_used_as_the_tracker(self, tmp_path, isolated_home):
         from amplifier_module_tool_context_intelligence_upload.cli import main
@@ -2329,7 +2384,8 @@ class TestProgressRendererWiring:
             main()
 
         err = capsys.readouterr().err
-        assert "summary:" in err
+        # Part 2 redesign: "summary:" -> "upload complete" block.
+        assert "upload complete" in err
         assert "http://explicit:9000" in err
 
 

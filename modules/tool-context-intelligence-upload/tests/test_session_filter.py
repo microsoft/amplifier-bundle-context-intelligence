@@ -11,7 +11,6 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-
 from amplifier_module_hook_context_intelligence.config_resolver import Destination
 from amplifier_module_hook_context_intelligence.fanout import (
     destination_is_active,

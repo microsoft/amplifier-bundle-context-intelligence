@@ -25,7 +25,7 @@ independently of the migrate-side implementation.
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -47,7 +47,7 @@ def _make_node_id(
     """
     safe_event = event_name.replace(":", "_")
     dt = datetime.fromisoformat(timestamp)
-    epoch_ms = int(dt.astimezone(timezone.utc).timestamp() * 1000)
+    epoch_ms = int(dt.astimezone(UTC).timestamp() * 1000)
     node_id = f"{session_id}__{safe_event}__{epoch_ms}"
     if disambiguator is not None:
         node_id = f"{node_id}__{disambiguator}"

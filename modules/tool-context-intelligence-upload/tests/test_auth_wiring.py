@@ -284,6 +284,11 @@ class TestCliMainEntraMode:
         fake_sessions = [(tmp_path, {"session_id": "s1"})]
         mock_result = MagicMock()
         mock_result.success = True
+        mock_result.sessions_uploaded = 1
+        mock_result.events_uploaded = 1
+        mock_result.events_malformed = 0
+        mock_result.events_unreadable = 0
+        mock_result.retries = 0
         mock_result.to_dict.return_value = {
             "status": "completed",
             "sessions_uploaded": 1,
@@ -341,6 +346,11 @@ class TestCliMainEntraMode:
         fake_sessions = [(tmp_path, {"session_id": "s1"})]
         mock_result = MagicMock()
         mock_result.success = True
+        mock_result.sessions_uploaded = 1
+        mock_result.events_uploaded = 1
+        mock_result.events_malformed = 0
+        mock_result.events_unreadable = 0
+        mock_result.retries = 0
         mock_result.to_dict.return_value = {
             "status": "completed",
             "sessions_uploaded": 1,
@@ -402,6 +412,11 @@ class TestCliMainEntraMode:
         fake_sessions = [(tmp_path, {"session_id": "s1"})]
         mock_result = MagicMock()
         mock_result.success = True
+        mock_result.sessions_uploaded = 1
+        mock_result.events_uploaded = 1
+        mock_result.events_malformed = 0
+        mock_result.events_unreadable = 0
+        mock_result.retries = 0
         mock_result.to_dict.return_value = {
             "status": "completed",
             "sessions_uploaded": 1,
@@ -514,6 +529,11 @@ class TestDestinationConfiguredAuth:
         fake_sessions = [(tmp_path, {"session_id": "s1"})]
         mock_result = MagicMock()
         mock_result.success = True
+        mock_result.sessions_uploaded = 1
+        mock_result.events_uploaded = 1
+        mock_result.events_malformed = 0
+        mock_result.events_unreadable = 0
+        mock_result.retries = 0
         mock_result.events_skipped = 0
         mock_result.events_unmapped = 0
         mock_result.to_dict.return_value = {
@@ -594,6 +614,11 @@ class TestDestinationConfiguredAuth:
         fake_sessions = [(tmp_path, {"session_id": "s1"})]
         mock_result = MagicMock()
         mock_result.success = True
+        mock_result.sessions_uploaded = 1
+        mock_result.events_uploaded = 1
+        mock_result.events_malformed = 0
+        mock_result.events_unreadable = 0
+        mock_result.retries = 0
         mock_result.events_skipped = 0
         mock_result.events_unmapped = 0
         mock_result.to_dict.return_value = {
@@ -664,6 +689,11 @@ class TestDestinationConfiguredAuth:
         fake_sessions = [(tmp_path, {"session_id": "s1"})]
         mock_result = MagicMock()
         mock_result.success = True
+        mock_result.sessions_uploaded = 1
+        mock_result.events_uploaded = 1
+        mock_result.events_malformed = 0
+        mock_result.events_unreadable = 0
+        mock_result.retries = 0
         mock_result.events_skipped = 0
         mock_result.events_unmapped = 0
         mock_result.to_dict.return_value = {

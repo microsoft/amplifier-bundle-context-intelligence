@@ -42,8 +42,8 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-
 from amplifier_module_hook_context_intelligence.upload import _canonical_json
+
 from amplifier_module_tool_context_intelligence_upload.legacy_transform import (
     derive_workspace,
     reassemble_event_data,

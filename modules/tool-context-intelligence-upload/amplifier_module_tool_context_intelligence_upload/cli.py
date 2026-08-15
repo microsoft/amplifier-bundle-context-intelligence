@@ -24,7 +24,7 @@ from .formats import FORMATS
 from .keys_env import load_keys_env_into_environ
 from .logging_hook_format import discover_legacy
 from .preview import ConfirmationRequiredError, build_preview_text, confirm_upload
-from .progress import TwoLevelProgressRenderer, progress_file_path, session_label
+from .progress import TwoLevelProgressRenderer, folder_label, progress_file_path
 from .reconciliation import reconciliation_summary
 from .session_filter import default_scan_root, filter_sessions, resolve_session_working_dir
 from .session_graph import ScopeError, resolve_upload_sessions
@@ -414,7 +414,7 @@ def _make_help_action(text: str) -> type[argparse.Action]:
             option_strings: list[str],
             dest: str = argparse.SUPPRESS,
             default: str = argparse.SUPPRESS,
-            help: str | None = None,  # noqa: A002
+            help: str | None = None,
         ) -> None:
             super().__init__(
                 option_strings=option_strings,
@@ -610,6 +610,18 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
     )
 
+    parser.add_argument(
+        "--verbose",
+        action="store_true",
+        default=False,
+        dest="verbose",
+        help=(
+            "Print extra diagnostic lines (job id/progress file path, discovery scope "
+            "details, live/unclassified session notes) that are hidden by default so "
+            "the happy-path output stays limited to the preview block and the prompt."
+        ),
+    )
+
     return parser
 
 
@@ -791,8 +803,9 @@ def main() -> None:
     job_id: str = args.job_id
     if job_id is None:
         job_id = str(uuid.uuid4())
-        prog_default = f"/tmp/context-intelligence-upload-{job_id}.json"
-        print(f"job_id: {job_id}  progress={prog_default}", file=sys.stderr)
+        if args.verbose:
+            prog_default = f"/tmp/context-intelligence-upload-{job_id}.json"
+            print(f"job_id: {job_id}  progress={prog_default}", file=sys.stderr)
 
     # 2. Resolve the scan root: --path if given, else ~/.amplifier/projects.
     target_path = Path(args.path) if args.path else default_scan_root()
@@ -833,16 +846,20 @@ def main() -> None:
             sys.exit(2)
 
         sessions = scope.sessions
+        # Dangling parents are folded into the preview's "what will be sent:"
+        # block below (preview.py::build_preview_text dangling_parent_count)
+        # rather than printed as a separate top-level note -- see Part 6 item 3.
+        dangling_parent_count = len(scope.dangling_parent_ids)
 
-        print(
-            f"scope: mode={scope.mode} root(s)={','.join(scope.selected_root_ids)} "
-            f"uploading {scope.selected_count} of {scope.total_discovered} discovered session(s)",
-            file=sys.stderr,
-        )
-        if scope.dangling_parent_ids:
+        if args.verbose:
+            # This is a PRE-filter count: it reflects everything
+            # resolve_upload_sessions discovered before the destination's
+            # include/exclude patterns run (step 3b below). It is worded to
+            # not be mistaken for the actual upload count -- that number
+            # comes from the preview's "uploading:" line, post-filter.
             print(
-                f"note: {len(scope.dangling_parent_ids)} parent session(s) not included "
-                f"will appear as placeholders until uploaded: {','.join(scope.dangling_parent_ids)}",
+                f"scope: mode={scope.mode} \u2014 {scope.total_discovered} session(s) "
+                "discovered (before destination filtering)",
                 file=sys.stderr,
             )
     else:
@@ -853,6 +870,7 @@ def main() -> None:
         discovery = discover_legacy(target_path)
         sessions = discovery.sessions
         live_sessions_skipped = discovery.live_skipped
+        dangling_parent_count = 0
 
         if not sessions:
             print(
@@ -861,28 +879,29 @@ def main() -> None:
                 file=sys.stderr,
             )
 
-        print(
-            f"scope: format={args.format} discovered {len(sessions)} legacy session(s); "
-            f"live-skipped={discovery.live_skipped}, "
-            f"unresolved-workspace={discovery.unresolved_workspace}, "
-            f"unclassified={discovery.unclassified}",
-            file=sys.stderr,
-        )
-
-        if discovery.live_skipped:
+        if args.verbose:
             print(
-                f"note: {discovery.live_skipped} live/in-progress session(s) skipped: "
-                f"{','.join(discovery.live_skipped_ids)}",
+                f"scope: format={args.format} discovered {len(sessions)} legacy session(s); "
+                f"live-skipped={discovery.live_skipped}, "
+                f"unresolved-workspace={discovery.unresolved_workspace}, "
+                f"unclassified={discovery.unclassified}",
                 file=sys.stderr,
             )
 
-        if discovery.unclassified:
-            print(
-                f"note: {discovery.unclassified} session(s) skipped as unclassified "
-                f"(schema sniff inconclusive, not silently dropped): "
-                f"{','.join(discovery.unclassified_ids)}",
-                file=sys.stderr,
-            )
+            if discovery.live_skipped:
+                print(
+                    f"note: {discovery.live_skipped} live/in-progress session(s) skipped: "
+                    f"{','.join(discovery.live_skipped_ids)}",
+                    file=sys.stderr,
+                )
+
+            if discovery.unclassified:
+                print(
+                    f"note: {discovery.unclassified} session(s) skipped as unclassified "
+                    f"(schema sniff inconclusive, not silently dropped): "
+                    f"{','.join(discovery.unclassified_ids)}",
+                    file=sys.stderr,
+                )
 
     # 3b. Destination filter -- runs ONCE on the final pre-upload list, before
     #     the empty guard, so it covers both the upload loop and the
@@ -954,6 +973,7 @@ def main() -> None:
                 folder_entries,
                 sessions_filtered_out,
                 source_format=args.format,
+                dangling_parent_count=dangling_parent_count,
             ),
             file=sys.stderr,
         )
@@ -982,17 +1002,28 @@ def main() -> None:
 
     # 5. Create progress tracker
     prog_path = progress_file_path(job_id, override=args.progress)
-    labels = {
-        str(session_metadata.get("session_id") or session_dir.name): session_label(
+    # folder_label() -- not session_label() -- because the live progress
+    # block's "now:" field shows the folder an operator recognizes (the same
+    # grouping the preview's "from N folders:" section uses), not a raw
+    # session UUID. failure_block()'s "session:" field also uses this map
+    # (via TwoLevelProgressRenderer._session_display) to render folder/id.
+    folder_labels = {
+        str(session_metadata.get("session_id") or session_dir.name): folder_label(
             session_dir, session_metadata
         )
         for session_dir, session_metadata in sessions
     }
+    destination_display_name = (
+        conn.destination.name if conn.destination else "(explicit --server-url)"
+    )
+    events_total_overall = _count_total_events(sessions)
     tracker = TwoLevelProgressRenderer(
         job_id,
         prog_path,
         len(sessions),
-        labels=labels,
+        events_total_overall,
+        destination_name=destination_display_name,
+        folder_labels=folder_labels,
     )
 
     # 6. Run upload
@@ -1015,37 +1046,60 @@ def main() -> None:
     )
     upload_duration_s = time.monotonic() - upload_started_at
 
-    # 6b. Print the operator reconciliation summary -- independently-measured
-    # counts only (read is a fresh non-blank-line count from the events.jsonl
-    # files on disk, NOT a rederivation of ingested + skipped).
+    # 6b. Reconciliation is only worth surfacing when the independently
+    # measured "read" count (fresh non-blank-line count from events.jsonl on
+    # disk) disagrees with what was actually ingested -- that disagreement is
+    # the one signal an operator needs to act on. When they match, printing a
+    # reconciliation line every run is noise on the happy path (Part 2).
     read_total = _count_total_events(sessions)
-
-    print(
-        "reconciliation: "
-        + reconciliation_summary(
-            read=read_total,
-            ingested=upload_result.events_uploaded,
-            skipped=upload_result.events_skipped,
-            unmapped=upload_result.events_unmapped,
-            live_sessions_skipped=live_sessions_skipped,
-        ),
-        file=sys.stderr,
-    )
-
-    print(
-        tracker.final_summary(
-            destination_name=(
-                conn.destination.name if conn.destination else "(explicit --server-url)"
+    if read_total != upload_result.events_uploaded:
+        print(
+            "warning: reconciliation mismatch -- "
+            + reconciliation_summary(
+                read=read_total,
+                ingested=upload_result.events_uploaded,
+                skipped=upload_result.events_skipped,
+                unmapped=upload_result.events_unmapped,
+                live_sessions_skipped=live_sessions_skipped,
             ),
-            destination_url=server_url,
-            sessions_uploaded=upload_result.sessions_uploaded,
-            events_sent=upload_result.events_uploaded,
-            events_skipped=upload_result.events_skipped,
-            filtered_out=sessions_filtered_out,
-            duration_s=upload_duration_s,
-        ),
-        file=sys.stderr,
-    )
+            file=sys.stderr,
+        )
+
+    # 6c. Completion or failure block. mark_failed() already recorded
+    # failed_at via the tracker (inside run_upload), so failure details come
+    # from upload_result.failed_at -- the same data the progress JSON file's
+    # "failed_at" key carries.
+    if upload_result.success:
+        print(
+            tracker.completion_block(
+                destination_name=destination_display_name,
+                destination_url=f"{server_url.rstrip('/')}/events",
+                sessions_uploaded=upload_result.sessions_uploaded,
+                events_sent=upload_result.events_uploaded,
+                events_malformed=upload_result.events_malformed,
+                events_unreadable=upload_result.events_unreadable,
+                retries=upload_result.retries,
+                duration_s=upload_duration_s,
+            ),
+            file=sys.stderr,
+        )
+    else:
+        failed_at = upload_result.failed_at or {}
+        http_status = failed_at.get("http_status", 0)
+        error_detail = upload_result.error or "unknown error"
+        error_display = f"HTTP {http_status} \u2014 {error_detail}" if http_status else error_detail
+        print(
+            tracker.failure_block(
+                sessions_uploaded=upload_result.sessions_uploaded,
+                events_sent=upload_result.events_uploaded,
+                failed_session_id=str(failed_at.get("session_id", "")),
+                failed_event_index=int(failed_at.get("event_index", 0)),
+                error=error_display,
+                job_id=job_id,
+                duration_s=upload_duration_s,
+            ),
+            file=sys.stderr,
+        )
 
     # 7. Write result JSON to stdout
     sys.stdout.write(json.dumps(upload_result.to_dict(), indent=2) + "\n")
