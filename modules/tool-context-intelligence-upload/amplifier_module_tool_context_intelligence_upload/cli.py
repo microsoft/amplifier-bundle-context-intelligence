@@ -26,7 +26,7 @@ from .logging_hook_format import discover_legacy
 from .preview import ConfirmationRequiredError, build_preview_text, confirm_upload
 from .progress import TwoLevelProgressRenderer, progress_file_path, session_label
 from .reconciliation import reconciliation_summary
-from .session_filter import default_scan_root, filter_sessions
+from .session_filter import default_scan_root, filter_sessions, resolve_session_working_dir
 from .session_graph import ScopeError, resolve_upload_sessions
 from .uploader import _count_lines, run_upload
 
@@ -734,6 +734,21 @@ def _resolve_connection(args: argparse.Namespace) -> _Connection:
     )
 
 
+def _count_events_per_session(sessions: list[tuple[Path, dict]]) -> list[int]:
+    """Return one non-blank event line count per session, in input order.
+
+    Counted fresh from each session's ``events.jsonl`` on disk.  A session
+    with no events file contributes ``0`` rather than being skipped, so the
+    returned list always aligns positionally with *sessions* -- callers zip
+    the two together to attribute counts back to individual sessions.
+    """
+    counts: list[int] = []
+    for session_dir, _session_metadata in sessions:
+        events_file = session_dir / "events.jsonl"
+        counts.append(_count_lines(events_file) if events_file.exists() else 0)
+    return counts
+
+
 def _count_total_events(sessions: list[tuple[Path, dict]]) -> int:
     """Sum non-blank event line counts across each session's events.jsonl.
 
@@ -741,12 +756,7 @@ def _count_total_events(sessions: list[tuple[Path, dict]]) -> int:
     reconciliation "read" count -- both need the same independently-measured
     total, counted fresh from disk rather than rederived from upload results.
     """
-    total = 0
-    for session_dir, _session_metadata in sessions:
-        events_file = session_dir / "events.jsonl"
-        if events_file.exists():
-            total += _count_lines(events_file)
-    return total
+    return sum(_count_events_per_session(sessions))
 
 
 # ---------------------------------------------------------------------------
@@ -921,14 +931,29 @@ def main() -> None:
     #     --server-url/--api-key the user already said "send here", so the
     #     original behavior is preserved byte-for-byte (no preview, no prompt).
     if conn.destination is not None:
-        approx_event_count = _count_total_events(sessions)
+        # Resolve each surviving session's working directory with the SAME
+        # helper filter_sessions used, so the folders the preview names are
+        # exactly the folders the include/exclude rules matched -- not a
+        # second, independently-derived notion of "where this session ran".
+        preview_path_fallback = Path(args.path) if args.path else None
+        folder_entries = [
+            (
+                resolve_session_working_dir(session_dir, session_metadata, preview_path_fallback),
+                event_count,
+            )
+            for (session_dir, session_metadata), event_count in zip(
+                sessions,
+                _count_events_per_session(sessions),
+                strict=True,
+            )
+        ]
 
         print(
             build_preview_text(
                 conn.destination,
-                len(sessions),
-                approx_event_count,
+                folder_entries,
                 sessions_filtered_out,
+                source_format=args.format,
             ),
             file=sys.stderr,
         )
