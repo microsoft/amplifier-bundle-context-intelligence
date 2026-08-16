@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import sys
 import time
 from datetime import UTC, datetime
@@ -225,12 +226,28 @@ class TwoLevelProgressRenderer(ProgressTracker):
     """
 
     _BAR_CELLS = 20
+    #: The bar shrinks as terminal width tightens but is dropped entirely
+    #: once it can't fit at this many cells -- below that, a sliver of
+    #: "#"/"-" stops being a legible bar.
+    _MIN_BAR_CELLS = 4
     _REDRAW_EVENTS = 100
     _REDRAW_SECONDS = 0.25
     _NONTTY_INTERVAL_SECONDS = 30.0
     #: Below this elapsed time (or with zero events sent), the run hasn't
     #: produced enough throughput data yet for an ETA to mean anything.
     _ETA_MIN_ELAPSED_S = 2.0
+    #: Sanity clamp: an ETA extrapolated from a tiny fraction of progress
+    #: can be wildly disproportionate to the time actually spent -- e.g. 3
+    #: of 700 events sent at the 22s mark implies ~1h25m remaining, 232x
+    #: the elapsed time. Once the extrapolated remaining time exceeds this
+    #: multiple of elapsed time, the estimate isn't trustworthy yet -- keep
+    #: showing "estimating..." instead of an alarming or silly number. A
+    #: pure elapsed-time or event-count floor was considered and rejected:
+    #: either would need per-job tuning (a threshold right for 700 events
+    #: is wrong for 95,000), whereas this ratio scales with the job and
+    #: catches exactly the "one or two lucky/unlucky early events" case
+    #: that produces a wild extrapolation.
+    _ETA_MAX_REMAINING_MULTIPLE = 20
 
     def __init__(
         self,
@@ -416,22 +433,89 @@ class TwoLevelProgressRenderer(ProgressTracker):
         if fraction <= 0:
             return "estimating\u2026"
         remaining_s = elapsed_s * (1 - fraction) / fraction
+        if remaining_s > elapsed_s * self._ETA_MAX_REMAINING_MULTIPLE:
+            # Too little progress yet to trust the extrapolation (see
+            # _ETA_MAX_REMAINING_MULTIPLE docstring) -- keep estimating
+            # rather than print a wild, possibly alarming, number.
+            return "estimating\u2026"
         return f"~{format_duration(remaining_s)} remaining"
 
+    def _bar(self, cells: int, percent: int) -> str:
+        """Render a progress bar of exactly *cells* cells at *percent*."""
+        if cells <= 0:
+            return ""
+        filled = int(cells * percent / 100)
+        return "#" * filled + "-" * (cells - filled)
+
+    def _render_line1(self, width: int, percent: int) -> str:
+        """Build line 1 (bar + percent + counts), degrading to fit *width*.
+
+        Degradation ladder, highest priority (never dropped) first:
+        percentage > session counts > event counts. The bar shrinks
+        continuously from :data:`_BAR_CELLS` down to :data:`_MIN_BAR_CELLS`
+        before any segment is dropped, and is omitted entirely once even
+        the minimum size doesn't fit. This is a best-effort layout pass --
+        the caller applies an unconditional hard truncate afterward as the
+        safety net, so failing to fit here is never a correctness bug.
+        """
+        percent_seg = f"{percent}%"
+        sessions_seg = f"{self._sessions_completed:,}/{self._sessions_total:,} sessions"
+        events_seg = f"{self._events_sent_total:,}/{self._events_total:,} events"
+        budget = width - 1
+
+        for segments in ([sessions_seg, events_seg], [sessions_seg], []):
+            tail = _FIELD_SEP.join([percent_seg, *segments])
+            for cells in range(self._BAR_CELLS, self._MIN_BAR_CELLS - 1, -1):
+                candidate = f"  |{self._bar(cells, percent)}|  {tail}"
+                if len(candidate) <= budget:
+                    return candidate
+            candidate = f"  {tail}"
+            if len(candidate) <= budget:
+                return candidate
+        return f"  {percent_seg}"
+
+    def _render_line2(self, width: int, elapsed_str: str, eta_str: str) -> str:
+        """Build line 2 (elapsed + ETA + current session), degrading to fit *width*.
+
+        Degradation ladder, highest priority (dropped last) first: elapsed
+        > ETA > current-session name. The ``now:`` segment is omitted
+        outright whenever there is no current session yet (Fix 3),
+        independent of width.
+        """
+        segments = [f"{elapsed_str} elapsed", eta_str]
+        if self._current_folder_label:
+            segments.append(f"now: {self._current_folder_label}")
+        budget = width - 1
+
+        for end in range(len(segments), 0, -1):
+            candidate = "  " + _FIELD_SEP.join(segments[:end])
+            if len(candidate) <= budget:
+                return candidate
+        return "  "
+
     def _render_lines(self) -> tuple[str, str]:
+        """Render both progress lines, guaranteed to fit one physical row each.
+
+        Terminal width is re-read fresh on every call (via
+        ``shutil.get_terminal_size``) so a mid-upload resize is picked up
+        on the next redraw. Each line is built by a width-aware,
+        priority-ordered degradation pass (see :meth:`_render_line1` /
+        :meth:`_render_line2`), then unconditionally hard-truncated to
+        ``width - 1`` visible characters -- the truncate is the
+        correctness guarantee the ``\\033[1A\\033[1A`` two-row redraw
+        depends on; the degradation above only makes narrow output more
+        useful than a bare chop.
+        """
+        width = shutil.get_terminal_size(fallback=(80, 24)).columns
         percent = self._percent()
-        filled = int(self._BAR_CELLS * percent / 100)
-        bar = "#" * filled + "-" * (self._BAR_CELLS - filled)
-        line1 = (
-            f"  |{bar}|  {percent}%{_FIELD_SEP}"
-            f"{self._sessions_completed:,}/{self._sessions_total:,} sessions{_FIELD_SEP}"
-            f"{self._events_sent_total:,}/{self._events_total:,} events"
-        )
         elapsed_s = time.monotonic() - self._start_monotonic
         elapsed_str = format_duration(elapsed_s)
         eta_str = self._eta_str(elapsed_s)
-        line2 = f"  {elapsed_str} elapsed{_FIELD_SEP}{eta_str}{_FIELD_SEP}now: {self._current_folder_label}"
-        return line1, line2
+
+        line1 = self._render_line1(width, percent)
+        line2 = self._render_line2(width, elapsed_str, eta_str)
+        budget = max(0, width - 1)
+        return line1[:budget], line2[:budget]
 
     def _redraw(self) -> None:
         """Redraw the fixed 2-line block in place (TTY only).

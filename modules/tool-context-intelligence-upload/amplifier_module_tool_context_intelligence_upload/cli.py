@@ -1051,8 +1051,14 @@ def main() -> None:
     # disk) disagrees with what was actually ingested -- that disagreement is
     # the one signal an operator needs to act on. When they match, printing a
     # reconciliation line every run is noise on the happy path (Part 2).
+    #
+    # Only checked when the upload ran to completion. On a failed upload,
+    # read != ingested is expected arithmetic (the run stopped early) --
+    # not a data-integrity signal -- and the failure block below already
+    # reports what was sent before the failure. Printing the mismatch
+    # warning too would stack two alarming messages on top of one problem.
     read_total = _count_total_events(sessions)
-    if read_total != upload_result.events_uploaded:
+    if upload_result.success and read_total != upload_result.events_uploaded:
         print(
             "warning: reconciliation mismatch -- "
             + reconciliation_summary(

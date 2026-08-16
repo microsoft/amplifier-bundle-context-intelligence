@@ -6,6 +6,7 @@ import io
 import json
 import sys
 from pathlib import Path
+from typing import ClassVar
 
 from amplifier_module_tool_context_intelligence_upload.progress import (
     ProgressTracker,
@@ -879,3 +880,403 @@ class TestFailureBlock:
         captured = capsys.readouterr()
         assert captured.out == ""
         assert captured.err == ""
+
+
+# ---------------------------------------------------------------------------
+# TestLineWidthSafety (Fix 1 -- lines never wrap regardless of width/state)
+# ---------------------------------------------------------------------------
+
+
+def _bare_renderer() -> TwoLevelProgressRenderer:
+    """Build a TwoLevelProgressRenderer without running __init__.
+
+    _render_line1/_render_line2/_render_lines are pure functions of a
+    handful of instance attributes -- constructing via __new__ and setting
+    only those attributes keeps these tests focused on the rendering math
+    instead of the constructor's I/O side effects (file writes, isatty).
+    """
+    r = TwoLevelProgressRenderer.__new__(TwoLevelProgressRenderer)
+    r._sessions_completed = 0
+    r._sessions_total = 12
+    r._events_sent_total = 0
+    r._events_total = 700
+    r._current_folder_label = ""
+    return r
+
+
+class TestLineWidthSafety:
+    """The hard truncate safety net: a rendered line must never exceed
+    ``width - 1`` visible characters, for any width or progress state --
+    this is the property the cursor-up-2 redraw correctness depends on."""
+
+    _WIDTHS: ClassVar[list[int]] = [30, 40, 60, 80, 120, 200]
+
+    _STATES: ClassVar[list[tuple[int, int, int, int, str]]] = [
+        # (sessions_completed, sessions_total, events_sent, events_total, folder_label)
+        (0, 12, 0, 700, ""),
+        (6, 12, 350, 700, "proj-alpha"),
+        (12, 12, 700, 700, "proj-alpha"),
+        (3, 500, 12345, 999999, "a-very-long-project-folder-name-that-keeps-going-and-going"),
+        (999, 1000, 999999, 1000000, "z" * 80),
+    ]
+
+    def test_line1_never_exceeds_width_minus_one(self) -> None:
+        for width in self._WIDTHS:
+            for (
+                sessions_completed,
+                sessions_total,
+                events_sent,
+                events_total,
+                _label,
+            ) in self._STATES:
+                r = _bare_renderer()
+                r._sessions_completed = sessions_completed
+                r._sessions_total = sessions_total
+                r._events_sent_total = events_sent
+                r._events_total = events_total
+                percent = int(events_sent * 100 / (events_total or 1))
+                line1 = r._render_line1(width, percent)
+                # Mirror the unconditional hard-truncate the caller applies.
+                line1 = line1[: max(0, width - 1)]
+                assert len(line1) <= width - 1, (width, sessions_completed, events_sent, line1)
+
+    def test_line2_never_exceeds_width_minus_one(self) -> None:
+        for width in self._WIDTHS:
+            for _sc, _st, _es, _et, label in self._STATES:
+                r = _bare_renderer()
+                r._current_folder_label = label
+                line2 = r._render_line2(width, "2m 19s", "~1m 2s remaining")
+                line2 = line2[: max(0, width - 1)]
+                assert len(line2) <= width - 1, (width, label, line2)
+
+    def test_render_lines_hard_truncate_is_unconditional_even_for_absurd_state(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        """The safety net applies even to states the degradation ladder
+        wasn't designed for (e.g. an extremely long current-session label
+        at a very narrow width) -- truncation is the correctness guarantee,
+        degradation is only the best-effort layer above it."""
+        monkeypatch.setattr(sys.stdout, "isatty", lambda: True)
+        monkeypatch.setattr(
+            "amplifier_module_tool_context_intelligence_upload.progress.shutil.get_terminal_size",
+            lambda fallback=(80, 24): __import__("os").terminal_size((20, 24)),
+        )
+        clock = _FakeClock()
+        monkeypatch.setattr(
+            "amplifier_module_tool_context_intelligence_upload.progress.time.monotonic",
+            clock,
+        )
+        renderer = TwoLevelProgressRenderer(
+            "job-1",
+            tmp_path / "p.json",
+            1,
+            10,
+            folder_labels={"s1": "x" * 300},
+            stream=io.StringIO(),
+        )
+        clock.advance(3)
+        renderer.start_session("s1", events_total=10)
+        line1, line2 = renderer._render_lines()
+        assert len(line1) <= 19
+        assert len(line2) <= 19
+
+
+# ---------------------------------------------------------------------------
+# TestLine1Degradation (Fix 1 -- priority ladder: percent > sessions > events)
+# ---------------------------------------------------------------------------
+
+
+class TestLine1Degradation:
+    """Verifies the documented degradation order for line 1: the bar
+    shrinks first, then event counts drop, then session counts drop --
+    percent is never dropped."""
+
+    def _line1(
+        self, width: int, sessions_completed=6, sessions_total=12, events_sent=350, events_total=700
+    ):
+        r = _bare_renderer()
+        r._sessions_completed = sessions_completed
+        r._sessions_total = sessions_total
+        r._events_sent_total = events_sent
+        r._events_total = events_total
+        percent = int(events_sent * 100 / (events_total or 1))
+        return r._render_line1(width, percent)
+
+    def test_wide_width_shows_full_bar_sessions_and_events(self) -> None:
+        line1 = self._line1(120)
+        assert "|" in line1  # bar present
+        assert line1.count("#") + line1.count("-") == 20  # full-size bar
+        assert "6/12 sessions" in line1
+        assert "350/700 events" in line1
+        assert "50%" in line1
+
+    def test_bar_shrinks_before_any_segment_drops(self) -> None:
+        line1 = self._line1(60)
+        assert "6/12 sessions" in line1
+        assert "350/700 events" in line1
+        bar_section = line1.split("|")[1]
+        assert 4 <= len(bar_section) < 20  # shrunk, not full, not dropped
+
+    def test_bar_dropped_before_events_segment_drops(self) -> None:
+        line1 = self._line1(50)
+        assert "|" not in line1  # bar gone
+        assert "6/12 sessions" in line1
+        assert "350/700 events" in line1
+
+    def test_events_segment_dropped_before_sessions_segment(self) -> None:
+        line1 = self._line1(40)
+        assert "6/12 sessions" in line1
+        assert "events" not in line1
+
+    def test_sessions_segment_dropped_before_percent(self) -> None:
+        line1 = self._line1(20)
+        assert "sessions" not in line1
+        assert "events" not in line1
+        assert "50%" in line1
+
+    def test_percent_never_dropped_even_at_minimum_width(self) -> None:
+        line1 = self._line1(10)
+        assert "50%" in line1
+
+
+# ---------------------------------------------------------------------------
+# TestLine2Degradation (Fix 1 -- priority ladder: elapsed > ETA > now:)
+# ---------------------------------------------------------------------------
+
+
+class TestLine2Degradation:
+    """Verifies the documented degradation order for line 2: elapsed is
+    kept longest, ETA drops next, the current-session name drops first."""
+
+    def _line2(
+        self, width: int, label: str = "proj-alpha-with-a-somewhat-long-project-folder-name"
+    ):
+        r = _bare_renderer()
+        r._current_folder_label = label
+        return r._render_line2(width, "2m 19s", "~0s remaining")
+
+    def test_wide_width_shows_all_three_segments(self) -> None:
+        line2 = self._line2(120)
+        assert "2m 19s elapsed" in line2
+        assert "~0s remaining" in line2
+        assert "now: proj-alpha-with-a-somewhat-long-project-folder-name" in line2
+
+    def test_now_segment_dropped_before_eta(self) -> None:
+        line2 = self._line2(60)
+        assert "2m 19s elapsed" in line2
+        assert "~0s remaining" in line2
+        assert "now:" not in line2
+
+    def test_eta_dropped_before_elapsed(self) -> None:
+        line2 = self._line2(30)
+        assert "2m 19s elapsed" in line2
+        assert "remaining" not in line2
+        assert "now:" not in line2
+
+    def test_elapsed_kept_even_at_minimum_width(self) -> None:
+        # Elapsed alone ("  2m 19s elapsed") is 16 visible chars -- still
+        # fits at width=20 (budget 19) but not at width=10 (budget 9),
+        # where nothing fits and the line degrades to blank.
+        line2 = self._line2(20)
+        assert "2m 19s elapsed" in line2
+
+
+# ---------------------------------------------------------------------------
+# TestWideWidthUnchanged (120 columns must be byte-identical to pre-fix format)
+# ---------------------------------------------------------------------------
+
+
+class TestWideWidthUnchanged:
+    """At 120 columns (and the 80-column fallback used when no real
+    terminal is attached), the rendered lines must be byte-identical to the
+    original fixed-width format -- only Fix 3 (now: omission) and Fix 4
+    (ETA sanity) are permitted to change text, and neither applies to
+    these fully-populated, well-progressed states."""
+
+    def test_line1_matches_original_fixed_format_at_120_columns(self) -> None:
+        r = _bare_renderer()
+        r._sessions_completed = 6
+        r._sessions_total = 12
+        r._events_sent_total = 350
+        r._events_total = 700
+        line1 = r._render_line1(120, 50)
+        assert (
+            line1
+            == "  |##########----------|  50%   \u00b7   6/12 sessions   \u00b7   350/700 events"
+        )
+
+    def test_line2_matches_original_fixed_format_at_120_columns(self) -> None:
+        r = _bare_renderer()
+        r._current_folder_label = "proj-alpha"
+        line2 = r._render_line2(120, "2m 19s", "~0s remaining")
+        assert line2 == "  2m 19s elapsed   \u00b7   ~0s remaining   \u00b7   now: proj-alpha"
+
+    def test_default_fallback_80_columns_matches_original_format_too(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        """No COLUMNS env var and no real terminal -> shutil.get_terminal_size
+        falls back to (80, 24), which is wide enough that nothing degrades;
+        this is the width the existing (pre-Fix-1) test suite already runs
+        under, so this pins that those tests keep passing unmodified."""
+        monkeypatch.delenv("COLUMNS", raising=False)
+        monkeypatch.setattr(sys.stdout, "isatty", lambda: True)
+        clock = _FakeClock()
+        monkeypatch.setattr(
+            "amplifier_module_tool_context_intelligence_upload.progress.time.monotonic",
+            clock,
+        )
+        stream = io.StringIO()
+        renderer = TwoLevelProgressRenderer(
+            "job-1",
+            tmp_path / "p.json",
+            2,
+            4,
+            folder_labels={"s1": "proj"},
+            stream=stream,
+        )
+        clock.advance(3)
+        renderer.start_session("s1", events_total=4)
+        renderer.event_sent()
+        clock.advance(1)
+        renderer.event_sent()
+        out = stream.getvalue()
+        assert "|##########----------|" in out  # full 20-cell bar, undegraded
+        assert "50%" in out
+        assert "0/2 sessions" in out
+        assert "2/4 events" in out
+
+
+# ---------------------------------------------------------------------------
+# TestNowFieldOmitted (Fix 3 -- no empty "now:" on the first frame)
+# ---------------------------------------------------------------------------
+
+
+class TestNowFieldOmitted:
+    def test_now_segment_absent_when_no_current_session(self) -> None:
+        r = _bare_renderer()
+        r._current_folder_label = ""
+        line2 = r._render_line2(120, "0s", "estimating\u2026")
+        assert "now:" not in line2
+        assert "now: " not in line2
+
+    def test_now_segment_present_once_a_session_has_started(self) -> None:
+        r = _bare_renderer()
+        r._current_folder_label = "proj-alpha"
+        line2 = r._render_line2(120, "0s", "estimating\u2026")
+        assert "now: proj-alpha" in line2
+
+    def test_first_frame_of_a_real_renderer_has_no_now_segment(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        """End-to-end: the very first redraw (fired from __init__, before
+        any session has started) must not print an empty 'now: ' segment."""
+        monkeypatch.setattr(sys.stdout, "isatty", lambda: True)
+        monkeypatch.setattr(
+            "amplifier_module_tool_context_intelligence_upload.progress.shutil.get_terminal_size",
+            lambda fallback=(80, 24): __import__("os").terminal_size((120, 24)),
+        )
+        clock = _FakeClock()
+        monkeypatch.setattr(
+            "amplifier_module_tool_context_intelligence_upload.progress.time.monotonic",
+            clock,
+        )
+        stream = io.StringIO()
+        _renderer = TwoLevelProgressRenderer(
+            "job-1",
+            tmp_path / "p.json",
+            2,
+            4,
+            folder_labels={"s1": "proj"},
+            stream=stream,
+        )
+        out = stream.getvalue()
+        assert "now:" not in out
+
+
+# ---------------------------------------------------------------------------
+# TestEtaSanity (Fix 4 -- estimating... floor and absurd-value clamp)
+# ---------------------------------------------------------------------------
+
+
+class TestEtaSanity:
+    def _renderer_for_eta(
+        self, events_total: int = 700, events_sent: int = 0
+    ) -> TwoLevelProgressRenderer:
+        r = _bare_renderer()
+        r._events_total = events_total
+        r._events_sent_total = events_sent
+        return r
+
+    def test_estimating_shown_below_min_elapsed_threshold(self) -> None:
+        r = self._renderer_for_eta(events_sent=3)
+        assert r._eta_str(1.0) == "estimating\u2026"
+
+    def test_estimating_shown_with_zero_events_sent_regardless_of_elapsed(self) -> None:
+        r = self._renderer_for_eta(events_sent=0)
+        assert r._eta_str(60.0) == "estimating\u2026"
+
+    def test_estimating_shown_for_tiny_sample_that_would_extrapolate_wildly(self) -> None:
+        """The exact reported case: 3/700 events at 22s elapsed extrapolates
+        to ~1h25m remaining (232x elapsed) -- far past the trust threshold,
+        so it must still say 'estimating...' rather than print that number."""
+        r = self._renderer_for_eta(events_total=700, events_sent=3)
+        assert r._eta_str(22.0) == "estimating\u2026"
+
+    def test_eta_shown_once_sample_is_large_enough_to_trust(self) -> None:
+        """100/700 events at 22s extrapolates to ~132s remaining (~6x
+        elapsed) -- well within the trust threshold, so a real ETA shows."""
+        r = self._renderer_for_eta(events_total=700, events_sent=100)
+        eta = r._eta_str(22.0)
+        assert eta != "estimating\u2026"
+        assert "remaining" in eta
+
+    def test_eta_shrinks_toward_zero_as_upload_approaches_completion(self) -> None:
+        r = self._renderer_for_eta(events_total=700, events_sent=700)
+        assert r._eta_str(22.0) == "~0s remaining"
+
+
+# ---------------------------------------------------------------------------
+# TestMidUploadResize (Fix 1 -- terminal width is re-read on every frame)
+# ---------------------------------------------------------------------------
+
+
+class TestMidUploadResize:
+    def test_width_is_read_fresh_each_redraw(self, tmp_path: Path, monkeypatch) -> None:
+        """A resize between two redraws must be picked up on the very next
+        frame -- shutil.get_terminal_size must be called per-frame, not
+        cached once at construction."""
+        monkeypatch.setattr(sys.stdout, "isatty", lambda: True)
+        widths = [120, 30]
+        calls = {"n": 0}
+
+        def fake_size(fallback=(80, 24)):
+            idx = min(calls["n"], len(widths) - 1)
+            calls["n"] += 1
+            return __import__("os").terminal_size((widths[idx], 24))
+
+        monkeypatch.setattr(
+            "amplifier_module_tool_context_intelligence_upload.progress.shutil.get_terminal_size",
+            fake_size,
+        )
+        clock = _FakeClock()
+        monkeypatch.setattr(
+            "amplifier_module_tool_context_intelligence_upload.progress.time.monotonic",
+            clock,
+        )
+        stream = io.StringIO()
+        renderer = TwoLevelProgressRenderer(
+            "job-1",
+            tmp_path / "p.json",
+            1,
+            10,
+            folder_labels={"s1": "proj-alpha-with-a-somewhat-long-project-folder-name"},
+            stream=stream,
+        )
+        clock.advance(3)
+        renderer.start_session("s1", events_total=10)  # second redraw -> width=30
+        out = stream.getvalue()
+        frames = out.split("\033[1A\033[1A")
+        assert len(frames) == 2
+        # Second frame rendered at the narrower width -- the "now:" segment
+        # (which fits at 120) must have been dropped by width=30.
+        assert "now:" not in frames[1]
