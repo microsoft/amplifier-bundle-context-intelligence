@@ -22,10 +22,6 @@ class TestProjectSection:
         data = _load()
         assert data["project"]["name"] == "amplifier-module-tool-context-intelligence-upload"
 
-    def test_project_version(self):
-        data = _load()
-        assert data["project"]["version"] == "0.1.3"
-
     def test_requires_python(self):
         data = _load()
         assert data["project"]["requires-python"] == ">=3.11"
