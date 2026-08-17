@@ -164,11 +164,15 @@ def _classify_http_outcome(status_code: int) -> str:
         # Do NOT follow — silently following an authenticated POST redirect risks
         # leaking the bearer token to a different host.
         return _PERMANENT
-    if status_code == 401 or status_code == 429 or status_code >= 500:
+    if status_code == 401 or status_code == 408 or status_code == 429 or status_code >= 500:
+        # 408 (Request Timeout) is transient by definition — the request did not
+        # arrive/complete in time; retrying with backoff is the correct response,
+        # exactly like a 5xx or a 429. It is enumerated explicitly here rather than
+        # left to fall through to the permanent catch-all below.
         return _TRANSIENT
     # 403, 400, 413, 422, 404, 410, and any other 4xx — all non-retryable, but
     # NOT all "malformed"; see the message-layer branches in _worker for the
-    # per-status cause.
+    # per-status cause. (408 is deliberately NOT here — see the transient set above.)
     return _PERMANENT
 
 
