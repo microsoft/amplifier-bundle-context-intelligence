@@ -375,10 +375,21 @@ class TestShutdownDurableRecord:
         d.enqueue("e1", {"session_id": "sess-1"})
         await asyncio.wait_for(d._queue.join(), timeout=2.0)
 
+        records_before_close = _read_records(tmp_path)
+
         with patch(LOGGER_PATH):
             await d.close()
 
-        assert _read_records(tmp_path) == []
+        # close() on a clean shutdown must add NO durable record. The one record
+        # present is the D3 `delivery_ok` heartbeat, written by the worker on the
+        # first successful delivery (not by close()); it must not be joined by a
+        # shutdown_undelivered record on a clean drain.
+        records_after_close = _read_records(tmp_path)
+        assert records_after_close == records_before_close, (
+            "clean close() must not add any durable record"
+        )
+        assert [r for r in records_after_close if r["kind"] == "shutdown_undelivered"] == []
+        assert [r["kind"] for r in records_after_close] == ["delivery_ok"]
 
     async def test_close_shutdown_record_includes_degraded_seconds_zero_when_never_degraded(
         self, tmp_path: Path

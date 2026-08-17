@@ -386,6 +386,28 @@ class _DestinationDispatcher:
         # attempt so a stale value can never be inherited by an unrelated
         # outcome.
         self._auth_token_failed: bool = False
+        # Set True once the first successful delivery of this session emits a
+        # positive `delivery_ok` liveness record (D3). One heartbeat per
+        # dispatcher lifetime (per session); routine subsequent deliveries stay
+        # silent so the diagnostics file is not flooded on the happy path.
+        self._heartbeat_emitted: bool = False
+
+    def _emit_delivery_heartbeat(self) -> None:
+        """Emit a one-time positive liveness record on first successful delivery.
+
+        The forwarding-diagnostics sink otherwise only ever writes on a PROBLEM
+        (breaker_open, permanent_reject, auth_token_unavailable, ...), so an empty
+        log is structurally ambiguous between "healthy and delivering", "never
+        started", and "no sessions ran". A single `delivery_ok` record per session,
+        written the first time a destination actually delivers, disambiguates the
+        empty-log case: no record means no delivery happened, not a silent outage.
+        Fires at most once per dispatcher (per session); best-effort and never
+        raises into the delivery path.
+        """
+        if self._heartbeat_emitted:
+            return
+        self._heartbeat_emitted = True
+        self._record_forwarding_issue("delivery_ok", "first successful delivery this session")
 
     def _ensure_worker(self) -> None:
         if self._worker_task is None or self._worker_task.done():
@@ -707,6 +729,7 @@ class _DestinationDispatcher:
                     outcome = await self._post(event, payload_data)
                     if outcome == _DELIVERED:
                         self._breaker_record_delivered()
+                        self._emit_delivery_heartbeat()
                         self._degraded_warned = False
                         self._degraded_since = None
                     elif outcome == _TRANSIENT and self._is_hard_outcome():
@@ -841,6 +864,7 @@ class _DestinationDispatcher:
                     # _DELIVERED or _PERMANENT — advance to next event
                     if outcome == _DELIVERED:
                         self._breaker_record_delivered()
+                        self._emit_delivery_heartbeat()
                         if self._degraded_warned:
                             logger.info(
                                 "Reconnected to %s — resuming delivery.",
