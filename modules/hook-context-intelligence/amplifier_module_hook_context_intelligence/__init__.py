@@ -245,29 +245,53 @@ async def on_session_ready(coordinator: Any) -> None:
             active = select_active(destinations, match_key)
 
     # Build one dispatcher per ACTIVE destination (D9).
-    dispatchers = [
-        _DestinationDispatcher(
-            name=d.name,
-            url=d.url,
-            api_key=d.api_key,
-            workspace=resolver.workspace,
-            working_dir=resolver.working_dir,
-            dispatch_timeout=resolver.dispatch_timeout,
-            read_timeout=resolver.dispatch_read_timeout,
-            connect_timeout=resolver.dispatch_connect_timeout,
-            failure_threshold=resolver.dispatch_failure_threshold,
-            queue_capacity=resolver.dispatch_queue_capacity,
-            close_drain_timeout=resolver.close_drain_timeout,
-            backoff_initial=resolver.dispatch_backoff_initial,
-            backoff_max=resolver.dispatch_backoff_max,
-            backoff_jitter=resolver.dispatch_backoff_jitter,
-            storage_path=str(resolver.base_path),
-            forwarding_log_dir=resolver.forwarding_log_dir,
-            auth_mode=d.auth_mode,
-            auth_resource=d.auth_resource,
-        )
-        for d in active.values()
-    ]
+    #
+    # Each construction is isolated in its own try/except: _DestinationDispatcher.__init__
+    # calls build_auth_strategy() eagerly, which can raise for an environmental reason
+    # that validate_destinations() does not (and cannot) screen for -- e.g. the
+    # azure-identity credential chain failing to initialise for an "entra" destination.
+    # A bare list comprehension would let ONE such failure abort the whole thing: no
+    # set_dispatchers() call, and -- because the exception would propagate out of
+    # on_session_ready, which the kernel swallows (Phase 6, _session_init.py) -- the
+    # event registration below would never run either, silently disabling ALL capture
+    # including local JSONL. That is the one path where the "no data is lost" guarantee
+    # breaks. So: skip only the failing destination, keep the rest, and always fall
+    # through to set_dispatchers() + event registration. _record_forwarding_issue is an
+    # instance method on the dispatcher we just failed to construct, so there is nothing
+    # to call it on here -- a module-level log.error(exc_info=True) is the durable signal.
+    dispatchers: list[_DestinationDispatcher] = []
+    for d in active.values():
+        try:
+            dispatchers.append(
+                _DestinationDispatcher(
+                    name=d.name,
+                    url=d.url,
+                    api_key=d.api_key,
+                    workspace=resolver.workspace,
+                    working_dir=resolver.working_dir,
+                    dispatch_timeout=resolver.dispatch_timeout,
+                    read_timeout=resolver.dispatch_read_timeout,
+                    connect_timeout=resolver.dispatch_connect_timeout,
+                    failure_threshold=resolver.dispatch_failure_threshold,
+                    queue_capacity=resolver.dispatch_queue_capacity,
+                    close_drain_timeout=resolver.close_drain_timeout,
+                    backoff_initial=resolver.dispatch_backoff_initial,
+                    backoff_max=resolver.dispatch_backoff_max,
+                    backoff_jitter=resolver.dispatch_backoff_jitter,
+                    storage_path=str(resolver.base_path),
+                    forwarding_log_dir=resolver.forwarding_log_dir,
+                    auth_mode=d.auth_mode,
+                    auth_resource=d.auth_resource,
+                )
+            )
+        except Exception:
+            log.error(
+                "context-intelligence: destination %r failed to construct its dispatcher "
+                "(auth strategy init failed) -- dispatch disabled for this destination "
+                "only; local JSONL and any other configured destinations are unaffected.",
+                d.name,
+                exc_info=True,
+            )
     await logging_handler.set_dispatchers(dispatchers)
 
     # --- Fan-out log line (S2) ---

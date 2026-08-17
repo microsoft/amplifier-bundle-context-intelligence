@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -312,4 +312,119 @@ class TestLegacyUrlWithoutKeyMounts:
         assert any("api_key" in r.message for r in caplog.records), (
             "expected a discoverable WARNING naming the missing api_key"
         )
+        await cleanup()
+
+
+class TestDispatcherConstructionFailure:
+    """Issue #431 D4: dispatcher CONSTRUCTION (not config validation) blowing up
+    must degrade to local-only, never take down the whole fleet or local JSONL.
+
+    validate_destinations() screens bad *config* before construction, but
+    _DestinationDispatcher.__init__ calls build_auth_strategy() eagerly, which
+    can raise for an ENVIRONMENTAL reason validation cannot foresee (e.g. the
+    azure-identity credential chain failing to initialise for an "entra"
+    destination). Before the fix this raised out of the bare list comprehension
+    in on_session_ready -> set_dispatchers() was never reached AND, because the
+    kernel swallows on_session_ready exceptions, event registration below never
+    ran either -- silently disabling ALL capture including local JSONL. This is
+    the one path where the "no data is lost" guarantee broke.
+
+    Mirrors TestWorkingDirRequirement::test_absent_working_dir_degrades_to_local_only
+    for the build_auth_strategy() failure path (which had zero coverage).
+    """
+
+    async def test_build_auth_strategy_failure_degrades_to_local_only_not_raise(
+        self,
+    ) -> None:
+        """A single destination whose auth-strategy construction raises must NOT
+        propagate: on_session_ready completes and dispatchers is empty (local-only)
+        rather than the exception aborting the whole callback."""
+        config = {
+            "destinations": {
+                "only": {
+                    "url": "http://only:8000",
+                    "api_key": "k",
+                    "auth_mode": "entra",
+                    "auth_resource": "api://only",
+                    "include": ["**"],
+                },
+            }
+        }
+
+        def _boom(*_args: Any, **_kwargs: Any) -> Any:
+            raise RuntimeError("credential chain unavailable")
+
+        with patch("context_intelligence.auth.build_auth_strategy", side_effect=_boom):
+            # Must NOT raise -- a raise here would be swallowed by the kernel and
+            # abort event registration, killing local JSONL for the session.
+            _, handler, cleanup = await _mount_and_ready(config)
+
+        assert handler._dispatchers == [], (
+            "construction failure must yield zero dispatchers (local-only)"
+        )
+        await cleanup()
+
+    async def test_local_capture_survives_dispatcher_construction_failure(self) -> None:
+        """The critical regression assertion the suite lacked: even when the only
+        destination's dispatcher construction raises, the LoggingHandler is still
+        registered for events -- local events.jsonl capture is NOT disabled."""
+        config = {
+            "destinations": {
+                "only": {
+                    "url": "http://only:8000",
+                    "api_key": "k",
+                    "auth_mode": "entra",
+                    "auth_resource": "api://only",
+                    "include": ["**"],
+                },
+            }
+        }
+
+        def _boom(*_args: Any, **_kwargs: Any) -> Any:
+            raise RuntimeError("credential chain unavailable")
+
+        with patch("context_intelligence.auth.build_auth_strategy", side_effect=_boom):
+            coordinator, handler, cleanup = await _mount_and_ready(config)
+
+        assert handler._dispatchers == []
+        assert coordinator.hooks.register.called, (
+            "LoggingHandler must still be registered for events -- local JSONL capture "
+            "must survive a dispatcher construction failure"
+        )
+        await cleanup()
+
+    async def test_one_bad_destination_does_not_block_good_sibling_dispatcher(self) -> None:
+        """Mixed fleet: one destination whose auth construction raises alongside a
+        valid one -- the valid destination must still receive its dispatcher.
+        Blast radius is the single failing destination, not the whole fleet."""
+        config = {
+            "destinations": {
+                "broken": {
+                    "url": "http://broken:8000",
+                    "api_key": "k",
+                    "auth_mode": "entra",
+                    "auth_resource": "api://broken",
+                    "include": ["**"],
+                },
+                "good": {
+                    "url": "http://good:8000",
+                    "api_key": "gk",
+                    "include": ["**"],
+                },
+            }
+        }
+
+        def _selective(*_args: Any, **kwargs: Any) -> Any:
+            # Only the entra destination's credential chain fails to construct;
+            # the static one builds normally.
+            if kwargs.get("auth_mode") == "entra":
+                raise RuntimeError("credential chain unavailable")
+            return MagicMock()
+
+        with patch("context_intelligence.auth.build_auth_strategy", side_effect=_selective):
+            _, handler, cleanup = await _mount_and_ready(config)
+
+        assert len(handler._dispatchers) == 1, "only the good destination should construct"
+        assert handler._dispatchers[0]._name == "good"
+        await cleanup()
         await cleanup()
