@@ -48,6 +48,7 @@ from __future__ import annotations
 import fnmatch
 import logging
 from collections.abc import Callable, Coroutine
+from datetime import datetime, timezone
 from typing import Any
 
 log = logging.getLogger(__name__)
@@ -258,7 +259,13 @@ async def on_session_ready(coordinator: Any) -> None:
     # breaks. So: skip only the failing destination, keep the rest, and always fall
     # through to set_dispatchers() + event registration. _record_forwarding_issue is an
     # instance method on the dispatcher we just failed to construct, so there is nothing
-    # to call it on here -- a module-level log.error(exc_info=True) is the durable signal.
+    # to call it on here -- instead we write a durable forwarding-diagnostics record via
+    # the module-level _write_forwarding_record (best-effort, never raises) so the failure
+    # is visible in forwarding-*.jsonl where an operator investigating a forwarding
+    # problem actually looks, not only in the kernel log. The log.error(exc_info=True)
+    # additionally carries the full traceback for deeper diagnosis.
+    from .handlers.logging_handler import _write_forwarding_record
+
     dispatchers: list[_DestinationDispatcher] = []
     for d in active.values():
         try:
@@ -284,7 +291,26 @@ async def on_session_ready(coordinator: Any) -> None:
                     auth_resource=d.auth_resource,
                 )
             )
-        except Exception:
+        except Exception as exc:
+            # Durable forwarding-diagnostics record so the dropped destination is
+            # visible in forwarding-*.jsonl (where an operator investigating a
+            # forwarding problem looks), not only in the kernel log. Best-effort:
+            # _write_forwarding_record never raises. http_status is null (this is
+            # not an HTTP response); detail carries the exception type + message.
+            _write_forwarding_record(
+                resolver.forwarding_log_dir,
+                {
+                    "ts": datetime.now(timezone.utc).isoformat(),
+                    "destination": d.name,
+                    "url": d.url,
+                    "kind": "dispatcher_construction_failed",
+                    "http_status": None,
+                    "session_id": "",
+                    "workspace": resolver.workspace or "",
+                    "detail": (f"dispatcher construction failed: {type(exc).__name__}: {exc}"),
+                },
+            )
+            # Full traceback for deeper diagnosis (console/kernel log only).
             log.error(
                 "context-intelligence: destination %r failed to construct its dispatcher "
                 "(auth strategy init failed) -- dispatch disabled for this destination "

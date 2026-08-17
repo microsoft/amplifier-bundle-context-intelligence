@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -426,5 +427,44 @@ class TestDispatcherConstructionFailure:
 
         assert len(handler._dispatchers) == 1, "only the good destination should construct"
         assert handler._dispatchers[0]._name == "good"
+        await cleanup()
+
+    async def test_construction_failure_writes_durable_forwarding_record(
+        self, tmp_path: Any
+    ) -> None:
+        """Issue #431 D4 follow-up: the dropped destination must leave a DURABLE
+        dispatcher_construction_failed record in forwarding-*.jsonl (not only the
+        kernel log), carrying the exception type + message -- visible where an
+        operator investigating a forwarding problem actually looks."""
+        config = {
+            "forwarding_log_dir": str(tmp_path),
+            "destinations": {
+                "only": {
+                    "url": "http://only:8000",
+                    "api_key": "k",
+                    "auth_mode": "entra",
+                    "auth_resource": "api://only",
+                    "include": ["**"],
+                },
+            },
+        }
+
+        def _boom(*_args: Any, **_kwargs: Any) -> Any:
+            raise RuntimeError("credential chain unavailable")
+
+        with patch("context_intelligence.auth.build_auth_strategy", side_effect=_boom):
+            _, handler, cleanup = await _mount_and_ready(config)
+
+        assert handler._dispatchers == []  # failing destination dropped
+        files = list(tmp_path.glob("forwarding-*.jsonl"))
+        assert files, "expected a durable forwarding-diagnostics file to be written"
+        records = [json.loads(line) for f in files for line in f.read_text().splitlines()]
+        rec = next(r for r in records if r["kind"] == "dispatcher_construction_failed")
+        assert rec["destination"] == "only"
+        assert rec["http_status"] is None
+        assert "RuntimeError" in rec["detail"], f"exception type missing: {rec['detail']!r}"
+        assert "credential chain unavailable" in rec["detail"], (
+            f"exception message missing: {rec['detail']!r}"
+        )
         await cleanup()
         await cleanup()
