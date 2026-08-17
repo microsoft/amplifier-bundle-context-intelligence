@@ -1069,6 +1069,24 @@ class _DestinationDispatcher:
             # credential problem instead of retrying forever in silence.
             self._last_status = None
             self._auth_token_failed = True
+            # Durable diagnostic record: written on EVERY auth-token failure, NOT
+            # gated by the console rate-limit below, and carrying the exception TYPE
+            # and MESSAGE. Previously this was a hardcoded "auth token production
+            # failed" string written from inside the rate-limit branch, so every
+            # distinct fault -- expired token, wrong audience, broker unavailable,
+            # a masked TypeError -- collapsed to one byte-identical, uninformative
+            # record (and a burst within the rate-limit window dropped all but the
+            # first). Now each fault is individually diagnosable in the forwarding
+            # JSONL. Write volume is bounded by dispatch backoff, which throttles
+            # how often _post is attempted; _record_forwarding_issue is best-effort
+            # and never raises into this path.
+            self._record_forwarding_issue(
+                "auth_token_unavailable",
+                f"auth token production failed: {type(exc).__name__}: {exc}",
+            )
+            # Console logging (WARNING + DEBUG traceback) stays rate-limited to avoid
+            # spamming the log during a sustained outage; the durable record above is
+            # the diagnostic of record and is intentionally not throttled.
             now = time.monotonic()
             if now - self._last_headers_error_log >= _LOG_RATE_LIMIT_SECONDS:
                 self._last_headers_error_log = now
@@ -1079,9 +1097,6 @@ class _DestinationDispatcher:
                     self._name,
                     self._url,
                     type(exc).__name__,
-                )
-                self._record_forwarding_issue(
-                    "auth_token_unavailable", "auth token production failed"
                 )
                 logger.debug(
                     "%s auth-header production failed: %r",
