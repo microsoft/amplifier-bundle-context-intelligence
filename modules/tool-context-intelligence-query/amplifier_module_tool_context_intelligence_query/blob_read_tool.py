@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import json
 import re
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -36,7 +37,11 @@ from context_intelligence.tool_resolver import (
 )
 
 _URI_SCHEME = "ci-blob://"
-_BLOB_DIR = Path("/tmp/ci-blobs")
+# tempfile.gettempdir() (not a hardcoded "/tmp"): on Windows "/tmp" is a
+# driveless-rooted path that resolves against the current drive to something like
+# C:\tmp -- often permission-restricted, so mkdir raises PermissionError. This
+# resolves to %TEMP% on Windows and /tmp on POSIX.
+_BLOB_DIR = Path(tempfile.gettempdir()) / "ci-blobs"
 
 
 def _sanitize_path_component(s: str) -> str:
@@ -241,10 +246,15 @@ class BlobReadTool:
         # (8) Write to disk: json.dumps for dict/list, raw string otherwise
         dest = _BLOB_DIR / safe_session_id / f"{safe_key}.json"
         dest.parent.mkdir(parents=True, exist_ok=True)
+        # encoding="utf-8": the raw-string branch writes real blob content (CJK,
+        # emoji, extended Latin -- routine in session data); without an explicit
+        # encoding a text-mode write uses cp1252 on Windows and raises
+        # UnicodeEncodeError. The json.dumps branch is ASCII-safe by default but
+        # pinned too for consistency.
         if isinstance(data, (dict, list)):
-            dest.write_text(json.dumps(data))
+            dest.write_text(json.dumps(data), encoding="utf-8")
         else:
-            dest.write_text(data)
+            dest.write_text(data, encoding="utf-8")
 
         # (9) Return success with path + provenance
         return ToolResult(
