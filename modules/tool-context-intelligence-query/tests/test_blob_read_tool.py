@@ -25,6 +25,18 @@ from amplifier_core import ToolResult
 # ---------------------------------------------------------------------------
 
 
+def _blob_dir() -> pathlib.Path:
+    """Return the blob store root the module actually uses.
+
+    Read from the module rather than hardcoded: the store lives under the OS
+    temp dir, which is /tmp on Linux but /var/folders/... on macOS and %TEMP%
+    on Windows.
+    """
+    from amplifier_module_tool_context_intelligence_query.blob_read_tool import _BLOB_DIR
+
+    return pathlib.Path(_BLOB_DIR)
+
+
 def _make_coordinator(resolver: Any) -> MagicMock:
     """Return a MagicMock coordinator whose get_capability returns *resolver*."""
     coordinator = MagicMock()
@@ -88,8 +100,16 @@ def _patch_async_client(
 
 @pytest.fixture(autouse=True)
 def _clean_blob_dir():  # type: ignore[no-untyped-def]
-    """Remove /tmp/ci-blobs/ before each test to prevent cross-test pollution."""
-    blob_dir = pathlib.Path("/tmp/ci-blobs")
+    """Remove the blob store dir before each test to prevent cross-test pollution.
+
+    Reads _BLOB_DIR from the module rather than hardcoding a path: the store
+    lives under the OS temp dir, which is /tmp on Linux but /var/folders/... on
+    macOS and %TEMP% on Windows. A hardcoded "/tmp/ci-blobs" would silently
+    clean the wrong directory everywhere except Linux.
+    """
+    from amplifier_module_tool_context_intelligence_query.blob_read_tool import _BLOB_DIR
+
+    blob_dir = pathlib.Path(_BLOB_DIR)
     if blob_dir.exists():
         shutil.rmtree(blob_dir)
     yield
@@ -273,7 +293,7 @@ class TestURIParsing:
 
 
 class TestPathSanitization:
-    """Output file paths must be confined to /tmp/ci-blobs/ regardless of key."""
+    """Output file paths must stay confined to the blob store root regardless of key."""
 
     async def test_slashes_sanitized(self) -> None:
         """Slashes in the key must not create unexpected subdirectory depth."""
@@ -288,7 +308,7 @@ class TestPathSanitization:
         assert result.success is True
         assert result.output is not None
         output = str(result.output["path"])
-        assert output.startswith("/tmp/ci-blobs/")
+        assert output.startswith(str(_blob_dir()) + os.sep)
         assert ".." not in output
 
     async def test_special_chars_sanitized(self) -> None:
@@ -304,10 +324,10 @@ class TestPathSanitization:
         assert result.success is True
         assert result.output is not None
         output = str(result.output["path"])
-        assert output.startswith("/tmp/ci-blobs/")
+        assert output.startswith(str(_blob_dir()) + os.sep)
 
     async def test_path_traversal_neutralized(self) -> None:
-        """Output path must always stay under /tmp/ci-blobs/ even with traversal key."""
+        """Output path must always stay under the blob store root, even with traversal key."""
         from amplifier_module_tool_context_intelligence_query.blob_read_tool import BlobReadTool
 
         hook_resolver = _make_hook_resolver("http://localhost:8080")
@@ -319,8 +339,8 @@ class TestPathSanitization:
         assert result.success is True
         assert result.output is not None
         output = str(result.output["path"])
-        # Resolved path must be strictly under /tmp/ci-blobs/
-        assert output.startswith("/tmp/ci-blobs/")
+        # Resolved path must be strictly under the blob store root
+        assert output.startswith(str(_blob_dir()) + os.sep)
         # Must not have escaped to /etc/
         assert "/etc/" not in output
 

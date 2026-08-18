@@ -274,7 +274,7 @@ def _crude_hook_config_block(path: Path) -> dict[str, Any]:
     """
     result: dict[str, Any] = {}
     try:
-        text = path.read_text()
+        text = path.read_text(encoding="utf-8")
     except OSError:
         return result
 

@@ -419,8 +419,13 @@ class TestLateMountTimingInvariant:
 
         from amplifier_module_tool_context_intelligence_query import mount
 
-        # Cleanup blob dir
-        blob_dir = pathlib.Path("/tmp/ci-blobs")
+        # Cleanup blob dir. Read _BLOB_DIR from the module rather than
+        # hardcoding "/tmp/ci-blobs": the store lives under the OS temp dir,
+        # which is /tmp on Linux but /var/folders/... on macOS and %TEMP% on
+        # Windows, so a hardcoded path cleans nothing off Linux.
+        from amplifier_module_tool_context_intelligence_query.blob_read_tool import _BLOB_DIR
+
+        blob_dir = pathlib.Path(_BLOB_DIR)
         if blob_dir.exists():
             shutil.rmtree(blob_dir)
 
