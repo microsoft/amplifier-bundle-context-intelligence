@@ -6,16 +6,6 @@ An Amplifier tool module that replays context-intelligence session events to the
 
 ## Installation
 
-### As an Amplifier module (recommended)
-
-This module is included in the `amplifier-bundle-context-intelligence` bundle. When the bundle is configured, both tools (`context_intelligence_upload_start` and `context_intelligence_upload_status`) are automatically available in every Amplifier session — no separate installation is required.
-
-```bash
-amplifier bundle add git+https://github.com/microsoft/amplifier-bundle-context-intelligence@main
-```
-
-### As a standalone CLI
-
 Install as a standalone command-line tool using `uv`:
 
 ```bash
@@ -31,26 +21,184 @@ uv pip install "amplifier-module-tool-context-intelligence-upload @ git+https://
 
 After installation, the `context-intelligence-upload` command is available in your shell.
 
+> This module is CLI-only — it ships the standalone `context-intelligence-upload` console script and no in-session Amplifier tools: there is no `mount()` and no `amplifier.modules` entry point.
+
 ---
 
 ## CLI Usage
 
 ```
-context-intelligence-upload --path PATH --server-url URL --api-key KEY
-                             [--job-id ID] [--progress FILE]
+context-intelligence-upload [--path PATH] [--server-url URL] [--api-key KEY]
+                            [--destination NAME] [--auto-approve|-y]
+                            [--format FORMAT] [--job-id ID] [--progress FILE]
 ```
+
+Every flag is optional. With no flags at all the tool resolves everything from the config you already have — see [Zero-Argument Usage](#zero-argument-usage) below.
 
 ### Flags
 
 | Flag | Required | Description |
 |------|----------|-------------|
-| `--path PATH` | **required** | File or folder to replay. If `PATH` is a `metadata.json` file, only that single session is processed. Otherwise, the tool recurses into `PATH` searching for all `metadata.json` files. |
-| `--server-url URL` | **required** | Base URL of the Context Intelligence ingestion server (e.g. `https://context-intelligence.example.com`). The `/events` endpoint is appended automatically. |
-| `--api-key KEY` | **required** | Bearer token sent in the `Authorization` header for every request. |
+| `--path PATH` | optional | File or folder to replay. If `PATH` is a `metadata.json` file, only that single session is processed; otherwise the tool recurses into `PATH`. **When `--path` is omitted** the tool auto-discovers sessions under `~/.amplifier/projects`. |
+| `--server-url URL` | optional | Base URL of the Context Intelligence ingestion server (e.g. `https://context-intelligence.example.com`). The `/events` endpoint is appended automatically. When omitted, resolved from your configured destinations. |
+| `--api-key KEY` | optional | Bearer token sent in the `Authorization` header for every request. When omitted, resolved from your configured destinations (including `${VAR}` values backed by `~/.amplifier/keys.env`). |
+| `--destination NAME` | optional | Select a configured destination **by name**, with no prompt. Required in non-interactive contexts when two or more destinations are configured. An unknown name is an error listing the valid names. |
+| `--auto-approve`, `-y` | optional | Skip the `Proceed? [y/N]` confirmation. Use this in CI/automation. |
+| `--format FORMAT` | optional | `context-intelligence` (default) or `logging-hook`. Selects which input schema is discovered and ingested. |
 | `--job-id ID` | optional | Stable identifier for this upload job. Useful for correlating progress files and log output across retries. A random UUID4 is auto-generated and printed to stderr when omitted. |
 | `--progress FILE` | optional | Path to write the progress JSON file. Default: `/tmp/context-intelligence-upload-{job_id}.json` |
 | `-h` | — | Show compact help (usage line + flag list) and exit. |
 | `--help` | — | Show full documentation and exit. |
+
+---
+
+## Zero-Argument Usage
+
+The ideal gesture is no arguments at all:
+
+```bash
+$ context-intelligence-upload
+```
+
+With no flags, the tool resolves the server URL and API key from the destination(s) already configured for the live hook, auto-discovers sessions, applies that destination's include/exclude filters, shows a preview of what will be sent, and asks once before sending anything.
+
+A full interactive run looks like this:
+
+```
+$ context-intelligence-upload
+Destination: team  (https://context-intelligence.example.com)
+Sessions to upload: 12   (~1,840 events)
+Filtered out by this destination's include/exclude: 4
+
+Proceed? [y/N] y
+[3/12] my-project/abc123  ▕████▌ 45% (96/214)
+...
+Uploaded 12 sessions / 1,840 events (0 skipped, 4 filtered out) to team in 41s.
+```
+
+---
+
+## Where Connection Config Comes From
+
+Connection settings are resolved in this order, first match wins:
+
+1. **Explicit flags** — `--server-url`, `--api-key`, `--auth-mode`, `--auth-resource`.
+2. **Environment variables** — `AMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_URL`, `AMPLIFIER_CONTEXT_INTELLIGENCE_API_KEY`, and the `--auth-mode`/`--auth-resource` env pair.
+3. **Your configured destinations** — the named `destinations` map the live hook reads, at `overrides.hook-context-intelligence.config.destinations` in `~/.amplifier/settings.yaml`.
+
+**Amplifier home only.** Only `~/.amplifier/settings.yaml` and `~/.amplifier/keys.env` are read. A project-local `./.amplifier/settings.yaml` or `./.amplifier/keys.env` is **not consulted**.
+
+```yaml
+# ~/.amplifier/settings.yaml
+overrides:
+  hook-context-intelligence:
+    config:
+      destinations:
+        team:
+          url: https://context-intelligence.example.com
+          api_key: "${TEAM_CI_KEY}"
+          include:
+            - my-project
+          exclude:
+            - scratch
+```
+
+```bash
+# ~/.amplifier/keys.env
+TEAM_CI_KEY=sk-team-abc123
+```
+
+`${VAR}` values in `settings.yaml` are expanded from `~/.amplifier/keys.env` using exactly the same rules the Amplifier CLI uses for the hook: `KEY=VALUE` lines, `#` comments and blank lines ignored, one layer of surrounding quotes stripped, and **a real process environment variable always wins over the `keys.env` value**. A missing `keys.env` is not an error — it simply yields no expansions.
+
+If **no destinations are configured** and no connection flags/env are supplied, the tool exits with **exit code 2** and tells you to configure a destination or pass `--server-url`/`--api-key`. It never silently guesses.
+
+---
+
+## Choosing a Destination
+
+| Situation | Behavior |
+|-----------|----------|
+| Exactly one destination configured | Used automatically, **no prompt** — there is nothing to disambiguate. |
+| Two or more, interactive terminal | A numbered prompt lists each destination's name and URL; you pick one. |
+| Two or more, `--destination NAME` given | The named destination is used, no prompt. |
+| Two or more, **non-interactive** (not a TTY), no `--destination` | Error listing the valid names, **exit code 2**. The tool never blocks waiting for input in a script. |
+| `--destination NAME` names something unconfigured | Error listing the valid names, **exit code 2**. |
+
+A malformed destination entry that you did not select never blocks the run — entries are validated individually.
+
+---
+
+## Session Auto-Discovery
+
+**When `--path` is omitted**, the tool discovers sessions under `~/.amplifier/projects` using the discovery logic of the selected `--format`:
+
+| `--format` | Discovery layout |
+|------------|-------------------|
+| `context-intelligence` (default) | `~/.amplifier/projects/<project>/sessions/<id>/context-intelligence/` |
+| `logging-hook` | `~/.amplifier/projects/<project>/sessions/<id>/` (legacy `events.jsonl` directly in the session folder) |
+
+Passing `--path` still works exactly as before and simply narrows *which files are looked at*.
+
+---
+
+## Destination Filtering
+
+When a destination has `include`/`exclude` patterns configured, they are applied using the same matcher the live hook used at capture time, so replay routing matches capture routing exactly.
+
+**The discriminator is the session's own recorded `working_dir`**, resolved in this order:
+
+1. `metadata["working_dir"]` recorded with the session (both formats record it).
+2. For a legacy session with only a workspace slug, an **approximate** working directory is reconstructed from that slug — this is best-effort and documented as approximate, since slugging is not losslessly invertible.
+3. Only if no recorded or derivable working directory exists at all, the `--path` value is used as a last-resort approximation.
+
+**`--path` never decides filtering.** It may well point at a backup or a copied archive whose location says nothing about where the session actually ran; matching a destination's patterns against that path would route the wrong way. `--path` scopes discovery; the recorded `working_dir` decides matching.
+
+Filtered sessions are never dropped silently — they are counted and reported as the `filtered-out` number in both the preview and the final summary. If every discovered session is filtered out, that is not an error: the tool exits `0` with `0 uploaded / N filtered-out`.
+
+When you supply raw `--server-url`/`--api-key` (no destination object at all), **no filtering is applied** — you said explicitly where to send, so the tool sends there.
+
+---
+
+## Preview and Confirmation
+
+Before uploading, the tool prints a preview: destination name and URL, session count, approximate total events, and the filtered-out count. Then it asks:
+
+```
+Proceed? [y/N]
+```
+
+The default is **No** — answering no (or just pressing Enter) aborts with nothing uploaded and exit code `0`.
+
+| Situation | Behavior |
+|-----------|----------|
+| Interactive terminal | Preview is printed, then `Proceed? [y/N]`. |
+| `--auto-approve` / `-y` | Preview is printed, confirmation is skipped, upload proceeds immediately (use in CI). |
+| Non-interactive (not a TTY) **without** `--auto-approve` | Error telling you to pass `--auto-approve`, **exit code 2**. The tool never hangs on input and never silently uploads. |
+
+---
+
+## Progress Output
+
+In an interactive terminal, the tool shows **two-level** live progress — an outer counter tracking sessions and an inner bar tracking events within the current session:
+
+```
+[3/12] my-project/abc123  ▕████▌ 45% (96/214)
+```
+
+Events already present on the server (deduplicated) count as skipped rather than re-sent.
+
+When output is piped or not a TTY, there are no ANSI redraws — you get **one plain line per session** instead.
+
+Either way, the run ends with a **final summary**: destination name and URL, sessions uploaded, events sent, events skipped, filtered-out count, and elapsed duration.
+
+The machine-readable progress JSON file (`--progress`) is written exactly as before, unchanged.
+
+---
+
+## Non-Goals (v1)
+
+- **No project-local config.** Only Amplifier home (`~/.amplifier/settings.yaml`, `~/.amplifier/keys.env`) is read.
+- **One destination per run — no fan-out.** Each run targets exactly one selected destination. There is no `--all` flag and no fan-out to several destinations in a single run.
 
 ### Legacy hooks-logging import (--format logging-hook)
 
@@ -66,7 +214,7 @@ context-intelligence-upload --path PATH --server-url URL --api-key KEY
 
 **Slug parity with native.** The workspace for a migrated legacy event is derived from the legacy session's `working_dir` using the **same** slugifier the live context-intelligence hook uses (`config_resolver._slugify_path`). Migrated legacy events therefore land in the **exact same workspace** as native captures from the same working directory — the two coexist and dedupe together rather than forking into separate workspaces.
 
-**Exit codes.** `0` — clean (no skipped/unmapped/live-skipped sessions or events). `3` — completed with issues (one or more events were skipped or unmapped, or one or more sessions were live-skipped; see the reconciliation summary printed to stderr). `2` — usage error (e.g. `--no-replay` combined with `--format logging-hook`). This is additive to the default path's exit codes; `--format context-intelligence` never returns `3`.
+**Exit codes.** `0` — clean (no skipped/unmapped/live-skipped sessions or events; also the code returned when you decline the confirmation, and when every session is filtered out). `3` — completed with issues (one or more events were skipped or unmapped, or one or more sessions were live-skipped; see the reconciliation summary printed to stderr). `2` — usage error: `--no-replay` combined with `--format logging-hook`, no destinations configured and no connection flags, a non-interactive run with two or more destinations and no `--destination`, an unknown `--destination` name, or a non-interactive run without `--auto-approve`. This is additive to the default path's exit codes; `--format context-intelligence` never returns `3`.
 
 **Regression coverage.** This path is exercised end-to-end by the standing DTU profile [`context-intelligence-upload-format-validation.yaml`](../../.amplifier/digital-twin-universe/profiles/context-intelligence-upload-format-validation.yaml), which proves isolation, discrimination, slug parity/no-fork, and coexistence/dedup against a real Context Intelligence server.
 
@@ -130,60 +278,6 @@ context-intelligence-upload --server-url https://ci.example.com \
 > **Server-side prerequisite.** Entra mode requires the **server** to be configured to validate Entra tokens. Against a server that only accepts static keys, use `--auth-mode static`.
 
 ---
-
-## Amplifier Session Usage
-
-When the bundle is loaded, two tools are available inside every Amplifier session.
-
-### Starting an upload
-
-The agent calls `context_intelligence_upload_start` and receives a `job_id` and `progress_file` path immediately. The upload runs in a detached background subprocess so the session is not blocked.
-
-Example conversation:
-
-> **User:** Upload the sessions from my-project to the CI server.
->
-> **Agent:** I'll start a background upload job now.
->
-> *(calls `context_intelligence_upload_start` with `path=~/.amplifier/projects/my-project`)*
->
-> **Tool result:**
-> ```json
-> {
->   "job_id": "f47ac10b-58cc-4372-a567-0e02b2c3d479",
->   "progress_file": "/tmp/context-intelligence-upload-f47ac10b-58cc-4372-a567-0e02b2c3d479.json",
->   "message": "Upload job f47ac10b-... started in the background. Poll context_intelligence_upload_status with job_id='f47ac10b-...' to check progress."
-> }
-> ```
->
-> **Agent:** Upload job started. Job ID is `f47ac10b-...`. I'll check the progress in a moment.
-
-### Checking progress
-
-The agent calls `context_intelligence_upload_status` with the `job_id` to poll the progress file.
-
-Example conversation:
-
-> **User:** How is the upload going?
->
-> **Agent:** Let me check the upload status.
->
-> *(calls `context_intelligence_upload_status` with `job_id="f47ac10b-58cc-4372-a567-0e02b2c3d479"`)*
->
-> **Tool result:**
-> ```json
-> {
->   "job_id": "f47ac10b-58cc-4372-a567-0e02b2c3d479",
->   "status": "running",
->   "sessions_total": 12,
->   "sessions_completed": 7,
->   "current_session_id": "sess-abc123",
->   "current_session_events_total": 84,
->   "current_session_events_sent": 42
-> }
-> ```
->
-> **Agent:** The upload is in progress: 7 of 12 sessions completed. Currently uploading session `sess-abc123` (42 of 84 events sent).
 
 ---
 

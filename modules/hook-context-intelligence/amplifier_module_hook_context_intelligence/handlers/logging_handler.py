@@ -85,6 +85,41 @@ _BREAKER_MIN_OPEN_SECONDS: float = 30.0
 _BREAKER_PROBE_INTERVAL: float = 300.0
 
 # ---------------------------------------------------------------------------
+# Sustained-failure visibility escalation
+#
+# REAL INCIDENT: a Context Intelligence server was down/crash-looping for
+# ~2 days. Every session on the host kept dispatching into the dead
+# endpoint. The client behaved correctly throughout -- events stayed
+# durable in events.jsonl, the per-destination queue stayed isolated -- but
+# NOTHING escalated. Root cause of the silence: the circuit breaker above
+# only opens on a HARD (deterministic auth) failure ratio (see
+# _maybe_open_breaker); a down/unreachable server produces TRANSIENT
+# (network-error / timeout) outcomes, which are explicitly never HARD (see
+# _is_hard_outcome) and so never feed the breaker at all. A network outage
+# therefore retries the SAME event forever with capped backoff, forever
+# "DEGRADED", and the only signal was a single rate-limited INFO line per
+# episode -- deliberately quiet by design (see the comment in _worker),
+# because most DEGRADED episodes are transient blips that self-resolve in
+# seconds. Nothing ever escalated that quiet signal once the episode
+# stopped being transient and became a multi-day outage.
+#
+# This escalation is a SEPARATE, additive signal -- it does not touch
+# breaker state, retry/backoff timing, or dispatch semantics. It only
+# tracks wall-clock time since the CURRENT degraded regime began
+# (_degraded_since, set/cleared alongside _degraded_warned) and, once that
+# regime has run longer than this threshold, raises a rate-limited loud
+# ERROR plus a durable forwarding-diagnostics record (see
+# _maybe_escalate_sustained_failure) naming: events dropped so far, whether
+# the (auth-only) breaker is open, and how long delivery has been failing.
+# ---------------------------------------------------------------------------
+#: Sustained wall-clock seconds a destination must stay continuously
+#: DEGRADED before the routine per-episode INFO notice escalates to a loud,
+#: durable signal. Deliberately much longer than one backoff cycle (a
+#: single transient blip must never trip this) but short enough that an
+#: operator learns about a real outage in minutes, not days.
+_DEGRADED_ESCALATION_SECONDS: float = 300.0
+
+# ---------------------------------------------------------------------------
 # _post outcome constants (Task 4)
 # ---------------------------------------------------------------------------
 #: Returned by _post when the event was successfully delivered (HTTP < 400).
@@ -289,6 +324,13 @@ class _DestinationDispatcher:
         self._worker_task: asyncio.Task[None] | None = None
         self._consecutive_failures = 0  # backoff driver only — never disables
         self._degraded_warned = False
+        # Wall-clock start (time.monotonic()) of the CURRENT sustained-degraded
+        # regime; None while healthy. Set/cleared in lockstep with
+        # _degraded_warned (see _worker) — independent of the auth-only circuit
+        # breaker above, so a network outage (never HARD, never opens the
+        # breaker) still measures "how long has delivery been failing" for
+        # _maybe_escalate_sustained_failure.
+        self._degraded_since: float | None = None
         self._current: tuple[str, dict[str, Any]] | None = None  # in-flight held event
         self._overflow_dropped = 0
         self._auth_failures = 0
@@ -317,6 +359,11 @@ class _DestinationDispatcher:
         # gates a console-only warning about the diagnostics sink, not about
         # the destination's HTTP/auth behavior. See _record_forwarding_issue.
         self._last_sink_fail_log = float("-inf")
+        # Dedicated rate-limit gate for the sustained-delivery-failure
+        # escalation (see _maybe_escalate_sustained_failure) -- separate from
+        # every other _last_*_log sentinel above so this new signal's cooldown
+        # cannot be reset by an unrelated warning firing first.
+        self._last_degraded_escalation_log = float("-inf")
         # --- circuit breaker state ---
         # OWNERSHIP: this destination's single worker task (_worker) is the
         # ONLY mutator of breaker state. No lock is needed -- there is exactly
@@ -425,6 +472,61 @@ class _DestinationDispatcher:
                     self._name,
                     self._forwarding_log_dir,
                 )
+
+    def _maybe_escalate_sustained_failure(self) -> None:
+        """Escalate a SUSTAINED degraded regime to a loud, durable signal.
+
+        Called ONLY from ``_worker`` (never ``enqueue()``) -- this performs
+        logging plus best-effort file I/O via ``_record_forwarding_issue``
+        and must never run on the hot path.
+
+        RATIONALE (real incident): the circuit breaker (below) only opens on
+        a HARD (deterministic auth) failure ratio. A down/unreachable server
+        produces TRANSIENT network-error/timeout outcomes, which are never
+        HARD (see ``_is_hard_outcome``) and so never feed the breaker at
+        all -- the worker just retries the same event forever with capped
+        backoff, "DEGRADED" but silent beyond one rate-limited INFO line per
+        episode (deliberately quiet -- see the comment in ``_worker`` -- most
+        DEGRADED episodes are transient blips). A production server was once
+        down for ~2 days and nothing ever escalated past that quiet signal.
+
+        This closes that gap without touching retry/backoff timing or
+        breaker state: once ``self._degraded_since`` shows the CURRENT
+        regime has run longer than ``_DEGRADED_ESCALATION_SECONDS``, emit a
+        rate-limited (``_LOG_RATE_LIMIT_SECONDS``) loud ERROR plus a durable
+        ``sustained_delivery_failure`` forwarding-diagnostics record naming
+        the three facts an operator needs: events dropped so far, whether
+        the (auth-only) breaker is open, and how long delivery has been
+        failing. No-op while healthy (``self._degraded_since is None``).
+        """
+        if self._degraded_since is None:
+            return
+        now = time.monotonic()
+        failing_seconds = now - self._degraded_since
+        if failing_seconds < _DEGRADED_ESCALATION_SECONDS:
+            return
+        if now - self._last_degraded_escalation_log < _LOG_RATE_LIMIT_SECONDS:
+            return
+        self._last_degraded_escalation_log = now
+        logger.error(
+            "%s (%s) has been failing to deliver for %.0fs \u2014 %d event(s)"
+            " dropped from a full queue so far, circuit breaker open=%s."
+            " Events remain durable in events.jsonl; once %s recovers, replay"
+            " any dropped backlog with: context-intelligence-upload --path %s"
+            " (--server-url/--api-key come from flags or env/config; see --help).",
+            self._name,
+            self._url,
+            failing_seconds,
+            self._overflow_dropped,
+            self._breaker_open,
+            self._name,
+            self._storage_path,
+        )
+        self._record_forwarding_issue(
+            "sustained_delivery_failure",
+            "failing for %.0fs (overflow_dropped=%d, breaker_open=%s)"
+            % (failing_seconds, self._overflow_dropped, self._breaker_open),
+        )
 
     # -- circuit breaker (v2 minimal) ---------------------------------------
     #
@@ -602,6 +704,7 @@ class _DestinationDispatcher:
                     if outcome == _DELIVERED:
                         self._breaker_record_delivered()
                         self._degraded_warned = False
+                        self._degraded_since = None
                     elif outcome == _TRANSIENT and self._is_hard_outcome():
                         self._breaker_record_hard()
                     # Genuinely transient/permanent while probing is
@@ -654,8 +757,18 @@ class _DestinationDispatcher:
                                 self._name,
                             )
                             self._degraded_warned = True
+                            self._degraded_since = time.monotonic()
                         else:
                             logger.debug("server_dispatch_retry dest=%s", self._name)
+                            # Independent of the routine per-episode INFO above:
+                            # escalate loudly + durably once this regime has run
+                            # past _DEGRADED_ESCALATION_SECONDS. See that
+                            # constant's docstring and
+                            # _maybe_escalate_sustained_failure for the
+                            # real-incident rationale (a network outage never
+                            # feeds the auth-only breaker and can otherwise
+                            # retry silently forever).
+                            self._maybe_escalate_sustained_failure()
 
                         is_hard = self._is_hard_outcome()
                         if is_hard:
@@ -730,6 +843,7 @@ class _DestinationDispatcher:
                                 self._name,
                             )
                             self._degraded_warned = False
+                            self._degraded_since = None
                     elif outcome == _PERMANENT:
                         now = time.monotonic()
                         if now - self._last_permanent_log >= _LOG_RATE_LIMIT_SECONDS:
@@ -1018,6 +1132,17 @@ class _DestinationDispatcher:
         placeholder like ``<path>``).  A clean shutdown — count 0 and not
         degraded — emits no such warning.
 
+        The SAME shutdown condition also writes a durable
+        ``shutdown_undelivered`` forwarding-diagnostics record (see
+        ``_record_forwarding_issue``) carrying the honest count plus circuit
+        breaker state and sustained-degraded duration. Real incident this
+        closes: a console WARNING is invisible once the process that emitted
+        it has exited — every session that ends mid-outage now also drops
+        one durable, cross-session line into
+        ``forwarding-YYYY-MM-DD.jsonl``, so a multi-day outage across many
+        short-lived sessions leaves an aggregable trail even though no
+        single process lives long enough to see it end-to-end.
+
         Drain is bounded by ``_close_drain_timeout``: ``queue.join()`` runs until
         that deadline, then the worker is cancelled regardless.  The worker's
         ``asyncio.sleep`` in ``_sleep_backoff`` is cancellation-safe, so close()
@@ -1060,6 +1185,17 @@ class _DestinationDispatcher:
                     in_flight,
                     dropped,
                     self._storage_path,
+                )
+                degraded_seconds = (
+                    time.monotonic() - self._degraded_since
+                    if self._degraded_since is not None
+                    else 0.0
+                )
+                self._record_forwarding_issue(
+                    "shutdown_undelivered",
+                    "shutdown with %d undelivered event(s) (queued=%d in_flight=%d"
+                    " overflow_dropped=%d, breaker_open=%s, degraded_seconds=%.0f)"
+                    % (total, queued, in_flight, dropped, self._breaker_open, degraded_seconds),
                 )
 
             self._worker_task.cancel()

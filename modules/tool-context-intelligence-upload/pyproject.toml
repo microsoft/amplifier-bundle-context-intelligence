@@ -1,6 +1,6 @@
 [project]
 name = "amplifier-module-tool-context-intelligence-upload"
-version = "0.1.3"
+version = "0.1.4"
 requires-python = ">=3.11"
 license = "MIT"
 
@@ -10,6 +10,7 @@ dependencies = [
     "httpx>=0.28.1",
     "idna>=3.15",
     "amplifier-module-hook-context-intelligence",
+    "pyyaml>=6.0",
 ]
 
 [project.scripts]
@@ -35,6 +36,7 @@ dev = [
     "pytest-asyncio>=0.24",
     "pyright>=1.1",
     "ruff>=0.4",
+    "types-pyyaml>=6.0",
 ]
 
 [tool.uv.sources]

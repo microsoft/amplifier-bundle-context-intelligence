@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+import sys
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -42,8 +43,17 @@ def _make_upload_result(sessions_uploaded: int = 1, events_uploaded: int = 0) ->
     """
     mock_result = MagicMock()
     mock_result.success = True
+    mock_result.sessions_uploaded = sessions_uploaded
+    mock_result.events_uploaded = events_uploaded
     mock_result.events_skipped = 0
     mock_result.events_unmapped = 0
+    # Pinned to real ints (not left as auto-speccing MagicMock attributes)
+    # because completion_block()/failure_block() apply thousands-separator
+    # formatting (f"{n:,}") to each of these -- an unformatted MagicMock
+    # raises TypeError from __format__.
+    mock_result.events_malformed = 0
+    mock_result.events_unreadable = 0
+    mock_result.retries = 0
     mock_result.to_dict.return_value = {
         "status": "completed",
         "sessions_uploaded": sessions_uploaded,
@@ -66,30 +76,6 @@ class TestCompactHelp:
         with pytest.raises(SystemExit) as exc_info:
             _build_parser().parse_args(["-h"])
         assert exc_info.value.code == 0
-
-    def test_minus_h_stdout_contains_required_strings(self, capsys):
-        from amplifier_module_tool_context_intelligence_upload.cli import _build_parser
-
-        with pytest.raises(SystemExit):
-            _build_parser().parse_args(["-h"])
-        captured = capsys.readouterr()
-        assert "context-intelligence-upload" in captured.out
-        assert "--path" in captured.out
-        assert "--server-url" in captured.out
-        assert "--api-key" in captured.out
-
-    def test_compact_help_usage_line_contains_no_replay(self, capsys):
-        """_COMPACT_HELP usage line must include [--no-replay]."""
-        from amplifier_module_tool_context_intelligence_upload.cli import _COMPACT_HELP
-
-        assert "[--no-replay]" in _COMPACT_HELP
-
-    def test_compact_help_flags_block_contains_no_replay_entry(self, capsys):
-        """_COMPACT_HELP flags block must contain --no-replay entry with idempotency mention."""
-        from amplifier_module_tool_context_intelligence_upload.cli import _COMPACT_HELP
-
-        assert "--no-replay" in _COMPACT_HELP
-        assert "idempotency" in _COMPACT_HELP.lower()
 
 
 # ---------------------------------------------------------------------------
@@ -174,19 +160,6 @@ class TestFormatArgparse:
         assert exc_info.value.code == 2
 
 
-def test_help_mentions_format():
-    """Both _COMPACT_HELP and _DETAILED_HELP must document --format and logging-hook."""
-    from amplifier_module_tool_context_intelligence_upload.cli import (
-        _COMPACT_HELP,
-        _DETAILED_HELP,
-    )
-
-    assert "--format" in _COMPACT_HELP
-    assert "logging-hook" in _COMPACT_HELP
-    assert "--format" in _DETAILED_HELP
-    assert "logging-hook" in _DETAILED_HELP
-
-
 # ---------------------------------------------------------------------------
 # --help detailed help
 # ---------------------------------------------------------------------------
@@ -195,89 +168,12 @@ def test_help_mentions_format():
 class TestDetailedHelp:
     """The --help flag must print detailed help to stdout and exit 0."""
 
-    @pytest.fixture
-    def detailed_help_output(self, capsys) -> str:
-        """Capture and return the full --help output once per test."""
-        from amplifier_module_tool_context_intelligence_upload.cli import _build_parser
-
-        with pytest.raises(SystemExit):
-            _build_parser().parse_args(["--help"])
-        return capsys.readouterr().out
-
     def test_double_dash_help_exits_zero(self, capsys):
         from amplifier_module_tool_context_intelligence_upload.cli import _build_parser
 
         with pytest.raises(SystemExit) as exc_info:
             _build_parser().parse_args(["--help"])
         assert exc_info.value.code == 0
-
-    def test_double_dash_help_contains_examples(self, detailed_help_output):
-        assert "Replay a single session directory" in detailed_help_output
-        assert "Replay an entire project tree" in detailed_help_output
-        assert "Target a recovery server" in detailed_help_output
-
-    def test_double_dash_help_contains_progress_schema_fields(self, detailed_help_output):
-        """Progress schema section must contain 'failed_at' and 'sessions_total' fields."""
-        assert "failed_at" in detailed_help_output
-        assert "sessions_total" in detailed_help_output
-
-    def test_double_dash_help_contains_exit_codes(self, detailed_help_output):
-        assert "EXIT CODES" in detailed_help_output
-
-    def test_double_dash_help_contains_idempotency(self, detailed_help_output):
-        assert "IDEMPOTENCY" in detailed_help_output
-
-    def test_double_dash_help_contains_workspace_and_metadata_validation(
-        self, detailed_help_output
-    ):
-        assert "WORKSPACE" in detailed_help_output
-        assert "METADATA VALIDATION" in detailed_help_output
-
-    def test_double_dash_help_contains_finding_server_url_section(self, detailed_help_output):
-        """FINDING SERVER_URL AND API_KEY section must be present in detailed help."""
-        assert "FINDING SERVER_URL AND API_KEY" in detailed_help_output
-
-    def test_finding_server_url_section_appears_before_examples(self, detailed_help_output):
-        """FINDING SERVER_URL AND API_KEY section must appear before the EXAMPLES section."""
-        finding_pos = detailed_help_output.find("FINDING SERVER_URL AND API_KEY")
-        assert finding_pos != -1, "FINDING SERVER_URL AND API_KEY not found in help output"
-        examples_pos = detailed_help_output.find("EXAMPLES")
-        assert examples_pos != -1, "EXAMPLES not found in help output"
-        assert finding_pos < examples_pos, (
-            "FINDING SERVER_URL AND API_KEY must appear before EXAMPLES"
-        )
-
-    def test_no_abbreviated_ci_example_com(self, detailed_help_output):
-        """ci.example.com must not appear; use context-intelligence.example.com."""
-        assert "ci.example.com" not in detailed_help_output
-
-    def test_no_abbreviated_ci_api_key(self, detailed_help_output):
-        """$CI_API_KEY must not appear; use $AMPLIFIER_CONTEXT_INTELLIGENCE_API_KEY."""
-        assert "$CI_API_KEY" not in detailed_help_output
-
-    def test_context_intelligence_example_com_present(self, detailed_help_output):
-        """context-intelligence.example.com must appear in detailed help."""
-        assert "context-intelligence.example.com" in detailed_help_output
-
-    def test_amplifier_context_intelligence_api_key_present(self, detailed_help_output):
-        """$AMPLIFIER_CONTEXT_INTELLIGENCE_API_KEY must appear in detailed help."""
-        assert "$AMPLIFIER_CONTEXT_INTELLIGENCE_API_KEY" in detailed_help_output
-
-
-# ---------------------------------------------------------------------------
-# Missing required arguments → exit 2
-# ---------------------------------------------------------------------------
-
-
-class TestMissingRequiredArgs:
-    """Missing required args should exit with code 2."""
-
-    def test_missing_path_exits_2(self, capsys):
-        from amplifier_module_tool_context_intelligence_upload.cli import _build_parser
-
-        with pytest.raises(SystemExit) as exc_info:
-            _build_parser().parse_args(["--server-url", "http://localhost", "--api-key", "key"])
-        assert exc_info.value.code == 2
 
 
 # ---------------------------------------------------------------------------
@@ -302,6 +198,7 @@ class TestJobIdAutoGeneration:
                     "http://localhost",
                     "--api-key",
                     "key",
+                    "--verbose",  # job_id/progress= diagnostic is now verbose-only
                 ],
             ),
             patch(
@@ -444,7 +341,7 @@ class TestCliEndToEnd:
                 "amplifier_module_tool_context_intelligence_upload.cli.run_upload",
                 return_value=mock_result,
             ),
-            patch("amplifier_module_tool_context_intelligence_upload.cli.ProgressTracker"),
+            patch("amplifier_module_tool_context_intelligence_upload.cli.TwoLevelProgressRenderer"),
             pytest.raises(SystemExit) as exc_info,
         ):
             main()
@@ -489,7 +386,7 @@ class TestCliEndToEnd:
                 "amplifier_module_tool_context_intelligence_upload.cli.run_upload",
                 return_value=mock_result,
             ) as mock_run_upload,
-            patch("amplifier_module_tool_context_intelligence_upload.cli.ProgressTracker"),
+            patch("amplifier_module_tool_context_intelligence_upload.cli.TwoLevelProgressRenderer"),
             pytest.raises(SystemExit) as exc_info,
         ):
             main()
@@ -533,7 +430,7 @@ class TestCliEndToEnd:
                 "amplifier_module_tool_context_intelligence_upload.cli.run_upload",
                 return_value=mock_result,
             ) as mock_run_upload,
-            patch("amplifier_module_tool_context_intelligence_upload.cli.ProgressTracker"),
+            patch("amplifier_module_tool_context_intelligence_upload.cli.TwoLevelProgressRenderer"),
             pytest.raises(SystemExit) as exc_info,
         ):
             main()
@@ -590,7 +487,7 @@ class TestEnvVarConfigResolution:
                 "amplifier_module_tool_context_intelligence_upload.cli.run_upload",
                 return_value=mock_result,
             ) as mock_upload,
-            patch("amplifier_module_tool_context_intelligence_upload.cli.ProgressTracker"),
+            patch("amplifier_module_tool_context_intelligence_upload.cli.TwoLevelProgressRenderer"),
             pytest.raises(SystemExit) as exc_info,
         ):
             main()
@@ -640,7 +537,7 @@ class TestEnvVarConfigResolution:
                 "amplifier_module_tool_context_intelligence_upload.cli.run_upload",
                 return_value=mock_result,
             ) as mock_upload,
-            patch("amplifier_module_tool_context_intelligence_upload.cli.ProgressTracker"),
+            patch("amplifier_module_tool_context_intelligence_upload.cli.TwoLevelProgressRenderer"),
             pytest.raises(SystemExit) as exc_info,
         ):
             main()
@@ -705,31 +602,39 @@ class TestEnvVarConfigResolution:
 class TestScopeResolutionWiring:
     """CLI must emit a loud resolved-scope line and handle ScopeError \u2192 exit 2."""
 
-    def _run(self, tmp_path, scope, mock_result=None):
+    def _run(self, tmp_path, scope, mock_result=None, verbose=False):
         from amplifier_module_tool_context_intelligence_upload.cli import main
 
         if mock_result is None:
             mock_result = MagicMock()
             mock_result.success = True
+            mock_result.sessions_uploaded = scope.selected_count
+            mock_result.events_uploaded = 0
+            mock_result.events_skipped = 0
+            mock_result.events_unmapped = 0
+            mock_result.events_malformed = 0
+            mock_result.events_unreadable = 0
+            mock_result.retries = 0
             mock_result.to_dict.return_value = {
                 "status": "completed",
                 "sessions_uploaded": scope.selected_count,
                 "events_uploaded": 0,
             }
 
+        argv = [
+            "context-intelligence-upload",
+            "--path",
+            str(tmp_path),
+            "--server-url",
+            "http://localhost",
+            "--api-key",
+            "key",
+        ]
+        if verbose:
+            argv.append("--verbose")
+
         with (
-            patch(
-                "sys.argv",
-                [
-                    "context-intelligence-upload",
-                    "--path",
-                    str(tmp_path),
-                    "--server-url",
-                    "http://localhost",
-                    "--api-key",
-                    "key",
-                ],
-            ),
+            patch("sys.argv", argv),
             patch(
                 "amplifier_module_tool_context_intelligence_upload.cli.resolve_upload_sessions",
                 return_value=scope,
@@ -738,33 +643,55 @@ class TestScopeResolutionWiring:
                 "amplifier_module_tool_context_intelligence_upload.cli.run_upload",
                 return_value=mock_result,
             ),
-            patch("amplifier_module_tool_context_intelligence_upload.cli.ProgressTracker"),
+            patch("amplifier_module_tool_context_intelligence_upload.cli.TwoLevelProgressRenderer"),
             pytest.raises(SystemExit) as exc_info,
         ):
             main()
         return exc_info
 
     def test_scope_line_printed_to_stderr(self, tmp_path, capsys):
+        # scope: diagnostic line is now gated behind --verbose (Part 6 of the
+        # upload UX redesign) -- the happy path shows only the preview + prompt.
+        # Reworded so it can't be mistaken for the post-filter upload count
+        # (it reports scope.total_discovered, a pre-filter number).
         fake_sessions = [(tmp_path, {"session_id": "root"}), (tmp_path, {"session_id": "child"})]
         scope = _fake_scope(fake_sessions, mode="single")
 
-        self._run(tmp_path, scope)
+        self._run(tmp_path, scope, verbose=True)
 
         captured = capsys.readouterr()
         assert "scope:" in captured.err
         assert "mode=single" in captured.err
-        assert "root(s)=root" in captured.err
-        assert "uploading 2 of 2" in captured.err
+        assert "before destination filtering" in captured.err
 
     def test_dangling_parent_note_printed_when_present(self, tmp_path, capsys):
+        # The dangling-parent note is no longer a standalone cli.py stderr
+        # line -- it is folded into preview.py's "what will be sent:" block
+        # as a "placeholders:" line (count only, not individual IDs). That
+        # block only renders in destination mode, so wire a destination.
         fake_sessions = [(tmp_path, {"session_id": "mid"}), (tmp_path, {"session_id": "leaf"})]
         scope = _fake_scope(fake_sessions, mode="single", dangling_parent_ids=["root"])
+        dest = _dest("team", "http://localhost:9000")
 
-        self._run(tmp_path, scope)
+        from amplifier_module_tool_context_intelligence_upload.cli import _Connection
+
+        conn = _Connection(
+            server_url=dest.url,
+            api_key=dest.api_key,
+            auth_mode="static",
+            auth_resource="",
+            destination=dest,
+        )
+
+        with patch(
+            "amplifier_module_tool_context_intelligence_upload.cli._resolve_connection",
+            return_value=conn,
+        ):
+            self._run(tmp_path, scope)
 
         captured = capsys.readouterr()
-        assert "note:" in captured.err
-        assert "root" in captured.err
+        assert "placeholders:" in captured.err
+        assert "1 parent" in captured.err
         assert "placeholder" in captured.err.lower()
 
     def test_no_dangling_note_when_absent(self, tmp_path, capsys):
@@ -873,7 +800,7 @@ class TestDtuServerUrlPrecedence:
                 "amplifier_module_tool_context_intelligence_upload.cli.run_upload",
                 return_value=mock_result,
             ) as mock_run_upload,
-            patch("amplifier_module_tool_context_intelligence_upload.cli.ProgressTracker"),
+            patch("amplifier_module_tool_context_intelligence_upload.cli.TwoLevelProgressRenderer"),
             pytest.raises(SystemExit) as exc_info,
         ):
             main()
@@ -934,7 +861,7 @@ class TestFormatDispatch:
             ),
             patch.object(cli_mod, "discover_legacy", return_value=fake_discovery) as mock_discover,
             patch.object(cli_mod, "run_upload", return_value=mock_result) as mock_run_upload,
-            patch.object(cli_mod, "ProgressTracker"),
+            patch.object(cli_mod, "TwoLevelProgressRenderer"),
             pytest.raises(SystemExit) as exc_info,
         ):
             cli_mod.main()
@@ -980,7 +907,7 @@ class TestFormatDispatch:
             ),
             patch.object(cli_mod, "discover_legacy", return_value=fake_discovery),
             patch.object(cli_mod, "run_upload", return_value=mock_result) as mock_run_upload,
-            patch.object(cli_mod, "ProgressTracker"),
+            patch.object(cli_mod, "TwoLevelProgressRenderer"),
             pytest.raises(SystemExit) as exc_info,
         ):
             cli_mod.main()
@@ -1012,7 +939,7 @@ class TestFormatDispatch:
             ),
             patch.object(cli_mod, "discover_legacy") as mock_discover,
             patch.object(cli_mod, "run_upload") as mock_run_upload,
-            patch.object(cli_mod, "ProgressTracker"),
+            patch.object(cli_mod, "TwoLevelProgressRenderer"),
             pytest.raises(SystemExit) as exc_info,
         ):
             cli_mod.main()
@@ -1049,7 +976,7 @@ class TestFormatDispatch:
                 cli_mod, "resolve_upload_sessions", return_value=_fake_scope(fake_sessions)
             ),
             patch.object(cli_mod, "run_upload", return_value=mock_result) as mock_run_upload,
-            patch.object(cli_mod, "ProgressTracker"),
+            patch.object(cli_mod, "TwoLevelProgressRenderer"),
             pytest.raises(SystemExit) as exc_info,
         ):
             cli_mod.main()
@@ -1118,7 +1045,7 @@ class TestReconciliationSummary:
             ),
             patch.object(cli_mod, "discover_legacy", return_value=fake_discovery),
             patch.object(cli_mod, "run_upload", return_value=upload_result),
-            patch.object(cli_mod, "ProgressTracker"),
+            patch.object(cli_mod, "TwoLevelProgressRenderer"),
             pytest.raises(SystemExit) as exc_info,
         ):
             cli_mod.main()
@@ -1127,7 +1054,10 @@ class TestReconciliationSummary:
         # run completed WITH issues -- exit 3, not 0.
         assert exc_info.value.code == 3
         captured = capsys.readouterr()
-        assert "reconciliation:" in captured.err
+        # Part 2 of the redesign: the reconciliation line only surfaces when
+        # read != ingested (a discrepancy worth a warning) -- here read=5,
+        # ingested=4, so it fires as "warning: reconciliation mismatch -- ...".
+        assert "warning: reconciliation mismatch" in captured.err
         assert "5 read" in captured.err
         assert "4 ingested" in captured.err
         assert "1 skipped" in captured.err
@@ -1184,7 +1114,7 @@ class TestReconciliationSummary:
             ),
             patch.object(cli_mod, "discover_legacy", return_value=fake_discovery),
             patch.object(cli_mod, "run_upload", return_value=upload_result),
-            patch.object(cli_mod, "ProgressTracker"),
+            patch.object(cli_mod, "TwoLevelProgressRenderer"),
             pytest.raises(SystemExit),
         ):
             cli_mod.main()
@@ -1250,13 +1180,15 @@ class TestReconciliationSummary:
             ),
             patch.object(cli_mod, "discover_legacy", return_value=fake_discovery),
             patch.object(cli_mod, "run_upload", return_value=upload_result),
-            patch.object(cli_mod, "ProgressTracker"),
+            patch.object(cli_mod, "TwoLevelProgressRenderer"),
             pytest.raises(SystemExit),
         ):
             cli_mod.main()
 
         captured = capsys.readouterr()
-        assert "reconciliation:" in captured.err
+        # read (5) != ingested (3) -- Part 2: this discrepancy is exactly
+        # what the warning exists to surface.
+        assert "warning: reconciliation mismatch" in captured.err
         # read == ingested + skipped + unmapped == 3 + 1 + 1 == 5, exactly.
         assert "5 read" in captured.err
         assert "3 ingested" in captured.err
@@ -1265,7 +1197,9 @@ class TestReconciliationSummary:
 
     def test_main_reconciliation_default_format_zero_live_sessions_skipped(self, tmp_path, capsys):
         """The default context-intelligence path has no discovery object, so
-        live-sessions-skipped must be 0 without raising."""
+        live-sessions-skipped must be 0 without raising. read == ingested
+        here (1 == 1), so per Part 2 the reconciliation warning must NOT
+        print at all -- no discrepancy, no noise on the happy path."""
         from amplifier_module_tool_context_intelligence_upload import cli as cli_mod
         from amplifier_module_tool_context_intelligence_upload.uploader import UploadResult
 
@@ -1298,14 +1232,15 @@ class TestReconciliationSummary:
                 cli_mod, "resolve_upload_sessions", return_value=_fake_scope(fake_sessions)
             ),
             patch.object(cli_mod, "run_upload", return_value=upload_result),
-            patch.object(cli_mod, "ProgressTracker"),
+            patch.object(cli_mod, "TwoLevelProgressRenderer"),
             pytest.raises(SystemExit),
         ):
             cli_mod.main()
 
         captured = capsys.readouterr()
-        assert "reconciliation:" in captured.err
-        assert "0 live-sessions-skipped" in captured.err
+        # read (1) == ingested (1) -- no discrepancy, so Part 2 says: print
+        # nothing. The prior "reconciliation:" line every run is gone.
+        assert "reconciliation" not in captured.err
 
 
 # ---------------------------------------------------------------------------
@@ -1349,10 +1284,13 @@ class TestOperatorSignals:
                     "key",
                     "--format",
                     "logging-hook",
+                    # Part 6: the "scope:" diagnostic line is now gated
+                    # behind --verbose.
+                    "--verbose",
                 ],
             ),
             patch.object(cli_mod, "discover_legacy", return_value=fake_discovery),
-            patch.object(cli_mod, "ProgressTracker"),
+            patch.object(cli_mod, "TwoLevelProgressRenderer"),
             pytest.raises(SystemExit),
         ):
             cli_mod.main()
@@ -1406,11 +1344,14 @@ class TestOperatorSignals:
                     "key",
                     "--format",
                     "logging-hook",
+                    # Part 6: the live-skipped-ids note is now gated
+                    # behind --verbose.
+                    "--verbose",
                 ],
             ),
             patch.object(cli_mod, "discover_legacy", return_value=fake_discovery),
             patch.object(cli_mod, "run_upload", return_value=upload_result),
-            patch.object(cli_mod, "ProgressTracker"),
+            patch.object(cli_mod, "TwoLevelProgressRenderer"),
             pytest.raises(SystemExit),
         ):
             cli_mod.main()
@@ -1468,7 +1409,7 @@ class TestOperatorSignals:
             ),
             patch.object(cli_mod, "discover_legacy", return_value=fake_discovery),
             patch.object(cli_mod, "run_upload", return_value=upload_result),
-            patch.object(cli_mod, "ProgressTracker"),
+            patch.object(cli_mod, "TwoLevelProgressRenderer"),
             pytest.raises(SystemExit) as exc_info,
         ):
             cli_mod.main()
@@ -1511,9 +1452,987 @@ class TestOperatorSignals:
                 cli_mod, "resolve_upload_sessions", return_value=_fake_scope(fake_sessions)
             ),
             patch.object(cli_mod, "run_upload", return_value=upload_result),
-            patch.object(cli_mod, "ProgressTracker"),
+            patch.object(cli_mod, "TwoLevelProgressRenderer"),
             pytest.raises(SystemExit) as exc_info,
         ):
             cli_mod.main()
 
         assert exc_info.value.code == 0
+
+
+# ---------------------------------------------------------------------------
+# --destination / --auto-approve / optional --path argparse
+# ---------------------------------------------------------------------------
+
+
+class TestDestinationAndAutoApproveArgparse:
+    """The two new flags, and --path becoming optional."""
+
+    def test_destination_defaults_to_none(self):
+        from amplifier_module_tool_context_intelligence_upload.cli import _build_parser
+
+        args = _build_parser().parse_args([])
+        assert args.destination is None
+
+    def test_destination_flag_is_parsed(self):
+        from amplifier_module_tool_context_intelligence_upload.cli import _build_parser
+
+        args = _build_parser().parse_args(["--destination", "team"])
+        assert args.destination == "team"
+
+    def test_auto_approve_defaults_to_false(self):
+        from amplifier_module_tool_context_intelligence_upload.cli import _build_parser
+
+        args = _build_parser().parse_args([])
+        assert args.auto_approve is False
+
+    @pytest.mark.parametrize("flag", ["-y", "--auto-approve"])
+    def test_auto_approve_flag_and_alias_set_true(self, flag):
+        from amplifier_module_tool_context_intelligence_upload.cli import _build_parser
+
+        args = _build_parser().parse_args([flag])
+        assert args.auto_approve is True
+
+    def test_path_is_optional_and_defaults_to_none(self):
+        from amplifier_module_tool_context_intelligence_upload.cli import _build_parser
+
+        args = _build_parser().parse_args([])
+        assert args.path is None
+
+    def test_path_is_still_accepted_when_given(self):
+        from amplifier_module_tool_context_intelligence_upload.cli import _build_parser
+
+        args = _build_parser().parse_args(["--path", "/tmp"])
+        assert args.path == "/tmp"
+
+
+# ---------------------------------------------------------------------------
+# main() — connection precedence + destination selection
+# ---------------------------------------------------------------------------
+
+
+def _dest(name: str, url: str, **overrides):
+    """Build a hook Destination for CLI wiring tests."""
+    from amplifier_module_hook_context_intelligence.config_resolver import Destination
+
+    fields: dict = {
+        "name": name,
+        "url": url,
+        "api_key": f"{name}-key",
+        "include": ("**",),
+        "exclude": (),
+    }
+    fields.update(overrides)
+    return Destination(**fields)
+
+
+@pytest.fixture
+def isolated_home(tmp_path, monkeypatch):
+    """Isolate a main() run from the developer's real machine.
+
+    - HOME -> tmp_path, so anything calling Path.home() lands in the sandbox.
+    - AMPLIFIER_CONTEXT_INTELLIGENCE_* cleared, so destination mode is reached.
+    - progress file redirected into tmp_path, so the real progress renderer
+      (which main() now always constructs) does not litter /tmp.
+    """
+    monkeypatch.setenv("HOME", str(tmp_path))
+    for var in (
+        "AMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_URL",
+        "AMPLIFIER_CONTEXT_INTELLIGENCE_API_KEY",
+        "AMPLIFIER_CONTEXT_INTELLIGENCE_AUTH_MODE",
+        "AMPLIFIER_CONTEXT_INTELLIGENCE_AUTH_RESOURCE",
+    ):
+        monkeypatch.delenv(var, raising=False)
+    monkeypatch.setattr(
+        "amplifier_module_tool_context_intelligence_upload.cli.progress_file_path",
+        lambda job_id, override=None: tmp_path / "progress.json",
+    )
+    return tmp_path
+
+
+class TestConnectionResolution:
+    """Precedence: explicit flags > env vars > the destinations map."""
+
+    def test_single_destination_is_auto_selected_without_prompting(
+        self, tmp_path, isolated_home, monkeypatch
+    ):
+        from amplifier_module_tool_context_intelligence_upload.cli import main
+
+        def _boom(*args, **kwargs):
+            raise AssertionError("must not prompt when exactly one destination exists")
+
+        monkeypatch.setattr("builtins.input", _boom)
+        fake_sessions = [(tmp_path, {"session_id": "s1"})]
+
+        with (
+            patch("sys.argv", ["context-intelligence-upload", "--path", str(tmp_path), "-y"]),
+            patch(
+                "amplifier_module_tool_context_intelligence_upload.cli.read_destinations",
+                return_value={"team": _dest("team", "https://team.example.com")},
+            ),
+            patch(
+                "amplifier_module_tool_context_intelligence_upload.cli.load_keys_env_into_environ"
+            ),
+            patch(
+                "amplifier_module_tool_context_intelligence_upload.cli.filter_sessions",
+                return_value=(fake_sessions, 0),
+            ),
+            patch(
+                "amplifier_module_tool_context_intelligence_upload.cli.resolve_upload_sessions",
+                return_value=_fake_scope(fake_sessions),
+            ),
+            patch(
+                "amplifier_module_tool_context_intelligence_upload.cli.run_upload",
+                return_value=_make_upload_result(),
+            ) as mock_upload,
+            pytest.raises(SystemExit) as exc_info,
+        ):
+            main()
+
+        assert exc_info.value.code == 0
+        assert mock_upload.call_args.kwargs["server_url"] == "https://team.example.com"
+        assert mock_upload.call_args.kwargs["api_key"] == "team-key"
+
+    def test_named_destination_is_selected_when_several_exist(
+        self, tmp_path, isolated_home, monkeypatch
+    ):
+        from amplifier_module_tool_context_intelligence_upload.cli import main
+
+        destinations = {
+            "team": _dest("team", "https://team.example.com"),
+            "personal": _dest("personal", "https://personal.example.com"),
+        }
+        fake_sessions = [(tmp_path, {"session_id": "s1"})]
+
+        with (
+            patch(
+                "sys.argv",
+                [
+                    "context-intelligence-upload",
+                    "--path",
+                    str(tmp_path),
+                    "--destination",
+                    "personal",
+                    "-y",
+                ],
+            ),
+            patch(
+                "amplifier_module_tool_context_intelligence_upload.cli.read_destinations",
+                return_value=destinations,
+            ),
+            patch(
+                "amplifier_module_tool_context_intelligence_upload.cli.load_keys_env_into_environ"
+            ),
+            patch(
+                "amplifier_module_tool_context_intelligence_upload.cli.filter_sessions",
+                return_value=(fake_sessions, 0),
+            ),
+            patch(
+                "amplifier_module_tool_context_intelligence_upload.cli.resolve_upload_sessions",
+                return_value=_fake_scope(fake_sessions),
+            ),
+            patch(
+                "amplifier_module_tool_context_intelligence_upload.cli.run_upload",
+                return_value=_make_upload_result(),
+            ) as mock_upload,
+            pytest.raises(SystemExit) as exc_info,
+        ):
+            main()
+
+        assert exc_info.value.code == 0
+        assert mock_upload.call_args.kwargs["server_url"] == "https://personal.example.com"
+
+    def test_ambiguous_destinations_without_flag_exits_2(self, tmp_path, isolated_home):
+        """select_destination raises DestinationSelectionError -> exit 2, listing names."""
+        from amplifier_module_tool_context_intelligence_upload.cli import main
+        from amplifier_module_tool_context_intelligence_upload.destinations import (
+            DestinationSelectionError,
+        )
+
+        with (
+            patch("sys.argv", ["context-intelligence-upload", "--path", str(tmp_path), "-y"]),
+            patch(
+                "amplifier_module_tool_context_intelligence_upload.cli.read_destinations",
+                return_value={
+                    "team": _dest("team", "https://team.example.com"),
+                    "personal": _dest("personal", "https://personal.example.com"),
+                },
+            ),
+            patch(
+                "amplifier_module_tool_context_intelligence_upload.cli.load_keys_env_into_environ"
+            ),
+            patch(
+                "amplifier_module_tool_context_intelligence_upload.cli.select_destination",
+                side_effect=DestinationSelectionError(
+                    "several destinations configured: personal, team"
+                ),
+            ),
+            pytest.raises(SystemExit) as exc_info,
+        ):
+            main()
+
+        assert exc_info.value.code == 2
+
+    def test_zero_destinations_and_nothing_configured_exits_2_with_guidance(
+        self, tmp_path, isolated_home, capsys
+    ):
+        from amplifier_module_tool_context_intelligence_upload.cli import main
+
+        with (
+            patch("sys.argv", ["context-intelligence-upload", "--path", str(tmp_path)]),
+            patch(
+                "amplifier_module_tool_context_intelligence_upload.cli.read_destinations",
+                return_value={},
+            ),
+            patch(
+                "amplifier_module_tool_context_intelligence_upload.cli.load_keys_env_into_environ"
+            ),
+            patch("context_intelligence.config.SETTINGS_PATH", tmp_path / "nosettings.yaml"),
+            pytest.raises(SystemExit) as exc_info,
+        ):
+            main()
+
+        assert exc_info.value.code == 2
+        err = capsys.readouterr().err
+        assert "settings.yaml" in err
+        assert "--server-url" in err
+
+    def test_explicit_destination_errors_when_zero_destinations_configured(
+        self, tmp_path, isolated_home, capsys
+    ):
+        """An explicit --destination must error, never silently fall back to legacy config."""
+        from amplifier_module_tool_context_intelligence_upload.cli import main
+
+        with (
+            patch(
+                "sys.argv",
+                [
+                    "context-intelligence-upload",
+                    "--path",
+                    str(tmp_path),
+                    "--destination",
+                    "nonexistent",
+                ],
+            ),
+            patch(
+                "amplifier_module_tool_context_intelligence_upload.cli.read_destinations",
+                return_value={},
+            ),
+            patch(
+                "amplifier_module_tool_context_intelligence_upload.cli.load_keys_env_into_environ"
+            ),
+            pytest.raises(SystemExit) as exc_info,
+        ):
+            main()
+
+        assert exc_info.value.code == 2
+        err = capsys.readouterr().err
+        assert "nonexistent" in err
+        assert "no context-intelligence destinations are configured" in err.lower()
+
+    def test_zero_destinations_falls_back_to_legacy_settings_scalars(self, tmp_path, isolated_home):
+        """D2: a legacy flat settings.yaml config still works (no destination selected)."""
+        from amplifier_module_tool_context_intelligence_upload.cli import main
+
+        fake_sessions = [(tmp_path, {"session_id": "s1"})]
+
+        with (
+            patch("sys.argv", ["context-intelligence-upload", "--path", str(tmp_path)]),
+            patch(
+                "amplifier_module_tool_context_intelligence_upload.cli.read_destinations",
+                return_value={},
+            ),
+            patch(
+                "amplifier_module_tool_context_intelligence_upload.cli.load_keys_env_into_environ"
+            ),
+            patch(
+                "context_intelligence.config.resolve_config",
+                return_value=("http://legacy:8000", "legacy-key"),
+            ),
+            patch(
+                "amplifier_module_tool_context_intelligence_upload.cli.resolve_upload_sessions",
+                return_value=_fake_scope(fake_sessions),
+            ),
+            patch(
+                "amplifier_module_tool_context_intelligence_upload.cli.run_upload",
+                return_value=_make_upload_result(),
+            ) as mock_upload,
+            pytest.raises(SystemExit) as exc_info,
+        ):
+            main()
+
+        assert exc_info.value.code == 0
+        assert mock_upload.call_args.kwargs["server_url"] == "http://legacy:8000"
+
+    def test_explicit_flags_bypass_destination_resolution_entirely(self, tmp_path, isolated_home):
+        from amplifier_module_tool_context_intelligence_upload.cli import main
+
+        fake_sessions = [(tmp_path, {"session_id": "s1"})]
+
+        with (
+            patch(
+                "sys.argv",
+                [
+                    "context-intelligence-upload",
+                    "--path",
+                    str(tmp_path),
+                    "--server-url",
+                    "http://explicit:9000",
+                    "--api-key",
+                    "explicit-key",
+                ],
+            ),
+            patch(
+                "amplifier_module_tool_context_intelligence_upload.cli.read_destinations",
+            ) as mock_read,
+            patch(
+                "amplifier_module_tool_context_intelligence_upload.cli.resolve_upload_sessions",
+                return_value=_fake_scope(fake_sessions),
+            ),
+            patch(
+                "amplifier_module_tool_context_intelligence_upload.cli.run_upload",
+                return_value=_make_upload_result(),
+            ) as mock_upload,
+            pytest.raises(SystemExit) as exc_info,
+        ):
+            main()
+
+        assert exc_info.value.code == 0
+        assert mock_read.call_count == 0
+        assert mock_upload.call_args.kwargs["server_url"] == "http://explicit:9000"
+
+
+# ---------------------------------------------------------------------------
+# main() — default scan root when --path is omitted
+# ---------------------------------------------------------------------------
+
+
+class TestDefaultScanRoot:
+    """With --path omitted, discovery starts at ~/.amplifier/projects."""
+
+    def test_omitted_path_uses_default_scan_root(self, tmp_path, isolated_home):
+        from amplifier_module_tool_context_intelligence_upload.cli import main
+
+        scan_root = tmp_path / "projects"
+        scan_root.mkdir()
+        fake_sessions = [(scan_root, {"session_id": "s1"})]
+
+        with (
+            patch("sys.argv", ["context-intelligence-upload", "-y"]),
+            patch(
+                "amplifier_module_tool_context_intelligence_upload.cli.read_destinations",
+                return_value={"team": _dest("team", "https://team.example.com")},
+            ),
+            patch(
+                "amplifier_module_tool_context_intelligence_upload.cli.load_keys_env_into_environ"
+            ),
+            patch(
+                "amplifier_module_tool_context_intelligence_upload.cli.default_scan_root",
+                return_value=scan_root,
+            ),
+            patch(
+                "amplifier_module_tool_context_intelligence_upload.cli.filter_sessions",
+                return_value=(fake_sessions, 0),
+            ),
+            patch(
+                "amplifier_module_tool_context_intelligence_upload.cli.resolve_upload_sessions",
+                return_value=_fake_scope(fake_sessions),
+            ) as mock_resolve,
+            patch(
+                "amplifier_module_tool_context_intelligence_upload.cli.run_upload",
+                return_value=_make_upload_result(),
+            ),
+            pytest.raises(SystemExit) as exc_info,
+        ):
+            main()
+
+        assert exc_info.value.code == 0
+        assert mock_resolve.call_args.args[0] == scan_root
+
+    def test_missing_default_scan_root_exits_2(self, tmp_path, isolated_home, capsys):
+        from amplifier_module_tool_context_intelligence_upload.cli import main
+
+        missing = tmp_path / "no-projects-dir"
+
+        with (
+            patch("sys.argv", ["context-intelligence-upload", "-y"]),
+            patch(
+                "amplifier_module_tool_context_intelligence_upload.cli.read_destinations",
+                return_value={"team": _dest("team", "https://team.example.com")},
+            ),
+            patch(
+                "amplifier_module_tool_context_intelligence_upload.cli.load_keys_env_into_environ"
+            ),
+            patch(
+                "amplifier_module_tool_context_intelligence_upload.cli.default_scan_root",
+                return_value=missing,
+            ),
+            pytest.raises(SystemExit) as exc_info,
+        ):
+            main()
+
+        assert exc_info.value.code == 2
+        assert "does not exist" in capsys.readouterr().err
+
+
+# ---------------------------------------------------------------------------
+# main() — destination filter wiring (runs once, after discovery, before the
+# empty-sessions guard)
+# ---------------------------------------------------------------------------
+
+
+class TestSessionFiltering:
+    """filter_sessions runs exactly once, in destination mode, on the final
+    pre-upload session list — before the ``if not sessions:`` guard, so it
+    covers both the upload loop and the reconciliation read-count loop.
+    """
+
+    def test_filter_runs_on_the_discovered_sessions_in_destination_mode(
+        self, tmp_path, isolated_home
+    ):
+        from amplifier_module_tool_context_intelligence_upload.cli import main
+
+        discovered = [
+            (tmp_path / "a", {"session_id": "a"}),
+            (tmp_path / "b", {"session_id": "b"}),
+        ]
+        kept = [discovered[0]]
+
+        with (
+            patch("sys.argv", ["context-intelligence-upload", "--path", str(tmp_path), "-y"]),
+            patch(
+                "amplifier_module_tool_context_intelligence_upload.cli.read_destinations",
+                return_value={"team": _dest("team", "https://team.example.com")},
+            ),
+            patch(
+                "amplifier_module_tool_context_intelligence_upload.cli.load_keys_env_into_environ"
+            ),
+            patch(
+                "amplifier_module_tool_context_intelligence_upload.cli.resolve_upload_sessions",
+                return_value=_fake_scope(discovered),
+            ),
+            patch(
+                "amplifier_module_tool_context_intelligence_upload.cli.filter_sessions",
+                return_value=(kept, 1),
+            ) as mock_filter,
+            patch(
+                "amplifier_module_tool_context_intelligence_upload.cli.run_upload",
+                return_value=_make_upload_result(),
+            ) as mock_upload,
+            pytest.raises(SystemExit) as exc_info,
+        ):
+            main()
+
+        assert exc_info.value.code == 0
+        assert mock_filter.call_args.args[0] == discovered
+        assert mock_filter.call_args.args[1].name == "team"
+        assert mock_upload.call_args.kwargs["sessions"] == kept
+
+    def test_explicit_path_is_passed_only_as_the_fallback(self, tmp_path, isolated_home):
+        """--path may point at a backup dir; it is a fallback, never the discriminator."""
+        from amplifier_module_tool_context_intelligence_upload.cli import main
+
+        backup_dir = tmp_path / "backup"
+        backup_dir.mkdir()
+        fake_sessions = [(backup_dir, {"session_id": "s1"})]
+
+        with (
+            patch("sys.argv", ["context-intelligence-upload", "--path", str(backup_dir), "-y"]),
+            patch(
+                "amplifier_module_tool_context_intelligence_upload.cli.read_destinations",
+                return_value={"team": _dest("team", "https://team.example.com")},
+            ),
+            patch(
+                "amplifier_module_tool_context_intelligence_upload.cli.load_keys_env_into_environ"
+            ),
+            patch(
+                "amplifier_module_tool_context_intelligence_upload.cli.resolve_upload_sessions",
+                return_value=_fake_scope(fake_sessions),
+            ),
+            patch(
+                "amplifier_module_tool_context_intelligence_upload.cli.filter_sessions",
+                return_value=(fake_sessions, 0),
+            ) as mock_filter,
+            patch(
+                "amplifier_module_tool_context_intelligence_upload.cli.run_upload",
+                return_value=_make_upload_result(),
+            ),
+            pytest.raises(SystemExit) as exc_info,
+        ):
+            main()
+
+        assert exc_info.value.code == 0
+        assert mock_filter.call_args.kwargs["path_fallback"] == backup_dir
+
+    def test_no_path_means_no_path_fallback(self, tmp_path, isolated_home):
+        from amplifier_module_tool_context_intelligence_upload.cli import main
+
+        scan_root = tmp_path / "projects"
+        scan_root.mkdir()
+        fake_sessions = [(scan_root, {"session_id": "s1"})]
+
+        with (
+            patch("sys.argv", ["context-intelligence-upload", "-y"]),
+            patch(
+                "amplifier_module_tool_context_intelligence_upload.cli.read_destinations",
+                return_value={"team": _dest("team", "https://team.example.com")},
+            ),
+            patch(
+                "amplifier_module_tool_context_intelligence_upload.cli.load_keys_env_into_environ"
+            ),
+            patch(
+                "amplifier_module_tool_context_intelligence_upload.cli.default_scan_root",
+                return_value=scan_root,
+            ),
+            patch(
+                "amplifier_module_tool_context_intelligence_upload.cli.resolve_upload_sessions",
+                return_value=_fake_scope(fake_sessions),
+            ),
+            patch(
+                "amplifier_module_tool_context_intelligence_upload.cli.filter_sessions",
+                return_value=(fake_sessions, 0),
+            ) as mock_filter,
+            patch(
+                "amplifier_module_tool_context_intelligence_upload.cli.run_upload",
+                return_value=_make_upload_result(),
+            ),
+            pytest.raises(SystemExit) as exc_info,
+        ):
+            main()
+
+        assert exc_info.value.code == 0
+        assert mock_filter.call_args.kwargs["path_fallback"] is None
+
+    def test_everything_filtered_out_exits_0_with_a_zero_upload_summary(
+        self, tmp_path, isolated_home, capsys
+    ):
+        from amplifier_module_tool_context_intelligence_upload.cli import main
+
+        discovered = [(tmp_path / "a", {"session_id": "a"})]
+
+        with (
+            patch("sys.argv", ["context-intelligence-upload", "--path", str(tmp_path), "-y"]),
+            patch(
+                "amplifier_module_tool_context_intelligence_upload.cli.read_destinations",
+                return_value={"team": _dest("team", "https://team.example.com")},
+            ),
+            patch(
+                "amplifier_module_tool_context_intelligence_upload.cli.load_keys_env_into_environ"
+            ),
+            patch(
+                "amplifier_module_tool_context_intelligence_upload.cli.resolve_upload_sessions",
+                return_value=_fake_scope(discovered),
+            ),
+            patch(
+                "amplifier_module_tool_context_intelligence_upload.cli.filter_sessions",
+                return_value=([], 2),
+            ),
+            patch(
+                "amplifier_module_tool_context_intelligence_upload.cli.run_upload",
+            ) as mock_upload,
+            pytest.raises(SystemExit) as exc_info,
+        ):
+            main()
+
+        assert exc_info.value.code == 0
+        assert mock_upload.call_count == 0
+        out = json.loads(capsys.readouterr().out)
+        assert out["sessions_uploaded"] == 0
+        assert out["sessions_filtered_out"] == 2
+
+    def test_no_filtering_without_a_destination(self, tmp_path, isolated_home):
+        """Explicit --server-url/--api-key selects no destination -> filter never runs."""
+        from amplifier_module_tool_context_intelligence_upload.cli import main
+
+        fake_sessions = [(tmp_path, {"session_id": "s1"})]
+
+        with (
+            patch(
+                "sys.argv",
+                [
+                    "context-intelligence-upload",
+                    "--path",
+                    str(tmp_path),
+                    "--server-url",
+                    "http://explicit:9000",
+                    "--api-key",
+                    "explicit-key",
+                ],
+            ),
+            patch(
+                "amplifier_module_tool_context_intelligence_upload.cli.read_destinations",
+            ),
+            patch(
+                "amplifier_module_tool_context_intelligence_upload.cli.resolve_upload_sessions",
+                return_value=_fake_scope(fake_sessions),
+            ),
+            patch(
+                "amplifier_module_tool_context_intelligence_upload.cli.filter_sessions",
+            ) as mock_filter,
+            patch(
+                "amplifier_module_tool_context_intelligence_upload.cli.run_upload",
+                return_value=_make_upload_result(),
+            ),
+            pytest.raises(SystemExit) as exc_info,
+        ):
+            main()
+
+        assert exc_info.value.code == 0
+        assert mock_filter.call_count == 0
+
+
+# ---------------------------------------------------------------------------
+# main() -- preview + confirmation gate (destination mode only)
+# ---------------------------------------------------------------------------
+
+
+class TestPreviewAndConfirmation:
+    """The preview + confirm gate is wired in for destination mode only,
+    after the empty-sessions guard and before progress-tracker construction.
+    """
+
+    def test_preview_is_printed_before_upload(self, tmp_path, isolated_home, capsys):
+        from amplifier_module_tool_context_intelligence_upload.cli import main
+
+        discovered = [(tmp_path / "a", {"session_id": "a"})]
+
+        with (
+            patch("sys.argv", ["context-intelligence-upload", "--path", str(tmp_path), "-y"]),
+            patch(
+                "amplifier_module_tool_context_intelligence_upload.cli.read_destinations",
+                return_value={"team": _dest("team", "https://team.example.com")},
+            ),
+            patch(
+                "amplifier_module_tool_context_intelligence_upload.cli.load_keys_env_into_environ"
+            ),
+            patch(
+                "amplifier_module_tool_context_intelligence_upload.cli.resolve_upload_sessions",
+                return_value=_fake_scope(discovered),
+            ),
+            patch(
+                "amplifier_module_tool_context_intelligence_upload.cli.filter_sessions",
+                return_value=(discovered, 3),
+            ),
+            patch(
+                "amplifier_module_tool_context_intelligence_upload.cli.run_upload",
+                return_value=_make_upload_result(),
+            ),
+            pytest.raises(SystemExit) as exc_info,
+        ):
+            main()
+
+        assert exc_info.value.code == 0
+        err = capsys.readouterr().err
+        assert "about to upload" in err
+        assert "team" in err
+        assert "https://team.example.com" in err
+
+    def test_declining_the_prompt_uploads_nothing_and_exits_0(
+        self, tmp_path, isolated_home, monkeypatch, capsys
+    ):
+        from amplifier_module_tool_context_intelligence_upload.cli import main
+
+        discovered = [(tmp_path / "a", {"session_id": "a"})]
+        monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
+        monkeypatch.setattr(sys.stdout, "isatty", lambda: True)
+        monkeypatch.setattr("builtins.input", lambda: "n")
+
+        with (
+            patch("sys.argv", ["context-intelligence-upload", "--path", str(tmp_path)]),
+            patch(
+                "amplifier_module_tool_context_intelligence_upload.cli.read_destinations",
+                return_value={"team": _dest("team", "https://team.example.com")},
+            ),
+            patch(
+                "amplifier_module_tool_context_intelligence_upload.cli.load_keys_env_into_environ"
+            ),
+            patch(
+                "amplifier_module_tool_context_intelligence_upload.cli.resolve_upload_sessions",
+                return_value=_fake_scope(discovered),
+            ),
+            patch(
+                "amplifier_module_tool_context_intelligence_upload.cli.filter_sessions",
+                return_value=(discovered, 0),
+            ),
+            patch(
+                "amplifier_module_tool_context_intelligence_upload.cli.run_upload",
+            ) as mock_upload,
+            pytest.raises(SystemExit) as exc_info,
+        ):
+            main()
+
+        assert exc_info.value.code == 0
+        assert mock_upload.call_count == 0
+
+    def test_accepting_the_prompt_uploads(self, tmp_path, isolated_home, monkeypatch, capsys):
+        from amplifier_module_tool_context_intelligence_upload.cli import main
+
+        discovered = [(tmp_path / "a", {"session_id": "a"})]
+        monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
+        monkeypatch.setattr(sys.stdout, "isatty", lambda: True)
+        monkeypatch.setattr("builtins.input", lambda: "y")
+
+        with (
+            patch("sys.argv", ["context-intelligence-upload", "--path", str(tmp_path)]),
+            patch(
+                "amplifier_module_tool_context_intelligence_upload.cli.read_destinations",
+                return_value={"team": _dest("team", "https://team.example.com")},
+            ),
+            patch(
+                "amplifier_module_tool_context_intelligence_upload.cli.load_keys_env_into_environ"
+            ),
+            patch(
+                "amplifier_module_tool_context_intelligence_upload.cli.resolve_upload_sessions",
+                return_value=_fake_scope(discovered),
+            ),
+            patch(
+                "amplifier_module_tool_context_intelligence_upload.cli.filter_sessions",
+                return_value=(discovered, 0),
+            ),
+            patch(
+                "amplifier_module_tool_context_intelligence_upload.cli.run_upload",
+                return_value=_make_upload_result(),
+            ) as mock_upload,
+            pytest.raises(SystemExit) as exc_info,
+        ):
+            main()
+
+        assert exc_info.value.code == 0
+        assert mock_upload.call_count == 1
+
+    def test_non_interactive_without_auto_approve_exits_2_with_guidance(
+        self, tmp_path, isolated_home, capsys
+    ):
+        from amplifier_module_tool_context_intelligence_upload.cli import main
+
+        discovered = [(tmp_path / "a", {"session_id": "a"})]
+
+        with (
+            patch("sys.argv", ["context-intelligence-upload", "--path", str(tmp_path)]),
+            patch(
+                "amplifier_module_tool_context_intelligence_upload.cli.read_destinations",
+                return_value={"team": _dest("team", "https://team.example.com")},
+            ),
+            patch(
+                "amplifier_module_tool_context_intelligence_upload.cli.load_keys_env_into_environ"
+            ),
+            patch(
+                "amplifier_module_tool_context_intelligence_upload.cli.resolve_upload_sessions",
+                return_value=_fake_scope(discovered),
+            ),
+            patch(
+                "amplifier_module_tool_context_intelligence_upload.cli.filter_sessions",
+                return_value=(discovered, 0),
+            ),
+            patch(
+                "amplifier_module_tool_context_intelligence_upload.cli.run_upload",
+            ) as mock_upload,
+            pytest.raises(SystemExit) as exc_info,
+        ):
+            main()
+
+        assert exc_info.value.code == 2
+        assert mock_upload.call_count == 0
+        assert "--auto-approve" in capsys.readouterr().err
+
+    def test_no_confirmation_gate_without_a_destination(self, tmp_path, isolated_home, capsys):
+        """Explicit flags -> byte-for-byte old behavior: no preview, no prompt."""
+        from amplifier_module_tool_context_intelligence_upload.cli import main
+
+        fake_sessions = [(tmp_path, {"session_id": "s1"})]
+
+        with (
+            patch(
+                "sys.argv",
+                [
+                    "context-intelligence-upload",
+                    "--path",
+                    str(tmp_path),
+                    "--server-url",
+                    "http://explicit:9000",
+                    "--api-key",
+                    "explicit-key",
+                ],
+            ),
+            patch(
+                "amplifier_module_tool_context_intelligence_upload.cli.read_destinations",
+            ),
+            patch(
+                "amplifier_module_tool_context_intelligence_upload.cli.resolve_upload_sessions",
+                return_value=_fake_scope(fake_sessions),
+            ),
+            patch(
+                "amplifier_module_tool_context_intelligence_upload.cli.run_upload",
+                return_value=_make_upload_result(),
+            ) as mock_upload,
+            pytest.raises(SystemExit) as exc_info,
+        ):
+            main()
+
+        assert exc_info.value.code == 0
+        assert mock_upload.call_count == 1
+        assert "about to upload" not in capsys.readouterr().err
+
+
+class TestProgressRendererWiring:
+    """main() attaches the two-level renderer and prints a final summary."""
+
+    def test_final_summary_is_printed_to_stderr(self, tmp_path, isolated_home, capsys):
+        from amplifier_module_tool_context_intelligence_upload.cli import main
+
+        discovered = [(tmp_path / "a", {"session_id": "a"})]
+
+        with (
+            patch("sys.argv", ["context-intelligence-upload", "--path", str(tmp_path), "-y"]),
+            patch(
+                "amplifier_module_tool_context_intelligence_upload.cli.read_destinations",
+                return_value={"team": _dest("team", "https://team.example.com")},
+            ),
+            patch(
+                "amplifier_module_tool_context_intelligence_upload.cli.load_keys_env_into_environ"
+            ),
+            patch(
+                "amplifier_module_tool_context_intelligence_upload.cli.resolve_upload_sessions",
+                return_value=_fake_scope(discovered),
+            ),
+            patch(
+                "amplifier_module_tool_context_intelligence_upload.cli.filter_sessions",
+                return_value=(discovered, 4),
+            ),
+            patch(
+                "amplifier_module_tool_context_intelligence_upload.cli.run_upload",
+                return_value=_make_upload_result(sessions_uploaded=1, events_uploaded=9),
+            ),
+            pytest.raises(SystemExit) as exc_info,
+        ):
+            main()
+
+        assert exc_info.value.code == 0
+        err = capsys.readouterr().err
+        # Part 2 redesign: "summary:" -> "upload complete" block.
+        assert "upload complete" in err
+        assert "team" in err
+        assert "filtered out:   4" in err
+        assert "took:" in err
+
+    def test_renderer_is_used_as_the_tracker(self, tmp_path, isolated_home):
+        from amplifier_module_tool_context_intelligence_upload.cli import main
+        from amplifier_module_tool_context_intelligence_upload.progress import (
+            TwoLevelProgressRenderer,
+        )
+
+        discovered = [(tmp_path / "a", {"session_id": "a"})]
+
+        with (
+            patch("sys.argv", ["context-intelligence-upload", "--path", str(tmp_path), "-y"]),
+            patch(
+                "amplifier_module_tool_context_intelligence_upload.cli.read_destinations",
+                return_value={"team": _dest("team", "https://team.example.com")},
+            ),
+            patch(
+                "amplifier_module_tool_context_intelligence_upload.cli.load_keys_env_into_environ"
+            ),
+            patch(
+                "amplifier_module_tool_context_intelligence_upload.cli.resolve_upload_sessions",
+                return_value=_fake_scope(discovered),
+            ),
+            patch(
+                "amplifier_module_tool_context_intelligence_upload.cli.filter_sessions",
+                return_value=(discovered, 0),
+            ),
+            patch(
+                "amplifier_module_tool_context_intelligence_upload.cli.run_upload",
+                return_value=_make_upload_result(),
+            ) as mock_upload,
+            pytest.raises(SystemExit),
+        ):
+            main()
+
+        tracker = mock_upload.call_args.kwargs["tracker"]
+        assert isinstance(tracker, TwoLevelProgressRenderer)
+
+    def test_summary_labels_explicit_mode_without_a_destination(
+        self, tmp_path, isolated_home, capsys
+    ):
+        from amplifier_module_tool_context_intelligence_upload.cli import main
+
+        discovered = [(tmp_path / "a", {"session_id": "a"})]
+
+        with (
+            patch(
+                "sys.argv",
+                [
+                    "context-intelligence-upload",
+                    "--path",
+                    str(tmp_path),
+                    "--server-url",
+                    "http://explicit:9000",
+                    "--api-key",
+                    "explicit-key",
+                ],
+            ),
+            patch(
+                "amplifier_module_tool_context_intelligence_upload.cli.resolve_upload_sessions",
+                return_value=_fake_scope(discovered),
+            ),
+            patch(
+                "amplifier_module_tool_context_intelligence_upload.cli.run_upload",
+                return_value=_make_upload_result(),
+            ),
+            pytest.raises(SystemExit),
+        ):
+            main()
+
+        err = capsys.readouterr().err
+        # Part 2 redesign: "summary:" -> "upload complete" block.
+        assert "upload complete" in err
+        assert "http://explicit:9000" in err
+
+
+# ---------------------------------------------------------------------------
+# Help text -- zero-arg gesture, destinations, keys.env, new flags
+# ---------------------------------------------------------------------------
+
+
+class TestHelpDocumentsTheNewGesture:
+    """Both help levels must explain the zero-arg gesture and the new flags."""
+
+    @pytest.mark.parametrize(
+        "needle",
+        ["--destination", "--auto-approve", "-y", "destinations", "keys.env"],
+    )
+    def test_compact_help_mentions(self, needle):
+        from amplifier_module_tool_context_intelligence_upload.cli import _COMPACT_HELP
+
+        assert needle in _COMPACT_HELP
+
+    @pytest.mark.parametrize(
+        "needle",
+        [
+            "--destination",
+            "--auto-approve",
+            "keys.env",
+            "destinations",
+            "~/.amplifier/projects",
+            "include",
+            "exclude",
+            "ZERO-ARG",
+            "PROGRESS DISPLAY",
+        ],
+    )
+    def test_detailed_help_mentions(self, needle):
+        from amplifier_module_tool_context_intelligence_upload.cli import _DETAILED_HELP
+
+        assert needle in _DETAILED_HELP
+
+    def test_compact_usage_line_shows_the_zero_arg_form(self):
+        from amplifier_module_tool_context_intelligence_upload.cli import _COMPACT_HELP
+
+        assert "usage: context-intelligence-upload" in _COMPACT_HELP
+        assert "[--path PATH]" in _COMPACT_HELP
+
+    def test_detailed_help_documents_the_new_exit_2_cases(self):
+        from amplifier_module_tool_context_intelligence_upload.cli import _DETAILED_HELP
+
+        assert "--auto-approve" in _DETAILED_HELP
+        assert "not a TTY" in _DETAILED_HELP

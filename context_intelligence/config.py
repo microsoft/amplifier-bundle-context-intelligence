@@ -18,6 +18,7 @@ import logging
 import os
 import re
 from pathlib import Path
+from typing import Any
 
 log = logging.getLogger("context_intelligence.config")
 
@@ -28,6 +29,10 @@ log = logging.getLogger("context_intelligence.config")
 LOG_SCHEMA = {"name": "amplifier.log", "ver": "1.0.0"}
 AMPLIFIER_DIR = Path.home() / ".amplifier"
 SETTINGS_PATH = AMPLIFIER_DIR / "settings.yaml"
+
+# The settings.yaml key the live hook is configured under. Both the hook and the
+# standalone upload CLI read their config from this one block.
+_HOOK_OVERRIDE_KEY = "hook-context-intelligence"
 
 #: The ONE canonical reader-side default root for context-intelligence captures.
 #: All readers fall back to this when AMPLIFIER_CONTEXT_INTELLIGENCE_BASE_PATH is unset.
@@ -222,56 +227,92 @@ def _expand_env_placeholders(value: str) -> str:
 # ---------------------------------------------------------------------------
 
 
-def _parse_settings_yaml(path: Path) -> dict:
-    """Minimal YAML parser for settings.yaml — good enough for the flat keys
-    we need without requiring PyYAML.
+def read_hook_config_block(path: Path) -> dict[str, Any]:
+    """Return the ``overrides.hook-context-intelligence.config`` block from *path*.
 
-    Returns a dict with CI server config keys (``server_url``, ``api_key``) if found.
+    This is the single settings.yaml reader for the bundle. Returns ``{}`` when
+    the file is missing, unparseable, or has no such block -- a malformed
+    settings.yaml must never crash a caller.
+
+    PyYAML is optional here on purpose: this package declares only
+    ``azure-identity`` as a runtime dependency, so ``context_intelligence`` can
+    be installed without PyYAML. The line-based fallback covers the flat scalar
+    keys we need in that case.
     """
-    result: dict[str, str] = {}
     if not path.is_file():
-        return result
+        return {}
 
     try:
-        # Try PyYAML first
         import yaml
-
-        with open(path, encoding="utf-8") as f:
-            data = yaml.safe_load(f)
-        if isinstance(data, dict):
-            ci_cfg = (
-                data.get("overrides", {}).get("hook-context-intelligence", {}).get("config", {})
-            )
-            if isinstance(ci_cfg, dict):
-                if "context_intelligence_server_url" in ci_cfg:
-                    result["server_url"] = ci_cfg["context_intelligence_server_url"]
-                if "context_intelligence_api_key" in ci_cfg:
-                    result["api_key"] = ci_cfg["context_intelligence_api_key"]
     except ImportError:
-        # Fallback: crude line-based extraction
-        try:
-            text = path.read_text(encoding="utf-8")
-            in_ci_section = False
-            for line in text.splitlines():
-                stripped = line.strip()
-                if "hook-context-intelligence" in stripped:
-                    in_ci_section = True
-                    continue
-                if in_ci_section:
-                    if stripped.startswith("context_intelligence_server_url:"):
-                        val = stripped.split(":", 1)[1].strip().strip("'\"")
-                        result["server_url"] = val
-                    elif stripped.startswith("context_intelligence_api_key:"):
-                        val = stripped.split(":", 1)[1].strip().strip("'\"")
-                        result["api_key"] = val
-                    # If we hit a non-indented line, we've left the section
-                    if not line.startswith(" ") and not line.startswith("\t") and stripped:
-                        if "context_intelligence" not in stripped:
-                            in_ci_section = False
-        except OSError:
-            pass
-    except Exception as exc:
+        return _crude_hook_config_block(path)
+
+    try:
+        data = yaml.safe_load(path.read_text(encoding="utf-8"))
+    except Exception as exc:  # noqa: BLE001 - a malformed settings.yaml must never crash a caller
         log.debug("Could not parse %s: %s", path, exc)
+        return {}
+
+    if not isinstance(data, dict):
+        return {}
+    overrides = data.get("overrides")
+    if not isinstance(overrides, dict):
+        return {}
+    hook_override = overrides.get(_HOOK_OVERRIDE_KEY)
+    if not isinstance(hook_override, dict):
+        return {}
+    config = hook_override.get("config")
+    return config if isinstance(config, dict) else {}
+
+
+def _crude_hook_config_block(path: Path) -> dict[str, Any]:
+    """Line-based fallback for when PyYAML is unavailable.
+
+    Collects flat ``key: value`` pairs nested under the
+    ``hook-context-intelligence`` section. Good enough for the scalar
+    connection keys; nested structures are not represented.
+    """
+    result: dict[str, Any] = {}
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        return result
+
+    in_ci_section = False
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        if _HOOK_OVERRIDE_KEY in stripped:
+            in_ci_section = True
+            continue
+        if not in_ci_section:
+            continue
+        # A non-indented line ends the section.
+        if not line.startswith((" ", "\t")):
+            in_ci_section = False
+            continue
+        if stripped.endswith(":"):
+            continue
+        key, sep, value = stripped.partition(":")
+        if not sep:
+            continue
+        result[key.strip()] = value.strip().strip("'\"")
+    return result
+
+
+def _parse_settings_yaml(path: Path) -> dict:
+    """Projection of :func:`read_hook_config_block` onto the connection keys.
+
+    Kept as a distinct function because ``resolve_config`` and ``tool_resolver``
+    want the flattened ``{"server_url", "api_key"}`` shape, not the raw block.
+    """
+    config = read_hook_config_block(path)
+    result: dict[str, str] = {}
+    if "context_intelligence_server_url" in config:
+        result["server_url"] = config["context_intelligence_server_url"]
+    if "context_intelligence_api_key" in config:
+        result["api_key"] = config["context_intelligence_api_key"]
     return result
 
 

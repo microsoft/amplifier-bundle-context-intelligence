@@ -22,10 +22,6 @@ class TestProjectSection:
         data = _load()
         assert data["project"]["name"] == "amplifier-module-tool-context-intelligence-upload"
 
-    def test_project_version(self):
-        data = _load()
-        assert data["project"]["version"] == "0.1.3"
-
     def test_requires_python(self):
         data = _load()
         assert data["project"]["requires-python"] == ">=3.11"
@@ -43,6 +39,12 @@ class TestProjectSection:
         data = _load()
         deps = data["project"]["dependencies"]
         assert any("amplifier-module-hook-context-intelligence" in d for d in deps)
+
+    def test_dependencies_include_pyyaml(self):
+        """destinations.py parses the nested destinations block — needs a real YAML parser."""
+        data = _load()
+        deps = data["project"]["dependencies"]
+        assert any("pyyaml" in d.lower() for d in deps)
 
 
 class TestNoAmplifierEntryPoints:

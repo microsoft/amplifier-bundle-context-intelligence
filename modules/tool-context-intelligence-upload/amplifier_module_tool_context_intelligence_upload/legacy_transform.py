@@ -205,6 +205,35 @@ def derive_workspace(working_dir: str) -> str:
     return _slugify_path(working_dir)
 
 
+def unslug_approximate(slug: str) -> str:
+    """Reconstruct an APPROXIMATE working-directory path from a workspace slug.
+
+    Best-effort inverse of :func:`derive_workspace`: strip the leading ``-``
+    and turn every remaining ``-`` back into ``/``.
+
+    **This is lossy and it is meant to be.** ``derive_workspace`` maps every
+    ``/`` to ``-``, so a literal hyphen inside a directory name is
+    indistinguishable from a path separator: ``/home/user/my-app`` and
+    ``/home/user/my/app`` slug identically. There is no way to tell them
+    apart from the slug alone.
+
+    It is therefore a RARE, deep fallback used only when a session has a
+    ``workspace`` slug but no recorded ``working_dir``. Virtually every
+    session records its real ``working_dir`` (CI-native always; legacy since
+    the discovery change), so the exact path is normally available and wins.
+
+    Returns ``""`` when nothing is derivable -- an empty slug, the hook's
+    ``"default"`` empty-input sentinel, or a degenerate ``"-"``. Callers
+    treat ``""`` as "no working dir derivable" and must not drop the session.
+    """
+    if not slug or slug == "default":
+        return ""
+    body = slug.removeprefix("-")
+    if not body:
+        return ""
+    return "/" + body.replace("-", "/")
+
+
 def read_working_dir(session_dir: Path, legacy_events: Path) -> str:
     """Return the working directory for a session.
 

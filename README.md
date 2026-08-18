@@ -39,7 +39,9 @@ The umbrella `context-intelligence.yaml` is the drop-in install (Quick Start bel
 
 ## Understanding workspace
 
-**Workspace** is the primary isolation boundary for event data. It is written into every local file and every server POST — sessions in different workspaces are completely independent whether queried locally or via the graph. Typical uses: separate projects (`my-api`, `frontend`), separate environments (`dev`, `staging`, `prod`), or separate teams on a shared server.
+**Workspace** is the primary organizing label for event data. It is written into every local file and every server POST, and it is how you scope a query to one project's sessions. Typical uses: separate projects (`my-api`, `frontend`), separate environments (`dev`, `staging`, `prod`), or separate teams on a shared server.
+
+> **Workspace is not a security boundary.** It is a label the *client* chooses, not an access control. The server does not bind a credential to a workspace, does not validate the `workspace` a client sends, and `graph_query` accepts `workspace: "*"` to read across all of them — as does hand-written Cypher that simply omits the filter. On a shared server, every credential can read every workspace: separation is by convention, not enforcement. If you need one contributor to be unable to read another's data, that has to be enforced at the server or network layer — see [remote-access-sharing.md](https://github.com/microsoft/amplifier-context-intelligence/blob/main/docs/remote-access-sharing.md) in the server repo.
 
 ### How workspace appears in data
 
@@ -575,9 +577,36 @@ The worker uses lazy creation: it creates an `httpx.AsyncClient` on the first di
 
 **Known limitation:** during a prolonged outage, once the bounded in-memory queue fills, the newest events are dropped from the queue but remain durable in `events.jsonl`. Recover them after the outage with `context-intelligence-upload --path <real storage path>` (--server-url/--api-key come from flags or env/config).
 
+**Sustained-outage visibility.** The circuit breaker described above only opens on a *hard* (deterministic auth) failure ratio — a down/unreachable server produces *transient* network-error/timeout outcomes, which never feed that breaker, so it can retry the same event silently forever with capped backoff. This is exactly what happened in a real incident: a server was down for ~2 days and the only signal was a single rate-limited INFO line per session — nobody noticed for two days. Two independent, additive signals close that gap without changing retry/backoff timing or breaker state:
+
+- **Escalation to ERROR.** Once a destination has been continuously DEGRADED for more than 5 minutes (`_DEGRADED_ESCALATION_SECONDS`), the routine per-episode INFO notice escalates to a rate-limited (60 s) `logger.error()` naming events dropped so far, whether the circuit breaker is open, and how long delivery has been failing.
+- **Durable `forwarding-YYYY-MM-DD.jsonl` records.** The same escalation, and every degraded/undelivered session shutdown, also writes a durable record (`sustained_delivery_failure` while a session runs; `shutdown_undelivered` when it ends) to the consolidated forwarding-diagnostics log described in the config table above. Console warnings vanish once a process exits; these records don't — every short-lived session that ends mid-outage leaves one line in that day's file, so a multi-day outage across many discrete sessions (the exact shape of the real incident: no single long-lived process to watch) still leaves an aggregable trail an operator (or a monitoring script tailing/grepping that file) can find.
+
 > Recovering an older **legacy `hooks-logging`** archive instead of a native one? It can be imported non-destructively with `--format logging-hook` — see [Legacy hooks-logging import](modules/tool-context-intelligence-upload/README.md#legacy-hooks-logging-import---format-logging-hook) in the upload tool README.
 
 See [`docs/dispatch-circuit-breaker.dot`](docs/dispatch-circuit-breaker.dot) for the updated dispatch flow and [`docs/dispatch-auto-recovery-lifecycle.dot`](docs/dispatch-auto-recovery-lifecycle.dot) for the consolidated auto-recovery lifecycle (HEALTHY → DEGRADED → RECOVERY → OVERFLOW → SHUTDOWN).
+
+### Client queue vs. server spool — two different backlogs
+
+This distinction is easy to conflate and has real diagnostic cost when it is: **two entirely different queues sit on either side of the wire**, and a healthy client tells you *nothing* about the health of the other one.
+
+| | **Client-side dispatch queue** (this hook) | **Server-side spool** (Context Intelligence server) |
+|---|---|---|
+| What it is | An in-memory `asyncio.Queue` per destination, inside this process | The server's own durable on-disk ingest spool |
+| Bounded? | Yes — `dispatch_queue_capacity` (default 256) | No — unbounded by default |
+| On overflow | Drops the newest event (see **Overflow** above); event remains durable in local `events.jsonl` | Grows without limit |
+| Survives process exit? | No — purely in-memory, gone the instant this process exits | Yes — durable on disk |
+| Visible to this client? | Yes — this is what `dispatch_queue_capacity`, `_overflow_dropped`, and the visibility signals above describe | **No — completely invisible to the client.** The hook has no capability to observe, query, or bound the server's spool. |
+
+This is not a hypothetical distinction: in the same real incident referenced above, the server's own on-disk spool grew to **38 GB and OOM-killed the server process** — a failure mode entirely on the server side of the wire, which nothing described in this README (client queue depth, circuit breaker state, dispatch backoff) can detect or report, because the client never sees it. A healthy-looking client (durable local JSONL, isolated per-destination queues, no dropped events) tells you only that *this side* is working; it says nothing about whether the server is keeping up with what it's receiving.
+
+**Recovering after an outage on either side:** local `events.jsonl` is the durable source of truth regardless of which side failed. Once the server (and its spool) are healthy again, replay any events this client dropped (or that accumulated while dispatch was disabled) with:
+
+```bash
+context-intelligence-upload --path <storage path> --server-url <url> --api-key <key>
+```
+
+(`--server-url`/`--api-key` may also come from env/config — see `context-intelligence-upload --help`.) This reads directly from `events.jsonl`, so it recovers correctly whether the gap was caused by the client's bounded queue dropping events, the destination being unreachable for the whole session, or the server having been down/unhealthy in a way the client could never observe.
 
 ---
 
@@ -714,10 +743,11 @@ amplifier-bundle-context-intelligence/
 │   └── jsonl-event-schema.md               ← events.jsonl schema contract
 ├── modules/
 │   ├── hook-context-intelligence/      ← the Python hook module — PURE TELEMETRY
-│   └── tool-context-intelligence-query/ ← graph_query + blob_read tools
-│       └── amplifier_module_tool_context_intelligence_query/
-│           ├── graph_query_tool.py     ← Cypher query tool
-│           └── blob_read_tool.py       ← ci-blob:// resolution tool
+│   ├── tool-context-intelligence-query/ ← graph_query + blob_read tools
+│   │   └── amplifier_module_tool_context_intelligence_query/
+│   │       ├── graph_query_tool.py     ← Cypher query tool
+│   │       └── blob_read_tool.py       ← ci-blob:// resolution tool
+│   └── tool-context-intelligence-upload/ ← standalone CLI, not an in-session tool — see its README to install
 ├── docs/
 │   ├── context-intelligence-exploration-guide.md   ← what to explore and how to test
 │   ├── dispatch-circuit-breaker.dot    ← dispatch flow and circuit breaker state machine
@@ -761,6 +791,7 @@ print('YAML validates OK')
 - [amplifier-context-intelligence](https://github.com/microsoft/amplifier-context-intelligence) — the CI server (Neo4j + blob storage + dashboard)
 - [amplifier-app-cli](https://github.com/microsoft/amplifier-app-cli) — CLI that sends `project_slug` used for workspace resolution
 - [amplifier](https://github.com/microsoft/amplifier) — the Amplifier framework
+- [`context-intelligence-upload`](modules/tool-context-intelligence-upload/README.md#installation) — standalone CLI to replay `events.jsonl` sessions to the CI server; install it with `uv tool install "amplifier-module-tool-context-intelligence-upload @ git+https://github.com/microsoft/amplifier-bundle-context-intelligence@main#subdirectory=modules/tool-context-intelligence-upload"`
 
 
 ## Contributing

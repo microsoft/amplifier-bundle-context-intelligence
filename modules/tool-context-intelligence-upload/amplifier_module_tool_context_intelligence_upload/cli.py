@@ -12,13 +12,21 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import time
 import uuid
 from pathlib import Path
+from typing import NamedTuple
 
+from amplifier_module_hook_context_intelligence.config_resolver import Destination
+
+from .destinations import DestinationSelectionError, read_destinations, select_destination
 from .formats import FORMATS
+from .keys_env import load_keys_env_into_environ
 from .logging_hook_format import discover_legacy
-from .progress import ProgressTracker, progress_file_path
+from .preview import ConfirmationRequiredError, build_preview_text, confirm_upload
+from .progress import TwoLevelProgressRenderer, folder_label, progress_file_path
 from .reconciliation import reconciliation_summary
+from .session_filter import default_scan_root, filter_sessions, resolve_session_working_dir
 from .session_graph import ScopeError, resolve_upload_sessions
 from .uploader import _count_lines, run_upload
 
@@ -27,19 +35,35 @@ from .uploader import _count_lines, run_upload
 # ---------------------------------------------------------------------------
 
 _COMPACT_HELP = """\
-usage: context-intelligence-upload --path PATH --server-url URL --api-key KEY
+usage: context-intelligence-upload [--path PATH] [--destination NAME]
+	                                    [--server-url URL] [--api-key KEY]
+	                                    [-y | --auto-approve]
 	                                    [--job-id ID] [--progress FILE]
-	                                    [--event-delay-ms MS]
+	                                    [--event-delay-ms MS] [--format FORMAT]
 	                                    [--no-replay]
 
 Replay context-intelligence session data to a server.
 
+With no arguments at all, uploads everything under ~/.amplifier/projects to
+the destination configured in ~/.amplifier/settings.yaml (auto-selected when
+exactly one destination is configured), after showing a preview of what will
+be sent and asking you to confirm.
+
 flags:
   -h                 Show this compact help and exit
   --help             Show detailed documentation and exit
-  --path             File or folder to replay (required)
-  --server-url       Target server base URL (required)
-  --api-key          Bearer token for authorization (required)
+  --path             File or folder to replay
+                       default: ~/.amplifier/projects (auto-discovery of all
+                       sessions when omitted)
+  --destination      Name of the destination to upload to, from the
+                       'destinations' map in ~/.amplifier/settings.yaml.
+                       Exactly one configured -> auto-selected. Two or more
+                       -> interactive prompt, or name one explicitly.
+  -y, --auto-approve Skip the 'Proceed? [y/N]' confirmation prompt
+                       (required for non-interactive/CI use)
+  --server-url       Target server base URL (bypasses destinations map)
+  --api-key          Bearer token for authorization
+                       ${VAR} values resolve from ~/.amplifier/keys.env
   --job-id           Job identifier (auto-generated UUID4 if omitted)
   --progress         Progress file path
                        default: /tmp/context-intelligence-upload-{job_id}.json
@@ -68,12 +92,108 @@ every events.jsonl file to the server's /events endpoint.
 Progress is tracked atomically in a JSON file on disk so the upload can be
 monitored externally.  The final result is written as JSON to stdout.
 
+ZERO-ARG GESTURE
+-----------------
+Running ``context-intelligence-upload`` with no arguments at all is a
+supported, first-class gesture.  It resolves in five stages:
+
+  1. CONNECTION
+     Explicit flags (--server-url/--api-key) win if given.  Otherwise the
+     AMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_URL / _API_KEY environment
+     variables are checked next.  If neither is set, the tool falls back to
+     the same write destinations the live hook uses: the 'destinations' map
+     under overrides.hook-context-intelligence.config.destinations in
+     ~/.amplifier/settings.yaml, for example:
+
+       overrides:
+         hook-context-intelligence:
+           config:
+             destinations:
+               primary:
+                 url: "https://context-intelligence.example.com"
+                 api_key: "${CONTEXT_INTELLIGENCE_API_KEY}"
+                 include: ["~/repos/*"]
+                 exclude: ["~/repos/scratch/*"]
+
+     ``${VAR}`` values are resolved from ~/.amplifier/keys.env.  A real
+     environment variable of the same name always wins over a keys.env
+     entry.  A missing keys.env file is not an error -- it is simply
+     skipped.
+
+  2. DESTINATION SELECTION
+     Exactly one destination configured -> it is used silently, no prompt.
+     Two or more configured -> an interactive numbered prompt is shown, or
+     pass --destination NAME to choose one explicitly (required in
+     non-interactive/scripted contexts).  In a non-interactive run, an
+     ambiguous choice is a hard error (exit 2) rather than hanging waiting
+     for input.
+
+  3. DISCOVERY
+     With --path omitted, the tool scans ~/.amplifier/projects using the
+     native layout for the selected --format.
+
+  4. FILTERING
+     The chosen destination's include/exclude patterns are applied using
+     the SAME matcher the hook used at capture time.  Matching is always
+     against each session's OWN recorded working_dir -- never against
+     --path, which may point at a backup or mirrored copy living somewhere
+     else entirely.  Legacy sessions that only recorded a workspace slug
+     fall back to an approximate reconstruction of the working directory;
+     this is documented as approximate, not exact.  Nothing is silently
+     dropped: filtered-out sessions are counted and reported in the preview
+     and in the final summary.
+
+  5. PREVIEW + CONFIRM
+     Before anything is sent, a summary is printed: destination name,
+     number of sessions, approximate event count, and how many sessions
+     were filtered out.  You are then asked 'Proceed? [y/N]', which
+     defaults to NO if you just press Enter.  Pass --auto-approve (or -y)
+     to skip this prompt.  If stdin/stdout is not a TTY and --auto-approve
+     was not given, the tool exits with code 2 instead of hanging
+     indefinitely or silently uploading without consent.
+
+Only ~/.amplifier/settings.yaml and ~/.amplifier/keys.env are read for this
+gesture -- a project-local ./.amplifier/ directory is deliberately NOT
+consulted, since uploads are a user-level, cross-project operation.
+
+Filtering and the confirmation prompt are DESTINATION-MODE features only.
+When --server-url/--api-key are given explicitly, behavior is unchanged
+from previous releases: no filtering, no preview, no prompt.
+
+PROGRESS DISPLAY
+-----------------
+On an interactive terminal, progress renders at two levels: an outer
+session counter (e.g. ``[3/12] my-project/abc123``) and an inner per-session
+event bar that redraws in place as events are sent.  When stdout is piped
+or redirected (not a TTY), the ANSI redraw sequences are dropped and one
+plain completion line is printed per session instead.  A final summary is
+always printed, regardless of terminal mode: destination name and URL,
+sessions uploaded, events sent, events skipped, sessions filtered out, and
+elapsed duration.
+
+All human-facing progress output goes to stderr; stdout carries only the
+final result JSON, so ``context-intelligence-upload | jq`` continues to
+work unaffected by progress rendering.
+
 PARAMETERS
 ----------
   --path PATH
       File or folder to replay.  If PATH is a file named metadata.json only
       that single session is processed.  Otherwise the tool recurses into
       PATH searching for metadata.json files.
+
+  --destination NAME     (optional)
+      Name of the destination to upload to, from the 'destinations' map in
+      ~/.amplifier/settings.yaml.  Passing an unknown name is an error that
+      lists the valid destination names.  Omit to auto-select when exactly
+      one destination is configured, or to be prompted interactively when
+      several are.
+
+  -y, --auto-approve     (optional, default: off)
+      Skip the 'Proceed? [y/N]' confirmation shown before a destination-mode
+      upload.  Required for non-interactive/CI use: without it, a run whose
+      stdin/stdout is not a TTY errors out with exit code 2 instead of
+      hanging waiting for input or silently uploading without consent.
 
   --server-url URL
       Base URL of the Context Intelligence ingestion server
@@ -215,6 +335,11 @@ EXIT CODES
   2   Invalid invocation — missing required argument, PATH does not exist, or
       no context-intelligence sessions could be found/resolved under PATH.
 
+  Also 2: no destination configured and no connection flags were given; an
+  ambiguous destination choice made during a non-interactive run; an unknown
+  --destination NAME; or a confirmation that could not be obtained because
+  the process is not a TTY and --auto-approve was not passed.
+
 FINDING SERVER_URL AND API_KEY
 ------------------------------
 These values come from your context-intelligence bundle configuration.
@@ -289,7 +414,7 @@ def _make_help_action(text: str) -> type[argparse.Action]:
             option_strings: list[str],
             dest: str = argparse.SUPPRESS,
             default: str = argparse.SUPPRESS,
-            help: str | None = None,  # noqa: A002
+            help: str | None = None,
         ) -> None:
             super().__init__(
                 option_strings=option_strings,
@@ -343,9 +468,10 @@ def _build_parser() -> argparse.ArgumentParser:
     # Required flags
     parser.add_argument(
         "--path",
-        required=True,
+        required=False,
+        default=None,
         metavar="PATH",
-        help="File or folder to replay",
+        help="File or folder to replay (default: ~/.amplifier/projects)",
     )
     parser.add_argument(
         "--server-url",
@@ -409,6 +535,30 @@ def _build_parser() -> argparse.ArgumentParser:
     )
 
     parser.add_argument(
+        "--destination",
+        default=None,
+        metavar="NAME",
+        dest="destination",
+        help=(
+            "Name of the destination to upload to, from the 'destinations' map in "
+            "~/.amplifier/settings.yaml. Omit to auto-select when exactly one is "
+            "configured, or to be prompted when several are."
+        ),
+    )
+
+    parser.add_argument(
+        "-y",
+        "--auto-approve",
+        action="store_true",
+        default=False,
+        dest="auto_approve",
+        help=(
+            "Skip the 'Proceed? [y/N]' confirmation shown before a destination-mode "
+            "upload. Required for non-interactive/CI use."
+        ),
+    )
+
+    parser.add_argument(
         "--max-retries",
         type=int,
         default=5,
@@ -460,24 +610,64 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
     )
 
+    parser.add_argument(
+        "--verbose",
+        action="store_true",
+        default=False,
+        dest="verbose",
+        help=(
+            "Print extra diagnostic lines (job id/progress file path, discovery scope "
+            "details, live/unclassified session notes) that are hidden by default so "
+            "the happy-path output stays limited to the preview block and the prompt."
+        ),
+    )
+
     return parser
 
 
 # ---------------------------------------------------------------------------
-# Entry point
+# Connection resolution
 # ---------------------------------------------------------------------------
 
 
-def main() -> None:
-    """CLI entry point — synchronous, exits with an appropriate code."""
+class _Connection(NamedTuple):
+    """The resolved upload connection.
+
+    ``destination`` is None when the connection came from explicit flags, env
+    vars, or legacy settings.yaml scalars.  A None destination means NO
+    include/exclude filtering and NO confirmation gate (design: "both present
+    as before -> original behavior, byte-for-byte").
+    """
+
+    server_url: str
+    api_key: str
+    auth_mode: str
+    auth_resource: str
+    destination: Destination | None
+
+
+def _resolve_connection(args: argparse.Namespace) -> _Connection:
+    """Resolve the upload connection.
+
+    Precedence:
+      1. explicit CLI flags (--server-url/--api-key/--auth-mode/--auth-resource)
+      2. AMPLIFIER_CONTEXT_INTELLIGENCE_* env vars
+      3. the 'destinations' map in ~/.amplifier/settings.yaml, with ${VAR}
+         resolved from ~/.amplifier/keys.env
+
+    ``--destination NAME`` forces tier 3 regardless of env vars.
+    """
     import os
 
-    parser = _build_parser()
-    args = parser.parse_args()
+    from context_intelligence.config import _expand_env_placeholders, resolve_config
 
-    # 0a. Resolve auth mode / resource — CLI flags > env vars
-    # Apply _expand_env_placeholders so ${VAR} in settings / env-var values expands correctly.
-    from context_intelligence.config import _expand_env_placeholders
+    # keys.env must be loaded before the FIRST ${VAR} expansion, which happens
+    # below for auth_resource and again inside the tier 1+2 return. --server-url,
+    # --api-key and --auth-resource all document ${VAR} support, and tiers 1+2
+    # return before tier 3 is reached -- so loading keys.env at the tier 3 site
+    # left every explicit-flag and env-var caller expanding against an
+    # environment that never saw keys.env.
+    load_keys_env_into_environ()
 
     auth_mode: str = args.auth_mode or os.environ.get(
         "AMPLIFIER_CONTEXT_INTELLIGENCE_AUTH_MODE", "static"
@@ -488,39 +678,137 @@ def main() -> None:
         or ""
     )
 
-    # 0b. Resolve server config — CLI flags > env vars > settings.yaml
-    from context_intelligence.config import resolve_config
-
-    server_url, api_key = resolve_config(
-        server_url=args.server_url,
-        api_key=args.api_key,
-        auth_mode=auth_mode,
+    explicit = bool(args.server_url or args.api_key)
+    env_configured = bool(
+        os.environ.get("AMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_URL")
+        or os.environ.get("AMPLIFIER_CONTEXT_INTELLIGENCE_API_KEY")
     )
-    # Apply placeholder expansion to the resolved URL and key as well (for consistency:
-    # a settings.yaml value like `context_intelligence_server_url: "http://${MY_HOST}:8000"`
-    # is already app-expanded by app-cli in hook mode, but the upload CLI reads settings.yaml
-    # directly via resolve_config → _parse_settings_yaml which does NOT expand placeholders).
-    server_url = _expand_env_placeholders(server_url)
-    api_key = _expand_env_placeholders(api_key)
 
-    # 0c. Build auth strategy — fail loud on misconfiguration
+    # Tiers 1 + 2 -- today's behavior, unchanged, no destination object.
+    if not args.destination and (explicit or env_configured):
+        server_url, api_key = resolve_config(
+            server_url=args.server_url,
+            api_key=args.api_key,
+            auth_mode=auth_mode,
+        )
+        return _Connection(
+            _expand_env_placeholders(server_url),
+            _expand_env_placeholders(api_key),
+            auth_mode,
+            auth_resource,
+            None,
+        )
+
+    # Tier 3 -- the destinations map (keys.env, loaded above, expands ${VAR}).
+    destinations = read_destinations()
+
+    if not destinations:
+        if args.destination is not None:
+            # An EXPLICIT --destination must never be silently ignored just
+            # because zero destinations are configured -- that would upload
+            # to whatever the legacy fallback resolves to, not the place the
+            # user named. Fail loudly instead.
+            raise DestinationSelectionError(
+                f"Unknown destination {args.destination!r}. No context-intelligence "
+                "destinations are configured. Add one under "
+                "overrides.hook-context-intelligence.config.destinations in "
+                "~/.amplifier/settings.yaml, or pass --server-url/--api-key."
+            )
+        # D2: no destinations map, but a legacy flat settings.yaml config may
+        # still exist. resolve_config raises SystemExit when nothing at all is
+        # configured -- that is the design's "0 destinations + no args" error.
+        try:
+            server_url, api_key = resolve_config(server_url=None, api_key=None, auth_mode=auth_mode)
+        except SystemExit:
+            print(
+                "error: no context-intelligence destination configured. Configure a "
+                "destination under overrides.hook-context-intelligence.config.destinations "
+                "in ~/.amplifier/settings.yaml, or pass --server-url/--api-key.",
+                file=sys.stderr,
+            )
+            sys.exit(2)
+        return _Connection(
+            _expand_env_placeholders(server_url),
+            _expand_env_placeholders(api_key),
+            auth_mode,
+            auth_resource,
+            None,
+        )
+
+    interactive = sys.stdin.isatty() and sys.stdout.isatty()
+    destination = select_destination(destinations, args.destination, interactive)
+    return _Connection(
+        destination.url,
+        destination.api_key,
+        destination.auth_mode or auth_mode,
+        destination.auth_resource or auth_resource,
+        destination,
+    )
+
+
+def _count_events_per_session(sessions: list[tuple[Path, dict]]) -> list[int]:
+    """Return one non-blank event line count per session, in input order.
+
+    Counted fresh from each session's ``events.jsonl`` on disk.  A session
+    with no events file contributes ``0`` rather than being skipped, so the
+    returned list always aligns positionally with *sessions* -- callers zip
+    the two together to attribute counts back to individual sessions.
+    """
+    counts: list[int] = []
+    for session_dir, _session_metadata in sessions:
+        events_file = session_dir / "events.jsonl"
+        counts.append(_count_lines(events_file) if events_file.exists() else 0)
+    return counts
+
+
+def _count_total_events(sessions: list[tuple[Path, dict]]) -> int:
+    """Sum non-blank event line counts across each session's events.jsonl.
+
+    Shared by the pre-upload preview estimate and the post-upload
+    reconciliation "read" count -- both need the same independently-measured
+    total, counted fresh from disk rather than rederived from upload results.
+    """
+    return sum(_count_events_per_session(sessions))
+
+
+# ---------------------------------------------------------------------------
+# Entry point
+# ---------------------------------------------------------------------------
+
+
+def main() -> None:
+    """CLI entry point — synchronous, exits with an appropriate code."""
+    parser = _build_parser()
+    args = parser.parse_args()
+
+    # 0. Resolve the connection: explicit flags > env vars > destinations map.
+    try:
+        conn = _resolve_connection(args)
+    except DestinationSelectionError as e:
+        print(f"error: {e}", file=sys.stderr)
+        sys.exit(2)
+
+    server_url = conn.server_url
+    api_key = conn.api_key
+
     from context_intelligence.auth import build_auth_strategy
 
     auth_strategy = build_auth_strategy(
-        auth_mode=auth_mode,
-        api_key=api_key,
-        auth_resource=auth_resource,
+        auth_mode=conn.auth_mode,
+        api_key=conn.api_key,
+        auth_resource=conn.auth_resource,
     )
 
     # 1. Auto-generate job_id if not provided
     job_id: str = args.job_id
     if job_id is None:
         job_id = str(uuid.uuid4())
-        prog_default = f"/tmp/context-intelligence-upload-{job_id}.json"
-        print(f"job_id: {job_id}  progress={prog_default}", file=sys.stderr)
+        if args.verbose:
+            prog_default = f"/tmp/context-intelligence-upload-{job_id}.json"
+            print(f"job_id: {job_id}  progress={prog_default}", file=sys.stderr)
 
-    # 2. Validate path exists
-    target_path = Path(args.path)
+    # 2. Resolve the scan root: --path if given, else ~/.amplifier/projects.
+    target_path = Path(args.path) if args.path else default_scan_root()
     if not target_path.exists():
         print(
             f"error: path does not exist: {target_path}",
@@ -558,16 +846,20 @@ def main() -> None:
             sys.exit(2)
 
         sessions = scope.sessions
+        # Dangling parents are folded into the preview's "what will be sent:"
+        # block below (preview.py::build_preview_text dangling_parent_count)
+        # rather than printed as a separate top-level note -- see Part 6 item 3.
+        dangling_parent_count = len(scope.dangling_parent_ids)
 
-        print(
-            f"scope: mode={scope.mode} root(s)={','.join(scope.selected_root_ids)} "
-            f"uploading {scope.selected_count} of {scope.total_discovered} discovered session(s)",
-            file=sys.stderr,
-        )
-        if scope.dangling_parent_ids:
+        if args.verbose:
+            # This is a PRE-filter count: it reflects everything
+            # resolve_upload_sessions discovered before the destination's
+            # include/exclude patterns run (step 3b below). It is worded to
+            # not be mistaken for the actual upload count -- that number
+            # comes from the preview's "uploading:" line, post-filter.
             print(
-                f"note: {len(scope.dangling_parent_ids)} parent session(s) not included "
-                f"will appear as placeholders until uploaded: {','.join(scope.dangling_parent_ids)}",
+                f"scope: mode={scope.mode} \u2014 {scope.total_discovered} session(s) "
+                "discovered (before destination filtering)",
                 file=sys.stderr,
             )
     else:
@@ -578,6 +870,7 @@ def main() -> None:
         discovery = discover_legacy(target_path)
         sessions = discovery.sessions
         live_sessions_skipped = discovery.live_skipped
+        dangling_parent_count = 0
 
         if not sessions:
             print(
@@ -586,28 +879,56 @@ def main() -> None:
                 file=sys.stderr,
             )
 
-        print(
-            f"scope: format={args.format} discovered {len(sessions)} legacy session(s); "
-            f"live-skipped={discovery.live_skipped}, "
-            f"unresolved-workspace={discovery.unresolved_workspace}, "
-            f"unclassified={discovery.unclassified}",
-            file=sys.stderr,
+        if args.verbose:
+            print(
+                f"scope: format={args.format} discovered {len(sessions)} legacy session(s); "
+                f"live-skipped={discovery.live_skipped}, "
+                f"unresolved-workspace={discovery.unresolved_workspace}, "
+                f"unclassified={discovery.unclassified}",
+                file=sys.stderr,
+            )
+
+            if discovery.live_skipped:
+                print(
+                    f"note: {discovery.live_skipped} live/in-progress session(s) skipped: "
+                    f"{','.join(discovery.live_skipped_ids)}",
+                    file=sys.stderr,
+                )
+
+            if discovery.unclassified:
+                print(
+                    f"note: {discovery.unclassified} session(s) skipped as unclassified "
+                    f"(schema sniff inconclusive, not silently dropped): "
+                    f"{','.join(discovery.unclassified_ids)}",
+                    file=sys.stderr,
+                )
+
+    # 3b. Destination filter -- runs ONCE on the final pre-upload list, before
+    #     the empty guard, so it covers both the upload loop and the
+    #     reconciliation read-count loop.  Only destination mode filters:
+    #     explicit --server-url/--api-key means "send here", no filtering.
+    sessions_filtered_out = 0
+    if conn.destination is not None:
+        discovered_count = len(sessions)
+        sessions, sessions_filtered_out = filter_sessions(
+            sessions,
+            conn.destination,
+            path_fallback=Path(args.path) if args.path else None,
         )
-
-        if discovery.live_skipped:
+        if discovered_count and not sessions:
             print(
-                f"note: {discovery.live_skipped} live/in-progress session(s) skipped: "
-                f"{','.join(discovery.live_skipped_ids)}",
+                f"all {discovered_count} discovered session(s) were filtered out by "
+                f"destination '{conn.destination.name}' -- nothing to upload.",
                 file=sys.stderr,
             )
-
-        if discovery.unclassified:
-            print(
-                f"note: {discovery.unclassified} session(s) skipped as unclassified "
-                f"(schema sniff inconclusive, not silently dropped): "
-                f"{','.join(discovery.unclassified_ids)}",
-                file=sys.stderr,
-            )
+            result = {
+                "status": "completed",
+                "sessions_uploaded": 0,
+                "events_uploaded": 0,
+                "sessions_filtered_out": sessions_filtered_out,
+            }
+            sys.stdout.write(json.dumps(result, indent=2) + "\n")
+            sys.exit(0)
 
     # 4. Handle no sessions found (fallback guard; resolve_upload_sessions
     #    already raises ScopeError on empty discovery, but keep this as a
@@ -625,12 +946,84 @@ def main() -> None:
         sys.stdout.write(json.dumps(result, indent=2) + "\n")
         sys.exit(0)
 
+    # 4b. Preview + confirm -- destination mode only.  With explicit
+    #     --server-url/--api-key the user already said "send here", so the
+    #     original behavior is preserved byte-for-byte (no preview, no prompt).
+    if conn.destination is not None:
+        # Resolve each surviving session's working directory with the SAME
+        # helper filter_sessions used, so the folders the preview names are
+        # exactly the folders the include/exclude rules matched -- not a
+        # second, independently-derived notion of "where this session ran".
+        preview_path_fallback = Path(args.path) if args.path else None
+        folder_entries = [
+            (
+                resolve_session_working_dir(session_dir, session_metadata, preview_path_fallback),
+                event_count,
+            )
+            for (session_dir, session_metadata), event_count in zip(
+                sessions,
+                _count_events_per_session(sessions),
+                strict=True,
+            )
+        ]
+
+        print(
+            build_preview_text(
+                conn.destination,
+                folder_entries,
+                sessions_filtered_out,
+                source_format=args.format,
+                dangling_parent_count=dangling_parent_count,
+            ),
+            file=sys.stderr,
+        )
+
+        try:
+            approved = confirm_upload(
+                auto_approve=args.auto_approve,
+                interactive=sys.stdin.isatty() and sys.stdout.isatty(),
+            )
+        except ConfirmationRequiredError:
+            print(
+                "error: confirmation required -- pass --auto-approve for non-interactive use",
+                file=sys.stderr,
+            )
+            sys.exit(2)
+
+        if not approved:
+            print("aborted -- nothing uploaded.", file=sys.stderr)
+            result = {
+                "status": "aborted",
+                "sessions_uploaded": 0,
+                "events_uploaded": 0,
+            }
+            sys.stdout.write(json.dumps(result, indent=2) + "\n")
+            sys.exit(0)
+
     # 5. Create progress tracker
     prog_path = progress_file_path(job_id, override=args.progress)
-    tracker = ProgressTracker(
-        job_id=job_id,
-        file_path=prog_path,
-        sessions_total=len(sessions),
+    # folder_label() -- not session_label() -- because the live progress
+    # block's "now:" field shows the folder an operator recognizes (the same
+    # grouping the preview's "from N folders:" section uses), not a raw
+    # session UUID. failure_block()'s "session:" field also uses this map
+    # (via TwoLevelProgressRenderer._session_display) to render folder/id.
+    folder_labels = {
+        str(session_metadata.get("session_id") or session_dir.name): folder_label(
+            session_dir, session_metadata
+        )
+        for session_dir, session_metadata in sessions
+    }
+    destination_display_name = (
+        conn.destination.name if conn.destination else "(explicit --server-url)"
+    )
+    events_total_overall = _count_total_events(sessions)
+    tracker = TwoLevelProgressRenderer(
+        job_id,
+        prog_path,
+        len(sessions),
+        events_total_overall,
+        destination_name=destination_display_name,
+        folder_labels=folder_labels,
     )
 
     # 6. Run upload
@@ -638,6 +1031,7 @@ def main() -> None:
     # replay=False unconditionally, with no --no-replay override (enforced
     # above at step 2b). The context-intelligence path keeps today's behavior.
     replay = False if args.format == "logging-hook" else not args.no_replay
+    upload_started_at = time.monotonic()
     upload_result = run_upload(
         sessions=sessions,
         server_url=server_url,
@@ -650,27 +1044,68 @@ def main() -> None:
         timeout_s=args.timeout_s,
         parse_fn=parse_fn,
     )
+    upload_duration_s = time.monotonic() - upload_started_at
 
-    # 6b. Print the operator reconciliation summary -- independently-measured
-    # counts only (read is a fresh non-blank-line count from the events.jsonl
-    # files on disk, NOT a rederivation of ingested + skipped).
-    read_total = 0
-    for session_dir, _session_metadata in sessions:
-        events_file = session_dir / "events.jsonl"
-        if events_file.exists():
-            read_total += _count_lines(events_file)
+    # 6b. Reconciliation is only worth surfacing when the independently
+    # measured "read" count (fresh non-blank-line count from events.jsonl on
+    # disk) disagrees with what was actually ingested -- that disagreement is
+    # the one signal an operator needs to act on. When they match, printing a
+    # reconciliation line every run is noise on the happy path (Part 2).
+    #
+    # Only checked when the upload ran to completion. On a failed upload,
+    # read != ingested is expected arithmetic (the run stopped early) --
+    # not a data-integrity signal -- and the failure block below already
+    # reports what was sent before the failure. Printing the mismatch
+    # warning too would stack two alarming messages on top of one problem.
+    read_total = _count_total_events(sessions)
+    if upload_result.success and read_total != upload_result.events_uploaded:
+        print(
+            "warning: reconciliation mismatch -- "
+            + reconciliation_summary(
+                read=read_total,
+                ingested=upload_result.events_uploaded,
+                skipped=upload_result.events_skipped,
+                unmapped=upload_result.events_unmapped,
+                live_sessions_skipped=live_sessions_skipped,
+            ),
+            file=sys.stderr,
+        )
 
-    print(
-        "reconciliation: "
-        + reconciliation_summary(
-            read=read_total,
-            ingested=upload_result.events_uploaded,
-            skipped=upload_result.events_skipped,
-            unmapped=upload_result.events_unmapped,
-            live_sessions_skipped=live_sessions_skipped,
-        ),
-        file=sys.stderr,
-    )
+    # 6c. Completion or failure block. mark_failed() already recorded
+    # failed_at via the tracker (inside run_upload), so failure details come
+    # from upload_result.failed_at -- the same data the progress JSON file's
+    # "failed_at" key carries.
+    if upload_result.success:
+        print(
+            tracker.completion_block(
+                destination_name=destination_display_name,
+                destination_url=f"{server_url.rstrip('/')}/events",
+                sessions_uploaded=upload_result.sessions_uploaded,
+                events_sent=upload_result.events_uploaded,
+                events_malformed=upload_result.events_malformed,
+                events_unreadable=upload_result.events_unreadable,
+                retries=upload_result.retries,
+                duration_s=upload_duration_s,
+            ),
+            file=sys.stderr,
+        )
+    else:
+        failed_at = upload_result.failed_at or {}
+        http_status = failed_at.get("http_status", 0)
+        error_detail = upload_result.error or "unknown error"
+        error_display = f"HTTP {http_status} \u2014 {error_detail}" if http_status else error_detail
+        print(
+            tracker.failure_block(
+                sessions_uploaded=upload_result.sessions_uploaded,
+                events_sent=upload_result.events_uploaded,
+                failed_session_id=str(failed_at.get("session_id", "")),
+                failed_event_index=int(failed_at.get("event_index", 0)),
+                error=error_display,
+                job_id=job_id,
+                duration_s=upload_duration_s,
+            ),
+            file=sys.stderr,
+        )
 
     # 7. Write result JSON to stdout
     sys.stdout.write(json.dumps(upload_result.to_dict(), indent=2) + "\n")

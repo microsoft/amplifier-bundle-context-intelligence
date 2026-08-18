@@ -293,7 +293,7 @@ class TestURIParsing:
 
 
 class TestPathSanitization:
-    """Output file paths must be confined to /tmp/ci-blobs/ regardless of key."""
+    """Output file paths must stay confined to the blob store root regardless of key."""
 
     async def test_slashes_sanitized(self) -> None:
         """Slashes in the key must not create unexpected subdirectory depth."""
