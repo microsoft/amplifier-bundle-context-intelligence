@@ -236,7 +236,7 @@ def _parse_settings_yaml(path: Path) -> dict:
         # Try PyYAML first
         import yaml
 
-        with open(path) as f:
+        with open(path, encoding="utf-8") as f:
             data = yaml.safe_load(f)
         if isinstance(data, dict):
             ci_cfg = (
@@ -250,7 +250,7 @@ def _parse_settings_yaml(path: Path) -> dict:
     except ImportError:
         # Fallback: crude line-based extraction
         try:
-            text = path.read_text()
+            text = path.read_text(encoding="utf-8")
             in_ci_section = False
             for line in text.splitlines():
                 stripped = line.strip()

@@ -184,15 +184,19 @@ returns a dict with the path. Never pass the URI to `read_file` directly.
 
 ```
 blob_read(uri="ci-blob://f881e0a0-c055-4ee4-84ed-ff44703150ea/events.jsonl")
-# → returns: {"path": "/tmp/ci-blobs/f881e0a0-c055-4ee4-84ed-ff44703150ea/events.jsonl.json", "source": {"name": ..., "url": ..., "origin": ...}}
+# → returns: {"path": "<blob store root>/f881e0a0-c055-4ee4-84ed-ff44703150ea/events.jsonl.json", "source": {"name": ..., "url": ..., "origin": ...}}
 ```
 
-The path takes the form `<session_id>/<key>.json` under the blob store root.
+The path takes the form `<session_id>/<key>.json` under the blob store root. The
+root is a `ci-blobs` directory inside the OS temp directory, which differs by
+platform (`/tmp/ci-blobs` on macOS and Linux, `%TEMP%\ci-blobs` on Windows) —
+always use the returned `path` verbatim rather than constructing one.
 
 > ⚠️ **Warning:** Blob files can contain lines with 100k+ tokens. Opening them with
-> `read_file` will overflow your context window. Use shell extraction tools only:
+> `read_file` will overflow your context window. Use shell extraction tools only,
+> with `$BLOB_PATH` being the `path` value returned by `blob_read`:
 >
 > ```bash
-> jq '.data.prompt' /tmp/ci-blobs/events.jsonl | head -20
-> head -5 /tmp/ci-blobs/events.jsonl
+> jq '.data.prompt' "$BLOB_PATH" | head -20
+> head -5 "$BLOB_PATH"
 > ```

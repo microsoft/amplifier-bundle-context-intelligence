@@ -105,7 +105,7 @@ def build_disk_only_metadata(session_id: str, session_dir: Path) -> dict:
     ci_meta_path = session_dir / "context-intelligence" / "metadata.json"
     if ci_meta_path.is_file():
         try:
-            with open(ci_meta_path) as f:
+            with open(ci_meta_path, encoding="utf-8") as f:
                 ci_meta = json.load(f)
             if isinstance(ci_meta, dict):
                 if ci_meta.get("started_at"):
@@ -134,7 +134,7 @@ def build_disk_only_metadata(session_id: str, session_dir: Path) -> dict:
     transcript_path = session_dir / "transcript.jsonl"
     if transcript_path.is_file():
         try:
-            with open(transcript_path) as f:
+            with open(transcript_path, encoding="utf-8") as f:
                 # Count user messages as turns
                 turn_count = sum(1 for line in f if line.strip() and '"role":"user"' in line)
             metadata["turn_count"] = turn_count

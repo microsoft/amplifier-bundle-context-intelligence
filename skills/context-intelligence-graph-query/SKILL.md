@@ -569,11 +569,14 @@ returns a local **file path**, not content:
 result = blob_read(uri="ci-blob://SESSION_ID/EVENT_KEY")  # -> {"path": "...", "source": {name, url, origin}}
 ```
 
-Then extract only the fields you need with `jq` — never load a whole blob into context:
+Then extract only the fields you need with `jq` — never load a whole blob into
+context. `$BLOB_PATH` below is the `path` value returned by `blob_read`; use it
+verbatim rather than constructing a path, since the blob store lives under the OS
+temp directory and differs by platform:
 
 ```bash
-jq 'keys' /tmp/ci-blobs/SESSION_ID/EVENT_KEY.json          # structure first
-jq '.messages[-1].content' /tmp/ci-blobs/SESSION_ID/EVENT_KEY.json
+jq 'keys' "$BLOB_PATH"                    # structure first
+jq '.messages[-1].content' "$BLOB_PATH"
 ```
 
 **Rules:** check for a `ci-blob://` prefix before parsing as JSON; lifted properties

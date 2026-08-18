@@ -59,7 +59,7 @@ log = logging.getLogger("context_intelligence_cli")
 def write_json(path: Path, data: dict) -> None:
     """Write a dict as pretty-printed JSON."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    with open(path, "w") as f:
+    with open(path, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=4)
         f.write("\n")
 
@@ -67,7 +67,7 @@ def write_json(path: Path, data: dict) -> None:
 def write_jsonl(path: Path, records: list[dict]) -> int:
     """Write records as JSONL. Returns number of lines written."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    with open(path, "w") as f:
+    with open(path, "w", encoding="utf-8") as f:
         for record in records:
             f.write(json.dumps(record, ensure_ascii=False, separators=(",", ":")))
             f.write("\n")

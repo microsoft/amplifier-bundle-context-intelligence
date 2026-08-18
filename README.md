@@ -499,7 +499,7 @@ they never raise. Every result names the resolved endpoint's provenance as a `so
 {"source": {"name": "default", "url": "...", "origin": "destination"}, "rows": [...]}
 
 # blob_read
-{"path": "/tmp/ci-blobs/<session_id>/<key>.json", "source": {"name": "default", "url": "...", "origin": "destination"}}
+{"path": "<os-temp-dir>/ci-blobs/<session_id>/<key>.json", "source": {"name": "default", "url": "...", "origin": "destination"}}
 ```
 
 **`list_sources: true`** (either tool) returns the whole connectable pool instead of
