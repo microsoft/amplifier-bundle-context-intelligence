@@ -250,3 +250,82 @@ class TestValidateDestinations:
         assert result == {}
         errors = [rec for rec in caplog.records if rec.levelno == logging.ERROR]
         assert any("weird" in rec.message and "kerberos" in rec.message for rec in errors)
+
+
+class TestEmptyIncludeWarning:
+    """A destination with an empty ``include`` (omitted or ``[]``) is fail-closed --
+    it matches no session (see ``Destination`` docstring, ``fanout.py``'s ``_matches``)
+    -- but that is a LEGAL configuration, not a validation failure. It must still be
+    a WARNING (not an error), must NOT drop the destination from the returned dict,
+    and must not fire for a destination whose ``include`` is actually populated
+    (explicitly, or via the legacy-scalar synthesis, which always sets ``("**",)``)."""
+
+    def test_omitted_include_warns_and_destination_survives(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        r = _resolver({"destinations": {"quiet": {"url": "http://q:8000", "api_key": "qk"}}})
+        with caplog.at_level(logging.WARNING):
+            result = r.validate_destinations()
+        assert set(result.keys()) == {"quiet"}
+        warnings = [rec for rec in caplog.records if rec.levelno == logging.WARNING]
+        assert any(
+            "quiet" in rec.message and "no include patterns" in rec.message for rec in warnings
+        )
+
+    def test_explicit_empty_include_list_warns_and_destination_survives(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        r = _resolver(
+            {"destinations": {"quiet": {"url": "http://q:8000", "api_key": "qk", "include": []}}}
+        )
+        with caplog.at_level(logging.WARNING):
+            result = r.validate_destinations()
+        assert set(result.keys()) == {"quiet"}
+        assert any(
+            "quiet" in rec.message and "no include patterns" in rec.message
+            for rec in caplog.records
+        )
+
+    def test_nonempty_include_does_not_warn(self, caplog: pytest.LogCaptureFixture) -> None:
+        r = _resolver(
+            {
+                "destinations": {
+                    "active": {
+                        "url": "http://a:8000",
+                        "api_key": "ak",
+                        "include": ["**"],
+                    }
+                }
+            }
+        )
+        with caplog.at_level(logging.WARNING):
+            result = r.validate_destinations()
+        assert set(result.keys()) == {"active"}
+        assert not any("no include patterns" in rec.message for rec in caplog.records)
+
+    def test_legacy_scalar_synthesized_destination_does_not_warn(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """The legacy scalar path always synthesizes include=("**",) -- it must
+        never trigger the empty-include warning."""
+        r = _resolver(
+            {
+                "context_intelligence_server_url": "http://legacy:8000",
+                "context_intelligence_api_key": "legacy-key",
+            }
+        )
+        with caplog.at_level(logging.WARNING):
+            result = r.validate_destinations()
+        assert set(result.keys()) == {"default"}
+        assert not any("no include patterns" in rec.message for rec in caplog.records)
+
+    def test_dropped_destination_does_not_also_get_include_warning(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """A destination dropped for a bad url/api_key must not ALSO emit the
+        empty-include warning -- it never reaches that check."""
+        r = _resolver({"destinations": {"broken": {"url": "", "api_key": "k"}}})
+        with caplog.at_level(logging.WARNING):
+            result = r.validate_destinations()
+        assert result == {}
+        assert not any("no include patterns" in rec.message for rec in caplog.records)

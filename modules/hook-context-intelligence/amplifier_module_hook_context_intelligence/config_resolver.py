@@ -741,6 +741,20 @@ class HookConfigResolver:
         configured any destination at all (the latter is this method's
         ordinary, silent local-only case per the Returns note below).
 
+        Empty-include WARNING (fail-closed surprise, not a failure): a
+        destination that survives url/api_key/auth_mode validation but has
+        an empty ``include`` (omitted or ``[]`` \u2014 see the ``Destination``
+        docstring above) is legal \u2014 it is simply permanently inactive, since
+        an empty pattern set matches no session (``fanout.py``'s
+        ``_matches`` returns ``False`` on empty patterns). That is easy to
+        configure by accident (a hand-typed destination with no ``include``
+        line looks identical to one meant to match everything), so it gets
+        its own per-destination WARNING naming the destination \u2014 distinct
+        from the misconfigured-url/api_key path above, and it does NOT drop
+        the destination from the returned dict (it remains a legitimate,
+        just currently inactive, target \u2014 e.g. still selectable by name via
+        the query tools' ``source=`` override).
+
         Returns:
             The validated (surviving) destinations dict \u2014 possibly empty,
             which is always OK (local-only, S4). Never raises.
@@ -792,6 +806,25 @@ class HookConfigResolver:
                     name,
                 )
                 continue
+
+            if not dest.include:
+                # Fail-closed by design (see the Destination docstring and
+                # fanout.py's _matches): an empty include pattern set means
+                # this destination will never match any session. That is a
+                # legal configuration (e.g. a destination meant only to be
+                # reached explicitly via the query tools' source= override),
+                # but it is also easy to produce by accident, so it gets its
+                # own WARNING -- distinct from the misconfigured-url/api_key
+                # path above -- and does NOT drop the destination.
+                log.warning(
+                    "context-intelligence destination %r: no include patterns "
+                    "-- this destination will never match any session and "
+                    'will receive nothing; set include: ["**"] to receive '
+                    "all sessions. Fix under "
+                    "overrides.hook-context-intelligence.config.destinations.%s.include.",
+                    name,
+                    name,
+                )
 
             valid[name] = dest
 
