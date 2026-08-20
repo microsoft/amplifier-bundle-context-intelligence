@@ -276,7 +276,7 @@ The `config` dict passed to `mount()` uses the same keys as the `overrides.hook-
 |---------|----------|---------|-------------|
 | `url` | yes | — | Base URL of the CI server for this destination. |
 | `api_key` | yes | — | Bearer token for this destination. Sent as `Authorization: Bearer <value>` on that destination's POSTs only — because each destination references its own `${VAR}`, distinct keys never cross between servers. |
-| `include` | no | `["**"]` | `.gitignore`-style patterns matched against the session's working directory. The destination is a candidate when any pattern matches. |
+| `include` | no | *(none — matches nothing)* | `.gitignore`-style patterns matched against the session's working directory. The destination is a candidate when any pattern matches; an omitted or empty `include` matches **nothing** (fail-closed) and the destination is inactive — set `include: ["**"]` explicitly to match every session. |
 | `exclude` | no | `[]` | `.gitignore`-style patterns; if any matches, the destination is dropped for that session (**exclude wins**). |
 
 ```yaml
@@ -309,7 +309,7 @@ overrides:
 
 Prefer the trailing-slash directory form (e.g. `**/work/`) to mean "this project and all its sessions" — it matches whether the session is launched from the project **root** or any subdirectory. (A pattern that targets only contents, like `**/work/**`, still also matches the directory itself here, because the match key is a directory.)
 
-**Defaults & validation.** Omitted `include` defaults to `["**"]` (match everything); omitted `exclude` defaults to none. After `${VAR}` expansion, a `destinations` entry whose `url` **or** `api_key` is empty is a **mount error** (fail-fast, naming the offending destination). With no `destinations` configured, the hook is local-JSONL-only. (The legacy scalar path is intentionally more lenient — see [Deprecated — legacy single-server scalars](#deprecated--legacy-single-server-scalars) below.)
+**Defaults & validation.** An omitted or empty `include` matches **nothing** — the destination never receives events (fail-closed); to receive everything, set `include: ["**"]` explicitly. Validation logs a per-destination WARNING when this happens (an inactive destination is legal, just easy to configure by accident). Omitted `exclude` defaults to none. After `${VAR}` expansion, a `destinations` entry whose `url` **or** `api_key` is empty is a **mount error** (fail-fast, naming the offending destination). With no `destinations` configured, the hook is local-JSONL-only. (The legacy scalar path synthesizes its single `default` destination with `include: ["**"]` — see [Deprecated — legacy single-server scalars](#deprecated--legacy-single-server-scalars) below — and is intentionally more lenient on url/api_key.)
 
 **Per-project override.** Because `destinations` is keyed by name, a project `.amplifier/settings.yaml` can override a single destination's `include`/`exclude` (e.g. `destinations.team.include`) without restating the others — the app-cli deep-merges user → project settings.
 
