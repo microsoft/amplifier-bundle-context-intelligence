@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import random
 import time
 from collections import deque
@@ -1324,6 +1325,54 @@ class LoggingHandler:
 
         return HookResult(action="continue")
 
+    # -- metadata read/write primitives -------------------------------------
+    @staticmethod
+    def _read_metadata(meta_path: Path) -> dict[str, Any] | None:
+        """Read and parse metadata.json, tolerating missing/empty/corrupt files.
+
+        Returns the parsed object, or ``None`` when the file is absent, empty,
+        or not valid JSON. A ``None`` return signals the caller to rebuild
+        metadata from defaults rather than raise.
+
+        This is the guard against a file left 0-length by a previously
+        interrupted write (e.g. an ``ENOSPC`` truncation while the disk was
+        full): ``meta_path.exists()`` is True for such a file, but its content
+        is unparseable, so an ``exists()``-only check is not sufficient.
+        """
+        try:
+            raw = meta_path.read_text()
+        except OSError:
+            return None
+        if not raw.strip():
+            return None
+        try:
+            parsed = json.loads(raw)
+        except json.JSONDecodeError:
+            return None
+        return parsed if isinstance(parsed, dict) else None
+
+    @staticmethod
+    def _atomic_write_text(meta_path: Path, text: str) -> None:
+        """Write ``text`` to ``meta_path`` atomically via temp file + os.replace.
+
+        Guarantees a reader never observes a partially written or truncated
+        file. On success the rename is atomic; on failure (e.g. ``ENOSPC``) the
+        existing file at ``meta_path`` is left untouched rather than truncated
+        to zero bytes -- which is precisely the corruption that a plain
+        ``write_text`` produced when the disk filled mid-write. The temp file
+        is best-effort cleaned up on failure.
+        """
+        tmp_path = meta_path.with_name(f"{meta_path.name}.{os.getpid()}.tmp")
+        try:
+            tmp_path.write_text(text)
+            os.replace(tmp_path, meta_path)
+        except OSError:
+            try:
+                tmp_path.unlink()
+            except OSError:
+                pass
+            raise
+
     # -- metadata lifecycle -------------------------------------------------
     def _ensure_metadata(
         self,
@@ -1331,9 +1380,15 @@ class LoggingHandler:
         session_id: str,
         data: dict[str, Any],
     ) -> None:
-        """Create initial metadata.json on first event for this session."""
+        """Create initial metadata.json on first event for this session.
+
+        Treats a missing, empty, or corrupt file as "needs creation" -- a file
+        left 0-length by a prior interrupted write (e.g. ENOSPC while the disk
+        was full) is thus repaired here rather than left to error on every
+        future event.
+        """
         meta_path = session_dir / "metadata.json"
-        if meta_path.exists():
+        if self._read_metadata(meta_path) is not None:
             return
 
         metadata: dict[str, Any] = {
@@ -1347,7 +1402,7 @@ class LoggingHandler:
             "status": "running",
             "working_dir": self._resolver.working_dir,
         }
-        meta_path.write_text(json.dumps(metadata, separators=(",", ":")))
+        self._atomic_write_text(meta_path, json.dumps(metadata, separators=(",", ":")))
 
     def _enrich_metadata_from_session_init(
         self,
@@ -1357,11 +1412,11 @@ class LoggingHandler:
     ) -> None:
         """Enrich metadata with fields only available in session:start/fork."""
         meta_path = session_dir / "metadata.json"
-        if meta_path.exists():
-            meta = json.loads(meta_path.read_text())
-        else:
-            # defensive: should already exist from _ensure_metadata; this branch
-            # is unreachable in normal flow but guards against unexpected race conditions.
+        meta = self._read_metadata(meta_path)
+        if meta is None:
+            # metadata.json is missing, empty, or corrupt (e.g. left 0-length by
+            # a prior ENOSPC-truncated write). Rebuild from defaults rather than
+            # raise, then re-apply the authoritative session-init fields below.
             meta = {
                 "format": _METADATA_FORMAT,
                 "version": _METADATA_VERSION,
@@ -1387,16 +1442,16 @@ class LoggingHandler:
             if value:
                 meta[field] = value
 
-        meta_path.write_text(json.dumps(meta, separators=(",", ":")))
+        self._atomic_write_text(meta_path, json.dumps(meta, separators=(",", ":")))
 
     def _finalize_metadata(self, session_dir: Path, data: dict[str, Any]) -> None:
         """Mark session as completed in metadata."""
         meta_path = session_dir / "metadata.json"
-        if meta_path.exists():
-            meta = json.loads(meta_path.read_text())
-        else:
-            # defensive: should already exist from _ensure_metadata; this branch
-            # is unreachable in normal flow but guards against unexpected race conditions.
+        meta = self._read_metadata(meta_path)
+        if meta is None:
+            # metadata.json is missing, empty, or corrupt (e.g. left 0-length by
+            # a prior ENOSPC-truncated write). Rebuild from defaults rather than
+            # raise, so the session is still marked completed below.
             meta = {
                 "format": _METADATA_FORMAT,
                 "version": _METADATA_VERSION,
@@ -1408,7 +1463,7 @@ class LoggingHandler:
         meta["status"] = data.get("status", "completed")
         meta["ended_at"] = data.get("timestamp", "")
 
-        meta_path.write_text(json.dumps(meta, separators=(",", ":")))
+        self._atomic_write_text(meta_path, json.dumps(meta, separators=(",", ":")))
 
     # -- lifecycle management ------------------------------------------------
     async def close(self) -> None:
@@ -1419,14 +1474,33 @@ class LoggingHandler:
     def _touch_last_event_at(self, session_dir: Path, timestamp: str) -> None:
         """Update last_event_at in metadata.json after each event append.
 
+        Self-healing: a missing, empty, or corrupt metadata.json (e.g. one left
+        0-length by a prior ENOSPC-truncated write while the disk was full) is
+        rebuilt from best-effort defaults instead of erroring on every event.
+
         Best-effort: catches OSError and json.JSONDecodeError, logs a warning,
         and never raises. A failure here must never block event capture.
         """
         try:
             meta_path = session_dir / "metadata.json"
-            meta = json.loads(meta_path.read_text())
+            meta = self._read_metadata(meta_path)
+            if meta is None:
+                # metadata.json is missing, empty, or corrupt. Rebuild a minimal
+                # valid record from what this handler knows so freshness tracking
+                # recovers; the session_id folder is meta_path's grandparent
+                # (.../sessions/<session_id>/context-intelligence/metadata.json).
+                meta = {
+                    "format": _METADATA_FORMAT,
+                    "version": _METADATA_VERSION,
+                    "session_id": session_dir.parent.name,
+                    "workspace": self._workspace or "",
+                    "parent_id": self._parent_id or "",
+                    "started_at": timestamp,
+                    "status": "running",
+                    "working_dir": self._resolver.working_dir,
+                }
             meta["last_event_at"] = timestamp
-            meta_path.write_text(json.dumps(meta, separators=(",", ":")))
+            self._atomic_write_text(meta_path, json.dumps(meta, separators=(",", ":")))
         except (OSError, json.JSONDecodeError):
             logger.warning(
                 "LoggingHandler failed to update last_event_at for %s",
