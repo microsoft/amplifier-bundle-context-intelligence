@@ -23,14 +23,12 @@ meta:
     Context: User wants to query session events using the graph
     user: 'Find all tool errors in my last session using the graph'
     assistant: 'I will use graph-analyst to run a Cypher query for tool error events — it checks server availability first and falls back to session-navigator if the server is unreachable.'
-    <commentary>Graph-powered session event queries go to this agent. It handles server availability automatically.</commentary>
     </example>
 
     <example>
     Context: User needs to trace a delegation tree
     user: 'Show me the full delegation tree for my last recipe run'
     assistant: 'I will delegate to graph-analyst to trace the parent-child session chain and map the delegation tree using Cypher graph traversal.'
-    <commentary>delegation tree tracing across many sessions benefits from graph traversal rather than scanning JSONL files.</commentary>
     </example>
 
 model_role: [reasoning, general]
