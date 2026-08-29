@@ -18,7 +18,6 @@ meta:
     Context: Graph analyst delegating because server is unreachable
     user: [graph-analyst delegates] 'Find tool errors in session abc123 — graph server is unreachable. Workspace: my-project'
     assistant: 'I will scope search to workspace my-project. I will first resolve CONTEXT_INTELLIGENCE_ROOT="${AMPLIFIER_CONTEXT_INTELLIGENCE_BASE_PATH:-$HOME/.amplifier/projects}", then look in "$CONTEXT_INTELLIGENCE_ROOT"/my-project/sessions/ first, then filter by workspace field if needed. I will search for tool errors using safe jq extraction patterns.'
-    <commentary>session-navigator receives workspace from graph-analyst and uses it to scope all directory lookups and field filters. External callers should never invoke session-navigator directly.</commentary>
     </example>
 
 model_role: general
