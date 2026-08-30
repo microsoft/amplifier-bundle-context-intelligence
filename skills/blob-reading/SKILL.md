@@ -1,7 +1,7 @@
 ---
 name: blob-reading
 version: 1.0.0
-description: Safe resolution of ci-blob:// URIs — extract specific fields without dumping full payloads
+description: Use when a graph result contains a ci-blob:// URI — resolve it by extracting only the fields you need, never the full payload.
 license: MIT
 ---
 

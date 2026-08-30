@@ -1,7 +1,7 @@
 ---
 name: context-intelligence-eval-design
 version: 1.0.0
-description: Use when designing evaluation scenarios for a context-intelligence tool signal — derives success criteria from domain-concepts.md and produces evaluation-scenarios.md entries and DTU profile templates.
+description: Use when designing evaluation scenarios for a context-intelligence tool signal. Derives success criteria from domain-concepts.md and produces evaluation-scenarios.md entries plus DTU profile templates.
 user-invocable: false
 allowed-tools: read_file, glob, grep, delegate, load_skill, todo
 model_role: reasoning
