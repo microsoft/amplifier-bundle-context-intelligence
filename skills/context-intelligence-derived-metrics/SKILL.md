@@ -1,15 +1,12 @@
 ---
 name: context-intelligence-derived-metrics
 description: >
-  Use when a graph query returns structurally-identical rows that hide different
-  intent — many delegations all "none/conversation", many look-alike sessions,
-  many identical tool calls — and the raw shape refuses to tell you WHY. Teaches
-  how to derive an INTERPRETIVE metric by joining a second graph layer onto the
-  blanket shape, turning undifferentiated data into behavioral signatures.
-  Flagship pattern: the "flavour" of a sub-session = delegation transport × the
-  skill payload loaded inside the sub-session it spawned. Complements
-  context-intelligence-graph-query (which tells you how to READ the graph); this
-  skill tells you how to make blanket reads MEAN something.
+  Use when a graph query returns structurally-identical rows hiding different
+  intent — many delegations all "none/conversation", look-alike sessions,
+  identical tool calls. Derives an INTERPRETIVE metric by joining a second graph
+  layer onto the blanket shape (flagship: transport × sub-session skill payload =
+  "flavour"). Complements graph-query (READ the graph) by making blanket reads
+  MEAN something.
 license: MIT
 metadata:
   version: "1.0.0"

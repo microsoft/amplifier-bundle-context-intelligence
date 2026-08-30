@@ -2,13 +2,11 @@
 name: workflow-pattern-analysis
 version: 1.0.0
 description: >
-  Analyse failure and success patterns across many runs of a specific workflow using
-  context-intelligence session data. Use when you want to answer: "How is <workflow>
-  failing?", "What does a successful run look like vs a failing one?", "Which steps are
-  the most common failure points?", or "What patterns appear consistently across sessions?"
-  Triggers on: workflow failure patterns, session failure analysis, compare successful and
-  failing runs, what patterns appear across sessions, session behaviour investigation,
-  how is the workflow failing, success patterns, failure signals, identify session signals.
+  Analyse failure/success patterns across many runs of a workflow using context-intelligence
+  session data. Use when asked "How is <workflow> failing?", "What does a successful run
+  look like vs a failing one?", "Which steps are the most common failure points?", or "What
+  patterns appear consistently across sessions?" — also triggers on session failure analysis
+  and identifying failure/success signals.
 user-invocable: true
 allowed-tools:
   - bash
@@ -17,6 +15,9 @@ allowed-tools:
   - write_file
 model_role: reasoning
 license: MIT
+visibility:
+  priority: 5
+  summary: Investigate failure and success patterns across many runs of a workflow using context-intelligence session data.
 ---
 
 # Workflow Pattern Analysis
