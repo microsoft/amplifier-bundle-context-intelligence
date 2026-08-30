@@ -7,6 +7,9 @@ description: >
   layers, cross-layer SOURCED_FROM joins, SST navigation, blob handling, and
   verified Cypher patterns.
 license: MIT
+visibility:
+  priority: 5
+  summary: Query the context-intelligence property graph for session history, tool traces, delegation trees, skills, and recipe orchestration via verified Cypher patterns.
 metadata:
   version: "2.5.0"
   changelog:

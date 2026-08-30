@@ -1,7 +1,7 @@
 ---
 name: context-intelligence-tool-design
 version: 1.0.0
-description: Use when selecting a detection strategy and implementation primitive for a context-intelligence signal — classifies signals as deterministic/probabilistic/llm-evaluated/hybrid and applies the cheapest-sufficient-capability principle.
+description: Use when selecting a detection strategy and implementation primitive for a context-intelligence signal. Classifies signals as deterministic, probabilistic, llm-evaluated, or hybrid, and applies the cheapest-sufficient-capability principle.
 user-invocable: false
 allowed-tools: read_file, glob, grep, delegate, load_skill, todo
 model_role: reasoning
