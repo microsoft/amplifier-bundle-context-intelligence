@@ -1,0 +1,53 @@
+[project]
+name = "amplifier-module-tool-server-data-ops"
+version = "0.1.0"
+description = "CI server data-ops tools -- session_summary (preview) and delete_session (permanent delete) against the context-intelligence server"
+requires-python = ">=3.11"
+license = "MIT"
+
+dependencies = [
+    "amplifier-bundle-context-intelligence @ git+https://github.com/microsoft/amplifier-bundle-context-intelligence@main",
+    "httpx>=0.28.1",
+    "idna>=3.15",
+]
+
+[project.entry-points."amplifier.modules"]
+tool-server-data-ops = "amplifier_module_tool_server_data_ops:mount"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.uv]
+package = true
+
+[tool.hatch.build.targets.wheel]
+packages = ["amplifier_module_tool_server_data_ops"]
+
+[tool.hatch.metadata]
+# Required to build a wheel that carries a PEP 508 direct-reference (git+https) dependency.
+allow-direct-references = true
+
+[dependency-groups]
+dev = [
+    "amplifier-core>=1.6.0",
+    "pytest>=9.0.3",
+    "pytest-asyncio>=0.24",
+    "pyright>=1.1.411",
+    "ruff>=0.14",
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+
+[tool.pyright]
+pythonVersion = "3.11"
+typeCheckingMode = "basic"
+venvPath = "."
+venv = ".venv"
+extraPaths = ["../.."]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100

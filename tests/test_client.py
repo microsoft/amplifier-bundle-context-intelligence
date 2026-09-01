@@ -360,6 +360,186 @@ class TestCIClientFetchBlob:
         assert headers.get("Authorization") == "Bearer blobkey"
 
 
+class TestCIClientSessionSummary:
+    """CIClient.session_summary() must GET /sessions/{id}/summary and return a dict."""
+
+    def test_session_summary_returns_dict(self):
+        """session_summary() returns the parsed summary dict from the server."""
+        from context_intelligence.client import CIClient
+
+        client = CIClient("http://localhost:8000", "key")
+        mock_response = {
+            "created_by": "alice",
+            "node_count": 10,
+            "edge_count": 5,
+            "blob_count": 2,
+            "deletable": True,
+        }
+
+        with patch("context_intelligence.client._http_get_strict") as mock_get:
+            mock_get.return_value = mock_response
+            result = client.session_summary("session1")
+
+        assert result == mock_response
+
+    def test_session_summary_calls_correct_url(self):
+        """session_summary() calls GET /sessions/{session_id}/summary."""
+        from context_intelligence.client import CIClient
+
+        client = CIClient("http://localhost:8000", "key")
+
+        with patch("context_intelligence.client._http_get_strict") as mock_get:
+            mock_get.return_value = {}
+            client.session_summary("my-session")
+
+        call_args = mock_get.call_args
+        url = call_args[0][0] if call_args[0] else call_args[1]["url"]
+        assert url == "http://localhost:8000/sessions/my-session/summary"
+
+    def test_session_summary_includes_authorization_header(self):
+        """session_summary() sends Authorization: [REDACTED:SECRET]"""
+        from context_intelligence.client import CIClient
+
+        client = CIClient("http://localhost:8000", "secretkey")
+
+        with patch("context_intelligence.client._http_get_strict") as mock_get:
+            mock_get.return_value = {}
+            client.session_summary("my-session")
+
+        call_args = mock_get.call_args
+        headers = call_args[0][1] if len(call_args[0]) > 1 else call_args[1].get("headers", {})
+        assert headers.get("Authorization") == "Bearer secretkey"
+
+    def test_session_summary_propagates_ciclienterror_404(self):
+        """A 404 (unknown session) must not be swallowed -- it propagates as CIClientError."""
+        from context_intelligence.client import CIClient, CIClientError
+
+        client = CIClient("http://localhost:8000", "key")
+
+        with patch("context_intelligence.client._http_get_strict") as mock_get:
+            mock_get.side_effect = CIClientError(
+                "HTTP 404 from http://localhost:8000/sessions/missing/summary",
+                error_type="http_status",
+                url="http://localhost:8000/sessions/missing/summary",
+                status_code=404,
+            )
+            with pytest.raises(CIClientError) as excinfo:
+                client.session_summary("missing")
+
+        assert excinfo.value.error_type == "http_status"
+        assert excinfo.value.status_code == 404
+
+    def test_session_summary_propagates_ciclienterror_409(self):
+        """A 409 (still receiving data / ambiguous id) must propagate as CIClientError."""
+        from context_intelligence.client import CIClient, CIClientError
+
+        client = CIClient("http://localhost:8000", "key")
+
+        with patch("context_intelligence.client._http_get_strict") as mock_get:
+            mock_get.side_effect = CIClientError(
+                "HTTP 409 from http://localhost:8000/sessions/live/summary",
+                error_type="http_status",
+                url="http://localhost:8000/sessions/live/summary",
+                status_code=409,
+            )
+            with pytest.raises(CIClientError) as excinfo:
+                client.session_summary("live")
+
+        assert excinfo.value.error_type == "http_status"
+        assert excinfo.value.status_code == 409
+
+
+class TestCIClientDeleteSession:
+    """CIClient.delete_session() must DELETE /sessions/{id} and return a dict."""
+
+    def test_delete_session_returns_dict(self):
+        """delete_session() returns the parsed result-counts dict from the server."""
+        from context_intelligence.client import CIClient
+
+        client = CIClient("http://localhost:8000", "key")
+        mock_response = {
+            "root_id": "session1",
+            "session_count": 3,
+            "nodes_deleted": 42,
+            "relationships_deleted": 10,
+            "blobs_deleted": 2,
+            "queue_sessions_cleaned": 1,
+        }
+
+        with patch("context_intelligence.client._http_delete_strict") as mock_delete:
+            mock_delete.return_value = mock_response
+            result = client.delete_session("session1")
+
+        assert result == mock_response
+
+    def test_delete_session_calls_correct_url(self):
+        """delete_session() calls DELETE /sessions/{session_id} (no query string/body)."""
+        from context_intelligence.client import CIClient
+
+        client = CIClient("http://localhost:8000", "key")
+
+        with patch("context_intelligence.client._http_delete_strict") as mock_delete:
+            mock_delete.return_value = {}
+            client.delete_session("my-session")
+
+        call_args = mock_delete.call_args
+        url = call_args[0][0] if call_args[0] else call_args[1]["url"]
+        assert url == "http://localhost:8000/sessions/my-session"
+
+    def test_delete_session_includes_authorization_header(self):
+        """delete_session() sends Authorization: [REDACTED:SECRET]"""
+        from context_intelligence.client import CIClient
+
+        client = CIClient("http://localhost:8000", "secretkey")
+
+        with patch("context_intelligence.client._http_delete_strict") as mock_delete:
+            mock_delete.return_value = {}
+            client.delete_session("my-session")
+
+        call_args = mock_delete.call_args
+        headers = call_args[0][1] if len(call_args[0]) > 1 else call_args[1].get("headers", {})
+        assert headers.get("Authorization") == "Bearer secretkey"
+
+    def test_delete_session_propagates_ciclienterror_404(self):
+        """A 404 (unknown session) must not be swallowed -- it propagates as CIClientError."""
+        from context_intelligence.client import CIClient, CIClientError
+
+        client = CIClient("http://localhost:8000", "key")
+
+        with patch("context_intelligence.client._http_delete_strict") as mock_delete:
+            mock_delete.side_effect = CIClientError(
+                "HTTP 404 from http://localhost:8000/sessions/missing",
+                error_type="http_status",
+                url="http://localhost:8000/sessions/missing",
+                status_code=404,
+            )
+            with pytest.raises(CIClientError) as excinfo:
+                client.delete_session("missing")
+
+        assert excinfo.value.error_type == "http_status"
+        assert excinfo.value.status_code == 404
+
+    def test_delete_session_propagates_ciclienterror_409(self):
+        """A 409 (still receiving data / ambiguous id) must propagate as CIClientError,
+        never silently treated as a completed delete."""
+        from context_intelligence.client import CIClient, CIClientError
+
+        client = CIClient("http://localhost:8000", "key")
+
+        with patch("context_intelligence.client._http_delete_strict") as mock_delete:
+            mock_delete.side_effect = CIClientError(
+                "HTTP 409 from http://localhost:8000/sessions/live",
+                error_type="http_status",
+                url="http://localhost:8000/sessions/live",
+                status_code=409,
+            )
+            with pytest.raises(CIClientError) as excinfo:
+                client.delete_session("live")
+
+        assert excinfo.value.error_type == "http_status"
+        assert excinfo.value.status_code == 409
+
+
 class TestCIClientHealthCheck:
     """CIClient.health_check() must use cypher() to run a count query and return dict."""
 
@@ -680,6 +860,210 @@ class TestAsyncCIClientFetchBlob:
         call_kwargs = mock_inner_client.get.call_args
         sent_headers = call_kwargs[1].get("headers") or call_kwargs[0][1]
         assert sent_headers.get("Authorization") == "Bearer blobkey"
+
+
+class TestAsyncCIClientSessionSummary:
+    """AsyncCIClient.session_summary() must GET /sessions/{id}/summary."""
+
+    async def test_async_session_summary_returns_parsed_dict(self):
+        """session_summary() returns the parsed summary dict from the server."""
+        from context_intelligence.client import AsyncCIClient
+
+        summary_data = {"created_by": "alice", "node_count": 10, "deletable": True}
+        mock_resp = _make_async_mock_response(summary_data)
+        mock_http = _make_async_httpx_client(mock_resp)
+
+        with patch("context_intelligence.client.httpx.AsyncClient", return_value=mock_http):
+            client = AsyncCIClient("http://localhost:8000", "testkey")
+            result = await client.session_summary("session1")
+
+        assert result == summary_data
+
+    async def test_async_session_summary_calls_correct_url_and_method(self):
+        """session_summary() GETs {server_url}/sessions/{session_id}/summary."""
+        from context_intelligence.client import AsyncCIClient
+
+        mock_resp = _make_async_mock_response({})
+        mock_http = _make_async_httpx_client(mock_resp)
+        mock_inner_client = mock_http.__aenter__.return_value
+
+        with patch("context_intelligence.client.httpx.AsyncClient", return_value=mock_http):
+            client = AsyncCIClient("http://localhost:8000", "testkey")
+            await client.session_summary("my-session")
+
+        assert mock_inner_client.get.called, "session_summary must use GET"
+        call_args = mock_inner_client.get.call_args
+        url = call_args[0][0] if call_args[0] else call_args[1]["url"]
+        assert url == "http://localhost:8000/sessions/my-session/summary"
+
+    async def test_async_session_summary_sends_auth_header(self):
+        """session_summary() sends Authorization: [REDACTED:SECRET]"""
+        from context_intelligence.client import AsyncCIClient
+
+        mock_resp = _make_async_mock_response({})
+        mock_http = _make_async_httpx_client(mock_resp)
+        mock_inner_client = mock_http.__aenter__.return_value
+
+        with patch("context_intelligence.client.httpx.AsyncClient", return_value=mock_http):
+            client = AsyncCIClient("http://localhost:8000", "secretkey")
+            await client.session_summary("my-session")
+
+        call_kwargs = mock_inner_client.get.call_args
+        sent_headers = call_kwargs[1].get("headers") or call_kwargs[0][1]
+        assert sent_headers.get("Authorization") == "Bearer secretkey"
+
+    async def test_async_session_summary_raises_on_404(self):
+        """A 404 (unknown session) raises CIClientError(error_type='http_status')."""
+        import httpx
+
+        from context_intelligence.client import AsyncCIClient, CIClientError
+
+        request = httpx.Request("GET", "http://localhost:8000/sessions/missing/summary")
+        real_response = httpx.Response(status_code=404, request=request)
+        mock_resp = MagicMock()
+        mock_resp.status_code = 404
+        mock_resp.raise_for_status.side_effect = httpx.HTTPStatusError(
+            "404", request=request, response=real_response
+        )
+        mock_http = _make_async_httpx_client(mock_resp)
+
+        with patch("context_intelligence.client.httpx.AsyncClient", return_value=mock_http):
+            client = AsyncCIClient("http://localhost:8000", "testkey")
+            with pytest.raises(CIClientError) as exc_info:
+                await client.session_summary("missing")
+
+        assert exc_info.value.error_type == "http_status"
+        assert exc_info.value.status_code == 404
+
+    async def test_async_session_summary_raises_on_409(self):
+        """A 409 (still receiving data / ambiguous id) raises CIClientError
+        with the status preserved, not a silently-empty result."""
+        import httpx
+
+        from context_intelligence.client import AsyncCIClient, CIClientError
+
+        request = httpx.Request("GET", "http://localhost:8000/sessions/live/summary")
+        real_response = httpx.Response(status_code=409, request=request)
+        mock_resp = MagicMock()
+        mock_resp.status_code = 409
+        mock_resp.raise_for_status.side_effect = httpx.HTTPStatusError(
+            "409", request=request, response=real_response
+        )
+        mock_http = _make_async_httpx_client(mock_resp)
+
+        with patch("context_intelligence.client.httpx.AsyncClient", return_value=mock_http):
+            client = AsyncCIClient("http://localhost:8000", "testkey")
+            with pytest.raises(CIClientError) as exc_info:
+                await client.session_summary("live")
+
+        assert exc_info.value.error_type == "http_status"
+        assert exc_info.value.status_code == 409
+
+
+class TestAsyncCIClientDeleteSession:
+    """AsyncCIClient.delete_session() must DELETE /sessions/{id}."""
+
+    async def test_async_delete_session_returns_parsed_dict(self):
+        """delete_session() returns the parsed result-counts dict from the server."""
+        from context_intelligence.client import AsyncCIClient
+
+        result_data = {"root_id": "session1", "nodes_deleted": 42, "blobs_deleted": 2}
+        mock_resp = _make_async_mock_response(result_data)
+        mock_http = _make_async_httpx_client(mock_resp)
+        mock_inner_client = mock_http.__aenter__.return_value
+        mock_inner_client.delete = AsyncMock(return_value=mock_resp)
+
+        with patch("context_intelligence.client.httpx.AsyncClient", return_value=mock_http):
+            client = AsyncCIClient("http://localhost:8000", "testkey")
+            result = await client.delete_session("session1")
+
+        assert result == result_data
+
+    async def test_async_delete_session_calls_correct_url_and_method(self):
+        """delete_session() DELETEs {server_url}/sessions/{session_id} (no query/body)."""
+        from context_intelligence.client import AsyncCIClient
+
+        mock_resp = _make_async_mock_response({})
+        mock_http = _make_async_httpx_client(mock_resp)
+        mock_inner_client = mock_http.__aenter__.return_value
+        mock_inner_client.delete = AsyncMock(return_value=mock_resp)
+
+        with patch("context_intelligence.client.httpx.AsyncClient", return_value=mock_http):
+            client = AsyncCIClient("http://localhost:8000", "testkey")
+            await client.delete_session("my-session")
+
+        assert mock_inner_client.delete.called, "delete_session must use DELETE"
+        call_args = mock_inner_client.delete.call_args
+        url = call_args[0][0] if call_args[0] else call_args[1]["url"]
+        assert url == "http://localhost:8000/sessions/my-session"
+
+    async def test_async_delete_session_sends_auth_header(self):
+        """delete_session() sends Authorization: [REDACTED:SECRET]"""
+        from context_intelligence.client import AsyncCIClient
+
+        mock_resp = _make_async_mock_response({})
+        mock_http = _make_async_httpx_client(mock_resp)
+        mock_inner_client = mock_http.__aenter__.return_value
+        mock_inner_client.delete = AsyncMock(return_value=mock_resp)
+
+        with patch("context_intelligence.client.httpx.AsyncClient", return_value=mock_http):
+            client = AsyncCIClient("http://localhost:8000", "secretkey")
+            await client.delete_session("my-session")
+
+        call_kwargs = mock_inner_client.delete.call_args
+        sent_headers = call_kwargs[1].get("headers") or call_kwargs[0][1]
+        assert sent_headers.get("Authorization") == "Bearer secretkey"
+
+    async def test_async_delete_session_raises_on_404(self):
+        """A 404 (unknown session) raises CIClientError(error_type='http_status')."""
+        import httpx
+
+        from context_intelligence.client import AsyncCIClient, CIClientError
+
+        request = httpx.Request("DELETE", "http://localhost:8000/sessions/missing")
+        real_response = httpx.Response(status_code=404, request=request)
+        mock_resp = MagicMock()
+        mock_resp.status_code = 404
+        mock_resp.raise_for_status.side_effect = httpx.HTTPStatusError(
+            "404", request=request, response=real_response
+        )
+        mock_http = _make_async_httpx_client(mock_resp)
+        mock_inner_client = mock_http.__aenter__.return_value
+        mock_inner_client.delete = AsyncMock(return_value=mock_resp)
+
+        with patch("context_intelligence.client.httpx.AsyncClient", return_value=mock_http):
+            client = AsyncCIClient("http://localhost:8000", "testkey")
+            with pytest.raises(CIClientError) as exc_info:
+                await client.delete_session("missing")
+
+        assert exc_info.value.error_type == "http_status"
+        assert exc_info.value.status_code == 404
+
+    async def test_async_delete_session_raises_on_409(self):
+        """A 409 (still receiving data / ambiguous id) raises CIClientError --
+        the delete is never silently treated as done."""
+        import httpx
+
+        from context_intelligence.client import AsyncCIClient, CIClientError
+
+        request = httpx.Request("DELETE", "http://localhost:8000/sessions/live")
+        real_response = httpx.Response(status_code=409, request=request)
+        mock_resp = MagicMock()
+        mock_resp.status_code = 409
+        mock_resp.raise_for_status.side_effect = httpx.HTTPStatusError(
+            "409", request=request, response=real_response
+        )
+        mock_http = _make_async_httpx_client(mock_resp)
+        mock_inner_client = mock_http.__aenter__.return_value
+        mock_inner_client.delete = AsyncMock(return_value=mock_resp)
+
+        with patch("context_intelligence.client.httpx.AsyncClient", return_value=mock_http):
+            client = AsyncCIClient("http://localhost:8000", "testkey")
+            with pytest.raises(CIClientError) as exc_info:
+                await client.delete_session("live")
+
+        assert exc_info.value.error_type == "http_status"
+        assert exc_info.value.status_code == 409
 
 
 class TestAsyncCIClientListBlobKeys:

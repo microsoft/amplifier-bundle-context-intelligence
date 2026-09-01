@@ -250,6 +250,102 @@ def _http_get_strict(url: str, headers: dict[str, str]) -> Any:
         ) from exc
 
 
+def _http_delete_strict(url: str, headers: dict[str, str]) -> Any:
+    """DELETE *url* with *headers*, classifying-and-RAISING ``CIClientError`` on failure.
+
+    Same shape as ``_http_get_strict`` (see its docstring for the full rule set),
+    just using the DELETE HTTP verb instead of GET. Used by
+    ``CIClient.delete_session()`` so a down / slow / rejecting server can never
+    masquerade as a completed delete.
+
+    Library preference mirrors ``_http_get_strict`` (requests -> httpx ->
+    urllib.request). Returns the parsed JSON body on a 2xx response.
+
+    Raises
+    ------
+    CIClientError
+        error_type one of: ``connection_error`` (refused/DNS/reset),
+        ``timeout``, ``http_status`` (non-2xx; ``status_code`` set -- this is
+        how a 404 "unknown session" or a 409 "still receiving data / ambiguous
+        id" reaches the caller), or ``decode_error`` (body is not valid JSON).
+    """
+    if _requests is not None:
+        try:
+            resp = _requests.delete(url, headers=headers, timeout=30)
+            resp.raise_for_status()
+            return resp.json()
+        except _requests.exceptions.Timeout as exc:
+            raise CIClientError(f"timeout deleting {url}", error_type="timeout", url=url) from exc
+        except _requests.exceptions.HTTPError as exc:
+            status = getattr(getattr(exc, "response", None), "status_code", None)
+            raise CIClientError(
+                f"HTTP {status} from {url}",
+                error_type="http_status",
+                url=url,
+                status_code=status,
+            ) from exc
+        except (ValueError, json.JSONDecodeError) as exc:  # resp.json() failed
+            raise CIClientError(
+                f"malformed JSON from {url}", error_type="decode_error", url=url
+            ) from exc
+        except _requests.exceptions.RequestException as exc:  # ConnectionError, etc.
+            raise CIClientError(
+                f"connection error to {url}: {exc}", error_type="connection_error", url=url
+            ) from exc
+
+    if _httpx is not None:
+        try:
+            with _httpx.Client(timeout=30) as client:
+                resp = client.delete(url, headers=headers)
+                resp.raise_for_status()
+                return resp.json()
+        except _httpx.TimeoutException as exc:
+            raise CIClientError(f"timeout deleting {url}", error_type="timeout", url=url) from exc
+        except _httpx.HTTPStatusError as exc:
+            raise CIClientError(
+                f"HTTP {exc.response.status_code} from {url}",
+                error_type="http_status",
+                url=url,
+                status_code=exc.response.status_code,
+            ) from exc
+        except (ValueError, json.JSONDecodeError) as exc:  # resp.json() failed
+            raise CIClientError(
+                f"malformed JSON from {url}", error_type="decode_error", url=url
+            ) from exc
+        except _httpx.HTTPError as exc:  # ConnectError, transport, etc.
+            raise CIClientError(
+                f"connection error to {url}: {exc}", error_type="connection_error", url=url
+            ) from exc
+
+    # stdlib fallback
+    try:
+        req = urllib.request.Request(url, headers=headers, method="DELETE")
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            raw = resp.read().decode("utf-8")
+    except urllib.error.HTTPError as exc:  # subclass of URLError -- catch FIRST
+        raise CIClientError(
+            f"HTTP {exc.code} from {url}",
+            error_type="http_status",
+            url=url,
+            status_code=exc.code,
+        ) from exc
+    except (TimeoutError, socket.timeout) as exc:  # read timeout
+        raise CIClientError(f"timeout deleting {url}", error_type="timeout", url=url) from exc
+    except urllib.error.URLError as exc:
+        # A URLError may wrap a socket timeout in .reason -- classify that as timeout.
+        if isinstance(exc.reason, (TimeoutError, socket.timeout)):
+            raise CIClientError(f"timeout deleting {url}", error_type="timeout", url=url) from exc
+        raise CIClientError(
+            f"connection error to {url}: {exc}", error_type="connection_error", url=url
+        ) from exc
+    try:
+        return json.loads(raw)
+    except (ValueError, json.JSONDecodeError) as exc:
+        raise CIClientError(
+            f"malformed JSON from {url}", error_type="decode_error", url=url
+        ) from exc
+
+
 # ---------------------------------------------------------------------------
 # Safe JSON parse
 # ---------------------------------------------------------------------------
@@ -517,6 +613,68 @@ class CIClient:
         url = f"{self._server_url}/blobs/{session_id}/{key}"
         return _http_get(url, self._auth_headers())
 
+    def session_summary(self, session_id: str) -> dict[str, Any]:
+        """Fetch the preview facts for a session (read, no changes made).
+
+        Calls ``GET /sessions/{session_id}/summary`` and returns the parsed
+        JSON dict: the facts about the whole session graph -- who created it,
+        how many nodes/edges/blobs it has, when it started and last changed,
+        whether it is safe to delete, and so on.
+
+        Parameters
+        ----------
+        session_id:
+            The session to look up.
+
+        Returns
+        -------
+        dict
+            The parsed summary facts.
+
+        Raises
+        ------
+        CIClientError
+            The request genuinely failed: connection error/refused, timeout,
+            non-2xx HTTP status, or a malformed (non-JSON) body. A 404 means
+            the session id is not known to the server; a 409 means the
+            session is still receiving data or the id is ambiguous across
+            workspaces -- ``status_code`` carries the exact number so the
+            caller can give a clear message.
+        """
+        url = f"{self._server_url}/sessions/{session_id}/summary"
+        return _http_get_strict(url, self._auth_headers())
+
+    def delete_session(self, session_id: str) -> dict[str, Any]:
+        """Delete a session's whole graph from the server (a real, permanent change).
+
+        Calls ``DELETE /sessions/{session_id}``. There is no workspace input and
+        no "preview only" flag -- the server resolves the session by id and this
+        always performs the delete. Returns the parsed JSON dict with the result
+        counts (how many nodes/relationships/blobs were removed, and so on).
+
+        Parameters
+        ----------
+        session_id:
+            The session to delete.
+
+        Returns
+        -------
+        dict
+            The parsed result counts.
+
+        Raises
+        ------
+        CIClientError
+            The request genuinely failed: connection error/refused, timeout,
+            non-2xx HTTP status, or a malformed (non-JSON) body. A 404 means
+            the session id is not known to the server; a 409 means the
+            session is still receiving data (not safe to delete yet) or the
+            id is ambiguous across workspaces -- ``status_code`` carries the
+            exact number so the caller can give a clear message.
+        """
+        url = f"{self._server_url}/sessions/{session_id}"
+        return _http_delete_strict(url, self._auth_headers())
+
     def health_check(self) -> dict[str, Any]:
         """Check server health by running a simple count query.
 
@@ -772,6 +930,110 @@ class AsyncCIClient:
             ) from exc
 
         return _parse_blob_keys(result)
+
+    async def session_summary(self, session_id: str) -> dict[str, Any]:
+        """Fetch the preview facts for a session (read, no changes made; async).
+
+        Calls ``GET /sessions/{session_id}/summary`` and returns the parsed
+        JSON dict: the facts about the whole session graph -- who created it,
+        how many nodes/edges/blobs it has, when it started and last changed,
+        whether it is safe to delete, and so on.
+
+        Parameters
+        ----------
+        session_id:
+            The session to look up.
+
+        Returns
+        -------
+        dict
+            The parsed summary facts.
+
+        Raises
+        ------
+        CIClientError
+            The request genuinely failed: connection error/refused, timeout,
+            non-2xx HTTP status, or a malformed (non-JSON) body. A 404 means
+            the session id is not known to the server; a 409 means the
+            session is still receiving data or the id is ambiguous across
+            workspaces -- ``status_code`` carries the exact number so the
+            caller can give a clear message.
+        """
+        url = f"{self._server_url}/sessions/{session_id}/summary"
+        try:
+            async with httpx.AsyncClient(timeout=self._timeout) as client:  # type: ignore[union-attr]
+                resp = await client.get(url, headers=self._strategy.headers())
+                resp.raise_for_status()
+                return resp.json()
+        except httpx.TimeoutException as exc:  # type: ignore[union-attr]
+            raise CIClientError(f"timeout fetching {url}", error_type="timeout", url=url) from exc
+        except httpx.HTTPStatusError as exc:  # type: ignore[union-attr]
+            raise CIClientError(
+                f"HTTP {exc.response.status_code} from {url}",
+                error_type="http_status",
+                url=url,
+                status_code=exc.response.status_code,
+            ) from exc
+        except (ValueError, json.JSONDecodeError) as exc:  # resp.json() failed
+            raise CIClientError(
+                f"malformed JSON from {url}", error_type="decode_error", url=url
+            ) from exc
+        except httpx.HTTPError as exc:  # type: ignore[union-attr]  # ConnectError, transport, etc.
+            raise CIClientError(
+                f"connection error to {url}: {exc}", error_type="connection_error", url=url
+            ) from exc
+
+    async def delete_session(self, session_id: str) -> dict[str, Any]:
+        """Delete a session's whole graph from the server (a real, permanent change; async).
+
+        Calls ``DELETE /sessions/{session_id}``. There is no workspace input and
+        no "preview only" flag -- the server resolves the session by id and this
+        always performs the delete. Returns the parsed JSON dict with the result
+        counts (how many nodes/relationships/blobs were removed, and so on).
+
+        Parameters
+        ----------
+        session_id:
+            The session to delete.
+
+        Returns
+        -------
+        dict
+            The parsed result counts.
+
+        Raises
+        ------
+        CIClientError
+            The request genuinely failed: connection error/refused, timeout,
+            non-2xx HTTP status, or a malformed (non-JSON) body. A 404 means
+            the session id is not known to the server; a 409 means the
+            session is still receiving data (not safe to delete yet) or the
+            id is ambiguous across workspaces -- ``status_code`` carries the
+            exact number so the caller can give a clear message.
+        """
+        url = f"{self._server_url}/sessions/{session_id}"
+        try:
+            async with httpx.AsyncClient(timeout=self._timeout) as client:  # type: ignore[union-attr]
+                resp = await client.delete(url, headers=self._strategy.headers())
+                resp.raise_for_status()
+                return resp.json()
+        except httpx.TimeoutException as exc:  # type: ignore[union-attr]
+            raise CIClientError(f"timeout deleting {url}", error_type="timeout", url=url) from exc
+        except httpx.HTTPStatusError as exc:  # type: ignore[union-attr]
+            raise CIClientError(
+                f"HTTP {exc.response.status_code} from {url}",
+                error_type="http_status",
+                url=url,
+                status_code=exc.response.status_code,
+            ) from exc
+        except (ValueError, json.JSONDecodeError) as exc:  # resp.json() failed
+            raise CIClientError(
+                f"malformed JSON from {url}", error_type="decode_error", url=url
+            ) from exc
+        except httpx.HTTPError as exc:  # type: ignore[union-attr]  # ConnectError, transport, etc.
+            raise CIClientError(
+                f"connection error to {url}: {exc}", error_type="connection_error", url=url
+            ) from exc
 
     async def health_check(self) -> dict[str, Any]:
         """Check server health by running a simple count query (async).
