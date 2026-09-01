@@ -2,13 +2,17 @@ bundle:
   name: context-intelligence-navigation-behavior
   version: 0.1.0
   description: >
-    LAYER 1 of 3 (innermost). Adds session-navigator (reads raw session JSONL
-    on disk, no graph server). Includes: nothing. Use alone for local/offline
-    navigation fallback.
+    Carries the three context-intelligence agents (graph-analyst,
+    session-navigator, server-data-ops) as an independent, equal copy of the
+    analysis behavior's agent set. Imports nothing. session-navigator reads raw
+    session JSONL on disk with no graph server; use for local/offline navigation
+    plus graph analysis and session data operations.
 
 agents:
   include:
+    - context-intelligence:graph-analyst
     - context-intelligence:session-navigator
+    - context-intelligence:server-data-ops
 
 tools:
   - module: tool-delegate
