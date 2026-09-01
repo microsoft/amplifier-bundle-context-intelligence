@@ -1,0 +1,43 @@
+"""Context Intelligence server data-ops tools -- session_summary and delete_session.
+
+Both tools share one ToolConfigResolver, so sources has a single
+config namespace: overrides.tool-server-data-ops.config.sources.
+
+Two tools, one mount(): idiomatic multi-tool module (same shape as
+tool-context-intelligence-query, which mounts graph_query / blob_read from one
+mount() call).
+"""
+
+from __future__ import annotations
+
+from typing import Any
+
+__amplifier_module_type__ = "tool"
+__all__ = ["mount"]
+
+
+async def mount(coordinator: Any, config: Any) -> None:
+    """Mount both server-data-ops tools, sharing one ToolConfigResolver.
+
+    The resolver is built ONCE from the module's config and injected into
+    both tools.  Tool constructors do not accept config -- the resolver IS
+    the config surface.
+
+    The hook resolver is NOT fetched here; each tool fetches it lazily at
+    first execute() because tools mount before hooks (kernel phase order is
+    orchestrator -> context -> providers -> tools -> hooks -- CONTRACTS.md
+    section Module Lifecycle Methods).
+    """
+    from context_intelligence.tool_resolver import ToolConfigResolver
+
+    from .delete_session_tool import DeleteSessionTool
+    from .session_summary_tool import SessionSummaryTool
+
+    resolver = ToolConfigResolver(config or {}, coordinator)  # built ONCE
+    # WARN-only diagnostic pass -- never raises; hard validation is per-source
+    # at query time (see tool_resolver.py: validate_source()).
+    resolver.validate_sources()
+    summary = SessionSummaryTool(coordinator, resolver)
+    delete = DeleteSessionTool(coordinator, resolver)
+    await coordinator.mount("tools", summary, name=summary.name)  # "session_summary"
+    await coordinator.mount("tools", delete, name=delete.name)  # "delete_session"
