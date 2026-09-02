@@ -69,32 +69,6 @@ hooks:
   - module: hook-server-data-ops-lockdown
     source: git+https://github.com/microsoft/amplifier-bundle-context-intelligence@main#subdirectory=modules/hook-server-data-ops-lockdown
 
-# Delegation allowlist: restricts which sub-agent server-data-ops's spawned
-# session may delegate to, closing the gap the lockdown hook above cannot
-# close on its own. hook-server-data-ops-lockdown is scoped (via the
-# tool-delegate settings.exclude_hooks entry above) to NOT apply to sessions
-# this agent delegates to -- that scoping is required so graph-analyst's own
-# graph_query calls aren't wrongly denied. But without an `agents:` allowlist,
-# that same scoping meant server-data-ops could delegate a file-write to ANY
-# other agent (e.g. foundation:file-ops) and have it succeed unchecked -- a
-# DTU eval proved exactly this: server-data-ops delegated the settings.yaml
-# edit to foundation:file-ops, which wrote the file, bypassing the lockdown
-# entirely. Restricting delegation to graph-analyst (the only agent this
-# agent's own flows ever delegate to -- see "Tools" section below) closes the
-# hole structurally: server-data-ops can no longer reach a write-capable
-# agent via delegation at all, regardless of what tools that agent has.
-#
-# Value shape: a list of agent names as they appear as KEYS in this bundle's
-# composed agent roster (behaviors/context-intelligence-analysis.yaml and
-# behaviors/context-intelligence-navigation.yaml both register agents under
-# namespaced keys, e.g. "context-intelligence:graph-analyst") -- NOT bare
-# agent names. The access-control filter
-# (amplifier-app-cli's agent_config.merge_configs, and its session_spawner.py
-# live-registry reconciliation) does an exact-string membership check
-# (`k in agent_filter`) against those same roster keys, so a bare "graph-analyst"
-# here would silently match nothing and disable delegation entirely.
-agents:
-  - context-intelligence:graph-analyst
 ---
 
 # Server Data Ops
