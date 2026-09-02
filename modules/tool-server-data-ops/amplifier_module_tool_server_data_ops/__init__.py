@@ -1,22 +1,13 @@
 """Context Intelligence server data-ops tools -- session_summary,
 delete_session, and whoami.
 
-All three tools share one ToolConfigResolver, so sources has a single
-config namespace: overrides.tool-server-data-ops.config.sources.
+All three tools share one ToolConfigResolver (single config namespace:
+overrides.tool-server-data-ops.config.sources).
 
-WhoamiTool itself lives in the shared context_intelligence library
-(context_intelligence/whoami_tool.py), not in this module's own package --
-it is ALSO mounted by tool-context-intelligence-query (graph-analyst's
-module). The server-data-ops (delete) agent needs identity for ownership
-checks but must NOT have graph_query, so it mounts THIS module alone
-rather than tool-context-intelligence-query. Importing the same class
-from the shared location keeps the two mounts in lock-step with zero
-duplication. No agent mounts both this module AND
-tool-context-intelligence-query, so there is no "whoami" name collision.
-
-Three tools, one mount(): idiomatic multi-tool module (same shape as
-tool-context-intelligence-query, which mounts graph_query / blob_read / whoami
-from one mount() call).
+WhoamiTool itself lives in the shared context_intelligence library, not in
+this module's own package, because it is also mounted by
+tool-context-intelligence-query -- importing the same class keeps both
+mounts in lock-step with zero duplication.
 """
 
 from __future__ import annotations
@@ -45,13 +36,13 @@ async def mount(coordinator: Any, config: Any) -> None:
     from .delete_session_tool import DeleteSessionTool
     from .session_summary_tool import SessionSummaryTool
 
-    resolver = ToolConfigResolver(config or {}, coordinator)  # built ONCE
+    resolver = ToolConfigResolver(config or {}, coordinator)
     # WARN-only diagnostic pass -- never raises; hard validation is per-source
     # at query time (see tool_resolver.py: validate_source()).
     resolver.validate_sources()
     summary = SessionSummaryTool(coordinator, resolver)
     delete = DeleteSessionTool(coordinator, resolver)
     whoami = WhoamiTool(coordinator, resolver)
-    await coordinator.mount("tools", summary, name=summary.name)  # "session_summary"
-    await coordinator.mount("tools", delete, name=delete.name)  # "delete_session"
-    await coordinator.mount("tools", whoami, name=whoami.name)  # "whoami"
+    await coordinator.mount("tools", summary, name=summary.name)
+    await coordinator.mount("tools", delete, name=delete.name)
+    await coordinator.mount("tools", whoami, name=whoami.name)

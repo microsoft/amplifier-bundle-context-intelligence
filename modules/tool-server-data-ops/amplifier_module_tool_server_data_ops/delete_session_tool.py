@@ -1,28 +1,13 @@
 """DeleteSessionTool -- agent-facing tool that permanently deletes a session.
 
-Implements the Amplifier Tool protocol. Configuration and provenance are
-resolved via ``resolve_query_connection`` (same as SessionSummaryTool -- parity
-guaranteed by the shared helper), a SINGLE-HIT selection over the connectable
-pool (tool ``sources`` union hook ``destinations``). See
-``resolve_query_connection``'s docstring in context_intelligence/tool_resolver.py
-for the authoritative selection rule (in brief: explicit ``source=<name>``
-reaches any pool entry; with no name, 1 source -> it, 2+ sources -> fail loud,
-0 sources -> the FIRST destination in config order for any N, else env).
+Implements the Amplifier Tool protocol. Endpoint selection goes through
+``resolve_query_connection`` (see context_intelligence/tool_resolver.py for
+the authoritative selection rule); every result carries the resolved
+``source``.
 
-Every result (success or failure) carries a ``source`` field naming the
-endpoint that answered / was attempted. Callers can also pass
-``list_sources: true`` to discover the connectable set without deleting
-anything.
-
-The ``ToolConfigResolver`` is injected at construction time by ``mount()``
-(one shared instance for both server-data-ops tools -- single config namespace).
-
-This tool never talks to the server directly -- the only path to the server
-is through ``AsyncCIClient`` (the shared library). This is a REAL, PERMANENT
-CHANGE: there is no workspace input and no "preview only" flag on the server
-call itself -- the delete always runs against the whole session graph. The
-agent using this tool is responsible for showing the user a preview
-(session_summary) and getting explicit confirmation FIRST.
+This is a REAL, PERMANENT change with no preview flag here -- the caller is
+responsible for running session_summary and getting explicit confirmation
+before calling this.
 """
 
 from __future__ import annotations

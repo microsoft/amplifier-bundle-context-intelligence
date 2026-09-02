@@ -68,12 +68,9 @@ class CIClientError(Exception):
     ) -> None:
         super().__init__(message)
         #: One of "connection_error" | "timeout" | "http_status" | "decode_error"
-        #: | "auth_error". "auth_error" means the credential itself (api_key or
-        #: Entra token config) was unusable -- empty, the "[REDACTED]" sentinel,
-        #: or an unexpanded ${VAR} placeholder -- and was never sent to the
-        #: server. It is raised BEFORE the request is attempted, so it must
-        #: never be confused with "decode_error" (a genuine bad-JSON response
-        #: body from a server that was actually reached).
+        #: | "auth_error". "auth_error" -- an unusable credential -- is raised
+        #: BEFORE the request is attempted, so it is never confused with
+        #: "decode_error" (a bad response body from a server actually reached).
         self.error_type = error_type
         self.url = url
         self.status_code = status_code
@@ -177,11 +174,9 @@ def _http_get_strict(url: str, headers: dict[str, str]) -> Any:
     CIClientError
         error_type one of: ``connection_error`` (refused/DNS/reset),
         ``timeout``, ``http_status`` (non-2xx; ``status_code`` set), or
-        ``decode_error`` (body is not valid JSON). NOTE: ``headers`` is
-        computed by the caller BEFORE this function is invoked -- an unusable
-        credential is classified as ``auth_error`` by the caller (see
-        ``CIClient._auth_headers`` / ``AsyncCIClient._auth_headers``) and never
-        reaches this function at all, so it can never be misclassified here.
+        ``decode_error`` (body is not valid JSON). ``auth_error`` is
+        classified by the caller before ``headers`` reaches this function,
+        so it never appears here.
     """
     if _requests is not None:
         try:
@@ -278,11 +273,8 @@ def _http_delete_strict(url: str, headers: dict[str, str]) -> Any:
         ``timeout``, ``http_status`` (non-2xx; ``status_code`` set -- this is
         how a 404 "unknown session" or a 409 "still receiving data / ambiguous
         id" reaches the caller), or ``decode_error`` (body is not valid JSON).
-        NOTE: ``headers`` is computed by the caller BEFORE this function is
-        invoked -- an unusable credential is classified as ``auth_error`` by
-        the caller (see ``CIClient._auth_headers`` / ``AsyncCIClient._auth_headers``)
-        and never reaches this function at all, so it can never be
-        misclassified here.
+        ``auth_error`` is classified by the caller before ``headers`` reaches
+        this function, so it never appears here.
     """
     if _requests is not None:
         try:
@@ -815,16 +807,10 @@ class AsyncCIClient:
     def _auth_headers(self, url: str) -> dict[str, str]:
         """Return the ``Authorization`` header dict, computed per-request via strategy.
 
-        Called BEFORE entering a method's request ``try:`` block, so an
-        unusable credential (empty api_key, the "[REDACTED]" sentinel, or an
-        unexpanded ${VAR} placeholder) is classified as its own ``auth_error``
-        -- it is never sent to the server, and never confused with
-        ``decode_error`` (a genuine bad-JSON response from a server that was
-        actually reached). Calling ``self._strategy.headers()`` INSIDE the
-        request try block was the original bug: a credential ``ValueError``
-        would fall through to ``except (ValueError, json.JSONDecodeError)``
-        and be misreported as "malformed JSON from {url}" even though no
-        request was ever sent.
+        Called BEFORE entering a method's request ``try:`` block -- an
+        unusable credential is classified as ``auth_error`` here rather than
+        falling into the request's own ``except (ValueError, json.JSONDecodeError)``
+        and being misreported as a decode failure.
 
         Raises
         ------
