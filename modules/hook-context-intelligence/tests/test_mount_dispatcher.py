@@ -11,7 +11,7 @@ import inspect
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
-from amplifier_core.events import ALL_EVENTS
+from amplifier_core.events import ALL_EVENTS  # type: ignore[import-not-found]
 
 
 # ---------------------------------------------------------------------------
