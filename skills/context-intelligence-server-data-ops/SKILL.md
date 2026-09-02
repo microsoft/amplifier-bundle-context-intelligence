@@ -119,21 +119,27 @@ Steps, matching the approved scenario exactly:
    (see "Resolving 'this session' and 'the current user'" above) — ask the user directly
    only as a fallback. Ask the user to confirm they want to delete this session's data.
 2. Call `session_summary(session_id=<current>, list_sources=true)` or
-   `delete_session(list_sources=true)` to see every server this session was published to,
-   and report them to the user, asking "remove from all?"
+   `delete_session(list_sources=true)` to see **every** server in the connectable set, and
+   check which of them the session actually exists on — not just the one that seems
+   obvious. Report all of them to the user by name, asking "remove from all?" (this is
+   the all-servers completeness rule from the agent body; it applies here regardless of
+   how many servers turn out to hold the session).
 3. The user picks which server(s) to remove it from.
 4. If the session's folder is included by a chosen destination's filters, offer to add a
    folder exclusion for that destination (see "Folder exclusion" below) — so the folder is
    not pushed there anymore — and offer to guide the user through applying it. Do this
    **before** proceeding with deletion.
-5. Proceed with the deletion for the chosen server(s): call
+5. For **each** server the user chose (one at a time, not just the first): call
    `session_summary(session_id=<current>, source=<chosen>)` (the preview) and show the
    user the session details block built from it → get an explicit, strong confirmation
-   naming the specific session and server → call `delete_session` → report exactly what
-   was removed (session count, nodes/relationships/blobs/queue sessions) and which server
-   it came from.
+   naming the specific session and server → call `delete_session` → verify that server's
+   own result before moving to the next one.
+6. Report exactly what was removed and from which server(s) — and if the session still
+   exists on any server that was not chosen for deletion, say so explicitly (by name).
+   Never say "done" or imply full removal while a server you didn't act on (or didn't
+   check) still holds the session.
 
-All five steps happen in this same session.
+All six steps happen in this same session.
 
 ### Folder exclusion (offered before deletion)
 
@@ -172,13 +178,21 @@ resolution before this flow ships.
    accurate facts, and delegate to `graph-analyst` for a narrative (see "Building the
    narrative" above). Build a session details block for each.
 4. Present the candidates (their details blocks) to the user and let them pick one.
-5. Re-run `session_summary` on the chosen id, right before delete — a fresh preview, not
-   the one from the candidate list, in case anything changed in between.
-6. Get an explicit, strong confirmation: restate exactly what will be permanently removed
+5. All-servers completeness check (same rule as Flow 1): call `session_summary` or
+   `delete_session` with `list_sources: true` for the chosen id and check it against
+   **every** server in the connectable set. If it exists on more than one, name all of
+   them to the user and ask which to delete from (or "all") before continuing.
+6. For **each** server chosen: re-run `session_summary` on the chosen id right before
+   delete — a fresh preview, not the one from the candidate list, in case anything changed
+   in between.
+7. Get an explicit, strong confirmation: restate exactly what will be permanently removed
    (session id, counts) and from which server, and require a clear go-ahead — a plain "yes"
    with no restatement is not enough.
-7. Call `delete_session` on the chosen id and server.
-8. Report exactly what was removed and from which server.
+8. Call `delete_session` on the chosen id and server, and verify that server's own result
+   before moving to the next chosen server.
+9. Report exactly what was removed and from which server(s) — and if the session still
+   exists on any server that was not chosen, say so explicitly by name. Never say "done"
+   or imply full removal while an unchecked or unchosen server still holds the session.
 
 ## Flow 3 — delete a session someone else created
 
