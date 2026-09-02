@@ -202,3 +202,62 @@ class TestSessionScopeComposition:
         tools = self._server_data_ops_tools()
 
         assert "tool-context-intelligence-query" not in tools
+
+
+class TestDelegationAllowlist:
+    """Proves the companion fix for the delegation-bypass hole this module's
+    docstring and TestSessionScopeComposition document: the lockdown hook is
+    (correctly) scoped OFF of sessions server-data-ops delegates to, so
+    without a delegation allowlist server-data-ops could hand a file-write
+    to ANY other agent (e.g. foundation:file-ops) and have it succeed
+    unchecked -- a DTU eval proved exactly this for the settings.yaml edit.
+
+    The fix is a top-level `agents:` allowlist in server-data-ops.md's own
+    frontmatter (a sibling of `tools:`/`hooks:`, recognized by
+    amplifier_foundation.bundle._dataclass._load_agent_file_metadata and
+    forwarded to amplifier-app-cli's agent_config.merge_configs /
+    session_spawner.py, which filter the parent's agent roster with an
+    exact-string `k in agent_filter` membership check). This test locks the
+    allowlist to EXACTLY the one agent server-data-ops's own flows delegate
+    to (graph-analyst) -- a future edit that widens it (e.g. back to
+    unrestricted, or to add a second agent) must fail this test.
+
+    Value-shape note: the roster keys these allowlist entries are checked
+    against are NAMESPACED (this repo's own behaviors/
+    context-intelligence-analysis.yaml and
+    context-intelligence-navigation.yaml both register agents as
+    "context-intelligence:graph-analyst", "context-intelligence:server-data-ops"),
+    not bare names -- so the allowlist entry must be the namespaced form or
+    it silently matches nothing and disables delegation entirely.
+    """
+
+    @staticmethod
+    def _server_data_ops_agents_allowlist() -> Any:
+        text = SERVER_DATA_OPS_AGENT.read_text(encoding="utf-8")
+        _, frontmatter, _ = text.split("---", 2)
+        config = yaml.safe_load(frontmatter)
+        return config.get("agents")
+
+    def test_agent_declares_a_delegation_allowlist(self) -> None:
+        """Sanity check: the top-level `agents:` key must exist at all --
+        its absence means unrestricted delegation (the original hole)."""
+        allowlist = self._server_data_ops_agents_allowlist()
+
+        assert allowlist is not None, (
+            "server-data-ops.md must declare a top-level `agents:` allowlist, or "
+            "it can delegate a file-write to any agent, bypassing the lockdown hook"
+        )
+
+    def test_delegation_allowlist_is_exactly_graph_analyst(self) -> None:
+        """The actual fix: the allowlist must contain exactly the one agent
+        server-data-ops legitimately delegates to, namespaced as it appears
+        in this bundle's own composed roster. Widening this list (to "all",
+        or to include any other agent) must fail this test."""
+        allowlist = self._server_data_ops_agents_allowlist()
+
+        assert allowlist == ["context-intelligence:graph-analyst"], (
+            "server-data-ops.md's `agents:` allowlist must be exactly "
+            "['context-intelligence:graph-analyst'] -- widening it reopens the "
+            "delegation-bypass hole (delegating a write to e.g. foundation:file-ops "
+            "around the lockdown hook, which does not apply to delegated sessions)"
+        )
