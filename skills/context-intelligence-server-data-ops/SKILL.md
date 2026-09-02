@@ -134,16 +134,20 @@ some *other* session.
 
 ## Flow 2 — Find a Session by Description, Then Delete
 
-1. Take the user's description (topic, date range, sometimes a server/workspace).
-2. Narrow candidates with `graph_query`. Scope on `Session` node fields `workspace`,
-   `created_by`, `started_at`/`last_updated` (wrap dates in `datetime()`). Don't filter
-   on graph `working_dir` — it isn't reliably populated (see
-   `context-intelligence-graph-query`); the working dir you show the user comes from
-   `session_summary`. Cap the candidate set to a handful before per-candidate work.
+1. Take the user's description (topic, content, date range, sometimes a
+   server/workspace).
+2. **Search.** For any non-trivial criteria (topic, content, date, workspace),
+   delegate to `graph-analyst` — it has the data-navigation skills to query the graph
+   and returns the candidate session(s): their ids and key facts. This is a data-fetch
+   delegation, not a hand-off of the conversation — the results come back to you and
+   you keep driving the flow. Skip the delegation only for a trivial direct lookup —
+   the user names an exact session id — and call `session_summary` on it directly.
+   Cap the candidate set to a handful before per-candidate work.
 3. For each candidate, call `session_summary` for the facts, then build the narrative
-   yourself (see "Summary line" above) — every candidate gets either a real synthesized
-   narrative or an explicit "not available" before it's presented; never a summary
-   written from memory or a prompt quote.
+   yourself (see "Summary line" above; never delegate this part to `graph-analyst`) —
+   every candidate gets either a real synthesized narrative or an explicit "not
+   available" before it's presented; never a summary written from memory or a prompt
+   quote.
 4. Build a Session Details Block per candidate and present them; the user picks one.
 5. Run the Flow 3 ownership check on the chosen session.
 6. Re-run `session_summary` on the chosen id right before delete (a fresh preview, in
