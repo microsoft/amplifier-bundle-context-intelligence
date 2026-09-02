@@ -28,7 +28,7 @@ deleting a session someone else created.
 
 ---
 
-## The two tools this skill drives
+## The tools this skill drives
 
 - **`session_summary`** — read-only preview. Returns `{source: {name, url, origin}, summary: {...}}`.
   The `summary` object's fields (from the server's `DeletionPreview`):
@@ -49,26 +49,30 @@ deleting a session someone else created.
   `{source: {...}, result: {root_id, session_count, nodes_deleted, relationships_deleted,
   blobs_deleted, queue_sessions_cleaned}}`.
 
-Both accept `source` (name a specific server) and `list_sources: true` (discover the
-connectable set without acting). Neither takes a workspace input — you always address a
+- **`whoami`** — read-only identity lookup. Returns
+  `{contributor_id: <github-id-or-null>, source: {name, url, origin}}`. This is how you
+  find out who the acting user actually is, for the **same server** a session lives on —
+  it never talks to a different server than the one you're checking ownership against.
+  Used in Flow 3 to decide whether the ownership warning applies at all (see below).
+
+All three accept `source` (name a specific server) and `list_sources: true` (discover the
+connectable set without acting). None takes a workspace input — you always address a
 session by its id, and the server resolves the rest.
 
 ---
 
 ## Resolving "this session" and "the current user"
 
-Resolve both from context first — this is the primary path, not a fallback. Only ask the
-user directly if context genuinely doesn't have the answer. Keep it light: at most one
-short question, never an interrogation.
-
 - **Current session id**: look in the environment/status context injected into your turn
   (other agents in this ecosystem are shown a running "Session ID" the same way). Use that
-  id as "the current session" whenever a flow below refers to it.
-- **Current user identity**: look for injected identity/user context the same way. If none
-  is available, fall back to calling `session_summary` on the current session's own id and
-  reading its `created_by` field — use that as your reference identity whenever you compare
-  against another session's `created_by` (Flow 3 below).
-- Asking the user is the fallback for both, never the first move.
+  id as "the current session" whenever a flow below refers to it. Ask the user directly
+  only if context genuinely doesn't have it — at most one short question, never an
+  interrogation.
+- **Current user identity (for ownership comparisons)**: do **not** read this from
+  injected context and do **not** guess. Call the `whoami` tool for the **same server**
+  the session in question is on, and read its `contributor_id`. That is your one and only
+  reference identity for the ownership comparison in Flow 3 below — see that section for
+  exactly how to use it, including the null-`contributor_id` fallback.
 
 ---
 
@@ -107,7 +111,14 @@ any of its subsessions.
 Building it from the root session's prompts only keeps the overview fast and focused on
 top-level intent, rather than walking the whole subsession tree. Fold the returned
 narrative into the "Summary:" line of the details block. If graph-analyst cannot produce
-one (server unreachable, no data), say so plainly instead of inventing one.
+one (server unreachable, no data), write "not available" in that line instead of
+inventing one.
+
+**Forbidden shortcut: never put the session's raw first prompt (or any other raw prompt
+text) into the "Summary:" line instead of delegating.** A raw quote is not a narrative,
+even when it looks descriptive enough to stand in for one — always delegate to
+`graph-analyst` first, and fall back to "not available" only if that delegation itself
+fails to produce anything.
 
 ---
 
@@ -115,9 +126,9 @@ one (server unreachable, no data), say so plainly instead of inventing one.
 
 Steps, matching the approved scenario exactly:
 
-1. Resolve the current session's own id and the current user's identity from context
-   (see "Resolving 'this session' and 'the current user'" above) — ask the user directly
-   only as a fallback. Ask the user to confirm they want to delete this session's data.
+1. Resolve the current session's own id from context (see "Resolving 'this session' and
+   'the current user'" above) — ask the user directly only as a fallback. Ask the user to
+   confirm they want to delete this session's data.
 2. Call `session_summary(session_id=<current>, list_sources=true)` or
    `delete_session(list_sources=true)` to see **every** server in the connectable set, and
    check which of them the session actually exists on — not just the one that seems
@@ -125,10 +136,11 @@ Steps, matching the approved scenario exactly:
    the all-servers completeness rule from the agent body; it applies here regardless of
    how many servers turn out to hold the session).
 3. The user picks which server(s) to remove it from.
-4. If the session's folder is included by a chosen destination's filters, offer to add a
-   folder exclusion for that destination (see "Folder exclusion" below) — so the folder is
-   not pushed there anymore — and offer to guide the user through applying it. Do this
-   **before** proceeding with deletion.
+4. **Unconditionally** offer to add a folder exclusion for the chosen destination(s) (see
+   "Folder exclusion" below) — so the folder is not pushed there anymore — and offer to
+   guide the user through applying it. Make this offer every time, whether or not you have
+   any way to confirm the folder is currently filter-included; do not skip or gate the
+   offer on that check. Do this **before** proceeding with deletion.
 5. For **each** server the user chose (one at a time, not just the first): call
    `session_summary(session_id=<current>, source=<chosen>)` (the preview) and show the
    user the session details block built from it → get an explicit, strong confirmation
@@ -151,13 +163,17 @@ that destination's `exclude` list stops that destination from being selected for
 sessions started in that folder.
 
 **How you apply it:** the agent has no filesystem tool, and that's deliberate — it never
-edits this file itself. When Flow 1 finds that the current session's folder is included by
-a chosen destination's filters, offer to add the exclusion before proceeding with deletion:
-show the user exactly what to add (the destination name, and the pattern that matches their
-current folder), and offer to guide them through applying it. Confirm whether they applied
-it, then move on to the preview and delete steps.
+edits this file itself. **In Flow 1, make this offer every time, unconditionally** — do
+not first try to determine whether the current session's folder is actually included by
+a chosen destination's filters. That determination is not reliably available to the
+agent, and gating the offer on it is exactly what caused the offer to be silently skipped
+in a real case (a current-session deletion where the offer never fired). Instead: always
+show the user exactly what to add (the destination name, and the pattern that would match
+their current folder), and offer to guide them through applying it, before proceeding with
+deletion. Confirm whether they applied it, then move on to the preview and delete steps.
 
-Order: offer the exclusion → preview (`session_summary`) → strong confirmation → delete.
+Order: offer the exclusion (always) → preview (`session_summary`) → strong confirmation →
+delete.
 
 QUESTION FOR USER: it is unclear whether an exclusion added while the current session is
 still running takes effect for that session's own remaining event pushes to this
@@ -194,26 +210,43 @@ resolution before this flow ships.
    exists on any server that was not chosen, say so explicitly by name. Never say "done"
    or imply full removal while an unchecked or unchosen server still holds the session.
 
-## Flow 3 — delete a session someone else created
+## Flow 3 — deciding whether an ownership warning applies
+
+This flow is not a separate user-facing path — it's the ownership check that runs inside
+Flow 1 or Flow 2, right after the preview and before asking for the delete confirmation.
+Its whole job is to decide, correctly, whether to show the "not created by you" warning —
+and, just as importantly, to **not** show it when the session genuinely belongs to the
+current user.
 
 1. Run Flow 1 or Flow 2 up through the preview step (`session_summary`), but do **not**
-   ask for the delete confirmation yet.
-2. Compare the previewed session's `created_by` to the current user (see "Resolving 'this
-   session' and 'the current user'" above).
-3. If they match, continue as Flow 1/2 normally (single confirmation).
-4. If they do **not** match:
-   - State plainly: "this session was created by `<created_by>`, not you."
-   - Ask a **separate, explicit, strong** confirmation — restating what will be permanently
-     removed and from which server — that the user still wants to delete someone else's
-     data, before proceeding.
-   - Only call `delete_session` after that second, explicit confirmation.
+   ask for the delete confirmation yet. Note the previewed session's `created_by`.
+2. Call `whoami` for the **same server** the session is on (pass the same `source` you
+   used for the preview). Read its `contributor_id`.
+3. Compare `contributor_id` to the session's `created_by`:
+   - **They match** → this is the user's own session. Do **not** show any ownership
+     warning. Continue as Flow 1/2 normally (single confirmation, no extra step).
+   - **They differ** → genuine not-owned case:
+     - State plainly: "this session was created by `<created_by>`, not you."
+     - Ask a **separate, explicit, strong** confirmation — restating what will be
+       permanently removed and from which server — that the user still wants to delete
+       someone else's data, before proceeding.
+     - Only call `delete_session` after that second, explicit confirmation.
+   - **`contributor_id` is null** (auth disabled server-side, or otherwise unresolvable)
+     → you cannot confirm ownership either way. Say so plainly ("I can't confirm who
+     created this session on this server") and ask the user directly whether it's theirs,
+     rather than defaulting to the warning. Do not treat a null `contributor_id` as
+     evidence of a mismatch, and do not skip asking.
+
+**Never skip step 2.** Warning based on `created_by` alone, without first resolving the
+acting user via `whoami`, is exactly the mistake that produced false "not created by you"
+warnings on the user's own sessions in a real evaluation.
 
 ---
 
 ## Multi-server handling (all flows)
 
-- `list_sources: true` on either tool returns the connectable set: every server this agent
-  can reach, each with `name`, `url`, `origin` (`source` or `destination`).
+- `list_sources: true` on any of the three tools returns the connectable set: every server
+  this agent can reach, each with `name`, `url`, `origin` (`source` or `destination`).
 - Passing `source=<name>` addresses one specific server by name from that set.
 - Omitting `source` uses a default: the single configured tool source if there is exactly
   one, otherwise the first configured destination. If two or more tool **sources** are
@@ -235,11 +268,16 @@ resolution before this flow ships.
 
 ## Design notes
 
-- **Current session id / current user identity** — resolved from injected environment/
-  status context first (see "Resolving 'this session' and 'the current user'" above);
-  asking the user is the fallback, never the first move.
+- **Current session id** — resolved from injected environment/status context first (see
+  "Resolving 'this session' and 'the current user'" above); asking the user is the
+  fallback, never the first move.
+- **Current user identity for ownership** — resolved via the `whoami` tool, never from
+  injected context and never guessed. See "Resolving 'this session' and 'the current
+  user'" above and Flow 3.
 - **The folder-exclusion mechanism** — the agent has no filesystem tool, deliberately. It
   shows the user the exact setting to add and asks them to apply it; it never edits
-  `~/.amplifier/settings.yaml` itself (see "Folder exclusion" under Flow 1 above).
+  `~/.amplifier/settings.yaml` itself (see "Folder exclusion" under Flow 1 above). The
+  offer itself is unconditional — never gated on first confirming the folder is
+  filter-included.
 - **Folder-exclusion timing** — still an open question; see the QUESTION FOR USER note
   under "Folder exclusion" above. Needs a decision before this flow ships.
