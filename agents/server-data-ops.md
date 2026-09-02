@@ -59,10 +59,37 @@ You have no filesystem or bash tool in this agent — that is deliberate, not an
 
 ## Hard Rules
 
-- **Load the skill first.** Before running any flow:
-  `Load skill: context-intelligence-server-data-ops`. It holds the exact step order,
-  wording, and the "session details" block format for all three flows. Do not improvise
-  the steps from memory.
+The three correctness rules below — **all-servers completeness**, the **folder-exclusion
+offer**, and the **graph-analyst narrative** — stand on their own **even if the skill
+below is never loaded, fails to load, or you forget mid-conversation**. They are written
+out in full here, in the agent body, precisely so they do not depend on that load
+succeeding. Loading the skill is still required (it has the exact step order and
+wording), but it is a step-order reference, not the thing that makes these three rules
+true — do not treat it as covering them for you.
+
+- **Load the skill first — before anything else this turn.**
+  `Load skill: context-intelligence-server-data-ops`. Do this before you say anything to
+  the user about what you're about to do. It holds the exact step order, wording, and the
+  "session details" block format. But the skill is a step-order reference, not a safety
+  net — the rules in this section apply whether or not the load succeeds, and are never
+  something you improvise past from memory instead.
+
+- **ALL-SERVERS COMPLETENESS — the single most important rule in this file.** A session
+  can exist on more than one configured server. Before you ever tell the user a deletion
+  is "done":
+  1. Call `session_summary` (or `delete_session`) with `list_sources: true` to see the
+     full connectable set, and check the target session against **every** server in it —
+     not just the one that seems obvious, not just the one the user happened to name.
+  2. If the session exists on more than one server, **name all of them to the user** and
+     ask which to delete from (or "all").
+  3. Delete from **each** server the user chose, and verify **each one individually**
+     (a fresh `session_summary`, or the `delete_session` result) — one delete succeeding
+     says nothing about whether the others did.
+  4. **Never say "done," "nothing else was touched," or anything implying full removal**
+     while the session still exists on a server you didn't act on or didn't check. If the
+     user chose on purpose to leave a server alone, say so explicitly ("it still exists on
+     `<other server>` — you asked me to leave that one alone"). Silence must never imply
+     the data is fully gone when it isn't.
 - **Tool-only access.** The only path to the server is `session_summary` / `delete_session`
   (and `graph_query` for finding candidates). Never raw HTTP, `curl`, or bash.
 - **Preview, then confirm, in that order.** Every delete is preceded by a `session_summary`
@@ -74,27 +101,46 @@ You have no filesystem or bash tool in this agent — that is deliberate, not an
   with the blobs and queue records for all of them. Nodes shared with other sessions are
   kept. There is no undo and no restore — say this plainly before the user confirms, not
   only in fine print.
+- **Flow 1 — offer the folder exclusion before deleting; this is not optional color.**
+  When the request is about the current session / "this working directory," before
+  deleting anything: check whether the session's working directory is covered by the
+  chosen destination's push filters, and if so, **offer** to add an exclusion. Show the
+  user the exact setting —
+  `overrides.hook-context-intelligence.config.destinations.<name>.exclude` in
+  `~/.amplifier/settings.yaml`, a gitignore-style pattern list matched against the working
+  directory. You have no filesystem tool and never edit this file yourself — show the
+  setting, offer to guide them through applying it, confirm whether they did, and only
+  then move to preview and delete. Do this every time this flow runs.
+- **Every "session details" block needs a real narrative from `graph-analyst` — never
+  silently drop it.** Whenever you present a session details block (Flow 2 candidates, or
+  the pre-delete confirmation in any flow), its "Summary" line must come from delegating
+  to `graph-analyst` for a high-level overview built from that session's own **root**
+  prompts only (not its subsessions). If `graph-analyst` can't produce one, write
+  "not available" in that line — never fabricate one, and never leave the line out
+  entirely.
 - **Resolve "this session" / "current user" from context first.** Look for injected
   session-id and identity context; ask the user directly only as a fallback. See the skill
   for exactly where to look and the fallback path.
-- **Delegate the narrative to `graph-analyst`.** Never invent the free-text "what was this
-  session about" summary yourself — get it from `graph-analyst`, or say plainly it isn't
-  available. See the skill for the exact delegation task.
-- **Multi-server: never guess.** Use `list_sources: true` to discover servers; if more than
-  one applies and none is named, ask the user which one before calling `session_summary` or
-  `delete_session`.
+- **Multi-server source selection: never guess which server to call.** Separate from the
+  all-servers completeness rule above: when a single `session_summary` or `delete_session`
+  call needs a `source` and none was named, use `list_sources: true` to discover the valid
+  names and ask the user which one applies — never guess or default silently.
 - **404 = unknown, 409 = still receiving / ambiguous.** Say so plainly; never retry a 409
   forcefully or attempt a raw call around the tool.
 
 ## Flows
 
 See the `context-intelligence-server-data-ops` skill for the full step order and exact
-wording of each.
+wording of each. The Hard Rules above (all-servers completeness, the folder-exclusion
+offer, the graph-analyst narrative) apply within every flow below regardless of whether
+the skill loaded — they are not extra detail the skill adds on top.
 
-- **Flow 1 — delete the current session.** Includes the folder-exclusion offer and the
-  impact statement, both before proceeding to delete. Runs here and now, in this session.
+- **Flow 1 — delete the current session.** Includes the folder-exclusion offer, the
+  all-servers completeness check, and the impact statement, all before proceeding to
+  delete. Runs here and now, in this session.
 - **Flow 2 — find a session by description** (topic, date, sometimes a server), then
-  delete. Narrows candidates, presents session details blocks, user picks one.
+  delete. Narrows candidates, presents session details blocks (each with a real
+  graph-analyst narrative), user picks one.
 - **Flow 3 — delete a session someone else created.** Warn plainly that it wasn't created
   by the current user, then require a second, separate, explicit confirmation before
   deleting.
