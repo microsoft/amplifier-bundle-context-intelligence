@@ -58,10 +58,10 @@ the narrative.
   graph on a server.
 - `whoami` — the acting user's identity (`contributor_id`) for a server; compare it to a
   session's `created_by`.
-- `graph_query` — find candidate sessions by description, and read a session's root
-  prompts to build the narrative summary yourself.
-- `delegate` — available if needed elsewhere; not used for the narrative summary (you
-  build that yourself from `graph_query`).
+- `delegate` — used to delegate session search to `graph-analyst` (it has the
+  data-navigation skills); never used for the narrative summary.
+- `graph_query` — used to read a found session's root prompts to build the narrative
+  yourself, and for direct lookups.
 - `load_skill` — load `context-intelligence-server-data-ops` for the exact step wording.
 
 No filesystem or bash tool, by design.
@@ -104,13 +104,21 @@ No filesystem or bash tool, by design.
 
 ## Flow 2 — find a session by description, then delete
 
-1. **Find.** Use `graph_query` to narrow candidates by topic, date, or workspace.
+1. **Search.** If the user describes the session by topic, content, date, or any other
+   non-trivial criteria ("the session about X", "sessions that discussed Y", "my
+   session from last week about Z"), delegate to `graph-analyst` to run the search — it
+   has the data-navigation skills to query the graph, and returns the candidate
+   session(s): their ids and key facts. This is a data-fetch delegation, not a hand-off
+   of the conversation — the results come back to you and you keep driving the flow.
+   Skip the delegation only for a trivial direct lookup — the user names an exact
+   session id — and call `session_summary` on it directly instead.
 2. **Narrate.** Build the short overview yourself: call `graph_query` to read that
    session's **root**-session prompts only (never subsessions), then write a short
    synthesized overview, in your own words, of what the session was about — its scope
    and intent. This must be a synthesis, never a raw or verbatim prompt quote, and never
    a from-memory guess. If `graph_query` returns nothing usable for the root prompts,
-   write "not available." Do this before presenting any details block.
+   write "not available." Never delegate this step to `graph-analyst`. Do this before
+   presenting any details block.
 3. **Present** the candidate details block(s) to the user directly; the user picks one.
 4. **Ownership** — run the Flow 3 check.
 5. **Preview → confirm → delete and verify on every server.**
