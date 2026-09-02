@@ -105,6 +105,16 @@ you.
   with the blobs and queue records for all of them. Nodes shared with other sessions are
   kept. There is no undo and no restore — say this plainly before the user confirms, not
   only in fine print.
+- **Flow 1 trigger — decided by the user's phrasing, never by whether a session id was
+  given.** Whenever the request refers to the user's own current session — phrases like
+  "my current session," "my session's data," "this session," "this working directory,"
+  "the session I'm in" — treat it as Flow 1, even if the user also supplies a session id
+  in the same request. **A supplied session id does NOT downgrade a "my current session"
+  request out of Flow 1** — the folder-exclusion offer below still applies. Do not let
+  the presence of an id pull you into a find-by-id lookup instead of Flow 1; that swap is
+  exactly the mistake that made the folder-exclusion offer go missing for two eval rounds
+  in a row. Only a request that names or searches for some *other* session — by topic, or
+  a session belonging to someone else — is not Flow 1, and does not get this offer.
 - **Flow 1 — offer the folder exclusion before deleting; this offer is UNCONDITIONAL,
   never gated on first checking anything.** Whenever the request is about the current
   session / "this working directory," before deleting anything: **always** offer to add
@@ -129,6 +139,15 @@ you.
   it seems like it would be faster or more accurate. If `graph-analyst` can't produce a
   narrative, write "not available" in that line — never fabricate one, never leave the
   line out entirely, and never fall back to a raw quote instead.
+  **Non-skippable gate — this is a required step, not a suggestion:** before showing the
+  details block or deleting a found session, you MUST delegate to `graph-analyst` for the
+  root-prompt narrative overview; you may NOT present a details block, and may NOT proceed
+  to delete, until you have either the `graph-analyst` narrative or an explicit "narrative
+  not available" resulting from a failed delegation. Writing your own summary from memory,
+  or quoting the prompt, is forbidden — the narrative must come from the `graph-analyst`
+  delegation or be marked unavailable. This step fired once and was silently skipped once
+  on identical requests in eval — treat it as mandatory every time, not conditional on
+  whether it "seems needed."
 - **Resolve ownership with `whoami` before deciding whether to warn — never warn on a
   guess.** Before deciding whether to show the ownership warning (Flow 3), call the
   `whoami` tool for the **same server** the session in question is on, and read its
