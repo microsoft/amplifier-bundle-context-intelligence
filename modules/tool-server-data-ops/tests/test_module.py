@@ -1,8 +1,8 @@
 """Module-level contract tests for tool-server-data-ops.
 
-Tests for the merged two-tool module: mount registers both tools from one
-call, the ToolConfigResolver is shared (one instance, identical resolution),
-and the lazy hook lookup stays lazy (not cached at mount time).
+Tests for the merged three-tool module: mount registers all three tools from
+one call, the ToolConfigResolver is shared (one instance, identical
+resolution), and the lazy hook lookup stays lazy (not cached at mount time).
 """
 
 from __future__ import annotations
@@ -69,22 +69,22 @@ class TestModuleContract:
 
 
 # ---------------------------------------------------------------------------
-# TestMountRegistersExactlyTwoTools
+# TestMountRegistersExactlyThreeTools
 # ---------------------------------------------------------------------------
 
 
-class TestMountRegistersExactlyTwoTools:
-    """mount() must register exactly two tools with distinct names."""
+class TestMountRegistersExactlyThreeTools:
+    """mount() must register exactly three tools with distinct names."""
 
-    async def test_mount_registers_exactly_two_tools(self) -> None:
+    async def test_mount_registers_exactly_three_tools(self) -> None:
         from amplifier_module_tool_server_data_ops import mount
 
         coordinator = _make_coordinator()
         await mount(coordinator, config={})
 
-        assert coordinator.mount.call_count == 2
+        assert coordinator.mount.call_count == 3
 
-    async def test_both_tool_calls_use_tools_category(self) -> None:
+    async def test_all_tool_calls_use_tools_category(self) -> None:
         from amplifier_module_tool_server_data_ops import mount
 
         coordinator = _make_coordinator()
@@ -93,14 +93,14 @@ class TestMountRegistersExactlyTwoTools:
         for call in coordinator.mount.call_args_list:
             assert call.args[0] == "tools"
 
-    async def test_tool_names_are_session_summary_and_delete_session(self) -> None:
+    async def test_tool_names_are_session_summary_delete_session_and_whoami(self) -> None:
         from amplifier_module_tool_server_data_ops import mount
 
         coordinator = _make_coordinator()
         await mount(coordinator, config={})
 
         registered_names = {call.kwargs["name"] for call in coordinator.mount.call_args_list}
-        assert registered_names == {"session_summary", "delete_session"}
+        assert registered_names == {"session_summary", "delete_session", "whoami"}
 
     async def test_mounted_tools_are_protocol_compliant(self) -> None:
         from amplifier_module_tool_server_data_ops import mount
@@ -142,8 +142,8 @@ class TestMountRegistersExactlyTwoTools:
 class TestSharedResolverInvariant:
     """The ToolConfigResolver is shared: one instance, identical resolution."""
 
-    async def test_both_tools_have_same_resolver_instance(self) -> None:
-        """summary._tool_resolver is delete._tool_resolver: same object from mount()."""
+    async def test_all_three_tools_have_same_resolver_instance(self) -> None:
+        """summary/delete/whoami._tool_resolver are all the SAME object from mount()."""
         from amplifier_module_tool_server_data_ops import mount
 
         coordinator = _make_coordinator()
@@ -152,10 +152,12 @@ class TestSharedResolverInvariant:
         tools = {call.kwargs["name"]: call.args[1] for call in coordinator.mount.call_args_list}
         summary = tools["session_summary"]
         delete = tools["delete_session"]
+        whoami = tools["whoami"]
         assert summary._tool_resolver is delete._tool_resolver
+        assert summary._tool_resolver is whoami._tool_resolver
 
     async def test_shared_resolver_consistency_same_url_and_api_key(self) -> None:
-        """Both tools resolve to the SAME (url, api_key) from sources.
+        """All three tools resolve to the SAME (url, api_key) from sources.
 
         This is the load-bearing correctness invariant: with a shared resolver,
         divergent read-endpoint config is structurally impossible.
@@ -175,13 +177,17 @@ class TestSharedResolverInvariant:
         tools = {call.kwargs["name"]: call.args[1] for call in coordinator.mount.call_args_list}
         summary = tools["session_summary"]
         delete = tools["delete_session"]
+        whoami = tools["whoami"]
 
         # Resolve using the shared resolver (no hook resolver needed for tier-1 hit)
         summary_conn = resolve_query_connection(None, summary._tool_resolver)
         delete_conn = resolve_query_connection(None, delete._tool_resolver)
+        whoami_conn = resolve_query_connection(None, whoami._tool_resolver)
 
-        assert summary_conn.url == delete_conn.url == "http://data-ops.example.com"
-        assert summary_conn.api_key == delete_conn.api_key == "shared-key"
+        assert (
+            summary_conn.url == delete_conn.url == whoami_conn.url == "http://data-ops.example.com"
+        )
+        assert summary_conn.api_key == delete_conn.api_key == whoami_conn.api_key == "shared-key"
 
 
 # ---------------------------------------------------------------------------
@@ -261,6 +267,36 @@ class TestLateMountTimingInvariant:
         assert call_kwargs["server_url"] == "http://late-hook.example.com"
         assert call_kwargs["api_key"] == "late-key"
 
+    async def test_late_mount_whoami_resolves_destination_after_hook_registers(
+        self,
+    ) -> None:
+        """WhoamiTool: mount with no hook -> register hook -> execute sees destination."""
+        from amplifier_module_tool_server_data_ops import mount
+
+        coordinator = _make_coordinator(hook_resolver=None)
+        await mount(coordinator, config={})
+        tools = {call.kwargs["name"]: call.args[1] for call in coordinator.mount.call_args_list}
+        whoami = tools["whoami"]
+
+        assert whoami._hook_resolver is None
+
+        hook_resolver = _make_hook_resolver(url="http://late-hook.example.com", api_key="late-key")
+        coordinator.get_capability.return_value = hook_resolver
+
+        mock_client = MagicMock()
+        mock_client.whoami = AsyncMock(return_value={"contributor_id": "alice"})
+        mock_cls = MagicMock(return_value=mock_client)
+        with patch(
+            "amplifier_module_tool_server_data_ops.whoami_tool.AsyncCIClient",
+            mock_cls,
+        ):
+            result = await whoami.execute({})
+
+        assert result.success is True
+        call_kwargs = mock_cls.call_args.kwargs
+        assert call_kwargs["server_url"] == "http://late-hook.example.com"
+        assert call_kwargs["api_key"] == "late-key"
+
 
 # ---------------------------------------------------------------------------
 # TestMountWithMisconfiguredSource
@@ -284,7 +320,7 @@ class TestMountWithMisconfiguredSource:
         result = await mount(coordinator, config=config)
         assert result is None
 
-    async def test_mount_registers_both_tools_with_one_bad_source(self) -> None:
+    async def test_mount_registers_all_tools_with_one_bad_source(self) -> None:
         from amplifier_module_tool_server_data_ops import mount
 
         config = {
@@ -296,9 +332,9 @@ class TestMountWithMisconfiguredSource:
         coordinator = _make_coordinator()
         await mount(coordinator, config=config)
 
-        assert coordinator.mount.call_count == 2
+        assert coordinator.mount.call_count == 3
         registered_names = {call.kwargs["name"] for call in coordinator.mount.call_args_list}
-        assert registered_names == {"session_summary", "delete_session"}
+        assert registered_names == {"session_summary", "delete_session", "whoami"}
 
     async def test_mount_logs_warning_with_one_bad_source(self, caplog: Any) -> None:
         import logging
