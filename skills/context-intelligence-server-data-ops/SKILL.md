@@ -10,6 +10,10 @@ license: MIT
 Step-by-step procedure for deleting Context Intelligence session data from a server, so
 the three delete flows run the same way every time instead of being improvised fresh.
 
+**This is a direct, interactive conversation with the user** — every decision-critical
+step (preview, offer, impact, confirmation) is shown to them directly, in your own
+message, never summarized away by delegation.
+
 ## When to Use
 
 Load whenever the `server-data-ops` agent is about to run a delete flow: the current
@@ -79,25 +83,18 @@ Session <root_id>
   Working dir:    <working_dir>
   Server:         <source.name> (<source.url>)
   Still live:     <"yes — cannot delete yet" if not deletable, else "no">
-  Summary:        <narrative from graph-analyst, or "not available">
+  Summary:        <your synthesized overview of the session, or "not available">
 ```
 
 Fill every field from a real `session_summary` call. Never fabricate a value you
 didn't receive.
 
-**Summary line.** Not returned by the server — build it by delegating:
-
-```
-Delegate to: graph-analyst
-Task: Give me a high-level overview of the work in session <id> — what was done, its
-scope and intent — built from that session's own (root) prompts only. Do not dive into
-any of its subsessions.
-```
-
-Root-prompts-only keeps it fast and focused on top-level intent. Fold the returned
-narrative into the Summary line. Never write a raw prompt quote (or write one from
-memory) as the summary — always delegate first, and write "not available" only if
-that delegation itself produces nothing.
+**Summary line.** Not returned by the server — build it yourself. Call `graph_query`
+to read that session's **root**-session prompts only (never subsessions), then write a
+short synthesized overview, in your own words, of what the session was about — its
+scope and intent. This must be a synthesis, never a raw or verbatim prompt quote, and
+never a from-memory guess. If `graph_query` returns nothing usable for the root
+prompts, write "not available."
 
 ---
 
@@ -116,14 +113,16 @@ some *other* session.
    `working_dir`, and `last_change` (flag if under a minute old — "may still be live").
    Note every server the session exists on, from `list_sources`. If it 404s on every
    server, stop and tell the user plainly — never delete against an unresolved session.
-3. **Offer the folder exclusion**, before anything else proceeds. Show the setting
+3. **Offer the folder exclusion to the user directly, and wait for their answer**,
+   before anything else proceeds. Show the setting
    `overrides.hook-context-intelligence.config.destinations.<name>.exclude` in
    `~/.amplifier/settings.yaml` — a list of gitignore-style patterns matched against a
    session's `working_dir`; adding one for the current folder stops that destination
    being selected for future sessions there. The agent has no filesystem tool, so it
-   shows the setting and offers to guide the user through applying it — never edits
-   the file itself. Make this offer every time, regardless of whether you can confirm
-   the folder is currently included. Confirm whether they applied it, then move on.
+   shows the setting in its own message and offers to guide the user through applying
+   it — never edits the file itself. Make this offer every time, regardless of whether
+   you can confirm the folder is currently included. Wait for their answer, confirm
+   whether they applied it, then move on.
 4. **State the impact.** The whole graph — the session plus every descendant (forks,
    sub-sessions, delegated children) — plus its blobs and queue records, permanently,
    on the server(s) found in step 2. Shared nodes are kept; there is no undo.
@@ -141,10 +140,10 @@ some *other* session.
    on graph `working_dir` — it isn't reliably populated (see
    `context-intelligence-graph-query`); the working dir you show the user comes from
    `session_summary`. Cap the candidate set to a handful before per-candidate work.
-3. For each candidate, call `session_summary` for the facts, then delegate to
-   `graph-analyst` for the narrative (see "Summary line" above) — every candidate gets
-   either a real narrative or an explicit "not available" before it's presented; never
-   a summary written from memory or a prompt quote.
+3. For each candidate, call `session_summary` for the facts, then build the narrative
+   yourself (see "Summary line" above) — every candidate gets either a real synthesized
+   narrative or an explicit "not available" before it's presented; never a summary
+   written from memory or a prompt quote.
 4. Build a Session Details Block per candidate and present them; the user picks one.
 5. Run the Flow 3 ownership check on the chosen session.
 6. Re-run `session_summary` on the chosen id right before delete (a fresh preview, in
@@ -162,10 +161,12 @@ Runs inside Flow 1 or Flow 2, after the preview and before the delete confirmati
 2. Call `whoami` for the *same server* the session is on. Read its `contributor_id`.
 3. Compare:
    - **Match** → the user's own session. No warning; continue normally.
-   - **Differ** → state plainly it was created by `<created_by>`, not them, and get a
-     *separate*, explicit confirmation before deleting.
+   - **Differ** → tell the user directly, in your own visible message, that it was
+     created by `<created_by>`, not them, and wait for a *separate*, explicit
+     confirmation before deleting.
    - **`contributor_id` is null** (auth disabled or unresolvable) → say you can't
-     confirm ownership and ask the user directly. Don't treat null as a mismatch.
+     confirm ownership and ask the user directly, waiting for their answer. Don't treat
+     null as a mismatch.
 
 Never skip step 2 — warning from `created_by` alone, without resolving the acting user
 via `whoami` first, produces false "not created by you" warnings on the user's own
