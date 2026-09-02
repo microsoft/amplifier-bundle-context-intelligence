@@ -137,7 +137,9 @@ directory, not just the current session ("this folder," "this working directory,
    Note every server the session exists on, from `list_sources`. If it 404s on every
    server, stop and tell the user plainly — never delete against an unresolved session.
 3. **Offer the folder exclusion to the user directly, and wait for their answer**,
-   before anything else proceeds. Show the setting
+   before anything else proceeds. This is the destination **push filter** on the
+   session's `working_dir`, not the delete scope — deletion always removes the whole
+   session graph regardless of this setting. Show the setting
    `overrides.hook-context-intelligence.config.destinations.<name>.exclude` in
    `~/.amplifier/settings.yaml` — a list of gitignore-style patterns matched against a
    session's `working_dir`; adding one for the current folder stops that destination

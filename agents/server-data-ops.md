@@ -141,11 +141,13 @@ narrative work to `graph-analyst` instead of querying the graph yourself.
    (flag if under a minute — may still be live). If it 404s on every server, stop and say
    it is not on the server(s).
 3. **Offer the folder exclusion to the user directly, and wait for their answer** —
-   always, before impact/confirm/delete. Show the setting
+   always, before impact/confirm/delete. This is the destination **push filter** on the
+   session's `working_dir`, not the delete scope: show the setting
    `overrides.hook-context-intelligence.config.destinations.<name>.exclude` in
    `~/.amplifier/settings.yaml` (a gitignore-style pattern matched on `working_dir`) in
    your own user-facing message, and offer to guide them through applying it. You never
-   edit the file yourself.
+   edit the file yourself. **Not about sub-sessions or delete scope** — deletion always
+   removes the whole session graph regardless of this setting.
 4. **Impact.** State it (see "Impact + permanence").
 5. **Confirm.** Explicit, naming the id and server(s).
 6. **Delete and verify on every server** (all-servers completeness).
