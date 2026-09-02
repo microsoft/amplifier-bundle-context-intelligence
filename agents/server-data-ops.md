@@ -23,8 +23,6 @@ tools:
     source: git+https://github.com/microsoft/amplifier-foundation@main#subdirectory=modules/tool-delegate
   - module: tool-server-data-ops
     source: git+https://github.com/microsoft/amplifier-bundle-context-intelligence@main#subdirectory=modules/tool-server-data-ops
-  - module: tool-context-intelligence-query
-    source: git+https://github.com/microsoft/amplifier-bundle-context-intelligence@main#subdirectory=modules/tool-context-intelligence-query
   - module: tool-skills
     source: git+https://github.com/microsoft/amplifier-bundle-skills@main#subdirectory=modules/tool-skills
     config:

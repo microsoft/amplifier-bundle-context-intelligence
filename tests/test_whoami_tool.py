@@ -1,7 +1,7 @@
 """Tests for WhoamiTool.
 
 Constructor: WhoamiTool(coordinator, resolver=None). Patch path is
-amplifier_module_tool_context_intelligence_query.whoami_tool.
+context_intelligence.whoami_tool.
 """
 
 from __future__ import annotations
@@ -76,25 +76,25 @@ class TestWhoamiToolProtocol:
     """Tool protocol surface tests."""
 
     def test_name_is_whoami(self) -> None:
-        from amplifier_module_tool_context_intelligence_query.whoami_tool import WhoamiTool
+        from context_intelligence.whoami_tool import WhoamiTool
 
         tool = WhoamiTool(_make_coordinator())
         assert tool.name == "whoami"
 
     def test_description_mentions_contributor_id(self) -> None:
-        from amplifier_module_tool_context_intelligence_query.whoami_tool import WhoamiTool
+        from context_intelligence.whoami_tool import WhoamiTool
 
         tool = WhoamiTool(_make_coordinator())
         assert "contributor_id" in tool.description
 
     def test_input_schema_returns_object_type(self) -> None:
-        from amplifier_module_tool_context_intelligence_query.whoami_tool import WhoamiTool
+        from context_intelligence.whoami_tool import WhoamiTool
 
         tool = WhoamiTool(_make_coordinator())
         assert tool.input_schema["type"] == "object"
 
     def test_input_schema_has_optional_source_and_list_sources(self) -> None:
-        from amplifier_module_tool_context_intelligence_query.whoami_tool import WhoamiTool
+        from context_intelligence.whoami_tool import WhoamiTool
 
         tool = WhoamiTool(_make_coordinator())
         props = tool.input_schema["properties"]
@@ -108,7 +108,7 @@ class TestWhoamiToolProtocol:
     async def test_execute_returns_tool_result(self) -> None:
         from amplifier_core.models import ToolResult
 
-        from amplifier_module_tool_context_intelligence_query.whoami_tool import WhoamiTool
+        from context_intelligence.whoami_tool import WhoamiTool
 
         hook_resolver = _make_hook_resolver()
         coordinator = _make_coordinator(resolver=hook_resolver)
@@ -116,7 +116,7 @@ class TestWhoamiToolProtocol:
 
         _, mock_cls = _make_mock_async_ci_client()
         with patch(
-            "amplifier_module_tool_context_intelligence_query.whoami_tool.AsyncCIClient",
+            "context_intelligence.whoami_tool.AsyncCIClient",
             mock_cls,
         ):
             result = await tool.execute({})
@@ -131,7 +131,7 @@ class TestWhoamiToolProtocol:
 
 class TestListSources:
     async def test_list_sources_does_not_call_client(self) -> None:
-        from amplifier_module_tool_context_intelligence_query.whoami_tool import WhoamiTool
+        from context_intelligence.whoami_tool import WhoamiTool
 
         resolver = _make_tool_resolver(
             {"sources": {"only": {"url": "http://only.example.com", "api_key": "k"}}}
@@ -141,7 +141,7 @@ class TestListSources:
 
         mock_cls = MagicMock()
         with patch(
-            "amplifier_module_tool_context_intelligence_query.whoami_tool.AsyncCIClient",
+            "context_intelligence.whoami_tool.AsyncCIClient",
             mock_cls,
         ):
             result = await tool.execute({"list_sources": True})
@@ -162,7 +162,7 @@ class TestWhoamiConstruction:
     """AsyncCIClient construction and delegation tests (mirrors SessionSummaryTool)."""
 
     async def test_client_constructed_with_server_url_and_api_key(self) -> None:
-        from amplifier_module_tool_context_intelligence_query.whoami_tool import WhoamiTool
+        from context_intelligence.whoami_tool import WhoamiTool
 
         hook_resolver = _make_hook_resolver(server_url="http://ci-server:9000", api_key="my-key")
         coordinator = _make_coordinator(resolver=hook_resolver)
@@ -170,7 +170,7 @@ class TestWhoamiConstruction:
 
         _, mock_cls = _make_mock_async_ci_client()
         with patch(
-            "amplifier_module_tool_context_intelligence_query.whoami_tool.AsyncCIClient",
+            "context_intelligence.whoami_tool.AsyncCIClient",
             mock_cls,
         ):
             await tool.execute({})
@@ -181,7 +181,7 @@ class TestWhoamiConstruction:
         assert call_kwargs.get("api_key") == "my-key"
 
     async def test_whoami_called_with_no_arguments(self) -> None:
-        from amplifier_module_tool_context_intelligence_query.whoami_tool import WhoamiTool
+        from context_intelligence.whoami_tool import WhoamiTool
 
         hook_resolver = _make_hook_resolver()
         coordinator = _make_coordinator(resolver=hook_resolver)
@@ -189,7 +189,7 @@ class TestWhoamiConstruction:
 
         mock_instance, mock_cls = _make_mock_async_ci_client()
         with patch(
-            "amplifier_module_tool_context_intelligence_query.whoami_tool.AsyncCIClient",
+            "context_intelligence.whoami_tool.AsyncCIClient",
             mock_cls,
         ):
             await tool.execute({})
@@ -197,7 +197,7 @@ class TestWhoamiConstruction:
         mock_instance.whoami.assert_called_once_with()
 
     async def test_result_forwarded_and_source_stamped(self) -> None:
-        from amplifier_module_tool_context_intelligence_query.whoami_tool import WhoamiTool
+        from context_intelligence.whoami_tool import WhoamiTool
 
         hook_resolver = _make_hook_resolver(server_url="http://ci-server:9000")
         coordinator = _make_coordinator(resolver=hook_resolver)
@@ -205,7 +205,7 @@ class TestWhoamiConstruction:
 
         _, mock_cls = _make_mock_async_ci_client(return_value={"contributor_id": "alice"})
         with patch(
-            "amplifier_module_tool_context_intelligence_query.whoami_tool.AsyncCIClient",
+            "context_intelligence.whoami_tool.AsyncCIClient",
             mock_cls,
         ):
             result = await tool.execute({})
@@ -218,7 +218,7 @@ class TestWhoamiConstruction:
 
     async def test_null_contributor_id_when_auth_disabled(self) -> None:
         """Server returns contributor_id: null when auth is disabled -- passed through as-is."""
-        from amplifier_module_tool_context_intelligence_query.whoami_tool import WhoamiTool
+        from context_intelligence.whoami_tool import WhoamiTool
 
         hook_resolver = _make_hook_resolver(server_url="http://ci-server:9000")
         coordinator = _make_coordinator(resolver=hook_resolver)
@@ -226,7 +226,7 @@ class TestWhoamiConstruction:
 
         _, mock_cls = _make_mock_async_ci_client(return_value={"contributor_id": None})
         with patch(
-            "amplifier_module_tool_context_intelligence_query.whoami_tool.AsyncCIClient",
+            "context_intelligence.whoami_tool.AsyncCIClient",
             mock_cls,
         ):
             result = await tool.execute({})
@@ -243,7 +243,7 @@ class TestWhoamiConstruction:
 
 class TestWhoamiConfigFallback:
     async def test_capability_not_found_returns_configuration_error(self) -> None:
-        from amplifier_module_tool_context_intelligence_query.whoami_tool import WhoamiTool
+        from context_intelligence.whoami_tool import WhoamiTool
 
         coordinator = _make_coordinator(resolver=None)
         tool = WhoamiTool(coordinator)
@@ -273,7 +273,7 @@ class TestWhoamiSourceSelection:
         }
 
     async def test_source_matching_name_selects_that_source(self) -> None:
-        from amplifier_module_tool_context_intelligence_query.whoami_tool import WhoamiTool
+        from context_intelligence.whoami_tool import WhoamiTool
 
         resolver = _make_tool_resolver(self._two_source_config())
         coordinator = _make_coordinator(resolver=_make_hook_resolver_with_dests({}))
@@ -281,7 +281,7 @@ class TestWhoamiSourceSelection:
 
         _, mock_cls = _make_mock_async_ci_client()
         with patch(
-            "amplifier_module_tool_context_intelligence_query.whoami_tool.AsyncCIClient",
+            "context_intelligence.whoami_tool.AsyncCIClient",
             mock_cls,
         ):
             result = await tool.execute({"source": "beta"})
@@ -292,7 +292,7 @@ class TestWhoamiSourceSelection:
         assert call_kwargs["api_key"] == "beta-key"
 
     async def test_source_not_matching_returns_unknown_source_error(self) -> None:
-        from amplifier_module_tool_context_intelligence_query.whoami_tool import WhoamiTool
+        from context_intelligence.whoami_tool import WhoamiTool
 
         resolver = _make_tool_resolver(self._two_source_config())
         coordinator = _make_coordinator(resolver=_make_hook_resolver_with_dests({}))
@@ -306,7 +306,7 @@ class TestWhoamiSourceSelection:
         assert result.error["valid_sources"] == ["alpha", "beta"]
 
     async def test_source_omitted_with_two_configured_returns_ambiguous_error(self) -> None:
-        from amplifier_module_tool_context_intelligence_query.whoami_tool import WhoamiTool
+        from context_intelligence.whoami_tool import WhoamiTool
 
         resolver = _make_tool_resolver(self._two_source_config())
         coordinator = _make_coordinator(resolver=_make_hook_resolver_with_dests({}))
@@ -321,7 +321,7 @@ class TestWhoamiSourceSelection:
 
     async def test_source_omitted_with_one_configured_still_succeeds(self) -> None:
         """Safe to omit source with exactly one configured (backward compatible)."""
-        from amplifier_module_tool_context_intelligence_query.whoami_tool import WhoamiTool
+        from context_intelligence.whoami_tool import WhoamiTool
 
         config = {
             "sources": {
@@ -334,7 +334,7 @@ class TestWhoamiSourceSelection:
 
         _, mock_cls = _make_mock_async_ci_client()
         with patch(
-            "amplifier_module_tool_context_intelligence_query.whoami_tool.AsyncCIClient",
+            "context_intelligence.whoami_tool.AsyncCIClient",
             mock_cls,
         ):
             result = await tool.execute({})
@@ -344,7 +344,7 @@ class TestWhoamiSourceSelection:
         assert call_kwargs["server_url"] == "http://only.example.com"
 
     async def test_selected_source_misconfigured_returns_source_misconfigured_error(self) -> None:
-        from amplifier_module_tool_context_intelligence_query.whoami_tool import WhoamiTool
+        from context_intelligence.whoami_tool import WhoamiTool
 
         config = {
             "sources": {
@@ -372,8 +372,7 @@ class TestWhoamiSourceSelection:
 class TestWhoamiServerErrors:
     async def test_http_error_surfaces_as_clear_tool_error(self) -> None:
         from context_intelligence.client import CIClientError
-
-        from amplifier_module_tool_context_intelligence_query.whoami_tool import WhoamiTool
+        from context_intelligence.whoami_tool import WhoamiTool
 
         hook_resolver = _make_hook_resolver(server_url="http://ci-server:9000")
         coordinator = _make_coordinator(resolver=hook_resolver)
@@ -390,7 +389,7 @@ class TestWhoamiServerErrors:
         )
         mock_cls = MagicMock(return_value=mock_instance)
         with patch(
-            "amplifier_module_tool_context_intelligence_query.whoami_tool.AsyncCIClient",
+            "context_intelligence.whoami_tool.AsyncCIClient",
             mock_cls,
         ):
             result = await tool.execute({})
@@ -403,8 +402,7 @@ class TestWhoamiServerErrors:
 
     async def test_connection_error_surfaces_as_clear_tool_error(self) -> None:
         from context_intelligence.client import CIClientError
-
-        from amplifier_module_tool_context_intelligence_query.whoami_tool import WhoamiTool
+        from context_intelligence.whoami_tool import WhoamiTool
 
         hook_resolver = _make_hook_resolver(server_url="http://ci-server:9000")
         coordinator = _make_coordinator(resolver=hook_resolver)
@@ -420,7 +418,7 @@ class TestWhoamiServerErrors:
         )
         mock_cls = MagicMock(return_value=mock_instance)
         with patch(
-            "amplifier_module_tool_context_intelligence_query.whoami_tool.AsyncCIClient",
+            "context_intelligence.whoami_tool.AsyncCIClient",
             mock_cls,
         ):
             result = await tool.execute({})

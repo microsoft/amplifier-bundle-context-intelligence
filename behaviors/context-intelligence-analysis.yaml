@@ -16,6 +16,36 @@ agents:
     - context-intelligence:server-data-ops
 
 tools:
+  - module: tool-delegate
+    source: git+https://github.com/microsoft/amplifier-foundation@main#subdirectory=modules/tool-delegate
+    config:
+      settings:
+        # server-data-ops (the delete agent) must never receive file-write
+        # tools by inheritance -- it only ever guides the user to edit
+        # settings.yaml themselves. tool-filesystem (read_file/write_file/
+        # edit_file -- one module, no finer-grained exclusion is possible)
+        # and tool-apply-patch are foundation base tools that would
+        # otherwise be inherited by every spawned agent by default. Any
+        # agent that genuinely needs them (graph-analyst, session-navigator,
+        # context-intelligence-tool-designer) declares tool-filesystem
+        # explicitly in its OWN frontmatter tools: list, which always wins
+        # over this exclusion (see amplifier-app-cli's session_spawner.py
+        # _filter_tools: explicit agent declarations are never excluded).
+        # "tool-delegate" is kept in the list to preserve foundation's own
+        # default (self-exclusion) since setting this key replaces it
+        # wholesale rather than appending to it.
+        #
+        # Scope note: this merges (by module ID) with whatever tool-delegate
+        # config the composing session already has (e.g. foundation's own).
+        # It is declared HERE -- in context-intelligence-analysis (pulled in
+        # by context-intelligence-design and the full context-intelligence
+        # bundle) -- and deliberately NOT in context-intelligence-navigation,
+        # which foundation's own bundle.md composes by default for every
+        # session. Putting it there would silently change foundation's
+        # default tool-inheritance policy ecosystem-wide. This bundle can
+        # only safely enforce the policy for sessions that explicitly opt
+        # into the richer analysis/design/full context-intelligence layers.
+        exclude_tools: [tool-delegate, tool-filesystem, tool-apply-patch]
   - module: tool-skills
     source: git+https://github.com/microsoft/amplifier-bundle-skills@main#subdirectory=modules/tool-skills
     config:

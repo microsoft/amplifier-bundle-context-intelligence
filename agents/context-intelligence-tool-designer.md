@@ -28,6 +28,14 @@ model_role: [reasoning, general]
 tools:
   - module: tool-delegate
     source: git+https://github.com/microsoft/amplifier-foundation@main#subdirectory=modules/tool-delegate
+  # Explicit declaration required: context-intelligence-analysis (this agent's
+  # own behavior) now excludes tool-filesystem from inheritance by default so
+  # server-data-ops (the delete agent) can never receive file-write tools.
+  # This agent genuinely needs read_file/write_file (Step 2.1's confirmation
+  # gate below), so it re-declares the module itself -- explicit agent
+  # declarations always win over the exclusion.
+  - module: tool-filesystem
+    source: git+https://github.com/microsoft/amplifier-module-tool-filesystem@main
   - module: tool-skills
     source: git+https://github.com/microsoft/amplifier-bundle-skills@main#subdirectory=modules/tool-skills
     config:
