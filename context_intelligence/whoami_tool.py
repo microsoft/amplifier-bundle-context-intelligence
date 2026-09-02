@@ -1,40 +1,20 @@
 """WhoamiTool -- agent-facing tool that resolves the acting user's identity.
 
-Lives in the shared ``context_intelligence`` library (not in either tool
-module's own package) because it is mounted from TWO independent modules:
-``tool-context-intelligence-query`` (graph-analyst and any other agent that
-only needs read/query + identity) and ``tool-server-data-ops`` (the delete
-agent, which needs identity for ownership checks but must NOT have
-graph_query). Neither module owns this class -- both import it from here so
-there is exactly one implementation, never two copies drifting apart. An
-agent that mounts both modules would collide on the tool name "whoami" (the
-coordinator would attempt to mount it twice); no current agent does this.
+Lives in the shared ``context_intelligence`` library, not in either tool
+module's own package, because it is mounted from two independent modules
+(``tool-context-intelligence-query`` and ``tool-server-data-ops``) -- both
+import it from here so there is exactly one implementation. Each mounting
+module builds its own ``ToolConfigResolver`` and injects it at construction
+time; this class never constructs its own resolver.
 
-Implements the Amplifier Tool protocol. Configuration and provenance are
-resolved via ``resolve_query_connection`` (same as GraphQueryTool and
-BlobReadTool -- parity guaranteed by the shared helper), a SINGLE-HIT
-selection over the connectable pool (tool ``sources`` union hook
-``destinations``). See ``resolve_query_connection``'s docstring in
-context_intelligence/tool_resolver.py for the authoritative selection rule
-(in brief: explicit ``source=<name>`` reaches any pool entry; with no name,
-1 source -> it, 2+ sources -> fail loud, 0 sources -> the FIRST destination
-in config order for any N, else env).
+Implements the Amplifier Tool protocol. Endpoint selection goes through
+``resolve_query_connection`` (see context_intelligence/tool_resolver.py for
+the authoritative selection rule); every result carries the resolved
+``source``.
 
-Every result (success or failure) carries a ``source`` field naming the
-endpoint that answered / was attempted. Callers can also pass
-``list_sources: true`` to discover the connectable set without calling the
-server.
-
-Each mounting module builds its OWN ``ToolConfigResolver`` (its own config
-namespace: overrides.tool-context-intelligence-query.config.sources vs
-overrides.tool-server-data-ops.config.sources) and injects it at
-construction time -- this class never constructs its own resolver.
-
-This tool never talks to the server directly -- the only path to the server
-is through ``AsyncCIClient`` (the shared library). This is a READ (no
-changes made): it resolves who the server thinks is making the request,
-so an agent (e.g. the delete workflow) can compare it against a session's
-``created_by`` for ownership warnings.
+Read-only: resolves who the server thinks is making the request, so a
+caller can compare it against a session's ``created_by`` for ownership
+warnings.
 """
 
 from __future__ import annotations

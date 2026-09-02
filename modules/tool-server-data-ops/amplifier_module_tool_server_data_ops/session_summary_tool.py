@@ -1,34 +1,12 @@
 """SessionSummaryTool -- agent-facing tool for previewing a session before delete.
 
-Implements the Amplifier Tool protocol. Configuration and provenance are
-resolved via ``resolve_query_connection`` -- a SINGLE-HIT selection over the
-connectable pool (tool ``sources`` union hook ``destinations``), the exact same
-helper the read tools (graph_query, blob_read) use:
+Implements the Amplifier Tool protocol. Endpoint selection goes through
+``resolve_query_connection`` (see context_intelligence/tool_resolver.py for
+the authoritative selection rule -- the same helper the read tools use);
+every result carries the resolved ``source``.
 
-  1. Explicit ``source=<name>`` -- resolves against the WHOLE pool (can name a
-     tool source OR a hook upload destination).
-  2. No name -- default semantics: 1 source -> use it; 2+ sources -> fail loud
-     (the ONLY default-path fail-loud); 0 sources + N destinations -> use the
-     FIRST destination in config order; 0 of either -> env (tier 3). See
-     ``resolve_query_connection``'s docstring in
-     context_intelligence/tool_resolver.py for the authoritative rule.
-
-Every result (success or failure) carries a ``source`` field naming the
-endpoint that answered / was attempted, so which endpoint served a
-default-path pick is always visible to the user. Callers can also pass
-``list_sources: true`` to discover the connectable set without calling the
-server.
-
-The hook resolver is fetched lazily at first ``execute()`` call so that late
-mount order is handled correctly (tools mount before hooks).
-
-The ``ToolConfigResolver`` is injected at construction time by ``mount()``
-(one shared instance for both server-data-ops tools -- single config namespace).
-
-This tool never talks to the server directly -- the only path to the server
-is through ``AsyncCIClient`` (the shared library). This is a READ (preview,
-no changes made): it fetches the facts about a session so the agent can show
-the user what would be removed before it asks about the actual delete.
+Read-only: fetches session facts so the caller can preview what would be
+removed before deleting.
 """
 
 from __future__ import annotations
