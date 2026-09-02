@@ -1,0 +1,127 @@
+"""Unit tests for hook-server-data-ops-lockdown.
+
+Verifies:
+  - Module contract: __amplifier_module_type__ == "hook", mount() is a
+    coroutine, mount() registers a `tool:pre` handler and returns a cleanup
+    callable.
+  - The handler denies exactly the four lockdown tools (write_file,
+    edit_file, apply_patch, graph_query) with a HookResult(action="deny",
+    reason=...).
+  - The handler allows every other tool call server-data-ops actually
+    makes (session_summary, delete_session, whoami, delegate) plus a
+    read-only sentinel (read_file), returning HookResult(action="continue").
+"""
+
+from __future__ import annotations
+
+import inspect
+from typing import Any
+from unittest.mock import MagicMock
+
+import pytest
+from amplifier_core.models import HookResult
+
+from amplifier_module_hook_server_data_ops_lockdown import (
+    DENIED_TOOLS,
+    DENY_REASON,
+    _deny_lockdown_tools,
+    mount,
+)
+
+
+def _make_coordinator() -> MagicMock:
+    coordinator = MagicMock()
+    coordinator.hooks = MagicMock()
+    coordinator.hooks.register = MagicMock(return_value=MagicMock(name="unregister"))
+    return coordinator
+
+
+class TestModuleContract:
+    def test_module_type_is_hook(self) -> None:
+        from amplifier_module_hook_server_data_ops_lockdown import (
+            __amplifier_module_type__,
+        )
+
+        assert __amplifier_module_type__ == "hook"
+
+    def test_mount_is_coroutine(self) -> None:
+        assert inspect.iscoroutinefunction(mount)
+
+    def test_denied_tools_are_exactly_the_four_named(self) -> None:
+        assert DENIED_TOOLS == frozenset({"write_file", "edit_file", "apply_patch", "graph_query"})
+
+    @pytest.mark.asyncio
+    async def test_mount_registers_tool_pre_handler(self) -> None:
+        coordinator = _make_coordinator()
+
+        await mount(coordinator, {})
+
+        coordinator.hooks.register.assert_called_once()
+        args, kwargs = coordinator.hooks.register.call_args
+        assert args[0] == "tool:pre"
+        assert args[1] is _deny_lockdown_tools
+        assert kwargs.get("priority") == 10
+
+    @pytest.mark.asyncio
+    async def test_mount_returns_cleanup_that_unregisters(self) -> None:
+        coordinator = _make_coordinator()
+        unregister_fn = MagicMock(name="unregister")
+        coordinator.hooks.register.return_value = unregister_fn
+
+        cleanup = await mount(coordinator, {})
+        assert callable(cleanup)
+
+        cleanup()
+        unregister_fn.assert_called_once()
+
+
+class TestDenyLockdownTools:
+    """Direct handler tests -- mirrors HOOK_CONTRACT.md's own test pattern:
+    `await handler("tool:pre", {"tool_name": ..., "tool_input": ...})`.
+    """
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("tool_name", ["write_file", "edit_file", "apply_patch", "graph_query"])
+    async def test_denies_each_lockdown_tool(self, tool_name: str) -> None:
+        result = await _deny_lockdown_tools("tool:pre", {"tool_name": tool_name, "tool_input": {}})
+
+        assert isinstance(result, HookResult)
+        assert result.action == "deny"
+        assert result.reason == DENY_REASON
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "tool_name",
+        [
+            "session_summary",
+            "delete_session",
+            "whoami",
+            "delegate",
+            "read_file",
+            "load_skill",
+            "todo",
+        ],
+    )
+    async def test_allows_every_other_tool(self, tool_name: str) -> None:
+        result = await _deny_lockdown_tools("tool:pre", {"tool_name": tool_name, "tool_input": {}})
+
+        assert isinstance(result, HookResult)
+        assert result.action == "continue"
+        assert result.reason is None
+
+    @pytest.mark.asyncio
+    async def test_missing_tool_name_is_allowed(self) -> None:
+        """Defensive: a data dict with no tool_name key must never be denied
+        (missing information is not evidence of a lockdown-tool call)."""
+        result = await _deny_lockdown_tools("tool:pre", {})
+
+        assert result.action == "continue"
+
+    @pytest.mark.asyncio
+    async def test_deny_reason_is_plain_and_explains_delegation(self) -> None:
+        result: Any = await _deny_lockdown_tools(
+            "tool:pre", {"tool_name": "graph_query", "tool_input": {}}
+        )
+
+        assert "delete agent" in result.reason
+        assert "graph-analyst" in result.reason

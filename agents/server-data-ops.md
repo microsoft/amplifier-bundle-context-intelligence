@@ -30,6 +30,16 @@ tools:
         - "git+https://github.com/microsoft/amplifier-bundle-context-intelligence@main#subdirectory=skills"
   - module: tool-todo
     source: git+https://github.com/microsoft/amplifier-module-tool-todo@main
+
+# Agent-scoped lockdown: this agent must never call write_file, edit_file,
+# apply_patch, or graph_query, regardless of how it comes to have them
+# available (inheritance, a future tools: change, etc.). Declared here --
+# on the CONSUMING agent -- rather than as a behavior-level exclude_tools
+# policy, so the restriction never collides with sibling agents (e.g.
+# graph-analyst, session-navigator) that legitimately need these tools.
+hooks:
+  - module: hook-server-data-ops-lockdown
+    source: git+https://github.com/microsoft/amplifier-bundle-context-intelligence@main#subdirectory=modules/hook-server-data-ops-lockdown
 ---
 
 # Server Data Ops
