@@ -1,31 +1,33 @@
 """Unit tests for hook-server-data-ops-lockdown.
 
-Verifies:
+Verifies the module's actual runtime behaviour:
   - Module contract: __amplifier_module_type__ == "hook", mount() is a
     coroutine, mount() registers a `tool:pre` handler and returns a cleanup
     callable.
   - The handler denies exactly the four lockdown tools (write_file,
     edit_file, apply_patch, graph_query) with a HookResult(action="deny",
     reason=...).
-  - The handler allows every other tool call server-data-ops actually
-    makes (session_summary, delete_session, whoami, delegate) plus a
-    read-only sentinel (read_file), returning HookResult(action="continue").
-  - Session-scope composition: agents/server-data-ops.md declares the
-    companion settings.exclude_hooks fix (see TestSessionScopeComposition
-    below and this module's own docstring for why the handler itself
-    cannot do this -- the tool:pre payload carries no session/agent
-    identity to check against).
+  - The handler allows every other tool call (session_summary,
+    delete_session, whoami, delegate, read_file, load_skill, todo), returning
+    HookResult(action="continue").
+
+Deliberately NOT tested here: that the agent .md frontmatter contains a given
+string (declares the hook, excludes it from delegated sessions, or pins the
+delegation allowlist). Those are config assertions that only prove "the YAML
+says what we typed" -- they give false confidence and fail only if someone
+edits the same line the test reads. The real guarantees they gestured at --
+the hook does not leak into graph-analyst's session, and server-data-ops
+cannot hand a file-write to another agent -- are behavioural properties,
+proven in the DTU security-validation profile, not by grepping a file.
 """
 
 from __future__ import annotations
 
 import inspect
-from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
-import yaml
 from amplifier_core.models import HookResult
 
 from amplifier_module_hook_server_data_ops_lockdown import (
@@ -34,10 +36,6 @@ from amplifier_module_hook_server_data_ops_lockdown import (
     _deny_lockdown_tools,
     mount,
 )
-
-# modules/hook-server-data-ops-lockdown/tests/test_module.py -> repo root
-REPO_ROOT = Path(__file__).resolve().parents[3]
-SERVER_DATA_OPS_AGENT = REPO_ROOT / "agents" / "server-data-ops.md"
 
 
 def _make_coordinator() -> MagicMock:
@@ -136,128 +134,3 @@ class TestDenyLockdownTools:
 
         assert "delete agent" in result.reason
         assert "graph-analyst" in result.reason
-
-
-class TestSessionScopeComposition:
-    """Proves the session-scoping fix for the subtree leak this module's own
-    docstring documents (a DTU eval caught it: graph-analyst's legitimate
-    graph_query calls were denied whenever server-data-ops delegated search
-    to it, because this hook -- mounted on server-data-ops's own session --
-    was ALSO inherited by every session server-data-ops spawned).
-
-    The handler under test (`_deny_lockdown_tools`) has zero session/agent
-    awareness -- it only ever inspects `tool_name` -- and the `tool:pre`
-    event's documented payload (core:docs/contracts/ORCHESTRATOR_CONTRACT.md,
-    HOOK_CONTRACT.md) carries no session or agent identity to check
-    against, so the handler structurally cannot distinguish
-    "server-data-ops's own call" from "a descendant session's call". These
-    tests cannot exercise a real delegate spawn (that requires the
-    app-layer session_spawner.py, only exercised in a DTU); instead they
-    verify the actual fix -- agents/server-data-ops.md's own tool-delegate
-    config excluding this hook module from inheritance -- is in place.
-    """
-
-    @staticmethod
-    def _server_data_ops_tools() -> dict[str, dict[str, Any]]:
-        text = SERVER_DATA_OPS_AGENT.read_text(encoding="utf-8")
-        _, frontmatter, _ = text.split("---", 2)
-        config = yaml.safe_load(frontmatter)
-        return {t["module"]: t for t in config.get("tools", [])}
-
-    @staticmethod
-    def _server_data_ops_hooks() -> dict[str, dict[str, Any]]:
-        text = SERVER_DATA_OPS_AGENT.read_text(encoding="utf-8")
-        _, frontmatter, _ = text.split("---", 2)
-        config = yaml.safe_load(frontmatter)
-        return {h["module"]: h for h in config.get("hooks", [])}
-
-    def test_agent_declares_this_hook(self) -> None:
-        """Sanity check: server-data-ops still mounts this hook module for
-        its own session (the hook is meaningless if this ever drops)."""
-        hooks = self._server_data_ops_hooks()
-
-        assert "hook-server-data-ops-lockdown" in hooks
-
-    def test_agent_excludes_this_hook_from_delegated_sessions(self) -> None:
-        """The actual fix: tool-delegate's settings.exclude_hooks must name
-        this hook's own module id, so a spawned child (graph-analyst,
-        session-navigator, ...) never inherits it."""
-        tools = self._server_data_ops_tools()
-
-        assert "tool-delegate" in tools, "server-data-ops must declare tool-delegate in tools:"
-        settings = tools["tool-delegate"].get("config", {}).get("settings", {})
-        excluded_hooks = settings.get("exclude_hooks", [])
-
-        assert "hook-server-data-ops-lockdown" in excluded_hooks, (
-            "settings.exclude_hooks must list this hook's own module id, or the "
-            "subtree leak documented in this module's docstring reopens"
-        )
-
-    def test_agent_does_not_mount_graph_query_tool(self) -> None:
-        """Corroborates this module's docstring claim (verified against
-        history at commit a897c2d): server-data-ops's own tools: list never
-        declares tool-context-intelligence-query, so it never has graph_query
-        available to call directly -- all searching goes through graph-analyst
-        via delegation instead."""
-        tools = self._server_data_ops_tools()
-
-        assert "tool-context-intelligence-query" not in tools
-
-
-class TestDelegationAllowlist:
-    """Proves the companion fix for the delegation-bypass hole this module's
-    docstring and TestSessionScopeComposition document: the lockdown hook is
-    (correctly) scoped OFF of sessions server-data-ops delegates to, so
-    without a delegation allowlist server-data-ops could hand a file-write
-    to ANY other agent (e.g. foundation:file-ops) and have it succeed
-    unchecked -- a DTU eval proved exactly this for the settings.yaml edit.
-
-    The fix is a top-level `agents:` allowlist in server-data-ops.md's own
-    frontmatter (a sibling of `tools:`/`hooks:`, recognized by
-    amplifier_foundation.bundle._dataclass._load_agent_file_metadata and
-    forwarded to amplifier-app-cli's agent_config.merge_configs /
-    session_spawner.py, which filter the parent's agent roster with an
-    exact-string `k in agent_filter` membership check). This test locks the
-    allowlist to EXACTLY the one agent server-data-ops's own flows delegate
-    to (graph-analyst) -- a future edit that widens it (e.g. back to
-    unrestricted, or to add a second agent) must fail this test.
-
-    Value-shape note: the roster keys these allowlist entries are checked
-    against are NAMESPACED (this repo's own behaviors/
-    context-intelligence-analysis.yaml and
-    context-intelligence-navigation.yaml both register agents as
-    "context-intelligence:graph-analyst", "context-intelligence:server-data-ops"),
-    not bare names -- so the allowlist entry must be the namespaced form or
-    it silently matches nothing and disables delegation entirely.
-    """
-
-    @staticmethod
-    def _server_data_ops_agents_allowlist() -> Any:
-        text = SERVER_DATA_OPS_AGENT.read_text(encoding="utf-8")
-        _, frontmatter, _ = text.split("---", 2)
-        config = yaml.safe_load(frontmatter)
-        return config.get("agents")
-
-    def test_agent_declares_a_delegation_allowlist(self) -> None:
-        """Sanity check: the top-level `agents:` key must exist at all --
-        its absence means unrestricted delegation (the original hole)."""
-        allowlist = self._server_data_ops_agents_allowlist()
-
-        assert allowlist is not None, (
-            "server-data-ops.md must declare a top-level `agents:` allowlist, or "
-            "it can delegate a file-write to any agent, bypassing the lockdown hook"
-        )
-
-    def test_delegation_allowlist_is_exactly_graph_analyst(self) -> None:
-        """The actual fix: the allowlist must contain exactly the one agent
-        server-data-ops legitimately delegates to, namespaced as it appears
-        in this bundle's own composed roster. Widening this list (to "all",
-        or to include any other agent) must fail this test."""
-        allowlist = self._server_data_ops_agents_allowlist()
-
-        assert allowlist == ["context-intelligence:graph-analyst"], (
-            "server-data-ops.md's `agents:` allowlist must be exactly "
-            "['context-intelligence:graph-analyst'] -- widening it reopens the "
-            "delegation-bypass hole (delegating a write to e.g. foundation:file-ops "
-            "around the lockdown hook, which does not apply to delegated sessions)"
-        )
