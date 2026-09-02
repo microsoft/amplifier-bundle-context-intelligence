@@ -124,6 +124,15 @@ fails to produce anything.
 
 ## Flow 1 — delete the current session
 
+**Trigger for this flow — the user's phrasing, not whether a session id is present.**
+Flow 1 applies whenever the request refers to the user's own current session — phrases
+like "my current session," "my session's data," "this session," "this working directory,"
+"the session I'm in." This is true **even if the user also supplies a session id in the
+same request** — a supplied id does not downgrade a "my current session" request out of
+Flow 1, and the folder-exclusion offer below still applies. Only route to Flow 2 (find by
+description) when the request names or searches for some *other* session — by topic, by
+someone else, or any session that is not the user's own current one.
+
 Steps, matching the approved scenario exactly:
 
 1. Resolve the current session's own id from context (see "Resolving 'this session' and
@@ -191,24 +200,33 @@ resolution before this flow ships.
    working directory you show the user comes from `session_summary`, not from Cypher.
    Cap the candidate set to a small number (a handful) before doing per-candidate work.
 3. For each shortlisted candidate: call `session_summary(session_id=<candidate>)` for the
-   accurate facts, and delegate to `graph-analyst` for a narrative (see "Building the
-   narrative" above). Build a session details block for each.
-4. Present the candidates (their details blocks) to the user and let them pick one.
-5. All-servers completeness check (same rule as Flow 1): call `session_summary` or
+   accurate facts.
+4. **Non-skippable gate — before presenting any details block:** for each shortlisted
+   candidate, delegate to `graph-analyst` for the root-prompt narrative overview (see
+   "Building the narrative" above). You MUST NOT present a session details block for a
+   candidate until you have either the `graph-analyst` narrative or an explicit "narrative
+   not available" from a failed delegation for that candidate. Writing your own summary
+   from memory, or quoting the prompt, is forbidden — this step fired once and was
+   silently skipped once on identical requests in eval, so treat it as required every
+   time, never optional.
+5. Build a session details block for each candidate, using the facts from step 3 and the
+   narrative (or "not available") from step 4.
+6. Present the candidates (their details blocks) to the user and let them pick one.
+7. All-servers completeness check (same rule as Flow 1): call `session_summary` or
    `delete_session` with `list_sources: true` for the chosen id and check it against
    **every** server in the connectable set. If it exists on more than one, name all of
    them to the user and ask which to delete from (or "all") before continuing.
-6. For **each** server chosen: re-run `session_summary` on the chosen id right before
+8. For **each** server chosen: re-run `session_summary` on the chosen id right before
    delete — a fresh preview, not the one from the candidate list, in case anything changed
    in between.
-7. Get an explicit, strong confirmation: restate exactly what will be permanently removed
+9. Get an explicit, strong confirmation: restate exactly what will be permanently removed
    (session id, counts) and from which server, and require a clear go-ahead — a plain "yes"
    with no restatement is not enough.
-8. Call `delete_session` on the chosen id and server, and verify that server's own result
-   before moving to the next chosen server.
-9. Report exactly what was removed and from which server(s) — and if the session still
-   exists on any server that was not chosen, say so explicitly by name. Never say "done"
-   or imply full removal while an unchecked or unchosen server still holds the session.
+10. Call `delete_session` on the chosen id and server, and verify that server's own result
+    before moving to the next chosen server.
+11. Report exactly what was removed and from which server(s) — and if the session still
+    exists on any server that was not chosen, say so explicitly by name. Never say "done"
+    or imply full removal while an unchecked or unchosen server still holds the session.
 
 ## Flow 3 — deciding whether an ownership warning applies
 
