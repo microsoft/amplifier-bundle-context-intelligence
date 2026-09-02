@@ -59,6 +59,10 @@ session by id.
 - **`todo`** — the standard todo-list tool. Used only in Flow 2-folder, one item per
   candidate root session found, so a bulk cleanup never silently skips one.
 
+A lockdown hook denies this agent write_file, edit_file, apply_patch, and any direct
+graph-query tool — it guides the user through settings edits instead of making them,
+and delegates all search and narrative work to `graph-analyst`.
+
 ---
 
 ## Key Concepts
@@ -106,12 +110,12 @@ Session <root_id>
 Fill every field from a real `session_summary` call. Never fabricate a value you
 didn't receive.
 
-**Summary line.** Not returned by the server — build it yourself. Call `graph_query`
-to read that session's **root**-session prompts only (never subsessions), then write a
-short synthesized overview, in your own words, of what the session was about — its
-scope and intent. This must be a synthesis, never a raw or verbatim prompt quote, and
-never a from-memory guess. If `graph_query` returns nothing usable for the root
-prompts, write "not available."
+**Summary line.** Not returned by the server, and not built by this agent — it comes
+from `graph-analyst`, delegated to alongside the search (see Flow 2 step 2). It returns
+a short synthesized overview of what the session was about, built from that session's
+**root**-session prompts only (never subsessions). This must be a synthesis, never a
+raw or verbatim prompt quote, and never a from-memory guess. If `graph-analyst` can't
+produce one, use "not available."
 
 ---
 
@@ -155,23 +159,20 @@ directory, not just the current session ("this folder," "this working directory,
 
 1. Take the user's description (topic, content, date range, sometimes a
    server/workspace).
-2. **Search.** For any non-trivial criteria (topic, content, date, workspace),
-   delegate to `graph-analyst` — it has the data-navigation skills to query the graph
-   and returns the candidate session(s): their ids and key facts. This is a data-fetch
-   delegation, not a hand-off of the conversation — the results come back to you and
-   you keep driving the flow. Skip the delegation only for a trivial direct lookup —
-   the user names an exact session id — and call `session_summary` on it directly.
-   Cap the candidate set to a handful before per-candidate work.
-3. For each candidate, call `session_summary` for the facts, then build the narrative
-   yourself (see "Summary line" above; never delegate this part to `graph-analyst`) —
-   every candidate gets either a real synthesized narrative or an explicit "not
-   available" before it's presented; never a summary written from memory or a prompt
-   quote.
-4. Build a Session Details Block per candidate and present them; the user picks one.
-5. Run the Flow 3 ownership check on the chosen session.
-6. Re-run `session_summary` on the chosen id right before delete (a fresh preview, in
-   case anything changed since step 3).
-7. Confirm explicitly — id, counts, server(s) — then delete and verify on every server
+2. **Search + narrate.** For any non-trivial criteria (topic, content, date, workspace),
+   delegate to `graph-analyst`. It runs the search AND returns, for each candidate, both
+   the key facts and a short synthesized overview (see "Summary line" above) — you never
+   query the graph or build the narrative yourself. This is a data-fetch delegation, not
+   a hand-off of the conversation — the results come back to you and you keep driving
+   the flow. Skip the delegation only for a trivial direct lookup — the user names an
+   exact session id — and call `session_summary` on it directly. Cap the candidate set
+   to a handful before per-candidate work.
+3. Build a Session Details Block per candidate, using the overview `graph-analyst`
+   returned (or "not available"), and present them; the user picks one.
+4. Run the Flow 3 ownership check on the chosen session.
+5. Re-run `session_summary` on the chosen id right before delete (a fresh preview, in
+   case anything changed since step 2).
+6. Confirm explicitly — id, counts, server(s) — then delete and verify on every server
    (see Multi-Server Handling).
 
 ---
@@ -205,12 +206,13 @@ description.
    `graph-analyst` to enumerate every **root** session (never subsessions)
    whose `working_dir` matches the resolved directory AND `created_by` is you,
    checking every configured server (all-servers completeness applies to the
-   search too, not only the deletes). It returns the candidate root sessions
-   and their key facts.
-3. **Propose the list.** For each candidate, build the narrative the same way
-   Flow 2 does (see "Summary line" above), present it as a Session Details
-   Block, and add one item to a todo list (the `todo` tool) per session found
-   — so every session is tracked and none is silently skipped.
+   search too, not only the deletes). It returns the candidate root sessions,
+   their key facts, and a short synthesized overview for each — same as
+   Flow 2's search step.
+3. **Propose the list.** For each candidate, build a Session Details Block
+   using the overview `graph-analyst` returned (see "Summary line" above),
+   present it, and add one item to a todo list (the `todo` tool) per session
+   found — so every session is tracked and none is silently skipped.
 4. **Delete all.** Walk the todo list one session at a time. For each: re-run
    `session_summary` (a fresh preview), run the Flow 3 ownership check (a
    session in this folder may not be the user's own), state the impact,
