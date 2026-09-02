@@ -1,82 +1,90 @@
+// Context Intelligence: a bundle that records what happens during Amplifier sessions and lets you query that history as a searchable graph.
 digraph context_intelligence {
     rankdir=LR
     fontname="Helvetica"
     fontsize=12
-    label="context-intelligence v0.1.0 — bundle repo"
+    label="Context Intelligence v0.1.0\nRecords session activity and makes it searchable"
     labelloc=t
     labeljust=c
     nodesep=0.6
     ranksep=0.7
     bgcolor="white"
-    source_hash="0758d63959ef34f091dbe8fc6e27bc712f154503c829bb35474423dd213c2c27"
+    source_hash="3fb54cded848d61b162e4fffa3c7445239361e2ed7d48abca8c1814a0fe49afd"
 
     node [fontname="Helvetica", fontsize=11, style="filled,rounded"]
     edge [fontname="Helvetica", fontsize=9]
 
-    root_context_intelligence [label="context-intelligence v0.1.0\n0 tools · 0 agents\n~98 tok aggregate", shape=box, fillcolor="#80cbc4", style="filled,rounded,bold", penwidth=2]
+    root_context_intelligence [label="Context Intelligence (main entry point) v0.1.0\n0 tools · 0 agents\n~98 tok aggregate", shape=box, fillcolor="#80cbc4", style="filled,rounded,bold", penwidth=2]
 
     subgraph cluster_behaviors {
-        label="Behaviors"
+        label="Capability Packages (features you can switch on)"
         style="filled"
         fillcolor="#f9f9f9"
         color="#999999"
 
-        beh_context_intelligence_analysis_behavior [label="context-intelligence-analysis-behavior\n1 tools\n~864 tok", shape=box, fillcolor="#e0f2f1", style="filled,rounded"]
-        beh_context_intelligence_design_behavior [label="context-intelligence-design-behavior\n1 tools\n~331 tok", shape=box, fillcolor="#e0f2f1", style="filled,rounded"]
-        beh_context_intelligence_logging_behavior [label="context-intelligence-logging-behavior\n1 tools\n~1656 tok", shape=box, fillcolor="#e0f2f1", style="filled,rounded"]
-        beh_context_intelligence_navigation_behavior [label="context-intelligence-navigation-behavior\n2 tools\n~617 tok", shape=box, fillcolor="#e0f2f1", style="filled,rounded"]
-        beh_context_intelligence_behavior [label="context-intelligence-behavior\n~236 tok", shape=box, fillcolor="#e0f2f1", style="filled,rounded"]
+        beh_context_intelligence_analysis_behavior [label="Analyze Past Sessions\n1 tools\n~974 tok", shape=box, fillcolor="#e0f2f1", style="filled,rounded"]
+        beh_context_intelligence_design_behavior [label="Design New Query Tools\n1 tools\n~331 tok", shape=box, fillcolor="#e0f2f1", style="filled,rounded"]
+        beh_context_intelligence_logging_behavior [label="Record Session Activity\n1 tools\n~1656 tok", shape=box, fillcolor="#e0f2f1", style="filled,rounded"]
+        beh_context_intelligence_navigation_behavior [label="Browse & Search History\n2 tools\n~878 tok", shape=box, fillcolor="#e0f2f1", style="filled,rounded"]
+        beh_context_intelligence_behavior [label="Core Bundle Wiring\n~236 tok", shape=box, fillcolor="#e0f2f1", style="filled,rounded"]
     }
 
     subgraph cluster_agents {
-        label="Agents"
+        label="Specialist Assistants (each handles one kind of question)"
         style="filled"
         fillcolor="#f9f9f9"
         color="#999999"
 
-        agt_context_intelligence_design_facilitator [label="context-intelligence-design-facilitator\n~187 tok desc", shape=box, fillcolor="#c8e6c9", style="filled,rounded"]
-        agt_context_intelligence_tool_designer [label="context-intelligence-tool-designer\n~198 tok desc", shape=box, fillcolor="#c8e6c9", style="filled,rounded"]
-        agt_graph_analyst [label="graph-analyst\n~543 tok desc", shape=box, fillcolor="#c8e6c9", style="filled,rounded"]
-        agt_session_navigator [label="session-navigator\n~422 tok desc", shape=box, fillcolor="#c8e6c9", style="filled,rounded"]
+        agt_context_intelligence_design_facilitator [label="Design Conversation Guide\n~187 tok desc", shape=box, fillcolor="#c8e6c9", style="filled,rounded"]
+        agt_context_intelligence_tool_designer [label="Query Tool Builder\n~198 tok desc", shape=box, fillcolor="#c8e6c9", style="filled,rounded"]
+        agt_graph_analyst [label="History Graph Analyst\n~191 tok desc", shape=box, fillcolor="#c8e6c9", style="filled,rounded"]
+        agt_server_data_ops [label="Stored Data Caretaker\n~270 tok desc", shape=box, fillcolor="#c8e6c9", style="filled,rounded"]
+        agt_session_navigator [label="Local Session Browser\n~157 tok desc", shape=box, fillcolor="#c8e6c9", style="filled,rounded"]
     }
 
     subgraph cluster_modules {
-        label="Modules"
+        label="Building Blocks (the code that does the work)"
         style="filled"
         fillcolor="#f9f9f9"
         color="#999999"
 
-        mod_hook_context_intelligence [label="hook-context-intelligence", shape=box, fillcolor="#bbdefb", style="filled,rounded"]
-        mod_tool_context_intelligence_query [label="tool-context-intelligence-query", shape=box, fillcolor="#bbdefb", style="filled,rounded"]
-        mod_tool_context_intelligence_upload [label="tool-context-intelligence-upload", shape=box, fillcolor="#bbdefb", style="filled,rounded"]
+        mod_hook_context_intelligence [label="Activity Recorder\nhook-context-intelligence", shape=box, fillcolor="#bbdefb", style="filled,rounded"]
+        mod_hook_server_data_ops_lockdown [label="Data Safety Guard\nhook-server-data-ops-lockdown", shape=box, fillcolor="#bbdefb", style="filled,rounded"]
+        mod_tool_context_intelligence_query [label="History Search\ntool-context-intelligence-query", shape=box, fillcolor="#bbdefb", style="filled,rounded"]
+        mod_tool_context_intelligence_upload [label="History Upload\ntool-context-intelligence-upload", shape=box, fillcolor="#bbdefb", style="filled,rounded"]
+        mod_tool_server_data_ops [label="Stored Data Management\ntool-server-data-ops", shape=box, fillcolor="#bbdefb", style="filled,rounded"]
     }
 
     subgraph cluster_legend {
-        label="Legend"
+        label="Legend — what each colour means"
         style="filled"
         fillcolor="white"
         color="#cccccc"
         fontsize=9
 
-        leg_root [label="root bundle", shape=box, fillcolor="#80cbc4", style="filled,rounded,bold", fontsize=9]
-        leg_behavior [label="behavior", shape=box, fillcolor="#e0f2f1", style="filled,rounded", fontsize=9]
-        leg_agent [label="agent", shape=box, fillcolor="#c8e6c9", style="filled,rounded", fontsize=9]
-        leg_module [label="module", shape=box, fillcolor="#bbdefb", style="filled,rounded", fontsize=9]
-        leg_provider [label="provider", shape=box, fillcolor="#e0e0e0", style="filled,rounded", fontsize=9]
-        leg_context [label="context", shape=box, fillcolor="#e1bee7", style="filled,rounded", fontsize=9]
-        leg_standalone [label="standalone", shape=box, fillcolor="#80cbc4", style="filled,rounded", fontsize=9]
-        leg_experiment [label="experiment", shape=box, fillcolor="#e1bee7", style="filled,rounded", fontsize=9]
-        leg_ext_cost [label="ext+cost", shape=box, fillcolor="#80cbc4", style="dashed", color="red", penwidth=2, fontsize=9]
-        leg_ext_muted [label="ext+no-cost", shape=box, fillcolor="#f5f5f5", style="dashed", fontsize=9]
+        leg_root [label="main entry point", shape=box, fillcolor="#80cbc4", style="filled,rounded,bold", fontsize=9]
+        leg_behavior [label="capability package", shape=box, fillcolor="#e0f2f1", style="filled,rounded", fontsize=9]
+        leg_agent [label="specialist assistant", shape=box, fillcolor="#c8e6c9", style="filled,rounded", fontsize=9]
+        leg_module [label="building block", shape=box, fillcolor="#bbdefb", style="filled,rounded", fontsize=9]
+        leg_provider [label="AI model connection", shape=box, fillcolor="#e0e0e0", style="filled,rounded", fontsize=9]
+        leg_context [label="reference text", shape=box, fillcolor="#e1bee7", style="filled,rounded", fontsize=9]
+        leg_standalone [label="ready-to-run setup", shape=box, fillcolor="#80cbc4", style="filled,rounded", fontsize=9]
+        leg_experiment [label="experimental", shape=box, fillcolor="#e1bee7", style="filled,rounded", fontsize=9]
+        leg_ext_cost [label="from another repo\n(adds hidden cost)", shape=box, fillcolor="#80cbc4", style="dashed", color="red", penwidth=2, fontsize=9]
+        leg_ext_muted [label="from another repo\n(no added cost)", shape=box, fillcolor="#f5f5f5", style="dashed", fontsize=9]
     }
 
     disclaimer [label="Token estimates: ~4 chars/token\nSolid border = local (counted)\nDashed + red = external, hidden cost (not counted)\nDashed + muted = external, no cost\nExcludes: sub-session costs, runtime-dynamic", shape=note, fillcolor="#eceff1", style="filled", fontsize=9]
 
-    ext_githttps___github_com_microsoft_amplifier_foundation_main [label="amplifier-foundation\n(external, cost)", shape=box, fillcolor="#80cbc4", style="dashed", color="red", penwidth=2]
+    ext_githttps___github_com_microsoft_amplifier_foundation_main [label="Shared Amplifier Base\namplifier-foundation\n(external, cost)", shape=box, fillcolor="#80cbc4", style="dashed", color="red", penwidth=2]
 
     root_context_intelligence -> ext_githttps___github_com_microsoft_amplifier_foundation_main [style=dashed]
     root_context_intelligence -> beh_context_intelligence_behavior [label="composes"]
     beh_context_intelligence_analysis_behavior -> agt_graph_analyst [label="owns"]
+    beh_context_intelligence_analysis_behavior -> agt_session_navigator [label="owns"]
+    beh_context_intelligence_analysis_behavior -> agt_server_data_ops [label="owns"]
     beh_context_intelligence_logging_behavior -> mod_hook_context_intelligence [label="uses", penwidth=0.8]
+    beh_context_intelligence_navigation_behavior -> agt_graph_analyst [label="owns"]
     beh_context_intelligence_navigation_behavior -> agt_session_navigator [label="owns"]
+    beh_context_intelligence_navigation_behavior -> agt_server_data_ops [label="owns"]
 }
