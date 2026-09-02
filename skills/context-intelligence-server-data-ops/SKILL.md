@@ -56,7 +56,7 @@ All three accept `source` (name a server) and `list_sources: true` (discover the
 connectable set without acting). None takes a workspace — you always address a
 session by id.
 
-- **`todo`** — the standard todo-list tool. Used only in Flow 1-folder, one item per
+- **`todo`** — the standard todo-list tool. Used only in Flow 2-folder, one item per
   candidate root session found, so a bulk cleanup never silently skips one.
 
 ---
@@ -69,7 +69,7 @@ current session" request, that value IS the session to act on. Don't ask the use
 for an id, and a typed id never replaces it — resolve from context regardless. Only
 ask directly if context genuinely has no `Session ID`.
 
-**Current working directory (for Flow 1-folder).** Comes from the same runtime
+**Current working directory (for Flow 2-folder).** Comes from the same runtime
 context — the `Working directory` field injected into your status context every
 turn, resolved the same way as the session id above. For any "this folder" / "this
 working directory" / "uploaded from here" request, that value is the directory to
@@ -113,7 +113,7 @@ prompts, write "not available."
 Applies whenever the request refers to the user's own current session ("my current
 session," "this session," "the session I'm in") — even if the user also supplies a
 session id; a supplied id doesn't downgrade it out of Flow 1 or replace the runtime
-id. Route to **Flow 1-folder** instead when the request is about the whole working
+id. Route to **Flow 2-folder** instead when the request is about the whole working
 directory, not just the current session ("this folder," "this working directory,"
 "uploaded from here"). Route to Flow 2 when the request names or searches for some
 *other* session.
@@ -144,41 +144,6 @@ directory, not just the current session ("this folder," "this working directory,
 
 ---
 
-## Flow 1-folder — Clean Up Everything Pushed From This Working Directory
-
-Applies when the user is worried that data from sessions run in THIS folder was
-pushed and should not have been — "I think I uploaded data from sessions in this
-folder, I want to delete it," "things from this working directory should never have
-been pushed." Still the user's own data (S1), but scoped to every root session that
-ran here, not just the current one. Route here instead of Flow 1 when the request is
-about the *folder*, not a single session.
-
-1. **Resolve the working directory.** Take it from runtime context (see Key
-   Concepts), the same way Flow 1 resolves the current session id. Don't ask the
-   user for a path.
-2. **Offer the folder exclusion FIRST, and wait for their answer**, before finding
-   or deleting anything — same setting as Flow 1 step 3:
-   `overrides.hook-context-intelligence.config.destinations.<name>.exclude` in
-   `~/.amplifier/settings.yaml`. Show it in your own message and offer to guide the
-   user through applying it — you never edit the file yourself. Confirm it's applied
-   before moving on: while the folder is still in scope, continued ingestion would
-   keep re-creating the very data you are about to delete.
-3. **Find.** Delegate to `graph-analyst` to enumerate every **root** session (never
-   subsessions) whose `working_dir` matches the resolved directory, checking every
-   configured server (all-servers completeness applies to the search too, not only
-   the deletes). It returns the candidate root sessions and their key facts.
-4. **Propose.** For each candidate, build the narrative the same way Flow 2 does
-   (see "Summary line" above), present it as a Session Details Block, and add one
-   item to a todo list (the `todo` tool) per session found — so every session is
-   tracked and none is silently skipped.
-5. **Delete all.** Walk the todo list one session at a time. For each: re-run
-   `session_summary` (a fresh preview), run the Flow 3 ownership check (a session in
-   this folder may not be the user's own), state the impact, confirm explicitly,
-   delete, and verify on every server it is on (see Multi-Server Handling) — then
-   mark that todo item done. Never mark an item done before its delete is verified.
-
----
-
 ## Flow 2 — Find a Session by Description, Then Delete
 
 1. Take the user's description (topic, content, date range, sometimes a
@@ -204,9 +169,53 @@ about the *folder*, not a single session.
 
 ---
 
+## Flow 2-folder — Clean Up Everything Pushed From This Working Directory (Folder + Mine)
+
+A variation of Flow 2, not a Flow 1 flavor. Flow 1's defining trait is the
+**current** session, resolved from runtime; this flow finds sessions by
+**criteria** — `working_dir` = this folder AND `created_by` = you — exactly Flow
+2's find-by-criteria shape. The only thing it borrows from Flow 1 is the
+folder-exclusion offer, because it's your own folder being pushed.
+
+Applies when the user is worried that data from sessions run in THIS folder was
+pushed and should not have been — "I think I uploaded data from sessions in this
+folder, I want to delete it," "things from this working directory should never
+have been pushed." Route here instead of Flow 1 when the request is about the
+*folder*, not a single session; route here instead of plain Flow 2 when the
+criteria is specifically "this folder + mine" rather than a topic/date/server
+description.
+
+1. **Apply the folder exclusion first**, before finding or deleting anything.
+   Resolve the working directory from runtime context (see Key Concepts), the
+   same way Flow 1 resolves the current session id. Offer the setting
+   `overrides.hook-context-intelligence.config.destinations.<name>.exclude` in
+   `~/.amplifier/settings.yaml` — same as Flow 1 step 3 — show it in your own
+   message, guide the user through applying it (you never edit the file
+   yourself), and confirm it's applied before moving on: while the folder is
+   still in scope, continued ingestion would keep re-creating the very data
+   you are about to delete.
+2. **Run the S2 search, by criteria (this folder + mine).** Delegate to
+   `graph-analyst` to enumerate every **root** session (never subsessions)
+   whose `working_dir` matches the resolved directory AND `created_by` is you,
+   checking every configured server (all-servers completeness applies to the
+   search too, not only the deletes). It returns the candidate root sessions
+   and their key facts.
+3. **Propose the list.** For each candidate, build the narrative the same way
+   Flow 2 does (see "Summary line" above), present it as a Session Details
+   Block, and add one item to a todo list (the `todo` tool) per session found
+   — so every session is tracked and none is silently skipped.
+4. **Delete all.** Walk the todo list one session at a time. For each: re-run
+   `session_summary` (a fresh preview), run the Flow 3 ownership check (a
+   session in this folder may not be the user's own), state the impact,
+   confirm explicitly, delete, and verify on every server it is on (see
+   Multi-Server Handling) — then mark that todo item done. Never mark an item
+   done before its delete is verified.
+
+---
+
 ## Flow 3 — Ownership Check
 
-Runs inside Flow 1, Flow 1-folder, or Flow 2, after the preview and before the delete
+Runs inside Flow 1, Flow 2, or Flow 2-folder, after the preview and before the delete
 confirmation.
 
 1. From the preview, note the session's `created_by`.

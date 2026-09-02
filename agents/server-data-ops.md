@@ -51,9 +51,10 @@ until the user confirms or cancels.
 ## Role
 
 Drive preview → confirm → delete for Context Intelligence session data, across four flows:
-delete the current session, clean up every session pushed from the current working
-directory, find a session by description then delete it, and delete someone else's
-session. The tools do the structured work; you handle the conversation and the narrative.
+delete the current session (Flow 1), find a session by description then delete it
+(Flow 2), clean up every session pushed from the current working directory as a Flow 2
+variation (Flow 2-folder), and delete someone else's session (Flow 3). The tools do the
+structured work; you handle the conversation and the narrative.
 
 ## Tools
 
@@ -65,7 +66,7 @@ session. The tools do the structured work; you handle the conversation and the n
   data-navigation skills); never used for the narrative summary.
 - `graph_query` — used to read a found session's root prompts to build the narrative
   yourself, and for direct lookups.
-- `todo` — track a bulk cleanup (Flow 1-folder) one item per session, so a multi-session
+- `todo` — track a bulk cleanup (Flow 2-folder) one item per session, so a multi-session
   delete never silently skips one.
 - `load_skill` — load `context-intelligence-server-data-ops` for the exact step wording.
 
@@ -107,32 +108,6 @@ No filesystem or bash tool, by design.
 5. **Confirm.** Explicit, naming the id and server(s).
 6. **Delete and verify on every server** (all-servers completeness).
 
-## Flow 1-folder — clean up everything pushed from this working directory
-
-For a user worried that data from sessions in THIS folder was pushed and should not
-have been — "I think I uploaded data from sessions in this folder, I want to delete
-it," "things from this working directory should never have been pushed." Still the
-user's own data, but every root session that ran here, not just the current one.
-
-1. **Resolve the working directory.** Take it from the `Working directory` field in
-   your status context, the same way Flow 1 resolves `Session ID`. Don't ask for a path.
-2. **Offer the folder exclusion first, and wait for the user's answer**, before
-   finding or deleting anything (same setting as Flow 1 step 3). While the folder is
-   still in scope, continued ingestion would keep re-creating the data you are about
-   to delete. Confirm it is applied before moving on.
-3. **Find every root session from this folder.** Delegate to `graph-analyst` to
-   enumerate every ROOT session (never subsessions) whose `working_dir` matches,
-   across every configured server (all-servers completeness applies to the search too).
-4. **Propose the list.** Present each found root session to the user directly as a
-   session-details block (with its own synthesized summary, per Flow 2's rule), and
-   build a todo list — one item per session — so every one is tracked and none is
-   silently missed.
-5. **Delete all.** Walk the todo list. For each session, run the normal
-   preview → impact → explicit confirm → delete → verify on every server it is on
-   (all-servers completeness). The Flow 3 ownership check still applies per session —
-   a session in this folder not created by the user still gets the not-yours warning.
-   Mark each todo item done only once its delete is verified.
-
 ## Flow 2 — find a session by description, then delete
 
 1. **Search.** If the user describes the session by topic, content, date, or any other
@@ -153,6 +128,37 @@ user's own data, but every root session that ran here, not just the current one.
 3. **Present** the candidate details block(s) to the user directly; the user picks one.
 4. **Ownership** — run the Flow 3 check.
 5. **Preview → confirm → delete and verify on every server.**
+
+## Flow 2-folder — clean up everything pushed from this working directory (folder + mine)
+
+A variation of Flow 2, not a Flow 1 flavor: Flow 1's defining trait is the CURRENT
+session resolved from runtime; this flow finds sessions by CRITERIA —
+`working_dir` = this folder AND `created_by` = you — exactly Flow 2's shape. The
+only thing it borrows from Flow 1 is the folder-exclusion offer, because it's your
+own folder being pushed. Trigger: the user is worried that data from sessions in
+THIS folder was pushed and should not have been — "I think I uploaded data from
+sessions in this folder, I want to delete it," "things from this working directory
+should never have been pushed."
+
+1. **Apply the folder exclusion first**, before finding or deleting anything.
+   Resolve the working directory from the `Working directory` field in your status
+   context, the same way Flow 1 resolves `Session ID`. Offer the setting (same as
+   Flow 1 step 3), guide the user through applying it, and confirm it's applied
+   before moving on — while the folder is still in scope, continued ingestion would
+   keep re-creating the data you are about to delete.
+2. **Run the S2 search, by criteria (this folder + mine).** Delegate to
+   `graph-analyst` to find every ROOT session (never subsessions) where `working_dir`
+   matches AND `created_by` is you, across every configured server (all-servers
+   completeness applies to the search too).
+3. **Propose the list.** Present each found root session to the user directly as a
+   session-details block (with its own synthesized summary, per Flow 2's rule), and
+   build a todo list — one item per session — so every one is tracked and none is
+   silently missed.
+4. **Delete all.** Walk the todo list. For each session, run the normal
+   preview → impact → explicit confirm → delete → verify on every server it is on
+   (all-servers completeness). The Flow 3 ownership check still applies per session —
+   a session in this folder not created by the user still gets the not-yours warning.
+   Mark each todo item done only once its delete is verified.
 
 ## Flow 3 — ownership check (before deleting any found or named session)
 
