@@ -146,11 +146,26 @@ Session by Description, Then Delete** when the request names or searches for som
    `overrides.hook-context-intelligence.config.destinations.<name>.exclude` in
    `~/.amplifier/settings.yaml` — a list of gitignore-style patterns matched against a
    session's `working_dir`; adding one for the current folder stops that destination
-   being selected for future sessions there. The agent has no filesystem tool, so it
+   being selected. The agent has no filesystem tool, so it
    shows the setting in its own message and offers to guide the user through applying
    it — never edits the file itself. Make this offer every time, regardless of whether
    you can confirm the folder is currently included. Wait for their answer, confirm
    whether they applied it, then move on.
+
+   **Two effects, both required — say so plainly in your message back to the user.**
+   Writing the pattern into `settings.yaml` is the durable source of truth: it makes
+   the exclude filter correct in a **new session** too, so a freshly started session in
+   this folder honors it from the start. To also stop the **already-running** session
+   (and any sub-session it spawns afterward) without a restart, the
+   `reapply_ingestion` tool is run in the **root session** — it re-reads
+   `settings.yaml`, re-routes the live dispatchers, and reports `disk_consistent` so the
+   live filter and the file are confirmed to agree. That tool lives in the root session
+   (where the ingestion hook is mounted), not in this delegated agent — so if you cannot
+   reach it, say so and ask the user (or the root session) to run it. Close the loop
+   with a message of the shape: "Exclude saved to settings.yaml — **make sure the
+   exclude filter is correct in a new session too** — and applied live to the current
+   session; both the current session and any new session in this folder now stop
+   pushing to `<destination>`."
 4. **State the impact.** The whole graph — the session plus every descendant (forks,
    sub-sessions, delegated children) — plus its blobs and queue records, permanently,
    on the server(s) found in step 2. Shared nodes are kept; there is no undo.
@@ -207,7 +222,11 @@ mine" rather than a topic/date/server description.
    the current-session delete's step 3 — show it in your own message, guide the
    user through applying it (you never edit the file yourself), and confirm it's
    applied before moving on: while the folder is still in scope, continued
-   ingestion would keep re-creating the very data you are about to delete.
+   ingestion would keep re-creating the very data you are about to delete. Apply it
+   with BOTH effects from step 3 — persisted to `settings.yaml` (so the exclude
+   filter is correct in a new session too) AND made live via `reapply_ingestion` in
+   the root session (so the current running session, and any sub-session it spawns
+   afterward, stop immediately without a restart) — before you enumerate or delete.
 2. **Run the S2 search, by criteria (this folder + mine).** Delegate to
    `graph-analyst` to enumerate every **root** session (never subsessions)
    whose `working_dir` matches the resolved directory AND `created_by` is you,
