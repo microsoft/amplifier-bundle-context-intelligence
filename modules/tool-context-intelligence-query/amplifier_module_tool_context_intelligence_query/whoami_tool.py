@@ -1,8 +1,8 @@
 """WhoamiTool -- agent-facing tool that resolves the acting user's identity.
 
 Implements the Amplifier Tool protocol. Configuration and provenance are
-resolved via ``resolve_query_connection`` (same as SessionSummaryTool and
-DeleteSessionTool -- parity guaranteed by the shared helper), a SINGLE-HIT
+resolved via ``resolve_query_connection`` (same as GraphQueryTool and
+BlobReadTool -- parity guaranteed by the shared helper), a SINGLE-HIT
 selection over the connectable pool (tool ``sources`` union hook
 ``destinations``). See ``resolve_query_connection``'s docstring in
 context_intelligence/tool_resolver.py for the authoritative selection rule
@@ -16,7 +16,7 @@ endpoint that answered / was attempted. Callers can also pass
 server.
 
 The ``ToolConfigResolver`` is injected at construction time by ``mount()``
-(one shared instance across all three server-data-ops tools -- single config
+(one shared instance across all three CI read tools -- single config
 namespace).
 
 This tool never talks to the server directly -- the only path to the server
