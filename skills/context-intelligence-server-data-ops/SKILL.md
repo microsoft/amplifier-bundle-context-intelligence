@@ -50,14 +50,14 @@ description, or a session created by someone else.
   queue_sessions_cleaned}}`.
 - **`whoami`** — read-only identity lookup. Returns `{contributor_id, source: {name,
   url, origin}}` for the server you call it against. Used to compare against a
-  session's `created_by` (Flow 3).
+  session's `created_by` (see Ownership Check).
 
 All three accept `source` (name a server) and `list_sources: true` (discover the
 connectable set without acting). None takes a workspace — you always address a
 session by id.
 
-- **`todo`** — the standard todo-list tool. Used only in Flow 2-folder, one item per
-  candidate root session found, so a bulk cleanup never silently skips one.
+- **`todo`** — the standard todo-list tool. Used only in the folder cleanup, one item
+  per candidate root session found, so a bulk cleanup never silently skips one.
 
 A lockdown hook denies this agent write_file, edit_file, apply_patch, and any direct
 graph-query tool — it guides the user through settings edits instead of making them,
@@ -73,7 +73,7 @@ current session" request, that value IS the session to act on. Don't ask the use
 for an id, and a typed id never replaces it — resolve from context regardless. Only
 ask directly if context genuinely has no `Session ID`.
 
-**Current working directory (for Flow 2-folder).** Comes from the same runtime
+**Current working directory (for the folder cleanup).** Comes from the same runtime
 context — the `Working directory` field injected into your status context every
 turn, resolved the same way as the session id above. For any "this folder" / "this
 working directory" / "uploaded from here" request, that value is the directory to
@@ -81,19 +81,20 @@ search — not a single session id. Don't ask unless context genuinely has none.
 
 **Current user identity (for ownership).** Never read from context and never guess.
 Call `whoami` for the *same server* the session in question is on, and use its
-`contributor_id` as the one reference identity for the comparison (Flow 3).
+`contributor_id` as the one reference identity for the comparison (see Ownership
+Check).
 
 **When the folder exclusion applies.** Offer it only when the data is both yours and
-from here — this session, this folder, this machine (Flow 1, Flow 2-folder). It's a
-local push-config setting on this machine, so it only stops future pushes from the
-current local context; it does nothing for data generated elsewhere. Don't offer it
-for a session found by topic/description (plain Flow 2) or one that isn't yours
-(Flow 3).
+from here — this session, this folder, this machine (the current-session delete, the
+folder cleanup). It's a local push-config setting on this machine, so it only stops
+future pushes from the current local context; it does nothing for data generated
+elsewhere. Don't offer it for a session found by topic/description (the
+find-by-description delete) or one that isn't yours (see Ownership Check).
 
 ## The "Session Details" Block
 
-Use this exact shape for any candidate or confirmed target (Flow 2 candidate list;
-the pre-delete confirmation in any flow):
+Use this exact shape for any candidate or confirmed target (the find-by-description
+candidate list; the pre-delete confirmation in any flow):
 
 ```
 Session <root_id>
@@ -111,22 +112,24 @@ Fill every field from a real `session_summary` call. Never fabricate a value you
 didn't receive.
 
 **Summary line.** Not returned by the server, and not built by this agent — it comes
-from `graph-analyst`, delegated to alongside the search (see Flow 2 step 2). It returns
-a short synthesized overview of what the session was about, built from that session's
-**root**-session prompts only (never subsessions). This must be a synthesis, never a
-raw or verbatim prompt quote, and never a from-memory guess. If `graph-analyst` can't
-produce one, use "not available."
+from `graph-analyst`, delegated to alongside the search (see the search step in
+"Find a Session by Description, Then Delete"). It returns a short synthesized
+overview of what the session was about, built from that session's **root**-session
+prompts only (never subsessions). This must be a synthesis, never a raw or verbatim
+prompt quote, and never a from-memory guess. If `graph-analyst` can't produce one,
+use "not available."
 
 ---
 
-## Flow 1 — Delete the Current Session
+## Delete the Current Session
 
 Applies whenever the request refers to the user's own current session ("my current
 session," "this session," "the session I'm in") — even if the user also supplies a
-session id; a supplied id doesn't downgrade it out of Flow 1 or replace the runtime
-id. Route to **Flow 2-folder** instead when the request is about the whole working
-directory, not just the current session ("this folder," "this working directory,"
-"uploaded from here"). Route to Flow 2 when the request names or searches for some
+session id; a supplied id doesn't downgrade it out of this case or replace the runtime
+id. Route to **Clean Up Everything Pushed From This Working Directory** instead when
+the request is about the whole working directory, not just the current session
+("this folder," "this working directory," "uploaded from here"). Route to **Find a
+Session by Description, Then Delete** when the request names or searches for some
 *other* session.
 
 1. **Resolve.** Take the current session id from runtime context (see Key Concepts).
@@ -157,7 +160,7 @@ directory, not just the current session ("this folder," "this working directory,
 
 ---
 
-## Flow 2 — Find a Session by Description, Then Delete
+## Find a Session by Description, Then Delete
 
 1. Take the user's description (topic, content, date range, sometimes a
    server/workspace).
@@ -171,7 +174,7 @@ directory, not just the current session ("this folder," "this working directory,
    to a handful before per-candidate work.
 3. Build a Session Details Block per candidate, using the overview `graph-analyst`
    returned (or "not available"), and present them; the user picks one.
-4. Run the Flow 3 ownership check on the chosen session.
+4. Run the ownership check on the chosen session.
 5. Re-run `session_summary` on the chosen id right before delete (a fresh preview, in
    case anything changed since step 2).
 6. Confirm explicitly — id, counts, server(s) — then delete and verify on every server
@@ -179,44 +182,45 @@ directory, not just the current session ("this folder," "this working directory,
 
 ---
 
-## Flow 2-folder — Clean Up Everything Pushed From This Working Directory (Folder + Mine)
+## Clean Up Everything Pushed From This Working Directory (Yours, From Here)
 
-A variation of Flow 2, not a Flow 1 flavor. Flow 1's defining trait is the
-**current** session, resolved from runtime; this flow finds sessions by
-**criteria** — `working_dir` = this folder AND `created_by` = you — exactly Flow
-2's find-by-criteria shape. The only thing it borrows from Flow 1 is the
+This is a find-by-criteria cleanup, not a current-session delete. The
+current-session delete's defining trait is the **current** session, resolved from
+runtime; this cleanup finds sessions by **criteria** — `working_dir` = this folder
+AND `created_by` = you — the same find-by-criteria shape as the find-by-description
+delete. The only thing it borrows from the current-session delete is the
 folder-exclusion offer, because it's your own folder being pushed.
 
 Applies when the user is worried that data from sessions run in THIS folder was
 pushed and should not have been — "I think I uploaded data from sessions in this
 folder, I want to delete it," "things from this working directory should never
-have been pushed." Route here instead of Flow 1 when the request is about the
-*folder*, not a single session; route here instead of plain Flow 2 when the
-criteria is specifically "this folder + mine" rather than a topic/date/server
-description.
+have been pushed." Route here instead of the current-session delete when the
+request is about the *folder*, not a single session; route here instead of the
+plain find-by-description delete when the criteria is specifically "this folder +
+mine" rather than a topic/date/server description.
 
 1. **Apply the folder exclusion first**, before finding or deleting anything.
    Resolve the working directory from runtime context (see Key Concepts), the
-   same way Flow 1 resolves the current session id. Offer the setting
-   `overrides.hook-context-intelligence.config.destinations.<name>.exclude` in
-   `~/.amplifier/settings.yaml` — same as Flow 1 step 3 — show it in your own
-   message, guide the user through applying it (you never edit the file
-   yourself), and confirm it's applied before moving on: while the folder is
-   still in scope, continued ingestion would keep re-creating the very data
-   you are about to delete.
+   same way the current-session delete resolves the current session id. Offer the
+   setting `overrides.hook-context-intelligence.config.destinations.<name>.exclude`
+   in `~/.amplifier/settings.yaml` — the same folder-exclusion offer described in
+   the current-session delete's step 3 — show it in your own message, guide the
+   user through applying it (you never edit the file yourself), and confirm it's
+   applied before moving on: while the folder is still in scope, continued
+   ingestion would keep re-creating the very data you are about to delete.
 2. **Run the S2 search, by criteria (this folder + mine).** Delegate to
    `graph-analyst` to enumerate every **root** session (never subsessions)
    whose `working_dir` matches the resolved directory AND `created_by` is you,
    checking every configured server (all-servers completeness applies to the
    search too, not only the deletes). It returns the candidate root sessions,
-   their key facts, and a short synthesized overview for each — same as
-   Flow 2's search step.
+   their key facts, and a short synthesized overview for each — same as the
+   find-by-description delete's search step.
 3. **Propose the list.** For each candidate, build a Session Details Block
    using the overview `graph-analyst` returned (see "Summary line" above),
    present it, and add one item to a todo list (the `todo` tool) per session
    found — so every session is tracked and none is silently skipped.
 4. **Delete all.** Walk the todo list one session at a time. For each: re-run
-   `session_summary` (a fresh preview), run the Flow 3 ownership check (a
+   `session_summary` (a fresh preview), run the ownership check (a
    session in this folder may not be the user's own), state the impact,
    confirm explicitly, delete, and verify on every server it is on (see
    Multi-Server Handling) — then mark that todo item done. Never mark an item
@@ -224,10 +228,11 @@ description.
 
 ---
 
-## Flow 3 — Ownership Check
+## Ownership Check (Before Deleting Any Found or Named Session)
 
-Runs inside Flow 1, Flow 2, or Flow 2-folder, after the preview and before the delete
-confirmation.
+Runs inside any of the delete flows above — the current-session delete, the
+find-by-description delete, or the folder cleanup — after the preview and before
+the delete confirmation.
 
 1. From the preview, note the session's `created_by`.
 2. Call `whoami` for the *same server* the session is on. Read its `contributor_id`.
