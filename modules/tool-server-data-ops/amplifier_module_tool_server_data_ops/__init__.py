@@ -1,16 +1,20 @@
-"""Context Intelligence server data-ops tools -- session_summary and
-delete_session.
+"""Context Intelligence server data-ops tools -- session_summary,
+delete_session, and whoami.
 
-Both tools share one ToolConfigResolver, so sources has a single
+All three tools share one ToolConfigResolver, so sources has a single
 config namespace: overrides.tool-server-data-ops.config.sources.
 
-whoami lives in tool-context-intelligence-query, not here -- the
-server-data-ops agent mounts BOTH this module AND
-tool-context-intelligence-query, so a second "whoami" tool defined here
-would collide with the one in that module. This agent still has whoami
-available because it already mounts tool-context-intelligence-query.
+WhoamiTool itself lives in the shared context_intelligence library
+(context_intelligence/whoami_tool.py), not in this module's own package --
+it is ALSO mounted by tool-context-intelligence-query (graph-analyst's
+module). The server-data-ops (delete) agent needs identity for ownership
+checks but must NOT have graph_query, so it mounts THIS module alone
+rather than tool-context-intelligence-query. Importing the same class
+from the shared location keeps the two mounts in lock-step with zero
+duplication. No agent mounts both this module AND
+tool-context-intelligence-query, so there is no "whoami" name collision.
 
-Two tools, one mount(): idiomatic multi-tool module (same shape as
+Three tools, one mount(): idiomatic multi-tool module (same shape as
 tool-context-intelligence-query, which mounts graph_query / blob_read / whoami
 from one mount() call).
 """
@@ -24,10 +28,10 @@ __all__ = ["mount"]
 
 
 async def mount(coordinator: Any, config: Any) -> None:
-    """Mount both server-data-ops tools, sharing one ToolConfigResolver.
+    """Mount all three server-data-ops tools, sharing one ToolConfigResolver.
 
     The resolver is built ONCE from the module's config and injected into
-    both tools.  Tool constructors do not accept config -- the resolver
+    all three tools.  Tool constructors do not accept config -- the resolver
     IS the config surface.
 
     The hook resolver is NOT fetched here; each tool fetches it lazily at
@@ -36,6 +40,7 @@ async def mount(coordinator: Any, config: Any) -> None:
     section Module Lifecycle Methods).
     """
     from context_intelligence.tool_resolver import ToolConfigResolver
+    from context_intelligence.whoami_tool import WhoamiTool
 
     from .delete_session_tool import DeleteSessionTool
     from .session_summary_tool import SessionSummaryTool
@@ -46,5 +51,7 @@ async def mount(coordinator: Any, config: Any) -> None:
     resolver.validate_sources()
     summary = SessionSummaryTool(coordinator, resolver)
     delete = DeleteSessionTool(coordinator, resolver)
+    whoami = WhoamiTool(coordinator, resolver)
     await coordinator.mount("tools", summary, name=summary.name)  # "session_summary"
     await coordinator.mount("tools", delete, name=delete.name)  # "delete_session"
+    await coordinator.mount("tools", whoami, name=whoami.name)  # "whoami"

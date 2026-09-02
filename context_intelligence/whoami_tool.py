@@ -1,5 +1,15 @@
 """WhoamiTool -- agent-facing tool that resolves the acting user's identity.
 
+Lives in the shared ``context_intelligence`` library (not in either tool
+module's own package) because it is mounted from TWO independent modules:
+``tool-context-intelligence-query`` (graph-analyst and any other agent that
+only needs read/query + identity) and ``tool-server-data-ops`` (the delete
+agent, which needs identity for ownership checks but must NOT have
+graph_query). Neither module owns this class -- both import it from here so
+there is exactly one implementation, never two copies drifting apart. An
+agent that mounts both modules would collide on the tool name "whoami" (the
+coordinator would attempt to mount it twice); no current agent does this.
+
 Implements the Amplifier Tool protocol. Configuration and provenance are
 resolved via ``resolve_query_connection`` (same as GraphQueryTool and
 BlobReadTool -- parity guaranteed by the shared helper), a SINGLE-HIT
@@ -15,9 +25,10 @@ endpoint that answered / was attempted. Callers can also pass
 ``list_sources: true`` to discover the connectable set without calling the
 server.
 
-The ``ToolConfigResolver`` is injected at construction time by ``mount()``
-(one shared instance across all three CI read tools -- single config
-namespace).
+Each mounting module builds its OWN ``ToolConfigResolver`` (its own config
+namespace: overrides.tool-context-intelligence-query.config.sources vs
+overrides.tool-server-data-ops.config.sources) and injects it at
+construction time -- this class never constructs its own resolver.
 
 This tool never talks to the server directly -- the only path to the server
 is through ``AsyncCIClient`` (the shared library). This is a READ (no
@@ -31,6 +42,7 @@ from __future__ import annotations
 from typing import Any
 
 from amplifier_core.models import ToolResult
+
 from context_intelligence.client import AsyncCIClient, CIClientError
 from context_intelligence.tool_resolver import (
     ToolConfigResolver,

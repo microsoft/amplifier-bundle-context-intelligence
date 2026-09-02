@@ -3,13 +3,13 @@
 All three tools share one ToolConfigResolver, so sources has a single
 config namespace: overrides.tool-context-intelligence-query.config.sources.
 
-whoami lives here (not in tool-server-data-ops) because the
-server-data-ops agent mounts BOTH this module AND tool-server-data-ops --
-two tools named "whoami" in one agent would collide. whoami is also
-generally useful to any agent mounting this module alone (e.g.
-graph-analyst needs "who am I" to scope "my sessions"), so the read
-(query) module is its single home. The server-data-ops agent still has
-whoami available because it already mounts this module too.
+WhoamiTool itself lives in the shared context_intelligence library
+(context_intelligence/whoami_tool.py), not in this module's own package --
+it is ALSO mounted by tool-server-data-ops (the delete agent's module),
+which needs identity for ownership checks but must not have graph_query.
+Importing the same class from the shared location keeps the two mounts
+in lock-step with zero duplication. No agent mounts both this module AND
+tool-server-data-ops, so there is no "whoami" name collision.
 
 Three tools, one mount(): idiomatic multi-tool module (same as tool-filesystem
 which mounts read_file / write_file / edit_file from one mount() call).
@@ -37,10 +37,10 @@ async def mount(coordinator: Any, config: Any) -> None:
     untouched.
     """
     from context_intelligence.tool_resolver import ToolConfigResolver
+    from context_intelligence.whoami_tool import WhoamiTool
 
     from .blob_read_tool import BlobReadTool
     from .graph_query_tool import GraphQueryTool
-    from .whoami_tool import WhoamiTool
 
     resolver = ToolConfigResolver(config or {}, coordinator)  # built ONCE
     # WARN-only diagnostic pass (criterion 4) -- no longer raises; hard validation is
@@ -52,4 +52,3 @@ async def mount(coordinator: Any, config: Any) -> None:
     await coordinator.mount("tools", gq, name=gq.name)  # "graph_query"
     await coordinator.mount("tools", br, name=br.name)  # "blob_read"
     await coordinator.mount("tools", whoami, name=whoami.name)  # "whoami"
-    return None  # kernel ignores non-callable returns; resolver is pure → no cleanup
