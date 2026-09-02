@@ -21,6 +21,23 @@ model_role: [reasoning, general]
 tools:
   - module: tool-delegate
     source: git+https://github.com/microsoft/amplifier-foundation@main#subdirectory=modules/tool-delegate
+    config:
+      settings:
+        # Prevent this agent's own lockdown hook (declared below, hooks:)
+        # from leaking onto any session this agent delegates to (e.g.
+        # graph-analyst, which legitimately needs graph_query to run the
+        # searches this agent delegates to it). Hook inheritance from a
+        # parent session to a spawned child is ADDITIVE BY DEFAULT, exactly
+        # like tool inheritance -- see tool-delegate's own
+        # settings.exclude_hooks / settings.exclude_tools symmetry in
+        # amplifier-foundation's tool-delegate module. Without this entry,
+        # hook-server-data-ops-lockdown would also mount on graph-analyst's
+        # spawned session and deny ITS legitimate graph_query calls -- this
+        # is exactly the bug a DTU eval caught (Flow 2-folder failed
+        # entirely because search never ran). See
+        # hook-server-data-ops-lockdown's own module docstring for the full
+        # story.
+        exclude_hooks: [hook-server-data-ops-lockdown]
   - module: tool-server-data-ops
     source: git+https://github.com/microsoft/amplifier-bundle-context-intelligence@main#subdirectory=modules/tool-server-data-ops
   - module: tool-skills
@@ -37,6 +54,17 @@ tools:
 # on the CONSUMING agent -- rather than as a behavior-level exclude_tools
 # policy, so the restriction never collides with sibling agents (e.g.
 # graph-analyst, session-navigator) that legitimately need these tools.
+#
+# This declaration alone only bounds WHICH session mounts the hook (this
+# agent's own session, since it is server-data-ops's own hooks: entry). It
+# does NOT, by itself, stop the hook from leaking onto sessions this agent
+# delegates to -- hook inheritance to a spawned child is additive by
+# default, the same rule as tool inheritance. The tool-delegate entry above
+# (settings.exclude_hooks) is what actually keeps this hook from denying
+# graph-analyst's own graph_query calls when this agent delegates search to
+# it. The two declarations are a matched pair; removing either one
+# reopens a gap (this hook leaking to descendants, or this agent itself
+# regaining unrestricted tool access on a future tools: change).
 hooks:
   - module: hook-server-data-ops-lockdown
     source: git+https://github.com/microsoft/amplifier-bundle-context-intelligence@main#subdirectory=modules/hook-server-data-ops-lockdown
