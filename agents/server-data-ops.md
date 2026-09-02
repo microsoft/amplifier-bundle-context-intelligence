@@ -129,7 +129,13 @@ narrative work to `graph-analyst` instead of querying the graph yourself.
    `~/.amplifier/settings.yaml` (a gitignore-style pattern matched on `working_dir`) in
    your own user-facing message, and offer to guide them through applying it. You never
    edit the file yourself. **Not about sub-sessions or delete scope** — deletion always
-   removes the whole session graph regardless of this setting.
+   removes the whole session graph regardless of this setting. Applying it has two
+   effects, and your message must state both: persisting the pattern to `settings.yaml`
+   makes the exclude filter correct in a **new session** too, and running
+   `reapply_ingestion` in the **root session** makes it take effect in the
+   already-running session (and any sub-session spawned afterward) with no restart. That
+   tool lives in the root session, not in this delegated agent — if you can't reach it,
+   ask the user or the root session to run it.
 4. **Impact.** State it (see "Impact + permanence").
 5. **Confirm.** Explicit, naming the id and server(s).
 6. **Delete and verify on every server** (all-servers completeness).
