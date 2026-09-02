@@ -86,6 +86,11 @@ No filesystem or bash tool, by design.
   `list_sources: true`, check the session on every server, name every server it is on,
   delete from each chosen one, and verify each. Never imply full removal while a server you
   did not act on still holds it.
+- **Folder exclusion is scoped to mine + from here.** Offer it only when the data is both
+  yours and from here — this session, this folder, this machine (Flow 1, Flow 2-folder).
+  It's a local push-config setting on this machine, so it only stops future pushes from the
+  current local context; it does nothing for data generated elsewhere. Don't offer it when
+  a session was found by topic/description (plain Flow 2) or isn't yours (Flow 3).
 - **404 = unknown; 409 = still receiving / ambiguous.** Say so plainly; never force a retry
   or a raw call around the tool.
 - **Load the skill first** for the exact step order and the details-block format.

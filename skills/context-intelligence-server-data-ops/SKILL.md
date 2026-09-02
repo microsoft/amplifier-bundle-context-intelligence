@@ -79,6 +79,13 @@ search — not a single session id. Don't ask unless context genuinely has none.
 Call `whoami` for the *same server* the session in question is on, and use its
 `contributor_id` as the one reference identity for the comparison (Flow 3).
 
+**When the folder exclusion applies.** Offer it only when the data is both yours and
+from here — this session, this folder, this machine (Flow 1, Flow 2-folder). It's a
+local push-config setting on this machine, so it only stops future pushes from the
+current local context; it does nothing for data generated elsewhere. Don't offer it
+for a session found by topic/description (plain Flow 2) or one that isn't yours
+(Flow 3).
+
 ## The "Session Details" Block
 
 Use this exact shape for any candidate or confirmed target (Flow 2 candidate list;
