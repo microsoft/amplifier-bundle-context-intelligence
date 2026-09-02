@@ -63,16 +63,22 @@ session by its id, and the server resolves the rest.
 
 ## Resolving "this session" and "the current user"
 
-- **Current session id**: look in the environment/status context injected into your turn
-  (other agents in this ecosystem are shown a running "Session ID" the same way). Use that
-  id as "the current session" whenever a flow below refers to it. Ask the user directly
-  only if context genuinely doesn't have it — at most one short question, never an
-  interrogation.
+- **Current session id**: this comes from Amplifier's own runtime context — the
+  `Session ID` field in the status context injected into your turn every turn (other
+  agents in this ecosystem are shown the same running "Session ID"). For any "this
+  session" / "my current session" / "this working directory" request, that field's value
+  IS the session to act on. Do not ask the user to type an id for this kind of request.
+  If the user types one anyway, it does **not** replace the runtime value — resolve from
+  context regardless of what was typed. (Asking the user directly is only ever a fallback
+  for the rare case where context genuinely has no `Session ID` at all — at most one
+  short question, never an interrogation.) Resolution is not the end of the story: Flow 1
+  step 2 requires you to then *prove* the resolution with a real `session_summary` call
+  before doing anything else — never act on a resolved id you haven't proven.
 - **Current user identity (for ownership comparisons)**: do **not** read this from
   injected context and do **not** guess. Call the `whoami` tool for the **same server**
   the session in question is on, and read its `contributor_id`. That is your one and only
-  reference identity for the ownership comparison in Flow 3 below — see that section for
-  exactly how to use it, including the null-`contributor_id` fallback.
+  reference identity for the ownership comparison — in Flow 1 this runs as part of the
+  proof step (step 2, below); see Flow 3 for the full match/mismatch/null handling.
 
 ---
 
@@ -129,40 +135,62 @@ Flow 1 applies whenever the request refers to the user's own current session —
 like "my current session," "my session's data," "this session," "this working directory,"
 "the session I'm in." This is true **even if the user also supplies a session id in the
 same request** — a supplied id does not downgrade a "my current session" request out of
-Flow 1, and the folder-exclusion offer below still applies. Only route to Flow 2 (find by
-description) when the request names or searches for some *other* session — by topic, by
-someone else, or any session that is not the user's own current one.
+Flow 1, and it does not replace the runtime session id either (see step 1 below). The
+folder-exclusion offer below still applies. Only route to Flow 2 (find by description)
+when the request names or searches for some *other* session — by topic, by someone else,
+or any session that is not the user's own current one.
 
-Steps, matching the approved scenario exactly:
+Steps, in this exact order:
 
-1. Resolve the current session's own id from context (see "Resolving 'this session' and
-   'the current user'" above) — ask the user directly only as a fallback. Ask the user to
-   confirm they want to delete this session's data.
-2. Call `session_summary(session_id=<current>, list_sources=true)` or
-   `delete_session(list_sources=true)` to see **every** server in the connectable set, and
-   check which of them the session actually exists on — not just the one that seems
-   obvious. Report all of them to the user by name, asking "remove from all?" (this is
-   the all-servers completeness rule from the agent body; it applies here regardless of
-   how many servers turn out to hold the session).
-3. The user picks which server(s) to remove it from.
-4. **Unconditionally** offer to add a folder exclusion for the chosen destination(s) (see
-   "Folder exclusion" below) — so the folder is not pushed there anymore — and offer to
-   guide the user through applying it. Make this offer every time, whether or not you have
-   any way to confirm the folder is currently filter-included; do not skip or gate the
-   offer on that check. Do this **before** proceeding with deletion.
-5. For **each** server the user chose (one at a time, not just the first): call
-   `session_summary(session_id=<current>, source=<chosen>)` (the preview) and show the
-   user the session details block built from it → get an explicit, strong confirmation
-   naming the specific session and server → call `delete_session` → verify that server's
-   own result before moving to the next one.
-6. Report exactly what was removed and from which server(s) — and if the session still
-   exists on any server that was not chosen for deletion, say so explicitly (by name).
-   Never say "done" or imply full removal while a server you didn't act on (or didn't
-   check) still holds the session.
+1. **RESOLVE.** Take the current session id from Amplifier's own runtime context — the
+   `Session ID` field in your status context (see "Resolving 'this session' and 'the
+   current user'" above). That is the session to act on. Do **not** ask the user for an
+   id. If the user also typed one in their request, it does not replace the runtime id —
+   you still resolve from Amplifier's context, not from what was typed.
+2. **PROVE.** Call `session_summary(session_id=<resolved>, list_sources=true)` and show
+   the user the proof — not just "ok, found it," the actual fields:
+   - the resolved root session id (`root_id`)
+   - `created_by`, confirmed against your own identity — call `whoami` for the same
+     server and compare; this is the same ownership check described in Flow 3, running
+     here as part of the proof, right after the preview and before anything else
+   - `working_dir`
+   - `last_change` — flag it explicitly if it is under a minute old ("this may still be
+     live")
+   Also note, from the `list_sources: true` result, every server this session actually
+   exists on (feeds the all-servers completeness handling in step 6).
+   **If `session_summary` 404s on every configured server, STOP.** Tell the user plainly
+   — e.g. "this session isn't on the server(s)" — and go no further. Never delete against
+   an unresolved or absent session.
+3. **OFFER THE FOLDER EXCLUSION — mandatory, unconditional, front-loaded.** Before the
+   impact statement, before asking for confirmation, before any delete: offer to add a
+   folder exclusion for the `working_dir` you just proved in step 2 (see "Folder
+   exclusion" below), and offer to guide the user through applying it. Make this offer
+   every time, whether or not you have any way to confirm the folder is currently
+   filter-included; do not skip or gate the offer on that check. **Skipping this offer in
+   Flow 1 is a defect, not a shortcut.**
+4. **STATE THE IMPACT.** Tell the user plainly what will be removed: the session's whole
+   graph — the named session plus every descendant (forks, sub-sessions, delegated
+   children) — along with the blobs and queue records for all of them, permanently, and
+   name which server(s) this applies to (from step 2's server check). Nodes shared with
+   other sessions are kept; there is no undo and no restore.
+5. **CONFIRM.** Get an explicit, strong confirmation from the user, restating the
+   resolved session id and the server(s) about to be affected — a vague "yes" is never
+   enough.
+6. **DELETE, then VERIFY, on every server (all-servers completeness).** If step 2 found
+   the session on more than one server, name all of them to the user and ask which to
+   delete from (or "all") if that was not already settled by step 5's confirmation. For
+   **each** server chosen (one at a time, not just the first): call `session_summary`
+   again as an immediate pre-delete preview if meaningful time has passed since step 2,
+   then call `delete_session`, then verify that server's own result (or a fresh
+   `session_summary`) before moving to the next one — one delete succeeding says nothing
+   about whether the others did. Report exactly what was removed and from which
+   server(s) — and if the session still exists on any server that was not chosen for
+   deletion, say so explicitly (by name). Never say "done" or imply full removal while a
+   server you didn't act on (or didn't check) still holds the session.
 
 All six steps happen in this same session.
 
-### Folder exclusion (offered before deletion)
+### Folder exclusion (offered in step 3, before anything else proceeds)
 
 The fan-out filter for a destination lives at
 `overrides.hook-context-intelligence.config.destinations.<name>.exclude` in
@@ -172,17 +200,19 @@ that destination's `exclude` list stops that destination from being selected for
 sessions started in that folder.
 
 **How you apply it:** the agent has no filesystem tool, and that's deliberate — it never
-edits this file itself. **In Flow 1, make this offer every time, unconditionally** — do
-not first try to determine whether the current session's folder is actually included by
-a chosen destination's filters. That determination is not reliably available to the
-agent, and gating the offer on it is exactly what caused the offer to be silently skipped
-in a real case (a current-session deletion where the offer never fired). Instead: always
-show the user exactly what to add (the destination name, and the pattern that would match
-their current folder), and offer to guide them through applying it, before proceeding with
-deletion. Confirm whether they applied it, then move on to the preview and delete steps.
+edits this file itself. **In Flow 1, make this offer every time, unconditionally, and
+before the impact statement, confirmation, or delete (steps 4–6)** — do not first try to
+determine whether the current session's folder is actually included by a chosen
+destination's filters. That determination is not reliably available to the agent, and
+gating the offer on it (or deferring it later in the flow) is exactly what caused the
+offer to be silently skipped in a real case (a current-session deletion where the offer
+never fired). Instead: always show the user exactly what to add (the destination name,
+and the pattern that would match their current folder), and offer to guide them through
+applying it, before proceeding to the impact statement, confirmation, or deletion.
+Confirm whether they applied it, then move on.
 
-Order: offer the exclusion (always) → preview (`session_summary`) → strong confirmation →
-delete.
+Order: resolve (step 1) → prove (step 2) → offer the exclusion (step 3, always) → state
+the impact (step 4) → strong confirmation (step 5) → delete and verify (step 6).
 
 QUESTION FOR USER: it is unclear whether an exclusion added while the current session is
 still running takes effect for that session's own remaining event pushes to this
@@ -286,16 +316,19 @@ warnings on the user's own sessions in a real evaluation.
 
 ## Design notes
 
-- **Current session id** — resolved from injected environment/status context first (see
-  "Resolving 'this session' and 'the current user'" above); asking the user is the
-  fallback, never the first move.
+- **Current session id** — resolved from Amplifier's own runtime context (the `Session
+  ID` field) first and always for a "this session" request; a typed id never replaces
+  it. Asking the user is the fallback only when context genuinely has no `Session ID` at
+  all. See "Resolving 'this session' and 'the current user'" above and Flow 1 step 1 —
+  and step 2, which proves the resolution before anything else proceeds.
 - **Current user identity for ownership** — resolved via the `whoami` tool, never from
   injected context and never guessed. See "Resolving 'this session' and 'the current
-  user'" above and Flow 3.
+  user'" above and Flow 3. In Flow 1 this runs as part of step 2 (the proof step).
 - **The folder-exclusion mechanism** — the agent has no filesystem tool, deliberately. It
   shows the user the exact setting to add and asks them to apply it; it never edits
   `~/.amplifier/settings.yaml` itself (see "Folder exclusion" under Flow 1 above). The
-  offer itself is unconditional — never gated on first confirming the folder is
-  filter-included.
+  offer itself is mandatory, unconditional, and front-loaded — step 3 of Flow 1, before
+  the impact statement, confirmation, or delete — never gated on first confirming the
+  folder is filter-included, and never deferred to later in the flow.
 - **Folder-exclusion timing** — still an open question; see the QUESTION FOR USER note
   under "Folder exclusion" above. Needs a decision before this flow ships.
