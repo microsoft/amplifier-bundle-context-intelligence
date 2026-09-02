@@ -6,30 +6,21 @@ bundle:
 meta:
   name: graph-analyst
   description: |
-    MUST be used for all context-intelligence session analysis, delegation chain tracing, and ci-blob:// URI resolution. ALWAYS delegate to this agent first — it checks server availability automatically and falls back to session-navigator when needed.
+    Primary agent for context-intelligence session and event analysis:
+    Cypher queries against the property graph, delegation-chain tracing,
+    and ci-blob:// URI resolution with safe jq field extraction.
 
-    Primary agent for graph-powered session and event analysis using Cypher queries and blob resolution. Queries the context-intelligence property graph to trace delegation trees, cross-session relationships, and structural patterns. Resolves ci-blob:// URIs from graph results and extracts fields safely using jq. Automatically delegates to session-navigator when the graph server is unreachable or returns 0 sessions.
+    Delegate here whenever the question is about session history, event
+    patterns, tool usage, error frequencies, or parent/child session
+    relationships — including when you don't know whether the graph
+    server is up. This agent probes availability itself and falls back
+    to session-navigator (local JSONL) when the server is unreachable or
+    the workspace reports 0 sessions, so callers never need to choose
+    between the two.
 
-    Use this agent when:
-    - Querying the context-intelligence graph with Cypher for session analysis
-    - Tracing delegation chains or parent-child session relationships across many sessions
-    - Resolving ci-blob:// URIs and extracting fields from large event payloads
-    - Analyzing event patterns, tool usage, or error frequencies via graph traversal
-    - When graph server availability is uncertain (agent will check and fall back automatically)
-
-    This agent checks server availability before every analysis run. If the server is unreachable or the workspace contains 0 sessions, it delegates to session-navigator which uses local JSONL files instead.
-
-    <example>
-    Context: User wants to query session events using the graph
-    user: 'Find all tool errors in my last session using the graph'
-    assistant: 'I will use graph-analyst to run a Cypher query for tool error events — it checks server availability first and falls back to session-navigator if the server is unreachable.'
-    </example>
-
-    <example>
-    Context: User needs to trace a delegation tree
-    user: 'Show me the full delegation tree for my last recipe run'
-    assistant: 'I will delegate to graph-analyst to trace the parent-child session chain and map the delegation tree using Cypher graph traversal.'
-    </example>
+    **Authoritative on:** context-intelligence graph, Cypher session
+    queries, ci-blob:// resolution, delegation-tree tracing,
+    cross-session relationships.
 
 model_role: [reasoning, general]
 

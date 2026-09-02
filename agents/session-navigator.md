@@ -6,19 +6,17 @@ bundle:
 meta:
   name: session-navigator
   description: |
-    MUST NOT be invoked directly by external callers. ALWAYS delegated to by graph-analyst when the graph server is unreachable or returns 0 sessions.
+    Local fallback for context-intelligence session navigation — session
+    discovery, event search, and JSONL traversal via safe bash/jq/grep
+    patterns that never load 100k+ token events.jsonl lines into context.
+    Operates entirely on the local filesystem under
+    ${AMPLIFIER_CONTEXT_INTELLIGENCE_BASE_PATH:-$HOME/.amplifier/projects};
+    never uses graph_query or blob_read.
 
-    Local fallback agent for navigating session data via flat JSONL files using bash/jq/grep safe extraction patterns. Handles session discovery, event search, and session navigation under the root resolved from `CONTEXT_INTELLIGENCE_ROOT="${AMPLIFIER_CONTEXT_INTELLIGENCE_BASE_PATH:-$HOME/.amplifier/projects}"` when the context-intelligence graph server is unavailable.
-
-    This agent is NOT called directly by external callers. It is only delegated to by graph-analyst when the graph server is unreachable or returns 0 sessions. External callers should use graph-analyst instead.
-
-    All operations use safe bash/jq/grep patterns that avoid loading 100k+ token events.jsonl lines into context. Never uses graph_query or blob_read — operates entirely on local filesystem files.
-
-    <example>
-    Context: Graph analyst delegating because server is unreachable
-    user: [graph-analyst delegates] 'Find tool errors in session abc123 — graph server is unreachable. Workspace: my-project'
-    assistant: 'I will scope search to workspace my-project. I will first resolve CONTEXT_INTELLIGENCE_ROOT="${AMPLIFIER_CONTEXT_INTELLIGENCE_BASE_PATH:-$HOME/.amplifier/projects}", then look in "$CONTEXT_INTELLIGENCE_ROOT"/my-project/sessions/ first, then filter by workspace field if needed. I will search for tool errors using safe jq extraction patterns.'
-    </example>
+    Reached only via graph-analyst, which delegates here when the graph
+    server is unreachable or the workspace returns 0 sessions. If you are
+    an external caller deciding where to send a session-analysis task,
+    send it to graph-analyst instead — it picks between the two.
 
 model_role: general
 
