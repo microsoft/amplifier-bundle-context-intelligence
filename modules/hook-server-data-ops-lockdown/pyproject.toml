@@ -30,6 +30,12 @@ dev = [
     "pytest-asyncio>=0.24",
     "pyright>=1.1.411",
     "ruff>=0.14",
+    # Parses agents/server-data-ops.md's frontmatter in
+    # tests/test_module.py's TestSessionScopeComposition -- verifies the
+    # companion settings.exclude_hooks fix (see this module's own
+    # docstring) is actually declared, not just documented. Same version
+    # floor as this repo's own root pyproject.toml dev group.
+    "PyYAML>=6.0",
 ]
 
 [tool.pytest.ini_options]

@@ -19,13 +19,52 @@ carried by the CONSUMING agent itself, not imposed on every agent that
 happens to share a behavior with it.
 
 A `tool:pre` deny hook declared in the agent's OWN frontmatter (`hooks:`,
-sibling to `tools:`) is the mechanism that achieves this: it is scoped to
-sessions that mount this hook module, which server-data-ops declares for
-itself. It has no effect on graph-analyst, session-navigator, or any other
-agent, regardless of how tool inheritance evolves around them. It also
-holds even if a future change to server-data-ops's own `tools:` list (or
-to what it inherits) were to re-introduce one of these tools -- the deny is
-enforced at call time, not just at composition time.
+sibling to `tools:`) bounds WHICH SESSION MOUNTS this hook module: only
+server-data-ops's own session, since only its own agent definition declares
+it. That much is true regardless of anything else. It also holds even if a
+future change to server-data-ops's own `tools:` list (or to what it
+inherits) were to re-introduce one of these tools -- the deny is enforced
+at call time, not just at composition time.
+
+SUBTREE LEAK, found via a DTU eval and fixed alongside this hook: mounting
+the hook on server-data-ops's own session does NOT, by itself, stop it from
+also reaching every session server-data-ops SPAWNS. Hook inheritance from a
+parent session to a delegated child is ADDITIVE BY DEFAULT -- exactly the
+same rule as tool inheritance -- see amplifier-foundation's tool-delegate
+module (`settings.exclude_hooks`, which mirrors `settings.exclude_tools`
+field-for-field; both are consumed by `_spawn_new_session()` to build an
+inheritance-filtering policy the app-layer spawn capability applies to the
+child). Left unexcluded, this hook -- mounted on server-data-ops's own
+session -- ALSO mounted on graph-analyst's spawned session whenever
+server-data-ops delegated search to it, and denied graph-analyst's own,
+entirely legitimate `graph_query` calls. That is precisely what broke Flow
+2 / Flow 2-folder: search never ran, so no candidate sessions were ever
+found to delete.
+
+THE FIX: agents/server-data-ops.md's own `tools:` entry for `tool-delegate`
+sets `config.settings.exclude_hooks: ["hook-server-data-ops-lockdown"]`
+(this module's own id). That setting -- not anything in this file -- is
+what stops this hook from being composed onto any session server-data-ops
+spawns, while leaving it fully in force for server-data-ops's OWN tool
+calls (its `hooks:` declaration is untouched; only its inheritance into
+descendants is excluded). With that setting in place, this hook has no
+effect on graph-analyst, session-navigator, or any other agent
+server-data-ops delegates to -- but only because of that setting. Removing
+it reopens the subtree leak even though nothing in this file's own deny
+logic changes.
+
+Why the fix is not "check which agent/session is calling" inside the
+handler below: the `tool:pre` event's documented payload carries ONLY
+`tool_name` and `tool_input` -- see the reference emit call in
+`core:docs/contracts/ORCHESTRATOR_CONTRACT.md`
+(`await hooks.emit("tool:pre", {"tool_name": ..., "tool_input": ...})`) and
+the field table in `core:docs/contracts/HOOK_CONTRACT.md`
+(`tool:pre | Before tool execution | tool_name, tool_input`). No session
+id, agent name, or other identity field is part of the documented
+contract, so a handler receiving `(event, data)` structurally cannot tell
+"server-data-ops's own call" apart from "a descendant session's call."
+Session-scoping has to happen at the delegation boundary
+(`exclude_hooks`), not inside this handler.
 
 Contract references (verified against amplifier-core docs before writing
 this handler):
