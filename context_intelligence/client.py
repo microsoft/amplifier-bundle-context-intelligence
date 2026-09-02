@@ -675,6 +675,30 @@ class CIClient:
         url = f"{self._server_url}/sessions/{session_id}"
         return _http_delete_strict(url, self._auth_headers())
 
+    def whoami(self) -> dict[str, Any]:
+        """Resolve the authenticated caller's identity from the server.
+
+        Calls ``GET /whoami`` and returns the parsed JSON dict: the server's
+        view of who is making the request right now (e.g.
+        ``{"contributor_id": "<github-id>"}``). ``contributor_id`` is ``None``
+        when auth is disabled server-side.
+
+        Returns
+        -------
+        dict
+            The parsed identity dict.
+
+        Raises
+        ------
+        CIClientError
+            The request genuinely failed: connection error/refused, timeout,
+            non-2xx HTTP status, or a malformed (non-JSON) body.
+            ``status_code`` carries the exact number so the caller can give a
+            clear message.
+        """
+        url = f"{self._server_url}/whoami"
+        return _http_get_strict(url, self._auth_headers())
+
     def health_check(self) -> dict[str, Any]:
         """Check server health by running a simple count query.
 
@@ -1019,6 +1043,51 @@ class AsyncCIClient:
                 return resp.json()
         except httpx.TimeoutException as exc:  # type: ignore[union-attr]
             raise CIClientError(f"timeout deleting {url}", error_type="timeout", url=url) from exc
+        except httpx.HTTPStatusError as exc:  # type: ignore[union-attr]
+            raise CIClientError(
+                f"HTTP {exc.response.status_code} from {url}",
+                error_type="http_status",
+                url=url,
+                status_code=exc.response.status_code,
+            ) from exc
+        except (ValueError, json.JSONDecodeError) as exc:  # resp.json() failed
+            raise CIClientError(
+                f"malformed JSON from {url}", error_type="decode_error", url=url
+            ) from exc
+        except httpx.HTTPError as exc:  # type: ignore[union-attr]  # ConnectError, transport, etc.
+            raise CIClientError(
+                f"connection error to {url}: {exc}", error_type="connection_error", url=url
+            ) from exc
+
+    async def whoami(self) -> dict[str, Any]:
+        """Resolve the authenticated caller's identity from the server (async).
+
+        Calls ``GET /whoami`` and returns the parsed JSON dict: the server's
+        view of who is making the request right now (e.g.
+        ``{"contributor_id": "<github-id>"}``). ``contributor_id`` is ``None``
+        when auth is disabled server-side.
+
+        Returns
+        -------
+        dict
+            The parsed identity dict.
+
+        Raises
+        ------
+        CIClientError
+            The request genuinely failed: connection error/refused, timeout,
+            non-2xx HTTP status, or a malformed (non-JSON) body.
+            ``status_code`` carries the exact number so the caller can give a
+            clear message. Honors ``self._timeout`` like ``session_summary()``.
+        """
+        url = f"{self._server_url}/whoami"
+        try:
+            async with httpx.AsyncClient(timeout=self._timeout) as client:  # type: ignore[union-attr]
+                resp = await client.get(url, headers=self._strategy.headers())
+                resp.raise_for_status()
+                return resp.json()
+        except httpx.TimeoutException as exc:  # type: ignore[union-attr]
+            raise CIClientError(f"timeout fetching {url}", error_type="timeout", url=url) from exc
         except httpx.HTTPStatusError as exc:  # type: ignore[union-attr]
             raise CIClientError(
                 f"HTTP {exc.response.status_code} from {url}",

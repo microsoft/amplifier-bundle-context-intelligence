@@ -449,6 +449,82 @@ class TestCIClientSessionSummary:
         assert excinfo.value.status_code == 409
 
 
+class TestCIClientWhoami:
+    """CIClient.whoami() must GET /whoami and return a dict."""
+
+    def test_whoami_returns_dict(self):
+        """whoami() returns the parsed identity dict from the server."""
+        from context_intelligence.client import CIClient
+
+        client = CIClient("http://localhost:8000", "key")
+        mock_response = {"contributor_id": "octocat"}
+
+        with patch("context_intelligence.client._http_get_strict") as mock_get:
+            mock_get.return_value = mock_response
+            result = client.whoami()
+
+        assert result == mock_response
+
+    def test_whoami_calls_correct_url(self):
+        """whoami() calls GET /whoami."""
+        from context_intelligence.client import CIClient
+
+        client = CIClient("http://localhost:8000", "key")
+
+        with patch("context_intelligence.client._http_get_strict") as mock_get:
+            mock_get.return_value = {}
+            client.whoami()
+
+        call_args = mock_get.call_args
+        url = call_args[0][0] if call_args[0] else call_args[1]["url"]
+        assert url == "http://localhost:8000/whoami"
+
+    def test_whoami_includes_authorization_header(self):
+        """whoami() sends Authorization: Bearer <api_key>."""
+        from context_intelligence.client import CIClient
+
+        client = CIClient("http://localhost:8000", "secretkey")
+
+        with patch("context_intelligence.client._http_get_strict") as mock_get:
+            mock_get.return_value = {}
+            client.whoami()
+
+        call_args = mock_get.call_args
+        headers = call_args[0][1] if len(call_args[0]) > 1 else call_args[1].get("headers", {})
+        assert headers.get("Authorization") == "Bearer secretkey"
+
+    def test_whoami_returns_null_contributor_id_when_auth_disabled(self):
+        """A server with auth disabled returns contributor_id: null -- passed through."""
+        from context_intelligence.client import CIClient
+
+        client = CIClient("http://localhost:8000", "key")
+
+        with patch("context_intelligence.client._http_get_strict") as mock_get:
+            mock_get.return_value = {"contributor_id": None}
+            result = client.whoami()
+
+        assert result == {"contributor_id": None}
+
+    def test_whoami_propagates_ciclienterror(self):
+        """A genuine transport/HTTP failure must not be swallowed -- it propagates."""
+        from context_intelligence.client import CIClient, CIClientError
+
+        client = CIClient("http://localhost:8000", "key")
+
+        with patch("context_intelligence.client._http_get_strict") as mock_get:
+            mock_get.side_effect = CIClientError(
+                "HTTP 500 from http://localhost:8000/whoami",
+                error_type="http_status",
+                url="http://localhost:8000/whoami",
+                status_code=500,
+            )
+            with pytest.raises(CIClientError) as excinfo:
+                client.whoami()
+
+        assert excinfo.value.error_type == "http_status"
+        assert excinfo.value.status_code == 500
+
+
 class TestCIClientDeleteSession:
     """CIClient.delete_session() must DELETE /sessions/{id} and return a dict."""
 
@@ -958,6 +1034,93 @@ class TestAsyncCIClientSessionSummary:
 
         assert exc_info.value.error_type == "http_status"
         assert exc_info.value.status_code == 409
+
+
+class TestAsyncCIClientWhoami:
+    """AsyncCIClient.whoami() must GET /whoami."""
+
+    async def test_async_whoami_returns_parsed_dict(self):
+        """whoami() returns the parsed identity dict from the server."""
+        from context_intelligence.client import AsyncCIClient
+
+        identity_data = {"contributor_id": "octocat"}
+        mock_resp = _make_async_mock_response(identity_data)
+        mock_http = _make_async_httpx_client(mock_resp)
+
+        with patch("context_intelligence.client.httpx.AsyncClient", return_value=mock_http):
+            client = AsyncCIClient("http://localhost:8000", "testkey")
+            result = await client.whoami()
+
+        assert result == identity_data
+
+    async def test_async_whoami_calls_correct_url_and_method(self):
+        """whoami() GETs {server_url}/whoami."""
+        from context_intelligence.client import AsyncCIClient
+
+        mock_resp = _make_async_mock_response({})
+        mock_http = _make_async_httpx_client(mock_resp)
+        mock_inner_client = mock_http.__aenter__.return_value
+
+        with patch("context_intelligence.client.httpx.AsyncClient", return_value=mock_http):
+            client = AsyncCIClient("http://localhost:8000", "testkey")
+            await client.whoami()
+
+        assert mock_inner_client.get.called, "whoami must use GET"
+        call_args = mock_inner_client.get.call_args
+        url = call_args[0][0] if call_args[0] else call_args[1]["url"]
+        assert url == "http://localhost:8000/whoami"
+
+    async def test_async_whoami_sends_auth_header(self):
+        """whoami() sends Authorization: Bearer <api_key>."""
+        from context_intelligence.client import AsyncCIClient
+
+        mock_resp = _make_async_mock_response({})
+        mock_http = _make_async_httpx_client(mock_resp)
+        mock_inner_client = mock_http.__aenter__.return_value
+
+        with patch("context_intelligence.client.httpx.AsyncClient", return_value=mock_http):
+            client = AsyncCIClient("http://localhost:8000", "secretkey")
+            await client.whoami()
+
+        call_kwargs = mock_inner_client.get.call_args
+        sent_headers = call_kwargs[1].get("headers") or call_kwargs[0][1]
+        assert sent_headers.get("Authorization") == "Bearer secretkey"
+
+    async def test_async_whoami_returns_null_contributor_id_when_auth_disabled(self):
+        """A server with auth disabled returns contributor_id: null -- passed through."""
+        from context_intelligence.client import AsyncCIClient
+
+        mock_resp = _make_async_mock_response({"contributor_id": None})
+        mock_http = _make_async_httpx_client(mock_resp)
+
+        with patch("context_intelligence.client.httpx.AsyncClient", return_value=mock_http):
+            client = AsyncCIClient("http://localhost:8000", "testkey")
+            result = await client.whoami()
+
+        assert result == {"contributor_id": None}
+
+    async def test_async_whoami_raises_on_500(self):
+        """A genuine HTTP failure raises CIClientError(error_type='http_status')."""
+        import httpx
+
+        from context_intelligence.client import AsyncCIClient, CIClientError
+
+        request = httpx.Request("GET", "http://localhost:8000/whoami")
+        real_response = httpx.Response(status_code=500, request=request)
+        mock_resp = MagicMock()
+        mock_resp.status_code = 500
+        mock_resp.raise_for_status.side_effect = httpx.HTTPStatusError(
+            "500", request=request, response=real_response
+        )
+        mock_http = _make_async_httpx_client(mock_resp)
+
+        with patch("context_intelligence.client.httpx.AsyncClient", return_value=mock_http):
+            client = AsyncCIClient("http://localhost:8000", "testkey")
+            with pytest.raises(CIClientError) as exc_info:
+                await client.whoami()
+
+        assert exc_info.value.error_type == "http_status"
+        assert exc_info.value.status_code == 500
 
 
 class TestAsyncCIClientDeleteSession:
