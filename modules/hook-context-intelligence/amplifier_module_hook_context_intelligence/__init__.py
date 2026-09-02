@@ -74,6 +74,151 @@ async def _discover_events(coordinator: Any) -> set[str]:
     return discovered
 
 
+async def apply_active_dispatchers(
+    coordinator: Any,
+    resolver: Any,
+    logging_handler: Any,
+    destinations: dict[str, Any],
+) -> tuple[str, list[str]]:
+    """Compute active destinations for the live working_dir and install them.
+
+    This is the reusable core of fan-out routing: match_key -> select_active ->
+    build one dispatcher per active destination -> set_dispatchers (drain-safe
+    swap). Called ONCE at on_session_ready, and AGAIN by the live-reapply path
+    (``context_intelligence.reapply_ingestion``) after the destinations config
+    is updated mid-session. ``set_dispatchers`` bounded-closes the previously
+    installed dispatchers, so calling this repeatedly is safe.
+
+    Returns ``(match_key, sorted_active_names)`` for reporting.
+    """
+    from .config_resolver import Destination
+    from .fanout import normalize_match_key, select_active
+    from .handlers.logging_handler import _DestinationDispatcher
+
+    active: dict[str, Destination] = {}
+    match_key: str = ""
+    if destinations:
+        get_cap = getattr(coordinator, "get_capability", None)
+        working_dir = get_cap("session.working_dir") if get_cap else None
+        if not working_dir:
+            log.warning(
+                "context-intelligence: session.working_dir capability is unavailable; "
+                "fan-out disabled for this session (local JSONL only)."
+            )
+        else:
+            match_key = normalize_match_key(working_dir)
+            active = select_active(destinations, match_key)
+
+    dispatchers = [
+        _DestinationDispatcher(
+            name=d.name,
+            url=d.url,
+            api_key=d.api_key,
+            workspace=resolver.workspace,
+            working_dir=resolver.working_dir,
+            dispatch_timeout=resolver.dispatch_timeout,
+            read_timeout=resolver.dispatch_read_timeout,
+            connect_timeout=resolver.dispatch_connect_timeout,
+            failure_threshold=resolver.dispatch_failure_threshold,
+            queue_capacity=resolver.dispatch_queue_capacity,
+            close_drain_timeout=resolver.close_drain_timeout,
+            backoff_initial=resolver.dispatch_backoff_initial,
+            backoff_max=resolver.dispatch_backoff_max,
+            backoff_jitter=resolver.dispatch_backoff_jitter,
+            storage_path=str(resolver.base_path),
+            forwarding_log_dir=resolver.forwarding_log_dir,
+            auth_mode=d.auth_mode,
+            auth_resource=d.auth_resource,
+        )
+        for d in active.values()
+    ]
+    await logging_handler.set_dispatchers(dispatchers)
+
+    if not destinations:
+        log.info("context-intelligence fan-out: no destinations configured — local JSONL only")
+    elif active:
+        log.info("context-intelligence fan-out: active -> %s", ", ".join(sorted(active)))
+    else:
+        log.warning(
+            "context-intelligence fan-out: routed to none (local-only) for working_dir=%s",
+            match_key,
+        )
+
+    return match_key, sorted(active)
+
+
+def _read_destinations_from_settings(settings_path: str) -> dict[str, Any]:
+    """Read the raw ``destinations`` block from a settings.yaml on disk.
+
+    The hook itself never reads settings.yaml (the kernel merges/expands it and
+    hands mount() a config dict). The live-reapply path re-reads the file so a
+    mid-session exclude edit on disk is reflected in the running session.
+
+    Looks first under ``overrides.hook-context-intelligence.config.destinations``
+    (the real settings.yaml shape), then falls back to a top-level
+    ``destinations:`` key (compact spike-config shape). Returns {} if neither is
+    present. Does NOT expand ${VAR}; callers writing on-disk config for reapply
+    are expected to write already-resolved values (same contract the kernel
+    applies before mount()).
+    """
+    import yaml
+
+    with open(settings_path) as fh:
+        doc = yaml.safe_load(fh) or {}
+    try:
+        nested = doc["overrides"]["hook-context-intelligence"]["config"]["destinations"]
+        if isinstance(nested, dict):
+            return nested
+    except (KeyError, TypeError):
+        pass
+    top = doc.get("destinations")
+    return top if isinstance(top, dict) else {}
+
+
+def _patch_inherited_hook_config(coordinator: Any, raw_destinations: dict[str, Any]) -> bool:
+    """Bundle-only: write the new destinations into the in-memory session config
+    that FUTURE spawned sub-sessions inherit.
+
+    A fresh sub-session's config is built by ``session_spawner.merge_configs(
+    parent_session.config, agent_overlay)`` — it copies the parent session's
+    config dict and does NOT re-read settings.yaml. That dict is
+    ``coordinator.session.config`` (the same object AmplifierSession stores at
+    construction). Updating this destination's hook entry there is what makes a
+    live filter change reach every sub-session spawned afterward — reached purely
+    through the coordinator the hook already holds, with no change to any module
+    outside this bundle.
+
+    Returns True if a hook-context-intelligence entry was patched.
+    """
+    session = getattr(coordinator, "session", None)
+    cfg = getattr(session, "config", None) if session is not None else getattr(coordinator, "config", None)
+    if not isinstance(cfg, dict):
+        return False
+    hooks = cfg.get("hooks")
+    if not isinstance(hooks, list):
+        return False
+    patched = False
+    for entry in hooks:
+        if isinstance(entry, dict) and entry.get("module") == "hook-context-intelligence":
+            entry.setdefault("config", {})["destinations"] = raw_destinations
+            patched = True
+    return patched
+
+
+def _exclude_map(destinations: dict[str, Any]) -> dict[str, list[str]]:
+    """Normalized {name: sorted(exclude patterns)} for a Destination map."""
+    return {name: sorted(dest.exclude) for name, dest in destinations.items()}
+
+
+def _disk_exclude_map(raw: dict[str, Any]) -> dict[str, list[str]]:
+    """Normalized {name: sorted(exclude patterns)} for a raw on-disk block."""
+    out: dict[str, list[str]] = {}
+    for name, spec in raw.items():
+        if isinstance(spec, dict):
+            out[name] = sorted(spec.get("exclude") or [])
+    return out
+
+
 async def mount(
     coordinator: Any, config: dict[str, Any]
 ) -> Callable[[], Coroutine[Any, Any, None]]:
@@ -122,6 +267,90 @@ async def mount(
     }
     coordinator.register_capability("context_intelligence._hook_state", _hook_state)
 
+    async def reapply_ingestion(
+        raw_destinations: dict[str, Any] | None = None,
+        settings_path: str | None = None,
+        verify_disk: bool = True,
+    ) -> dict[str, Any]:
+        """Re-apply fan-out routing to THIS session's live hook, mid-flight.
+
+        Source of the new destinations block (exactly one):
+          - ``settings_path``: re-read the block from a settings.yaml on disk
+            (the real "user edited settings.yaml" path).
+          - ``raw_destinations``: an explicit block (used to inject a
+            live-only patch, e.g. to exercise the live-vs-disk fault check).
+
+        Steps: update the resolver's destinations (cache-invalidated) ->
+        re-validate -> refresh shared hook state -> rebuild + drain-safe swap the
+        dispatchers via apply_active_dispatchers. Returns a report of the new
+        active destinations and their include/exclude.
+
+        When ``verify_disk`` and ``settings_path`` are both given, the resulting
+        live filter is cross-checked against the on-disk block and a mismatch
+        raises (fail-loud: the running session must never believe an exclude is
+        applied when the file disagrees).
+        """
+        disk_raw = _read_destinations_from_settings(settings_path) if settings_path else None
+        new_raw = raw_destinations if raw_destinations is not None else disk_raw
+        if new_raw is None:
+            raise ValueError("reapply_ingestion: provide raw_destinations or settings_path")
+
+        resolver.update_destinations(new_raw)
+        new_dests = resolver.validate_destinations()
+        _hook_state["destinations"] = new_dests
+        match_key, active = await apply_active_dispatchers(
+            coordinator, resolver, logging_handler, new_dests
+        )
+
+        # Bundle-only propagation to FUTURE sub-sessions: update the session
+        # config snapshot that session_spawner.merge_configs copies at spawn.
+        inherited_patched = _patch_inherited_hook_config(coordinator, new_raw)
+
+        report: dict[str, Any] = {
+            "match_key": match_key,
+            "active": active,
+            "inherited_snapshot_patched": inherited_patched,
+            "destinations": {
+                name: {"include": list(d.include), "exclude": list(d.exclude)}
+                for name, d in new_dests.items()
+            },
+            "disk_consistent": None,
+        }
+        if verify_disk and settings_path is not None:
+            live = _exclude_map(new_dests)
+            disk = _disk_exclude_map(_read_destinations_from_settings(settings_path))
+            if live != disk:
+                raise RuntimeError(
+                    "reapply_ingestion: live filter disagrees with on-disk settings "
+                    f"(live_exclude={live!r} disk_exclude={disk!r}); refusing to leave "
+                    "the running session believing an exclude is applied when the file "
+                    "disagrees."
+                )
+            report["disk_consistent"] = True
+        return report
+
+    def verify_ingestion_consistency(settings_path: str) -> dict[str, Any]:
+        """Fail-loud compare of the session's LIVE exclude filter vs on-disk.
+
+        Pure check — mutates nothing. Raises when the running session's live
+        per-destination exclude set does not match the settings.yaml on disk, in
+        EITHER direction (live patched but file not written; file written but
+        session not reapplied). Returns the two maps on agreement.
+        """
+        live = _exclude_map(resolver.validate_destinations())
+        disk = _disk_exclude_map(_read_destinations_from_settings(settings_path))
+        if live != disk:
+            raise RuntimeError(
+                "context-intelligence: live ingestion filter disagrees with on-disk "
+                f"settings (live_exclude={live!r} disk_exclude={disk!r})."
+            )
+        return {"live_exclude": live, "disk_exclude": disk, "consistent": True}
+
+    coordinator.register_capability("context_intelligence.reapply_ingestion", reapply_ingestion)
+    coordinator.register_capability(
+        "context_intelligence.verify_ingestion_consistency", verify_ingestion_consistency
+    )
+
     async def cleanup() -> None:
         try:
             await logging_handler.close()
@@ -156,8 +385,6 @@ async def on_session_ready(coordinator: Any) -> None:
     and installs per-destination dispatchers into the LoggingHandler.
     """
     from .config_resolver import Destination
-    from .handlers.logging_handler import _DestinationDispatcher
-    from .fanout import normalize_match_key, select_active
 
     state = coordinator.get_capability("context_intelligence._hook_state")
     if state is None:
@@ -222,64 +449,10 @@ async def on_session_ready(coordinator: Any) -> None:
                 _ENV_VAR,
             )
 
-    # --- Destination selection (C2: working_dir capability ONLY, fail-loud) ---
-    active: dict[str, Destination] = {}
-    match_key: str = ""
-    if destinations:
-        get_cap = getattr(coordinator, "get_capability", None)
-        working_dir = get_cap("session.working_dir") if get_cap else None
-        if not working_dir:
-            # working_dir capability unavailable. Do NOT raise here: the kernel
-            # CATCHES on_session_ready exceptions (Phase 6, _session_init.py) and
-            # continues the session, so a raise is swallowed AND aborts the rest of
-            # this callback — silently disabling ALL capture, including the local
-            # JSONL the design guarantees is always written. Degrade to local-only
-            # (active = {}) with a discoverable WARNING and fall through so the
-            # LoggingHandler is still registered below.
-            log.warning(
-                "context-intelligence: session.working_dir capability is unavailable; "
-                "fan-out disabled for this session (local JSONL only)."
-            )
-        else:
-            match_key = normalize_match_key(str(working_dir))
-            active = select_active(destinations, match_key)
-
-    # Build one dispatcher per ACTIVE destination (D9).
-    dispatchers = [
-        _DestinationDispatcher(
-            name=d.name,
-            url=d.url,
-            api_key=d.api_key,
-            workspace=resolver.workspace,
-            working_dir=resolver.working_dir,
-            dispatch_timeout=resolver.dispatch_timeout,
-            read_timeout=resolver.dispatch_read_timeout,
-            connect_timeout=resolver.dispatch_connect_timeout,
-            failure_threshold=resolver.dispatch_failure_threshold,
-            queue_capacity=resolver.dispatch_queue_capacity,
-            close_drain_timeout=resolver.close_drain_timeout,
-            backoff_initial=resolver.dispatch_backoff_initial,
-            backoff_max=resolver.dispatch_backoff_max,
-            backoff_jitter=resolver.dispatch_backoff_jitter,
-            storage_path=str(resolver.base_path),
-            forwarding_log_dir=resolver.forwarding_log_dir,
-            auth_mode=d.auth_mode,
-            auth_resource=d.auth_resource,
-        )
-        for d in active.values()
-    ]
-    await logging_handler.set_dispatchers(dispatchers)
-
-    # --- Fan-out log line (S2) ---
-    if not destinations:
-        log.info("context-intelligence fan-out: no destinations configured — local JSONL only")
-    elif active:
-        log.info("context-intelligence fan-out: active -> %s", ", ".join(sorted(active)))
-    else:
-        log.warning(
-            "context-intelligence fan-out: routed to none (local-only) for working_dir=%s",
-            match_key,
-        )
+    # --- Destination selection + dispatcher install (C2: working_dir ONLY) ---
+    # Factored into apply_active_dispatchers so the live-reapply capability can
+    # re-run the exact same routing computation mid-session.
+    await apply_active_dispatchers(coordinator, resolver, logging_handler, destinations)
 
     # Step 1: canonical kernel events + all module contributions
     # _discover_events returns: set(ALL_EVENTS) + collect_contributions
