@@ -674,6 +674,217 @@ class TestCIClientHealthCheck:
         assert result["session_count"] == 0
 
 
+class _GenericBehavior:
+    """Mutable control block read by the handler on every request (any path)."""
+
+    def __init__(self) -> None:
+        self.status_code: int = 200
+        self.body: bytes = b"{}"
+        self.paths: list[str] = []  # every request path the server was asked for
+
+
+def _make_generic_handler(behavior: "_GenericBehavior"):
+    from http.server import BaseHTTPRequestHandler
+
+    class _Handler(BaseHTTPRequestHandler):
+        def _respond(self):
+            behavior.paths.append(self.path)
+            self.send_response(behavior.status_code)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(behavior.body)
+
+        def do_GET(self):  # noqa: N802
+            self._respond()
+
+        def do_DELETE(self):  # noqa: N802
+            self._respond()
+
+        def log_message(self, *args):  # silence server logs
+            pass
+
+    return _Handler
+
+
+def _start_generic_server(behavior: "_GenericBehavior"):
+    import threading
+    from http.server import ThreadingHTTPServer
+
+    port = _find_free_port()
+    server = ThreadingHTTPServer(("127.0.0.1", port), _make_generic_handler(behavior))
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    return server, f"http://127.0.0.1:{port}"
+
+
+class TestCIClientErrorClassification:
+    """error_type classification must be correct: auth_error vs decode_error vs http_status.
+
+    Regression guard: ``ApiKeyAuth.headers()`` raising ``ValueError`` for an
+    unusable/redacted credential must classify as ``auth_error`` -- it must
+    NEVER be caught by the SAME ``except (ValueError, json.JSONDecodeError)``
+    handler used for a genuinely malformed JSON response, which previously
+    misreported a healthy 200 response (or, before any request was even sent)
+    as "malformed JSON from {url}".
+    """
+
+    # -- (a) unusable credential -> auth_error, NEVER decode_error ----------
+
+    @pytest.mark.parametrize("bad_key", ["", "[REDACTED]"])
+    def test_session_summary_unusable_credential_is_auth_error(self, bad_key):
+        from context_intelligence.client import CIClient, CIClientError
+
+        client = CIClient("http://localhost:8000", bad_key)
+
+        with patch("context_intelligence.client._http_get_strict") as mock_get:
+            with pytest.raises(CIClientError) as excinfo:
+                client.session_summary("session1")
+
+        assert excinfo.value.error_type == "auth_error"
+        mock_get.assert_not_called()
+
+    @pytest.mark.parametrize("bad_key", ["", "[REDACTED]"])
+    def test_delete_session_unusable_credential_is_auth_error(self, bad_key):
+        from context_intelligence.client import CIClient, CIClientError
+
+        client = CIClient("http://localhost:8000", bad_key)
+
+        with patch("context_intelligence.client._http_delete_strict") as mock_delete:
+            with pytest.raises(CIClientError) as excinfo:
+                client.delete_session("session1")
+
+        assert excinfo.value.error_type == "auth_error"
+        mock_delete.assert_not_called()
+
+    @pytest.mark.parametrize("bad_key", ["", "[REDACTED]"])
+    def test_whoami_unusable_credential_is_auth_error(self, bad_key):
+        from context_intelligence.client import CIClient, CIClientError
+
+        client = CIClient("http://localhost:8000", bad_key)
+
+        with patch("context_intelligence.client._http_get_strict") as mock_get:
+            with pytest.raises(CIClientError) as excinfo:
+                client.whoami()
+
+        assert excinfo.value.error_type == "auth_error"
+        mock_get.assert_not_called()
+
+    @pytest.mark.parametrize("bad_key", ["", "[REDACTED]"])
+    def test_cypher_unusable_credential_is_auth_error(self, bad_key):
+        from context_intelligence.client import CIClient, CIClientError
+
+        client = CIClient("http://localhost:8000", bad_key)
+
+        with patch("context_intelligence.client._http_post") as mock_post:
+            with pytest.raises(CIClientError) as excinfo:
+                client.cypher("MATCH (n) RETURN n")
+
+        assert excinfo.value.error_type == "auth_error"
+        mock_post.assert_not_called()
+
+    @pytest.mark.parametrize("bad_key", ["", "[REDACTED]"])
+    def test_fetch_blob_unusable_credential_is_auth_error(self, bad_key):
+        from context_intelligence.client import CIClient, CIClientError
+
+        client = CIClient("http://localhost:8000", bad_key)
+
+        with patch("context_intelligence.client._http_get") as mock_get:
+            with pytest.raises(CIClientError) as excinfo:
+                client.fetch_blob("session1", "key1")
+
+        assert excinfo.value.error_type == "auth_error"
+        mock_get.assert_not_called()
+
+    # -- (b) genuinely malformed JSON from a 200 -> decode_error (unchanged) --
+
+    def test_session_summary_malformed_json_is_decode_error(self):
+        """A real 200 with a body that fails to parse as JSON must still
+        classify as decode_error -- proves the auth_error fix left this path alone."""
+        from context_intelligence.client import CIClient, CIClientError
+
+        behavior = _GenericBehavior()
+        behavior.body = b"not json{{{"
+        server, base_url = _start_generic_server(behavior)
+        client = CIClient(base_url, "key")
+        try:
+            with pytest.raises(CIClientError) as excinfo:
+                client.session_summary("session1")
+        finally:
+            server.shutdown()
+            server.server_close()
+
+        assert excinfo.value.error_type == "decode_error"
+
+    def test_delete_session_malformed_json_is_decode_error(self):
+        from context_intelligence.client import CIClient, CIClientError
+
+        behavior = _GenericBehavior()
+        behavior.body = b"not json{{{"
+        server, base_url = _start_generic_server(behavior)
+        client = CIClient(base_url, "key")
+        try:
+            with pytest.raises(CIClientError) as excinfo:
+                client.delete_session("session1")
+        finally:
+            server.shutdown()
+            server.server_close()
+
+        assert excinfo.value.error_type == "decode_error"
+
+    def test_whoami_malformed_json_is_decode_error(self):
+        from context_intelligence.client import CIClient, CIClientError
+
+        behavior = _GenericBehavior()
+        behavior.body = b"not json{{{"
+        server, base_url = _start_generic_server(behavior)
+        client = CIClient(base_url, "key")
+        try:
+            with pytest.raises(CIClientError) as excinfo:
+                client.whoami()
+        finally:
+            server.shutdown()
+            server.server_close()
+
+        assert excinfo.value.error_type == "decode_error"
+
+    # -- (c) real 401 -> http_status (unchanged) -----------------------------
+
+    def test_session_summary_401_is_http_status(self):
+        from context_intelligence.client import CIClient, CIClientError
+
+        behavior = _GenericBehavior()
+        behavior.status_code = 401
+        behavior.body = b'{"detail": "unauthorized"}'
+        server, base_url = _start_generic_server(behavior)
+        client = CIClient(base_url, "key")
+        try:
+            with pytest.raises(CIClientError) as excinfo:
+                client.session_summary("session1")
+        finally:
+            server.shutdown()
+            server.server_close()
+
+        assert excinfo.value.error_type == "http_status"
+        assert excinfo.value.status_code == 401
+
+    def test_whoami_401_is_http_status(self):
+        from context_intelligence.client import CIClient, CIClientError
+
+        behavior = _GenericBehavior()
+        behavior.status_code = 401
+        behavior.body = b'{"detail": "unauthorized"}'
+        server, base_url = _start_generic_server(behavior)
+        client = CIClient(base_url, "key")
+        try:
+            with pytest.raises(CIClientError) as excinfo:
+                client.whoami()
+        finally:
+            server.shutdown()
+            server.server_close()
+
+        assert excinfo.value.error_type == "http_status"
+        assert excinfo.value.status_code == 401
+
+
 class TestLogger:
     """Logger must be named context_intelligence.client."""
 
@@ -1338,6 +1549,178 @@ class TestAsyncCIClientHealthCheck:
 
         assert result["status"] == "ok"
         assert result["session_count"] == 0
+
+
+class TestAsyncCIClientErrorClassification:
+    """error_type classification must be correct: auth_error vs decode_error vs http_status.
+
+    Regression guard: ``self._strategy.headers()`` was previously called INSIDE
+    each method's request ``try:`` block, so a credential ``ValueError`` (unusable/
+    redacted api_key) fell through to the SAME ``except (ValueError,
+    json.JSONDecodeError)`` handler used for a genuinely malformed JSON response
+    and was misreported as "malformed JSON from {url}" -- even though no request
+    was ever sent. ``_auth_headers()`` now computes headers BEFORE the try block
+    and classifies a credential failure as its own ``auth_error``.
+    """
+
+    # -- (a) unusable credential -> auth_error, NEVER decode_error ----------
+
+    @pytest.mark.parametrize("bad_key", ["", "[REDACTED]"])
+    async def test_async_session_summary_unusable_credential_is_auth_error(self, bad_key):
+        from context_intelligence.client import AsyncCIClient, CIClientError
+
+        client = AsyncCIClient("http://localhost:8000", bad_key)
+
+        with patch("context_intelligence.client.httpx.AsyncClient") as mock_async_client:
+            with pytest.raises(CIClientError) as excinfo:
+                await client.session_summary("session1")
+
+        assert excinfo.value.error_type == "auth_error"
+        mock_async_client.assert_not_called()
+
+    @pytest.mark.parametrize("bad_key", ["", "[REDACTED]"])
+    async def test_async_delete_session_unusable_credential_is_auth_error(self, bad_key):
+        from context_intelligence.client import AsyncCIClient, CIClientError
+
+        client = AsyncCIClient("http://localhost:8000", bad_key)
+
+        with patch("context_intelligence.client.httpx.AsyncClient") as mock_async_client:
+            with pytest.raises(CIClientError) as excinfo:
+                await client.delete_session("session1")
+
+        assert excinfo.value.error_type == "auth_error"
+        mock_async_client.assert_not_called()
+
+    @pytest.mark.parametrize("bad_key", ["", "[REDACTED]"])
+    async def test_async_whoami_unusable_credential_is_auth_error(self, bad_key):
+        from context_intelligence.client import AsyncCIClient, CIClientError
+
+        client = AsyncCIClient("http://localhost:8000", bad_key)
+
+        with patch("context_intelligence.client.httpx.AsyncClient") as mock_async_client:
+            with pytest.raises(CIClientError) as excinfo:
+                await client.whoami()
+
+        assert excinfo.value.error_type == "auth_error"
+        mock_async_client.assert_not_called()
+
+    @pytest.mark.parametrize("bad_key", ["", "[REDACTED]"])
+    async def test_async_cypher_unusable_credential_is_auth_error(self, bad_key):
+        from context_intelligence.client import AsyncCIClient, CIClientError
+
+        client = AsyncCIClient("http://localhost:8000", bad_key)
+
+        with patch("context_intelligence.client.httpx.AsyncClient") as mock_async_client:
+            with pytest.raises(CIClientError) as excinfo:
+                await client.cypher("MATCH (n) RETURN n")
+
+        assert excinfo.value.error_type == "auth_error"
+        mock_async_client.assert_not_called()
+
+    @pytest.mark.parametrize("bad_key", ["", "[REDACTED]"])
+    async def test_async_fetch_blob_unusable_credential_is_auth_error(self, bad_key):
+        from context_intelligence.client import AsyncCIClient, CIClientError
+
+        client = AsyncCIClient("http://localhost:8000", bad_key)
+
+        with patch("context_intelligence.client.httpx.AsyncClient") as mock_async_client:
+            with pytest.raises(CIClientError) as excinfo:
+                await client.fetch_blob("session1", "key1")
+
+        assert excinfo.value.error_type == "auth_error"
+        mock_async_client.assert_not_called()
+
+    # -- (b) genuinely malformed JSON from a 200 -> decode_error (unchanged) --
+
+    async def test_async_session_summary_malformed_json_is_decode_error(self):
+        from context_intelligence.client import AsyncCIClient, CIClientError
+
+        mock_resp = _make_async_mock_response(None)
+        mock_resp.json.side_effect = ValueError("Expecting value")
+        mock_http = _make_async_httpx_client(mock_resp)
+
+        with patch("context_intelligence.client.httpx.AsyncClient", return_value=mock_http):
+            client = AsyncCIClient("http://localhost:8000", "testkey")
+            with pytest.raises(CIClientError) as excinfo:
+                await client.session_summary("session1")
+
+        assert excinfo.value.error_type == "decode_error"
+
+    async def test_async_delete_session_malformed_json_is_decode_error(self):
+        from context_intelligence.client import AsyncCIClient, CIClientError
+
+        mock_resp = _make_async_mock_response(None)
+        mock_resp.json.side_effect = ValueError("Expecting value")
+        mock_http = _make_async_httpx_client(mock_resp)
+        mock_inner_client = mock_http.__aenter__.return_value
+        mock_inner_client.delete = AsyncMock(return_value=mock_resp)
+
+        with patch("context_intelligence.client.httpx.AsyncClient", return_value=mock_http):
+            client = AsyncCIClient("http://localhost:8000", "testkey")
+            with pytest.raises(CIClientError) as excinfo:
+                await client.delete_session("session1")
+
+        assert excinfo.value.error_type == "decode_error"
+
+    async def test_async_whoami_malformed_json_is_decode_error(self):
+        from context_intelligence.client import AsyncCIClient, CIClientError
+
+        mock_resp = _make_async_mock_response(None)
+        mock_resp.json.side_effect = ValueError("Expecting value")
+        mock_http = _make_async_httpx_client(mock_resp)
+
+        with patch("context_intelligence.client.httpx.AsyncClient", return_value=mock_http):
+            client = AsyncCIClient("http://localhost:8000", "testkey")
+            with pytest.raises(CIClientError) as excinfo:
+                await client.whoami()
+
+        assert excinfo.value.error_type == "decode_error"
+
+    # -- (c) real 401 -> http_status (unchanged) -----------------------------
+
+    async def test_async_session_summary_401_is_http_status(self):
+        import httpx
+
+        from context_intelligence.client import AsyncCIClient, CIClientError
+
+        request = httpx.Request("GET", "http://localhost:8000/sessions/session1/summary")
+        real_response = httpx.Response(status_code=401, request=request)
+        mock_resp = MagicMock()
+        mock_resp.status_code = 401
+        mock_resp.raise_for_status.side_effect = httpx.HTTPStatusError(
+            "401", request=request, response=real_response
+        )
+        mock_http = _make_async_httpx_client(mock_resp)
+
+        with patch("context_intelligence.client.httpx.AsyncClient", return_value=mock_http):
+            client = AsyncCIClient("http://localhost:8000", "testkey")
+            with pytest.raises(CIClientError) as excinfo:
+                await client.session_summary("session1")
+
+        assert excinfo.value.error_type == "http_status"
+        assert excinfo.value.status_code == 401
+
+    async def test_async_whoami_401_is_http_status(self):
+        import httpx
+
+        from context_intelligence.client import AsyncCIClient, CIClientError
+
+        request = httpx.Request("GET", "http://localhost:8000/whoami")
+        real_response = httpx.Response(status_code=401, request=request)
+        mock_resp = MagicMock()
+        mock_resp.status_code = 401
+        mock_resp.raise_for_status.side_effect = httpx.HTTPStatusError(
+            "401", request=request, response=real_response
+        )
+        mock_http = _make_async_httpx_client(mock_resp)
+
+        with patch("context_intelligence.client.httpx.AsyncClient", return_value=mock_http):
+            client = AsyncCIClient("http://localhost:8000", "testkey")
+            with pytest.raises(CIClientError) as excinfo:
+                await client.whoami()
+
+        assert excinfo.value.error_type == "http_status"
+        assert excinfo.value.status_code == 401
 
 
 # ---------------------------------------------------------------------------
