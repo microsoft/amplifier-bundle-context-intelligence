@@ -104,3 +104,10 @@ hooks:
       #     url: "${TEAM_CI_URL:}"
       #     api_key: "${TEAM_CI_KEY:}"
       #     include: ["**/client-x/"]        # the client-x project dir and everything under it
+
+# Live-reapply: expose the ingestion hook's reapply capability
+# as a root-session tool so the running root agent can make a destination
+# `exclude` edit take effect immediately, without a restart.
+tools:
+  - module: tool-context-intelligence-reapply
+    source: git+https://github.com/microsoft/amplifier-bundle-context-intelligence@main#subdirectory=modules/tool-context-intelligence-reapply

@@ -579,6 +579,18 @@ class HookConfigResolver:
         )
         return str(value) if value else None
 
+    def update_destinations(self, raw_destinations: dict[str, Any]) -> None:
+        """Replace the raw ``destinations`` config and invalidate the cache.
+
+        The resolver caches ``destinations`` on first access and never re-reads
+        it. The live-reapply path calls this to install a fresh destinations
+        block mid-session (e.g. reflecting an on-disk settings.yaml exclude edit)
+        so the next ``.destinations`` / ``validate_destinations()`` access
+        re-derives from the new dict instead of returning the startup snapshot.
+        """
+        self._config = {**self._config, "destinations": raw_destinations}
+        self._destinations = None
+
     @property
     def destinations(self) -> dict[str, Destination]:
         """Resolved fan-out destinations, keyed by name.
