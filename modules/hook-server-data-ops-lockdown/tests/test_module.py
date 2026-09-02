@@ -7,8 +7,14 @@ Verifies the module's actual runtime behaviour:
   - The handler denies exactly the four lockdown tools (write_file,
     edit_file, apply_patch, graph_query) with a HookResult(action="deny",
     reason=...).
+  - The handler denies a `delegate` call whose target agent is not exactly
+    ALLOWED_DELEGATE_AGENT ("context-intelligence:graph-analyst") -- this is
+    the delegation-bypass fix: a behavioral DTU test proved server-data-ops
+    running as the ROOT agent (no parent to enforce its `agents:`
+    frontmatter allowlist) could delegate to foundation:file-ops and have it
+    write a file to disk unchecked.
   - The handler allows every other tool call (session_summary,
-    delete_session, whoami, delegate, read_file, load_skill, todo), returning
+    delete_session, whoami, read_file, load_skill, todo), returning
     HookResult(action="continue").
 
 Deliberately NOT tested here: that the agent .md frontmatter contains a given
@@ -31,6 +37,8 @@ import pytest
 from amplifier_core.models import HookResult
 
 from amplifier_module_hook_server_data_ops_lockdown import (
+    ALLOWED_DELEGATE_AGENT,
+    DELEGATE_DENY_REASON,
     DENIED_TOOLS,
     DENY_REASON,
     _deny_lockdown_tools,
@@ -105,13 +113,16 @@ class TestDenyLockdownTools:
             "session_summary",
             "delete_session",
             "whoami",
-            "delegate",
             "read_file",
             "load_skill",
             "todo",
         ],
     )
     async def test_allows_every_other_tool(self, tool_name: str) -> None:
+        """`delegate` is deliberately excluded from this list -- it has its
+        own target-checked behaviour, covered by TestDelegateTargetLockdown
+        below, and an empty tool_input (as used here) would now be denied
+        (fail closed on a missing `agent` field)."""
         result = await _deny_lockdown_tools("tool:pre", {"tool_name": tool_name, "tool_input": {}})
 
         assert isinstance(result, HookResult)
@@ -134,3 +145,108 @@ class TestDenyLockdownTools:
 
         assert "delete agent" in result.reason
         assert "graph-analyst" in result.reason
+
+
+class TestDelegateTargetLockdown:
+    """Direct handler tests for the delegation-bypass fix.
+
+    A behavioral DTU test proved server-data-ops, running as the ROOT agent
+    (no parent session to enforce its `agents:` frontmatter allowlist), could
+    call `delegate(agent="foundation:file-ops")` and have it write a file to
+    disk unchecked. These tests prove the handler itself now closes that hole,
+    independent of any frontmatter allowlist.
+    """
+
+    @pytest.mark.asyncio
+    async def test_delegate_to_allowed_agent_is_allowed(self) -> None:
+        result = await _deny_lockdown_tools(
+            "tool:pre",
+            {
+                "tool_name": "delegate",
+                "tool_input": {"agent": ALLOWED_DELEGATE_AGENT, "instruction": "search"},
+            },
+        )
+
+        assert isinstance(result, HookResult)
+        assert result.action == "continue"
+        assert result.reason is None
+
+    @pytest.mark.asyncio
+    async def test_delegate_to_allowed_agent_is_the_namespaced_graph_analyst(self) -> None:
+        """Pin the exact allowed string so a future edit that changes it is
+        caught here, not just discovered behaviorally."""
+        assert ALLOWED_DELEGATE_AGENT == "context-intelligence:graph-analyst"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "target_agent",
+        [
+            "foundation:file-ops",
+            "self",
+            "graph-analyst",  # bare (unnamespaced) form -- must NOT match
+            "context-intelligence:server-data-ops",
+            "context-intelligence:session-navigator",
+        ],
+    )
+    async def test_delegate_to_any_other_agent_is_denied(self, target_agent: str) -> None:
+        result = await _deny_lockdown_tools(
+            "tool:pre",
+            {
+                "tool_name": "delegate",
+                "tool_input": {"agent": target_agent, "instruction": "do something"},
+            },
+        )
+
+        assert isinstance(result, HookResult)
+        assert result.action == "deny"
+        assert result.reason == DELEGATE_DENY_REASON
+
+    @pytest.mark.asyncio
+    async def test_delegate_with_missing_agent_field_is_denied(self) -> None:
+        """Fail closed: e.g. a resume-by-session_id call that omits `agent`
+        entirely must be denied, not allowed through."""
+        result = await _deny_lockdown_tools(
+            "tool:pre",
+            {
+                "tool_name": "delegate",
+                "tool_input": {"session_id": "abc123", "instruction": "continue"},
+            },
+        )
+
+        assert isinstance(result, HookResult)
+        assert result.action == "deny"
+        assert result.reason == DELEGATE_DENY_REASON
+
+    @pytest.mark.asyncio
+    async def test_delegate_with_empty_agent_field_is_denied(self) -> None:
+        """Fail closed: an explicit empty string is not evidence it targets
+        the allowed agent."""
+        result = await _deny_lockdown_tools(
+            "tool:pre",
+            {"tool_name": "delegate", "tool_input": {"agent": "", "instruction": "do something"}},
+        )
+
+        assert isinstance(result, HookResult)
+        assert result.action == "deny"
+        assert result.reason == DELEGATE_DENY_REASON
+
+    @pytest.mark.asyncio
+    async def test_delegate_with_missing_tool_input_is_denied(self) -> None:
+        """Fail closed: no tool_input key at all (malformed/edge-case event
+        payload) must not be treated as an allowed delegate."""
+        result = await _deny_lockdown_tools("tool:pre", {"tool_name": "delegate"})
+
+        assert isinstance(result, HookResult)
+        assert result.action == "deny"
+        assert result.reason == DELEGATE_DENY_REASON
+
+    @pytest.mark.asyncio
+    async def test_denied_tools_still_deny_even_though_delegate_check_exists(self) -> None:
+        """Regression guard: adding the delegate-target branch must not
+        change the outright deny behaviour for the original four tools."""
+        for tool_name in DENIED_TOOLS:
+            result = await _deny_lockdown_tools(
+                "tool:pre", {"tool_name": tool_name, "tool_input": {}}
+            )
+            assert result.action == "deny"
+            assert result.reason == DENY_REASON

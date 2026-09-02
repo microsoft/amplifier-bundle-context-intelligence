@@ -1,8 +1,12 @@
 """Agent-scoped lockdown hook for server-data-ops (the delete agent).
 
-This hook is registered on the `tool:pre` lifecycle event and denies exactly
-four tools: `write_file`, `edit_file`, `apply_patch`, `graph_query`. Every
-other tool call is left untouched (`continue`).
+This hook is registered on the `tool:pre` lifecycle event and denies:
+  - exactly four tools outright: `write_file`, `edit_file`, `apply_patch`,
+    `graph_query`;
+  - any `delegate` call whose target agent is not exactly
+    `context-intelligence:graph-analyst` (see "DELEGATE-TARGET LOCKDOWN"
+    below).
+Every other tool call is left untouched (`continue`).
 
 Why this exists, and why it lives here rather than as a behavior-level
 `exclude_tools` policy: tool inheritance in this ecosystem is ADDITIVE by
@@ -80,6 +84,45 @@ this handler):
     example (lines 271-274) reads `data.get("tool_name")` and compares it
     against a list of tool names, confirming both the field name and the
     plain-string comparison pattern used below.
+
+DELEGATE-TARGET LOCKDOWN, added after a behavioral DTU test proved the
+`agents:` frontmatter allowlist (see agents/server-data-ops.md) does NOT
+close this hole when server-data-ops runs as the ROOT agent (no parent
+session to apply a parent-side allowlist filter against). With server-data-ops
+spawned directly, it called `delegate(agent="foundation:file-ops")` and that
+delegate wrote a file to disk -- verified. The `agents:` allowlist is only
+enforced by the app-layer spawn capability when a PARENT spawns THIS agent
+(amplifier-app-cli's agent_config.merge_configs / session_spawner.py
+live-registry reconciliation filters the CHILD's roster against the
+allowlist declared on the agent being spawned); as the root/direct agent
+there is no such parent-side filtering step at all. This hook, in contrast,
+fires on server-data-ops's OWN `tool:pre` calls regardless of whether it is
+the root agent or itself a spawned child -- so the restriction has to live
+here to hold in both cases.
+
+Field name verified against the delegate tool itself
+(amplifier-foundation's `modules/tool-delegate/amplifier_module_tool_delegate/__init__.py`,
+`DelegateTool.execute()`: `agent_name = input.get("agent", "").strip()`),
+and against the documented event contract above: `tool_input` IS
+`tool_call.input`, i.e. the exact dict passed to `tool.execute()`. So for a
+`delegate` call, `data["tool_input"]["agent"]` carries the target agent name.
+
+Allowed value verified against this repo's own agent roster: server-data-ops's
+own `agents:` allowlist (agents/server-data-ops.md) already names
+`context-intelligence:graph-analyst` -- the namespaced form, matching how
+behaviors/context-intelligence-analysis.yaml registers it
+(`agents: include: - context-intelligence:graph-analyst`, composed under the
+bundle's own namespace `context-intelligence`). ALLOWED_DELEGATE_AGENT below
+uses that same namespaced string; a bare `"graph-analyst"` would never match
+a real delegate call (delegate's own callers use the namespaced roster key),
+so requiring the exact namespaced string is not extra strictness, it is the
+only string that will ever legitimately appear.
+
+Fail closed: a `delegate` call with a missing or empty `agent` field (e.g. a
+malformed call, or one that omits `agent` and instead supplies `session_id`
+to resume an existing delegation) is DENIED, not allowed -- the handler
+cannot confirm it targets the allowed agent, and "cannot confirm" must
+resolve to deny, not continue, for a security-sensitive gate.
 """
 
 from __future__ import annotations
@@ -103,18 +146,53 @@ DENY_REASON = (
     "queries the graph directly (it delegates search to graph-analyst)."
 )
 
+# The only agent server-data-ops may delegate to, declared here as the single
+# source of truth (see the module docstring's "DELEGATE-TARGET LOCKDOWN"
+# section for how this string was verified: it is the namespaced roster key
+# behaviors/context-intelligence-analysis.yaml registers graph-analyst under,
+# and the delegate tool's own `input.get("agent")` is the field that must
+# match it exactly).
+ALLOWED_DELEGATE_AGENT = "context-intelligence:graph-analyst"
+
+DELEGATE_DENY_REASON = (
+    "server-data-ops may only delegate to graph-analyst (for search); it "
+    "cannot delegate to other agents to perform actions it is itself "
+    "restricted from."
+)
+
 
 async def _deny_lockdown_tools(event: str, data: dict[str, Any]) -> Any:
-    """`tool:pre` handler: deny DENIED_TOOLS, allow everything else.
+    """`tool:pre` handler: deny DENIED_TOOLS and off-target delegation.
 
     Only ever registered for the `tool:pre` event (see mount() below), so
     `event` is not branched on here -- the registration itself scopes when
     this handler runs.
+
+    Two independent checks:
+      1. The four DENIED_TOOLS are always denied outright.
+      2. A `delegate` call is denied unless its target agent is exactly
+         ALLOWED_DELEGATE_AGENT. This closes the delegation-bypass hole: a
+         behavioral DTU test proved server-data-ops (running as the ROOT
+         agent, with no parent session to enforce its own `agents:`
+         frontmatter allowlist) could call
+         `delegate(agent="foundation:file-ops")` and have it write a file to
+         disk unchecked. A missing or empty `agent` field is denied too
+         (fail closed) -- it cannot be confirmed to be the allowed target,
+         so it is treated the same as an explicit mismatch.
     """
     from amplifier_core.models import HookResult  # local import: peer dependency
 
-    if data.get("tool_name") in DENIED_TOOLS:
+    tool_name = data.get("tool_name")
+
+    if tool_name in DENIED_TOOLS:
         return HookResult(action="deny", reason=DENY_REASON)
+
+    if tool_name == "delegate":
+        tool_input = data.get("tool_input") or {}
+        target_agent = tool_input.get("agent")
+        if target_agent != ALLOWED_DELEGATE_AGENT:
+            return HookResult(action="deny", reason=DELEGATE_DENY_REASON)
+
     return HookResult(action="continue")
 
 
