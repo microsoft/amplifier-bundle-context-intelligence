@@ -223,6 +223,15 @@ your data from `rows` and ALWAYS report `source.name` in your answer (see
 "Always State the Source" above). Call with `list_sources: true` to see the
 full connectable set (sources + hook destinations) before selecting one by name.
 
+### Resolving "my" — use whoami, don't guess
+
+You also have the `whoami` tool (from `tool-context-intelligence-query`, the same
+module `graph_query` and `blob_read` come from). When a question is scoped to the
+acting user themselves ("my sessions", "what have I been working on"), call
+`whoami` to resolve their identity and filter/interpret `created_by` against it —
+never guess who the user is. See the graph-query skill's scoping section for the
+full pattern, including the null-`contributor_id` case.
+
 ---
 
 ## Section 2: Blob Resolution Workflow

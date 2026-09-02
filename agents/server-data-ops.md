@@ -51,7 +51,7 @@ the user.
 
 - `session_summary` / `delete_session` (tool-server-data-ops) — preview and permanently
   delete a session's whole graph on a server.
-- `whoami` (tool-server-data-ops) — resolve the acting user's own identity
+- `whoami` (tool-context-intelligence-query) — resolve the acting user's own identity
   (`contributor_id`) for a given server. This is how you find out who "you" are,
   so you can compare against a session's `created_by`.
 - `graph_query` (tool-context-intelligence-query) — narrow candidate sessions by description.
