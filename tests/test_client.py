@@ -2077,3 +2077,56 @@ class TestAsyncListBlobKeysFailLoudRealSocket:
             server.shutdown()
             server.server_close()
         assert result == set()
+
+
+class TestRetryAfterParsing:
+    """_retry_after_seconds parses the Retry-After delta-seconds header."""
+
+    def test_parses_positive_integer(self):
+        from context_intelligence.client import _retry_after_seconds
+
+        assert _retry_after_seconds({"Retry-After": "2"}) == 2
+
+    def test_zero_is_valid(self):
+        from context_intelligence.client import _retry_after_seconds
+
+        assert _retry_after_seconds({"Retry-After": "0"}) == 0
+
+    def test_absent_header_is_none(self):
+        from context_intelligence.client import _retry_after_seconds
+
+        assert _retry_after_seconds({}) is None
+
+    def test_none_headers_is_none(self):
+        from context_intelligence.client import _retry_after_seconds
+
+        assert _retry_after_seconds(None) is None
+
+    def test_non_integer_is_none(self):
+        from context_intelligence.client import _retry_after_seconds
+
+        # HTTP-date form is not used by this server -> treated as absent.
+        assert _retry_after_seconds({"Retry-After": "Wed, 21 Oct 2026 07:28:00 GMT"}) is None
+
+    def test_negative_is_none(self):
+        from context_intelligence.client import _retry_after_seconds
+
+        assert _retry_after_seconds({"Retry-After": "-5"}) is None
+
+    def test_ciclienterror_carries_retry_after(self):
+        from context_intelligence.client import CIClientError
+
+        exc = CIClientError(
+            "HTTP 409",
+            error_type="http_status",
+            url="http://x/sessions/s",
+            status_code=409,
+            retry_after=2,
+        )
+        assert exc.retry_after == 2
+
+    def test_ciclienterror_retry_after_defaults_none(self):
+        from context_intelligence.client import CIClientError
+
+        exc = CIClientError("boom", error_type="timeout", url="http://x")
+        assert exc.retry_after is None

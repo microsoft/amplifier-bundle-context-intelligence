@@ -65,6 +65,7 @@ class CIClientError(Exception):
         error_type: str,
         url: str,
         status_code: int | None = None,
+        retry_after: int | None = None,
     ) -> None:
         super().__init__(message)
         #: One of "connection_error" | "timeout" | "http_status" | "decode_error"
@@ -74,6 +75,11 @@ class CIClientError(Exception):
         self.error_type = error_type
         self.url = url
         self.status_code = status_code
+        #: Seconds to wait before retrying, parsed from the ``Retry-After``
+        #: response header. Set only on a retryable status (a 409 for a delete
+        #: refused because the session graph is still draining). ``None`` when
+        #: the server sent no such hint -- the failure is not retryable.
+        self.retry_after = retry_after
 
 
 # ---------------------------------------------------------------------------
@@ -186,12 +192,14 @@ def _http_get_strict(url: str, headers: dict[str, str]) -> Any:
         except _requests.exceptions.Timeout as exc:
             raise CIClientError(f"timeout listing {url}", error_type="timeout", url=url) from exc
         except _requests.exceptions.HTTPError as exc:
-            status = getattr(getattr(exc, "response", None), "status_code", None)
+            _resp = getattr(exc, "response", None)
+            status = getattr(_resp, "status_code", None)
             raise CIClientError(
                 f"HTTP {status} from {url}",
                 error_type="http_status",
                 url=url,
                 status_code=status,
+                retry_after=_retry_after_seconds(getattr(_resp, "headers", None)),
             ) from exc
         except (ValueError, json.JSONDecodeError) as exc:  # resp.json() failed
             raise CIClientError(
@@ -216,6 +224,7 @@ def _http_get_strict(url: str, headers: dict[str, str]) -> Any:
                 error_type="http_status",
                 url=url,
                 status_code=exc.response.status_code,
+                retry_after=_retry_after_seconds(exc.response.headers),
             ) from exc
         except (ValueError, json.JSONDecodeError) as exc:  # resp.json() failed
             raise CIClientError(
@@ -237,6 +246,7 @@ def _http_get_strict(url: str, headers: dict[str, str]) -> Any:
             error_type="http_status",
             url=url,
             status_code=exc.code,
+            retry_after=_retry_after_seconds(getattr(exc, "headers", None)),
         ) from exc
     except (TimeoutError, socket.timeout) as exc:  # read timeout
         raise CIClientError(f"timeout listing {url}", error_type="timeout", url=url) from exc
@@ -253,6 +263,25 @@ def _http_get_strict(url: str, headers: dict[str, str]) -> Any:
         raise CIClientError(
             f"malformed JSON from {url}", error_type="decode_error", url=url
         ) from exc
+
+
+def _retry_after_seconds(response_headers: Any) -> int | None:
+    """Parse a non-negative integer ``Retry-After`` from response headers.
+
+    Accepts any headers-like object with ``.get`` (requests/httpx/urllib all
+    provide one). Returns ``None`` when the header is absent or not a plain
+    delta-seconds integer (the HTTP-date form is not used by this server).
+    """
+    if response_headers is None:
+        return None
+    raw = response_headers.get("Retry-After")
+    if raw is None:
+        return None
+    try:
+        value = int(str(raw).strip())
+    except (TypeError, ValueError):
+        return None
+    return value if value >= 0 else None
 
 
 def _http_delete_strict(url: str, headers: dict[str, str]) -> Any:
@@ -284,12 +313,14 @@ def _http_delete_strict(url: str, headers: dict[str, str]) -> Any:
         except _requests.exceptions.Timeout as exc:
             raise CIClientError(f"timeout deleting {url}", error_type="timeout", url=url) from exc
         except _requests.exceptions.HTTPError as exc:
-            status = getattr(getattr(exc, "response", None), "status_code", None)
+            _resp = getattr(exc, "response", None)
+            status = getattr(_resp, "status_code", None)
             raise CIClientError(
                 f"HTTP {status} from {url}",
                 error_type="http_status",
                 url=url,
                 status_code=status,
+                retry_after=_retry_after_seconds(getattr(_resp, "headers", None)),
             ) from exc
         except (ValueError, json.JSONDecodeError) as exc:  # resp.json() failed
             raise CIClientError(
@@ -314,6 +345,7 @@ def _http_delete_strict(url: str, headers: dict[str, str]) -> Any:
                 error_type="http_status",
                 url=url,
                 status_code=exc.response.status_code,
+                retry_after=_retry_after_seconds(exc.response.headers),
             ) from exc
         except (ValueError, json.JSONDecodeError) as exc:  # resp.json() failed
             raise CIClientError(
@@ -335,6 +367,7 @@ def _http_delete_strict(url: str, headers: dict[str, str]) -> Any:
             error_type="http_status",
             url=url,
             status_code=exc.code,
+            retry_after=_retry_after_seconds(getattr(exc, "headers", None)),
         ) from exc
     except (TimeoutError, socket.timeout) as exc:  # read timeout
         raise CIClientError(f"timeout deleting {url}", error_type="timeout", url=url) from exc
