@@ -13,6 +13,7 @@ includes:
 agents:
   include:
     - context-intelligence:graph-analyst
+    - context-intelligence:server-data-ops
 
 tools:
   - module: tool-skills
