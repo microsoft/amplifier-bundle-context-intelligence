@@ -132,7 +132,7 @@ narrative work to `graph-analyst` instead of querying the graph yourself.
    removes the whole session graph regardless of this setting. Applying it has two
    effects, and your message must state both: persisting the pattern to `settings.yaml`
    makes the exclude filter correct in a **new session** too, and running
-   `reapply_ingestion` in the **root session** makes it take effect in the
+   `set_ingestion_filters` in the **root session** makes it take effect in the
    already-running session (and any sub-session spawned afterward) with no restart. That
    tool lives in the root session, not in this delegated agent — if you can't reach it,
    ask the user or the root session to run it.

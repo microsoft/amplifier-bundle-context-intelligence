@@ -84,8 +84,8 @@ async def apply_active_dispatchers(
 
     This is the reusable core of fan-out routing: match_key -> select_active ->
     build one dispatcher per active destination -> set_dispatchers (drain-safe
-    swap). Called ONCE at on_session_ready, and AGAIN by the live-reapply path
-    (``context_intelligence.reapply_ingestion``) after the destinations config
+    swap). Called ONCE at on_session_ready, and AGAIN by the live-set-filters path
+    (``context_intelligence.set_ingestion_filters``) after the destinations config
     is updated mid-session. ``set_dispatchers`` bounded-closes the previously
     installed dispatchers, so calling this repeatedly is safe.
 
@@ -151,13 +151,13 @@ def _read_destinations_from_settings(settings_path: str) -> dict[str, Any]:
     """Read the raw ``destinations`` block from a settings.yaml on disk.
 
     The hook itself never reads settings.yaml (the kernel merges/expands it and
-    hands mount() a config dict). The reapply path re-reads the file so an
+    hands mount() a config dict). The set-filters path re-reads the file so an
     exclude edit made to it during a session is reflected in the running session.
 
     Looks first under ``overrides.hook-context-intelligence.config.destinations``
     (the settings.yaml shape), then falls back to a top-level ``destinations:``
     key. Returns {} if neither is
-    present. Does NOT expand ${VAR}; callers writing on-disk config for reapply
+    present. Does NOT expand ${VAR}; callers writing on-disk config to set filters
     are expected to write already-resolved values (same contract the kernel
     applies before mount()).
     """
@@ -179,14 +179,11 @@ def _patch_inherited_hook_config(coordinator: Any, raw_destinations: dict[str, A
     """Bundle-only: write the new destinations into the in-memory session config
     that FUTURE spawned sub-sessions inherit.
 
-    A fresh sub-session's config is built by ``session_spawner.merge_configs(
-    parent_session.config, agent_overlay)`` — it copies the parent session's
-    config dict and does NOT re-read settings.yaml. That dict is
-    ``coordinator.session.config`` (the same object AmplifierSession stores at
-    construction). Updating this destination's hook entry there is what makes a
-    live filter change reach every sub-session spawned afterward — reached purely
-    through the coordinator the hook already holds, with no change to any module
-    outside this bundle.
+    A spawned sub-session copies its parent session's config dict as its
+    starting point; it does not re-read settings.yaml. That dict is reachable
+    from the coordinator this hook already holds. Updating this hook's entry in
+    it is what carries a live filter change to every sub-session spawned
+    afterward, without touching any module outside this bundle.
 
     Returns True if a hook-context-intelligence entry was patched.
     """
@@ -271,12 +268,12 @@ async def mount(
     }
     coordinator.register_capability("context_intelligence._hook_state", _hook_state)
 
-    async def reapply_ingestion(
+    async def set_ingestion_filters(
         raw_destinations: dict[str, Any] | None = None,
         settings_path: str | None = None,
         verify_disk: bool = True,
     ) -> dict[str, Any]:
-        """Re-apply destination routing to this session's live hook, without a restart.
+        """Apply destination routing to this session's live hook, without a restart.
 
         Source of the new destinations block (exactly one):
           - ``settings_path``: re-read the block from a settings.yaml on disk
@@ -297,7 +294,7 @@ async def mount(
         disk_raw = _read_destinations_from_settings(settings_path) if settings_path else None
         new_raw = raw_destinations if raw_destinations is not None else disk_raw
         if new_raw is None:
-            raise ValueError("reapply_ingestion: provide raw_destinations or settings_path")
+            raise ValueError("set_ingestion_filters: provide raw_destinations or settings_path")
 
         resolver.update_destinations(new_raw)
         new_dests = resolver.validate_destinations()
@@ -307,7 +304,7 @@ async def mount(
         )
 
         # Bundle-only propagation to FUTURE sub-sessions: update the session
-        # config snapshot that session_spawner.merge_configs copies at spawn.
+        # config snapshot a spawned sub-session copies from its parent.
         inherited_patched = _patch_inherited_hook_config(coordinator, new_raw)
 
         report: dict[str, Any] = {
@@ -325,7 +322,7 @@ async def mount(
             disk = _disk_exclude_map(_read_destinations_from_settings(settings_path))
             if live != disk:
                 raise RuntimeError(
-                    "reapply_ingestion: live filter disagrees with on-disk settings "
+                    "set_ingestion_filters: live filter disagrees with on-disk settings "
                     f"(live_exclude={live!r} disk_exclude={disk!r}); refusing to leave "
                     "the running session believing an exclude is applied when the file "
                     "disagrees."
@@ -350,7 +347,9 @@ async def mount(
             )
         return {"live_exclude": live, "disk_exclude": disk, "consistent": True}
 
-    coordinator.register_capability("context_intelligence.reapply_ingestion", reapply_ingestion)
+    coordinator.register_capability(
+        "context_intelligence.set_ingestion_filters", set_ingestion_filters
+    )
     coordinator.register_capability(
         "context_intelligence.verify_ingestion_consistency", verify_ingestion_consistency
     )
@@ -454,7 +453,7 @@ async def on_session_ready(coordinator: Any) -> None:
             )
 
     # --- Destination selection + dispatcher install (C2: working_dir ONLY) ---
-    # Factored into apply_active_dispatchers so the live-reapply capability can
+    # Factored into apply_active_dispatchers so the live-set-filters capability can
     # re-run the exact same routing computation mid-session.
     await apply_active_dispatchers(coordinator, resolver, logging_handler, destinations)
 

@@ -1,7 +1,7 @@
 [project]
-name = "amplifier-module-tool-context-intelligence-reapply"
+name = "amplifier-module-tool-context-intelligence-set-filters"
 version = "0.1.0"
-description = "Same-session ingestion reapply tool - make a destination include/exclude change take effect live, without a restart"
+description = "Same-session ingestion filter tool - make a destination include/exclude change take effect live, without a restart"
 requires-python = ">=3.11"
 license = "MIT"
 
@@ -10,7 +10,7 @@ dependencies = [
 ]
 
 [project.entry-points."amplifier.modules"]
-tool-context-intelligence-reapply = "amplifier_module_tool_context_intelligence_reapply:mount"
+tool-context-intelligence-set-filters = "amplifier_module_tool_context_intelligence_set_filters:mount"
 
 [build-system]
 requires = ["hatchling"]
@@ -20,7 +20,7 @@ build-backend = "hatchling.build"
 package = true
 
 [tool.hatch.build.targets.wheel]
-packages = ["amplifier_module_tool_context_intelligence_reapply"]
+packages = ["amplifier_module_tool_context_intelligence_set_filters"]
 
 [tool.hatch.metadata]
 allow-direct-references = true

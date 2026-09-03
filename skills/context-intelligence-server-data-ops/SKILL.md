@@ -157,7 +157,7 @@ Session by Description, Then Delete** when the request names or searches for som
    the exclude filter correct in a **new session** too, so a freshly started session in
    this folder honors it from the start. To also stop the **already-running** session
    (and any sub-session it spawns afterward) without a restart, the
-   `reapply_ingestion` tool is run in the **root session** — it re-reads
+   `set_ingestion_filters` tool is run in the **root session** — it re-reads
    `settings.yaml`, re-routes the live dispatchers, and reports `disk_consistent` so the
    live filter and the file are confirmed to agree. That tool lives in the root session
    (where the ingestion hook is mounted), not in this delegated agent — so if you cannot
@@ -224,7 +224,7 @@ mine" rather than a topic/date/server description.
    applied before moving on: while the folder is still in scope, continued
    ingestion would keep re-creating the very data you are about to delete. Apply it
    with BOTH effects from step 3 — persisted to `settings.yaml` (so the exclude
-   filter is correct in a new session too) AND made live via `reapply_ingestion` in
+   filter is correct in a new session too) AND made live via `set_ingestion_filters` in
    the root session (so the current running session, and any sub-session it spawns
    afterward, stop immediately without a restart) — before you enumerate or delete.
 2. **Run the S2 search, by criteria (this folder + mine).** Delegate to
