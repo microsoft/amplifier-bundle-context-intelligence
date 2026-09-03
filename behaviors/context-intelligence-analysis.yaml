@@ -2,25 +2,23 @@ bundle:
   name: context-intelligence-analysis-behavior
   version: 0.1.0
   description: >
-    Carries the three context-intelligence agents (graph-analyst,
-    session-navigator, server-data-ops) plus the graph skills (blob-reading,
-    graph-query, session-reconstruction, workflow-pattern-analysis). Does not
-    import the navigation behavior; it lists the three agents itself. Use for
-    graph read/query/exploration and session data operations without the design
-    mode.
+    Imports the navigation behavior for the three context-intelligence agents
+    (graph-analyst, session-navigator, server-data-ops) instead of listing them
+    again, and adds the graph skills (blob-reading, graph-query,
+    session-reconstruction, workflow-pattern-analysis). Use for graph
+    read/query/exploration and session data operations without the design mode.
 
-agents:
-  include:
-    - context-intelligence:graph-analyst
-    - context-intelligence:session-navigator
-    - context-intelligence:server-data-ops
+includes:
+  # The three agents (and tool-delegate + the session-navigation skill) come from
+  # here; this behavior only adds the graph skills below, which list-merge with
+  # the navigation layer's skill list.
+  - bundle: context-intelligence:behaviors/context-intelligence-navigation
 
 tools:
   - module: tool-skills
     source: git+https://github.com/microsoft/amplifier-bundle-skills@main#subdirectory=modules/tool-skills
     config:
       skills:
-        # Concatenates with the navigation layer's skill list (list-merge with dedup).
         - "git+https://github.com/microsoft/amplifier-bundle-context-intelligence@main#subdirectory=skills/blob-reading"
         - "git+https://github.com/microsoft/amplifier-bundle-context-intelligence@main#subdirectory=skills/context-intelligence-graph-query"
         - "git+https://github.com/microsoft/amplifier-bundle-context-intelligence@main#subdirectory=skills/context-intelligence-session-reconstruction"
