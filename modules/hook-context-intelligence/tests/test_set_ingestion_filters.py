@@ -1,10 +1,10 @@
-"""Tests for the live-reapply ingestion capability.
+"""Tests for the live-set-filters ingestion capability.
 
 Covers:
 - HookConfigResolver.update_destinations() cache invalidation (config_resolver.py)
-- context_intelligence.reapply_ingestion capability: live exclude take-effect,
+- context_intelligence.set_ingestion_filters capability: live exclude take-effect,
   disk-consistency reporting
-- context_intelligence.reapply_ingestion patching the in-memory session config
+- context_intelligence.set_ingestion_filters patching the in-memory session config
   snapshot inherited by future sub-sessions (_patch_inherited_hook_config)
 - context_intelligence.verify_ingestion_consistency fail-loud in both directions
 - _patch_inherited_hook_config as a standalone unit
@@ -104,10 +104,10 @@ class TestUpdateDestinationsCacheInvalidation:
 
 
 # ---------------------------------------------------------------------------
-# B. reapply excludes a destination live
+# B. set_ingestion_filters excludes a destination live
 # ---------------------------------------------------------------------------
-class TestReapplyExcludesDestinationLive:
-    async def test_reapply_updates_active_destinations(self, tmp_path: Path) -> None:
+class TestSetIngestionFiltersExcludesDestinationLive:
+    async def test_set_filters_updates_active_destinations(self, tmp_path: Path) -> None:
         working_dir = str(tmp_path)
         config = {
             "destinations": {
@@ -118,14 +118,14 @@ class TestReapplyExcludesDestinationLive:
         coordinator = make_lifecycle_coordinator(working_dir=working_dir)
         cleanup = await mount_and_ready(coordinator, config)
         try:
-            reapply = coordinator.get_capability("context_intelligence.reapply_ingestion")
-            assert reapply is not None
+            set_filters = coordinator.get_capability("context_intelligence.set_ingestion_filters")
+            assert set_filters is not None
 
             new_raw = {
                 "d1": {"url": "http://d1", "api_key": "k1", "include": ["**"], "exclude": ["**"]},
                 "d2": {"url": "http://d2", "api_key": "k2", "include": ["**"], "exclude": []},
             }
-            report = await reapply(raw_destinations=new_raw)
+            report = await set_filters(raw_destinations=new_raw)
 
             assert "d1" not in report["active"]
             assert "d2" in report["active"]
@@ -145,38 +145,38 @@ class TestReapplyExcludesDestinationLive:
         coordinator = make_lifecycle_coordinator(working_dir=working_dir)
         cleanup = await mount_and_ready(coordinator, config)
         try:
-            reapply = coordinator.get_capability("context_intelligence.reapply_ingestion")
+            set_filters = coordinator.get_capability("context_intelligence.set_ingestion_filters")
             new_raw = {
                 "d1": {"url": "http://d1", "api_key": "k1", "include": ["**"], "exclude": ["**"]},
             }
 
             # Default verify_disk=True but no settings_path given -> the disk
             # cross-check never runs; disk_consistent stays None either way.
-            report = await reapply(raw_destinations=new_raw)
+            report = await set_filters(raw_destinations=new_raw)
             assert report["disk_consistent"] is None
 
-            report_no_verify = await reapply(raw_destinations=new_raw, verify_disk=False)
+            report_no_verify = await set_filters(raw_destinations=new_raw, verify_disk=False)
             assert report_no_verify["disk_consistent"] is None
         finally:
             await cleanup()
 
-    async def test_reapply_requires_a_destinations_source(self, tmp_path: Path) -> None:
+    async def test_set_filters_requires_a_destinations_source(self, tmp_path: Path) -> None:
         working_dir = str(tmp_path)
         config = {"destinations": {}}
         coordinator = make_lifecycle_coordinator(working_dir=working_dir)
         cleanup = await mount_and_ready(coordinator, config)
         try:
-            reapply = coordinator.get_capability("context_intelligence.reapply_ingestion")
+            set_filters = coordinator.get_capability("context_intelligence.set_ingestion_filters")
             with pytest.raises(ValueError):
-                await reapply()
+                await set_filters()
         finally:
             await cleanup()
 
 
 # ---------------------------------------------------------------------------
-# C. reapply patches the inherited session config snapshot
+# C. set_ingestion_filters patches the inherited session config snapshot
 # ---------------------------------------------------------------------------
-class TestReapplyPatchesInheritedSnapshot:
+class TestSetIngestionFiltersPatchesInheritedSnapshot:
     async def test_inherited_hook_config_patched(self, tmp_path: Path) -> None:
         working_dir = str(tmp_path)
         initial_raw = {
@@ -192,11 +192,11 @@ class TestReapplyPatchesInheritedSnapshot:
 
         cleanup = await mount_and_ready(coordinator, config)
         try:
-            reapply = coordinator.get_capability("context_intelligence.reapply_ingestion")
+            set_filters = coordinator.get_capability("context_intelligence.set_ingestion_filters")
             new_raw = {
                 "d1": {"url": "http://d1", "api_key": "k1", "include": ["**"], "exclude": ["**"]},
             }
-            report = await reapply(raw_destinations=new_raw)
+            report = await set_filters(raw_destinations=new_raw)
 
             assert report["inherited_snapshot_patched"] is True
             ci_entry = next(h for h in hooks_list if h["module"] == "hook-context-intelligence")
@@ -222,8 +222,8 @@ class TestReapplyPatchesInheritedSnapshot:
         # must report False rather than silently pretending it patched anything.
         cleanup = await mount_and_ready(coordinator, config)
         try:
-            reapply = coordinator.get_capability("context_intelligence.reapply_ingestion")
-            report = await reapply(raw_destinations=config["destinations"])
+            set_filters = coordinator.get_capability("context_intelligence.set_ingestion_filters")
+            report = await set_filters(raw_destinations=config["destinations"])
             assert report["inherited_snapshot_patched"] is False
         finally:
             await cleanup()

@@ -583,7 +583,7 @@ class HookConfigResolver:
         """Replace the raw ``destinations`` config and invalidate the cache.
 
         The resolver caches ``destinations`` on first access and never re-reads
-        it. The live-reapply path calls this to install a fresh destinations
+        it. The live-set-filters path calls this to install a fresh destinations
         block mid-session (e.g. reflecting an on-disk settings.yaml exclude edit)
         so the next ``.destinations`` / ``validate_destinations()`` access
         re-derives from the new dict instead of returning the startup snapshot.

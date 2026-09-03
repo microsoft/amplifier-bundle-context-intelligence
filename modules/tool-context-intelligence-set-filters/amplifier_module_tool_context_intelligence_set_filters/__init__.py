@@ -1,6 +1,6 @@
-"""Same-session ingestion-reapply tool.
+"""Same-session ingestion-filter tool.
 
-Exposes the root session's ``context_intelligence.reapply_ingestion`` capability
+Exposes the root session's ``context_intelligence.set_ingestion_filters`` capability
 (registered by the ingestion hook) as an agent-callable tool, so the ROOT agent
 can make a destination `exclude` edit made during a session take effect
 immediately -- no restart -- against the already-running session's ingestion.
@@ -22,20 +22,20 @@ from amplifier_core.models import ToolResult
 __amplifier_module_type__ = "tool"
 __all__ = ["mount"]
 
-_CAP = "context_intelligence.reapply_ingestion"
+_CAP = "context_intelligence.set_ingestion_filters"
 _VERIFY_CAP = "context_intelligence.verify_ingestion_consistency"
 _DEFAULT_SETTINGS = str(Path("~/.amplifier/settings.yaml").expanduser())
 
 
-class ReapplyIngestionTool:
-    """Re-apply the ingestion hook's per-destination include/exclude live."""
+class SetIngestionFiltersTool:
+    """Apply the ingestion hook's per-destination include/exclude live."""
 
     def __init__(self, coordinator: Any) -> None:
         self._coordinator = coordinator
 
     @property
     def name(self) -> str:
-        return "reapply_ingestion"
+        return "set_ingestion_filters"
 
     @property
     def description(self) -> str:
@@ -64,7 +64,7 @@ class ReapplyIngestionTool:
                 "verify_only": {
                     "type": "boolean",
                     "description": (
-                        "If true, do NOT reapply -- only fail-loud compare the session's "
+                        "If true, do NOT apply -- only fail-loud compare the session's "
                         "LIVE exclude filter against settings.yaml on disk (both directions)."
                     ),
                 },
@@ -91,24 +91,24 @@ class ReapplyIngestionTool:
                 return ToolResult(success=False, output={"error": str(exc)})
             return ToolResult(success=True, output=result)
 
-        reapply = self._coordinator.get_capability(_CAP)
-        if reapply is None:
+        set_filters = self._coordinator.get_capability(_CAP)
+        if set_filters is None:
             return ToolResult(
                 success=False,
                 output={
                     "error": f"capability {_CAP} unavailable in this session (no "
                     "ingestion hook mounted here) -- this session's fan-out was NOT "
-                    "changed. The reapply tool only affects the session that mounts "
-                    "the ingestion hook (the root session)."
+                    "changed. The set_ingestion_filters tool only affects the session "
+                    "that mounts the ingestion hook (the root session)."
                 },
             )
         try:
-            report = await reapply(settings_path=settings_path, verify_disk=True)
+            report = await set_filters(settings_path=settings_path, verify_disk=True)
         except Exception as exc:  # noqa: BLE001 - surface the fail-loud reason to the agent
             return ToolResult(success=False, output={"error": str(exc)})
         return ToolResult(success=True, output=report)
 
 
 async def mount(coordinator: Any, config: Any) -> None:
-    tool = ReapplyIngestionTool(coordinator)
+    tool = SetIngestionFiltersTool(coordinator)
     await coordinator.mount("tools", tool, name=tool.name)
