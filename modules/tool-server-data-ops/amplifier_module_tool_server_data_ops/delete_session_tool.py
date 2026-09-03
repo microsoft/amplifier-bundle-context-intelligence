@@ -12,6 +12,7 @@ before calling this.
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 from amplifier_core.models import ToolResult
@@ -165,30 +166,53 @@ class DeleteSessionTool:
             auth_strategy=conn.auth_strategy,
             timeout=self._tool_resolver.request_timeout,
         )
-        try:
-            result = await async_client.delete_session(session_id)
-        except CIClientError as exc:
-            # success=False + output unset is safe: ToolResult.model_post_init
-            # back-fills output from error["message"] when output is None. Do NOT
-            # also set output= here or that back-fill is suppressed.
-            origin_name = conn.origin.name if conn.origin and conn.origin.name else conn.url
-            message = f"delete failed against {origin_name}: {exc}"
-            if exc.status_code == 404:
-                message = f"unknown session {session_id!r} on {origin_name}"
-            elif exc.status_code == 409:
-                message = (
-                    f"session {session_id!r} on {origin_name} is still receiving data "
-                    "and cannot be deleted yet, or the id is ambiguous across workspaces"
+        # A 409 with a Retry-After hint means the graph is still draining -- a
+        # transient, retryable refusal. Honor the server's hint with a bounded
+        # backoff so a normal "just finished" session drains and deletes without
+        # the user having to poll by hand; a genuinely still-live session simply
+        # exhausts the bound and returns a precise "still draining" message
+        # rather than blocking forever. An ambiguous-id 409 has no Retry-After,
+        # so it is never retried.
+        max_retries = 3
+        attempt = 0
+        while True:
+            try:
+                result = await async_client.delete_session(session_id)
+                break
+            except CIClientError as exc:
+                if exc.status_code == 409 and exc.retry_after is not None and attempt < max_retries:
+                    attempt += 1
+                    await asyncio.sleep(exc.retry_after)
+                    continue
+                # success=False + output unset is safe: ToolResult.model_post_init
+                # back-fills output from error["message"] when output is None. Do NOT
+                # also set output= here or that back-fill is suppressed.
+                origin_name = conn.origin.name if conn.origin and conn.origin.name else conn.url
+                message = f"delete failed against {origin_name}: {exc}"
+                if exc.status_code == 404:
+                    message = f"unknown session {session_id!r} on {origin_name}"
+                elif exc.status_code == 409 and exc.retry_after is not None:
+                    message = (
+                        f"session {session_id!r} on {origin_name} is still receiving "
+                        f"data (still draining after {attempt} automatic retr"
+                        f"{'y' if attempt == 1 else 'ies'}); wait ~{exc.retry_after}s "
+                        "and try again"
+                    )
+                elif exc.status_code == 409:
+                    message = (
+                        f"session {session_id!r} on {origin_name} could not be deleted: "
+                        "the id is ambiguous across workspaces"
+                    )
+                return ToolResult(
+                    success=False,
+                    error={
+                        "message": message,
+                        "type": exc.error_type,  # connection_error|timeout|http_status|decode_error
+                        "source": _origin_dict(conn.origin),
+                        **({"status_code": exc.status_code} if exc.status_code is not None else {}),
+                        **({"retry_after": exc.retry_after} if exc.retry_after is not None else {}),
+                    },
                 )
-            return ToolResult(
-                success=False,
-                error={
-                    "message": message,
-                    "type": exc.error_type,  # connection_error|timeout|http_status|decode_error
-                    "source": _origin_dict(conn.origin),
-                    **({"status_code": exc.status_code} if exc.status_code is not None else {}),
-                },
-            )
         return ToolResult(
             success=True,
             output={"source": _origin_dict(conn.origin), "result": result},

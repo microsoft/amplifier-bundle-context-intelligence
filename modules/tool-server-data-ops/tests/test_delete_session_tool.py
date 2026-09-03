@@ -416,9 +416,45 @@ class TestDeleteSessionServerErrors:
         assert "missing" in result.error["message"]
         assert result.error["source"] is not None
 
-    async def test_409_surfaces_as_clear_tool_error(self) -> None:
-        """A 409 (still receiving data / ambiguous id) must never be silently
-        treated as a completed delete -- it surfaces as a clear tool error."""
+    async def test_409_ambiguous_id_not_retried(self) -> None:
+        """A 409 with NO Retry-After hint is the ambiguous-id case: not
+        retryable, surfaced once as a clear tool error, never silently treated
+        as a completed delete."""
+        from context_intelligence.client import CIClientError
+
+        from amplifier_module_tool_server_data_ops.delete_session_tool import DeleteSessionTool
+
+        hook_resolver = _make_hook_resolver(server_url="http://ci-server:9000")
+        coordinator = _make_coordinator(resolver=hook_resolver)
+        tool = DeleteSessionTool(coordinator)
+
+        mock_instance = AsyncMock()
+        mock_instance.delete_session = AsyncMock(
+            side_effect=CIClientError(
+                "HTTP 409 from http://ci-server:9000/sessions/dup",
+                error_type="http_status",
+                url="http://ci-server:9000/sessions/dup",
+                status_code=409,
+                retry_after=None,
+            )
+        )
+        mock_cls = MagicMock(return_value=mock_instance)
+        with patch(
+            "amplifier_module_tool_server_data_ops.delete_session_tool.AsyncCIClient",
+            mock_cls,
+        ):
+            result = await tool.execute({"session_id": "dup"})
+
+        assert result.success is False
+        assert result.error is not None
+        assert result.error["status_code"] == 409
+        assert "ambiguous" in result.error["message"]
+        assert mock_instance.delete_session.await_count == 1  # never retried
+
+    async def test_409_still_draining_retries_then_surfaces_precise_error(self) -> None:
+        """A 409 WITH a Retry-After hint (graph still draining) is retried a
+        bounded number of times honoring the hint; if it never clears, it
+        surfaces a precise 'still draining' error carrying retry_after."""
         from context_intelligence.client import CIClientError
 
         from amplifier_module_tool_server_data_ops.delete_session_tool import DeleteSessionTool
@@ -434,6 +470,7 @@ class TestDeleteSessionServerErrors:
                 error_type="http_status",
                 url="http://ci-server:9000/sessions/live",
                 status_code=409,
+                retry_after=0,  # 0s so the bounded backoff runs instantly
             )
         )
         mock_cls = MagicMock(return_value=mock_instance)
@@ -445,6 +482,42 @@ class TestDeleteSessionServerErrors:
 
         assert result.success is False
         assert result.error is not None
-        assert result.error["type"] == "http_status"
         assert result.error["status_code"] == 409
-        assert "still receiving data" in result.error["message"]
+        assert result.error["retry_after"] == 0
+        assert "still draining" in result.error["message"]
+        # 1 initial attempt + 3 bounded retries
+        assert mock_instance.delete_session.await_count == 4
+
+    async def test_409_still_draining_then_succeeds_after_backoff(self) -> None:
+        """If the drain finishes mid-backoff, the bounded retry loop deletes
+        successfully instead of surfacing an error."""
+        from context_intelligence.client import CIClientError
+
+        from amplifier_module_tool_server_data_ops.delete_session_tool import DeleteSessionTool
+
+        hook_resolver = _make_hook_resolver(server_url="http://ci-server:9000")
+        coordinator = _make_coordinator(resolver=hook_resolver)
+        tool = DeleteSessionTool(coordinator)
+
+        pending = CIClientError(
+            "HTTP 409 from http://ci-server:9000/sessions/live",
+            error_type="http_status",
+            url="http://ci-server:9000/sessions/live",
+            status_code=409,
+            retry_after=0,
+        )
+        mock_instance = AsyncMock()
+        # 409 once, then a real delete result on the retry.
+        mock_instance.delete_session = AsyncMock(
+            side_effect=[pending, {"root_id": "live", "nodes_deleted": 3}]
+        )
+        mock_cls = MagicMock(return_value=mock_instance)
+        with patch(
+            "amplifier_module_tool_server_data_ops.delete_session_tool.AsyncCIClient",
+            mock_cls,
+        ):
+            result = await tool.execute({"session_id": "live"})
+
+        assert result.success is True
+        assert result.output["result"] == {"root_id": "live", "nodes_deleted": 3}
+        assert mock_instance.delete_session.await_count == 2
