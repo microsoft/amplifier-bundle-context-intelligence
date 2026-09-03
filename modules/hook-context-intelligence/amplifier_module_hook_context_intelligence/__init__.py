@@ -151,12 +151,12 @@ def _read_destinations_from_settings(settings_path: str) -> dict[str, Any]:
     """Read the raw ``destinations`` block from a settings.yaml on disk.
 
     The hook itself never reads settings.yaml (the kernel merges/expands it and
-    hands mount() a config dict). The live-reapply path re-reads the file so a
-    mid-session exclude edit on disk is reflected in the running session.
+    hands mount() a config dict). The reapply path re-reads the file so an
+    exclude edit made to it during a session is reflected in the running session.
 
     Looks first under ``overrides.hook-context-intelligence.config.destinations``
-    (the real settings.yaml shape), then falls back to a top-level
-    ``destinations:`` key (compact spike-config shape). Returns {} if neither is
+    (the settings.yaml shape), then falls back to a top-level ``destinations:``
+    key. Returns {} if neither is
     present. Does NOT expand ${VAR}; callers writing on-disk config for reapply
     are expected to write already-resolved values (same contract the kernel
     applies before mount()).
@@ -191,7 +191,11 @@ def _patch_inherited_hook_config(coordinator: Any, raw_destinations: dict[str, A
     Returns True if a hook-context-intelligence entry was patched.
     """
     session = getattr(coordinator, "session", None)
-    cfg = getattr(session, "config", None) if session is not None else getattr(coordinator, "config", None)
+    cfg = (
+        getattr(session, "config", None)
+        if session is not None
+        else getattr(coordinator, "config", None)
+    )
     if not isinstance(cfg, dict):
         return False
     hooks = cfg.get("hooks")
@@ -272,7 +276,7 @@ async def mount(
         settings_path: str | None = None,
         verify_disk: bool = True,
     ) -> dict[str, Any]:
-        """Re-apply fan-out routing to THIS session's live hook, mid-flight.
+        """Re-apply destination routing to this session's live hook, without a restart.
 
         Source of the new destinations block (exactly one):
           - ``settings_path``: re-read the block from a settings.yaml on disk
