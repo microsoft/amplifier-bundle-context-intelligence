@@ -2,8 +2,8 @@
 
 Exposes the root session's ``context_intelligence.reapply_ingestion`` capability
 (registered by the ingestion hook) as an agent-callable tool, so the ROOT agent
-can make a mid-session destination `exclude` edit take effect immediately -- no
-restart -- against the already-running session's fan-out.
+can make a destination `exclude` edit made during a session take effect
+immediately -- no restart -- against the already-running session's ingestion.
 
 Only meaningful in a session that actually mounts the ingestion hook (i.e. the
 ROOT session via behaviors/context-intelligence-logging.yaml). A delegated agent
@@ -80,8 +80,10 @@ class ReapplyIngestionTool:
             if verify is None:
                 return ToolResult(
                     success=False,
-                    output={"error": f"capability {_VERIFY_CAP} unavailable in this session "
-                            "(no ingestion hook mounted here) -- cannot verify."},
+                    output={
+                        "error": f"capability {_VERIFY_CAP} unavailable in this session "
+                        "(no ingestion hook mounted here) -- cannot verify."
+                    },
                 )
             try:
                 result = verify(settings_path)
@@ -93,10 +95,12 @@ class ReapplyIngestionTool:
         if reapply is None:
             return ToolResult(
                 success=False,
-                output={"error": f"capability {_CAP} unavailable in this session (no "
-                        "ingestion hook mounted here) -- this session's fan-out was NOT "
-                        "changed. The reapply tool only affects the session that mounts "
-                        "the ingestion hook (the root session)."},
+                output={
+                    "error": f"capability {_CAP} unavailable in this session (no "
+                    "ingestion hook mounted here) -- this session's fan-out was NOT "
+                    "changed. The reapply tool only affects the session that mounts "
+                    "the ingestion hook (the root session)."
+                },
             )
         try:
             report = await reapply(settings_path=settings_path, verify_disk=True)

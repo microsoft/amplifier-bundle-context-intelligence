@@ -1,7 +1,7 @@
 [project]
 name = "amplifier-module-tool-context-intelligence-reapply"
 version = "0.1.0"
-description = "Same-session ingestion reapply tool  14 make a destination include/exclude change take effect live, no restart"
+description = "Same-session ingestion reapply tool - make a destination include/exclude change take effect live, without a restart"
 requires-python = ">=3.11"
 license = "MIT"
 
