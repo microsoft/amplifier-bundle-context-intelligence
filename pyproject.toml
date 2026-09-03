@@ -38,6 +38,12 @@ dev = [
     "httpx>=0.25",
     "idna>=3.15",
     "PyYAML>=6.0",
+    # context_intelligence/whoami_tool.py imports amplifier_core.models.ToolResult
+    # (WhoamiTool is mounted from two tool modules -- see whoami_tool.py's own
+    # docstring -- and lives here in the shared library, not in either module's
+    # own package, so it needs amplifier-core as a dev dep for pyright/pytest
+    # the same way the module pyproject.toml files already do).
+    "amplifier-core>=1.6.0",
 ]
 
 [tool.pytest.ini_options]
@@ -49,6 +55,8 @@ pythonVersion = "3.11"
 typeCheckingMode = "basic"
 include = ["context_intelligence", "tests"]
 extraPaths = ["."]
+venvPath = "."
+venv = ".venv"
 
 [tool.ruff]
 target-version = "py311"

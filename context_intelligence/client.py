@@ -65,12 +65,21 @@ class CIClientError(Exception):
         error_type: str,
         url: str,
         status_code: int | None = None,
+        retry_after: int | None = None,
     ) -> None:
         super().__init__(message)
-        #: One of "connection_error" | "timeout" | "http_status" | "decode_error".
+        #: One of "connection_error" | "timeout" | "http_status" | "decode_error"
+        #: | "auth_error". "auth_error" -- an unusable credential -- is raised
+        #: BEFORE the request is attempted, so it is never confused with
+        #: "decode_error" (a bad response body from a server actually reached).
         self.error_type = error_type
         self.url = url
         self.status_code = status_code
+        #: Seconds to wait before retrying, parsed from the ``Retry-After``
+        #: response header. Set only on a retryable status (a 409 for a delete
+        #: refused because the session graph is still draining). ``None`` when
+        #: the server sent no such hint -- the failure is not retryable.
+        self.retry_after = retry_after
 
 
 # ---------------------------------------------------------------------------
@@ -171,7 +180,9 @@ def _http_get_strict(url: str, headers: dict[str, str]) -> Any:
     CIClientError
         error_type one of: ``connection_error`` (refused/DNS/reset),
         ``timeout``, ``http_status`` (non-2xx; ``status_code`` set), or
-        ``decode_error`` (body is not valid JSON).
+        ``decode_error`` (body is not valid JSON). ``auth_error`` is
+        classified by the caller before ``headers`` reaches this function,
+        so it never appears here.
     """
     if _requests is not None:
         try:
@@ -181,12 +192,14 @@ def _http_get_strict(url: str, headers: dict[str, str]) -> Any:
         except _requests.exceptions.Timeout as exc:
             raise CIClientError(f"timeout listing {url}", error_type="timeout", url=url) from exc
         except _requests.exceptions.HTTPError as exc:
-            status = getattr(getattr(exc, "response", None), "status_code", None)
+            _resp = getattr(exc, "response", None)
+            status = getattr(_resp, "status_code", None)
             raise CIClientError(
                 f"HTTP {status} from {url}",
                 error_type="http_status",
                 url=url,
                 status_code=status,
+                retry_after=_retry_after_seconds(getattr(_resp, "headers", None)),
             ) from exc
         except (ValueError, json.JSONDecodeError) as exc:  # resp.json() failed
             raise CIClientError(
@@ -211,6 +224,7 @@ def _http_get_strict(url: str, headers: dict[str, str]) -> Any:
                 error_type="http_status",
                 url=url,
                 status_code=exc.response.status_code,
+                retry_after=_retry_after_seconds(exc.response.headers),
             ) from exc
         except (ValueError, json.JSONDecodeError) as exc:  # resp.json() failed
             raise CIClientError(
@@ -232,6 +246,7 @@ def _http_get_strict(url: str, headers: dict[str, str]) -> Any:
             error_type="http_status",
             url=url,
             status_code=exc.code,
+            retry_after=_retry_after_seconds(getattr(exc, "headers", None)),
         ) from exc
     except (TimeoutError, socket.timeout) as exc:  # read timeout
         raise CIClientError(f"timeout listing {url}", error_type="timeout", url=url) from exc
@@ -239,6 +254,127 @@ def _http_get_strict(url: str, headers: dict[str, str]) -> Any:
         # A URLError may wrap a socket timeout in .reason -- classify that as timeout.
         if isinstance(exc.reason, (TimeoutError, socket.timeout)):
             raise CIClientError(f"timeout listing {url}", error_type="timeout", url=url) from exc
+        raise CIClientError(
+            f"connection error to {url}: {exc}", error_type="connection_error", url=url
+        ) from exc
+    try:
+        return json.loads(raw)
+    except (ValueError, json.JSONDecodeError) as exc:
+        raise CIClientError(
+            f"malformed JSON from {url}", error_type="decode_error", url=url
+        ) from exc
+
+
+def _retry_after_seconds(response_headers: Any) -> int | None:
+    """Parse a non-negative integer ``Retry-After`` from response headers.
+
+    Accepts any headers-like object with ``.get`` (requests/httpx/urllib all
+    provide one). Returns ``None`` when the header is absent or not a plain
+    delta-seconds integer (the HTTP-date form is not used by this server).
+    """
+    if response_headers is None:
+        return None
+    raw = response_headers.get("Retry-After")
+    if raw is None:
+        return None
+    try:
+        value = int(str(raw).strip())
+    except (TypeError, ValueError):
+        return None
+    return value if value >= 0 else None
+
+
+def _http_delete_strict(url: str, headers: dict[str, str]) -> Any:
+    """DELETE *url* with *headers*, classifying-and-RAISING ``CIClientError`` on failure.
+
+    Same shape as ``_http_get_strict`` (see its docstring for the full rule set),
+    just using the DELETE HTTP verb instead of GET. Used by
+    ``CIClient.delete_session()`` so a down / slow / rejecting server can never
+    masquerade as a completed delete.
+
+    Library preference mirrors ``_http_get_strict`` (requests -> httpx ->
+    urllib.request). Returns the parsed JSON body on a 2xx response.
+
+    Raises
+    ------
+    CIClientError
+        error_type one of: ``connection_error`` (refused/DNS/reset),
+        ``timeout``, ``http_status`` (non-2xx; ``status_code`` set -- this is
+        how a 404 "unknown session" or a 409 "still receiving data / ambiguous
+        id" reaches the caller), or ``decode_error`` (body is not valid JSON).
+        ``auth_error`` is classified by the caller before ``headers`` reaches
+        this function, so it never appears here.
+    """
+    if _requests is not None:
+        try:
+            resp = _requests.delete(url, headers=headers, timeout=30)
+            resp.raise_for_status()
+            return resp.json()
+        except _requests.exceptions.Timeout as exc:
+            raise CIClientError(f"timeout deleting {url}", error_type="timeout", url=url) from exc
+        except _requests.exceptions.HTTPError as exc:
+            _resp = getattr(exc, "response", None)
+            status = getattr(_resp, "status_code", None)
+            raise CIClientError(
+                f"HTTP {status} from {url}",
+                error_type="http_status",
+                url=url,
+                status_code=status,
+                retry_after=_retry_after_seconds(getattr(_resp, "headers", None)),
+            ) from exc
+        except (ValueError, json.JSONDecodeError) as exc:  # resp.json() failed
+            raise CIClientError(
+                f"malformed JSON from {url}", error_type="decode_error", url=url
+            ) from exc
+        except _requests.exceptions.RequestException as exc:  # ConnectionError, etc.
+            raise CIClientError(
+                f"connection error to {url}: {exc}", error_type="connection_error", url=url
+            ) from exc
+
+    if _httpx is not None:
+        try:
+            with _httpx.Client(timeout=30) as client:
+                resp = client.delete(url, headers=headers)
+                resp.raise_for_status()
+                return resp.json()
+        except _httpx.TimeoutException as exc:
+            raise CIClientError(f"timeout deleting {url}", error_type="timeout", url=url) from exc
+        except _httpx.HTTPStatusError as exc:
+            raise CIClientError(
+                f"HTTP {exc.response.status_code} from {url}",
+                error_type="http_status",
+                url=url,
+                status_code=exc.response.status_code,
+                retry_after=_retry_after_seconds(exc.response.headers),
+            ) from exc
+        except (ValueError, json.JSONDecodeError) as exc:  # resp.json() failed
+            raise CIClientError(
+                f"malformed JSON from {url}", error_type="decode_error", url=url
+            ) from exc
+        except _httpx.HTTPError as exc:  # ConnectError, transport, etc.
+            raise CIClientError(
+                f"connection error to {url}: {exc}", error_type="connection_error", url=url
+            ) from exc
+
+    # stdlib fallback
+    try:
+        req = urllib.request.Request(url, headers=headers, method="DELETE")
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            raw = resp.read().decode("utf-8")
+    except urllib.error.HTTPError as exc:  # subclass of URLError -- catch FIRST
+        raise CIClientError(
+            f"HTTP {exc.code} from {url}",
+            error_type="http_status",
+            url=url,
+            status_code=exc.code,
+            retry_after=_retry_after_seconds(getattr(exc, "headers", None)),
+        ) from exc
+    except (TimeoutError, socket.timeout) as exc:  # read timeout
+        raise CIClientError(f"timeout deleting {url}", error_type="timeout", url=url) from exc
+    except urllib.error.URLError as exc:
+        # A URLError may wrap a socket timeout in .reason -- classify that as timeout.
+        if isinstance(exc.reason, (TimeoutError, socket.timeout)):
+            raise CIClientError(f"timeout deleting {url}", error_type="timeout", url=url) from exc
         raise CIClientError(
             f"connection error to {url}: {exc}", error_type="connection_error", url=url
         ) from exc
@@ -414,9 +550,28 @@ class CIClient:
     # Internal helpers
     # ------------------------------------------------------------------
 
-    def _auth_headers(self) -> dict[str, str]:
-        """Return the ``Authorization`` header dict, computed per-request via strategy."""
-        return self._strategy.headers()
+    def _auth_headers(self, url: str) -> dict[str, str]:
+        """Return the ``Authorization`` header dict, computed per-request via strategy.
+
+        Called by every public method BEFORE it enters its request path, so an
+        unusable credential (empty api_key, the "[REDACTED]" sentinel, or an
+        unexpanded ${VAR} placeholder) is classified as its own ``auth_error``
+        -- it is never sent to the server, and never confused with
+        ``decode_error`` (a genuine bad-JSON response from a server that was
+        actually reached).
+
+        Raises
+        ------
+        CIClientError
+            error_type="auth_error" when ``self._strategy.headers()`` raises
+            ``ValueError`` (unusable credential).
+        """
+        try:
+            return self._strategy.headers()
+        except ValueError as exc:
+            raise CIClientError(
+                f"unusable credential for {url}: {exc}", error_type="auth_error", url=url
+            ) from exc
 
     # ------------------------------------------------------------------
     # Public API
@@ -451,7 +606,8 @@ class CIClient:
             "params": params if params is not None else {},
             "workspace": workspace,
         }
-        result = _http_post(url, body, self._auth_headers())
+        headers = self._auth_headers(url)
+        result = _http_post(url, body, headers)
         if result is None:
             return []
         if isinstance(result, list):
@@ -487,13 +643,14 @@ class CIClient:
         Raises
         ------
         CIClientError
-            The request genuinely failed: connection error/refused, timeout,
+            The request genuinely failed: an unusable credential (``auth_error``), connection error/refused, timeout,
             non-2xx HTTP status, or a malformed (non-JSON) body. A down / slow /
             rejecting server can never masquerade as "no blobs" -- see error_type
             for the classification.
         """
         url = f"{self._server_url}/blobs/{session_id}"
-        result = _http_get_strict(url, self._auth_headers())
+        headers = self._auth_headers(url)
+        result = _http_get_strict(url, headers)
         return _parse_blob_keys(result)
 
     def fetch_blob(self, session_id: str, key: str) -> Any | None:
@@ -515,7 +672,97 @@ class CIClient:
             Parsed JSON content, or ``None`` when the request fails.
         """
         url = f"{self._server_url}/blobs/{session_id}/{key}"
-        return _http_get(url, self._auth_headers())
+        headers = self._auth_headers(url)
+        return _http_get(url, headers)
+
+    def session_summary(self, session_id: str) -> dict[str, Any]:
+        """Fetch the preview facts for a session (read, no changes made).
+
+        Calls ``GET /sessions/{session_id}/summary`` and returns the parsed
+        JSON dict: the facts about the whole session graph -- who created it,
+        how many nodes/edges/blobs it has, when it started and last changed,
+        whether it is safe to delete, and so on.
+
+        Parameters
+        ----------
+        session_id:
+            The session to look up.
+
+        Returns
+        -------
+        dict
+            The parsed summary facts.
+
+        Raises
+        ------
+        CIClientError
+            The request genuinely failed: an unusable credential (``auth_error``), connection error/refused, timeout,
+            non-2xx HTTP status, or a malformed (non-JSON) body. A 404 means
+            the session id is not known to the server; a 409 means the
+            session is still receiving data or the id is ambiguous across
+            workspaces -- ``status_code`` carries the exact number so the
+            caller can give a clear message.
+        """
+        url = f"{self._server_url}/sessions/{session_id}/summary"
+        headers = self._auth_headers(url)
+        return _http_get_strict(url, headers)
+
+    def delete_session(self, session_id: str) -> dict[str, Any]:
+        """Delete a session's whole graph from the server (a real, permanent change).
+
+        Calls ``DELETE /sessions/{session_id}``. There is no workspace input and
+        no "preview only" flag -- the server resolves the session by id and this
+        always performs the delete. Returns the parsed JSON dict with the result
+        counts (how many nodes/relationships/blobs were removed, and so on).
+
+        Parameters
+        ----------
+        session_id:
+            The session to delete.
+
+        Returns
+        -------
+        dict
+            The parsed result counts.
+
+        Raises
+        ------
+        CIClientError
+            The request genuinely failed: an unusable credential (``auth_error``), connection error/refused, timeout,
+            non-2xx HTTP status, or a malformed (non-JSON) body. A 404 means
+            the session id is not known to the server; a 409 means the
+            session is still receiving data (not safe to delete yet) or the
+            id is ambiguous across workspaces -- ``status_code`` carries the
+            exact number so the caller can give a clear message.
+        """
+        url = f"{self._server_url}/sessions/{session_id}"
+        headers = self._auth_headers(url)
+        return _http_delete_strict(url, headers)
+
+    def whoami(self) -> dict[str, Any]:
+        """Resolve the authenticated caller's identity from the server.
+
+        Calls ``GET /whoami`` and returns the parsed JSON dict: the server's
+        view of who is making the request right now (e.g.
+        ``{"contributor_id": "<github-id>"}``). ``contributor_id`` is ``None``
+        when auth is disabled server-side.
+
+        Returns
+        -------
+        dict
+            The parsed identity dict.
+
+        Raises
+        ------
+        CIClientError
+            The request genuinely failed: an unusable credential (``auth_error``), connection error/refused, timeout,
+            non-2xx HTTP status, or a malformed (non-JSON) body.
+            ``status_code`` carries the exact number so the caller can give a
+            clear message.
+        """
+        url = f"{self._server_url}/whoami"
+        headers = self._auth_headers(url)
+        return _http_get_strict(url, headers)
 
     def health_check(self) -> dict[str, Any]:
         """Check server health by running a simple count query.
@@ -587,6 +834,31 @@ class AsyncCIClient:
         self._timeout: float = timeout
 
     # ------------------------------------------------------------------
+    # Internal helpers
+    # ------------------------------------------------------------------
+
+    def _auth_headers(self, url: str) -> dict[str, str]:
+        """Return the ``Authorization`` header dict, computed per-request via strategy.
+
+        Called BEFORE entering a method's request ``try:`` block -- an
+        unusable credential is classified as ``auth_error`` here rather than
+        falling into the request's own ``except (ValueError, json.JSONDecodeError)``
+        and being misreported as a decode failure.
+
+        Raises
+        ------
+        CIClientError
+            error_type="auth_error" when ``self._strategy.headers()`` raises
+            ``ValueError`` (unusable credential).
+        """
+        try:
+            return self._strategy.headers()
+        except ValueError as exc:
+            raise CIClientError(
+                f"unusable credential for {url}: {exc}", error_type="auth_error", url=url
+            ) from exc
+
+    # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
 
@@ -619,7 +891,7 @@ class AsyncCIClient:
         Raises
         ------
         CIClientError
-            The request genuinely failed: connection error/refused, timeout,
+            The request genuinely failed: an unusable credential (``auth_error``), connection error/refused, timeout,
             non-2xx HTTP status, or a malformed (non-JSON) response body. A
             down, slow, or rejecting SELECTED source can never masquerade as
             an empty success -- see error_type for the classification.
@@ -630,9 +902,10 @@ class AsyncCIClient:
             "params": params if params is not None else {},
             "workspace": workspace,
         }
+        headers = self._auth_headers(url)
         try:
             async with httpx.AsyncClient(timeout=self._timeout) as client:  # type: ignore[union-attr]
-                resp = await client.post(url, json=body, headers=self._strategy.headers())
+                resp = await client.post(url, json=body, headers=headers)
                 resp.raise_for_status()
                 result = resp.json()
         except httpx.TimeoutException as exc:  # type: ignore[union-attr]
@@ -687,13 +960,14 @@ class AsyncCIClient:
         Raises
         ------
         CIClientError
-            The request genuinely failed: connection error/refused, timeout,
+            The request genuinely failed: an unusable credential (``auth_error``), connection error/refused, timeout,
             non-2xx HTTP status, or a malformed (non-JSON) response body.
         """
         url = f"{self._server_url}/blobs/{session_id}/{key}"
+        headers = self._auth_headers(url)
         try:
             async with httpx.AsyncClient(timeout=self._timeout) as client:  # type: ignore[union-attr]
-                resp = await client.get(url, headers=self._strategy.headers())
+                resp = await client.get(url, headers=headers)
                 resp.raise_for_status()
                 return resp.json()
         except httpx.TimeoutException as exc:  # type: ignore[union-attr]
@@ -741,16 +1015,17 @@ class AsyncCIClient:
         Raises
         ------
         CIClientError
-            The request genuinely failed: connection error/refused, timeout,
+            The request genuinely failed: an unusable credential (``auth_error``), connection error/refused, timeout,
             non-2xx HTTP status, or a malformed (non-JSON) body. A down / slow /
             rejecting server can never masquerade as "no blobs" -- see error_type
             for the classification. Honors ``self._timeout`` like ``cypher()`` /
             ``fetch_blob()``.
         """
         url = f"{self._server_url}/blobs/{session_id}"
+        headers = self._auth_headers(url)
         try:
             async with httpx.AsyncClient(timeout=self._timeout) as client:  # type: ignore[union-attr]
-                resp = await client.get(url, headers=self._strategy.headers())
+                resp = await client.get(url, headers=headers)
                 resp.raise_for_status()
                 result = resp.json()
         except httpx.TimeoutException as exc:  # type: ignore[union-attr]
@@ -772,6 +1047,158 @@ class AsyncCIClient:
             ) from exc
 
         return _parse_blob_keys(result)
+
+    async def session_summary(self, session_id: str) -> dict[str, Any]:
+        """Fetch the preview facts for a session (read, no changes made; async).
+
+        Calls ``GET /sessions/{session_id}/summary`` and returns the parsed
+        JSON dict: the facts about the whole session graph -- who created it,
+        how many nodes/edges/blobs it has, when it started and last changed,
+        whether it is safe to delete, and so on.
+
+        Parameters
+        ----------
+        session_id:
+            The session to look up.
+
+        Returns
+        -------
+        dict
+            The parsed summary facts.
+
+        Raises
+        ------
+        CIClientError
+            The request genuinely failed: an unusable credential (``auth_error``), connection error/refused, timeout,
+            non-2xx HTTP status, or a malformed (non-JSON) body. A 404 means
+            the session id is not known to the server; a 409 means the
+            session is still receiving data or the id is ambiguous across
+            workspaces -- ``status_code`` carries the exact number so the
+            caller can give a clear message.
+        """
+        url = f"{self._server_url}/sessions/{session_id}/summary"
+        headers = self._auth_headers(url)
+        try:
+            async with httpx.AsyncClient(timeout=self._timeout) as client:  # type: ignore[union-attr]
+                resp = await client.get(url, headers=headers)
+                resp.raise_for_status()
+                return resp.json()
+        except httpx.TimeoutException as exc:  # type: ignore[union-attr]
+            raise CIClientError(f"timeout fetching {url}", error_type="timeout", url=url) from exc
+        except httpx.HTTPStatusError as exc:  # type: ignore[union-attr]
+            raise CIClientError(
+                f"HTTP {exc.response.status_code} from {url}",
+                error_type="http_status",
+                url=url,
+                status_code=exc.response.status_code,
+            ) from exc
+        except (ValueError, json.JSONDecodeError) as exc:  # resp.json() failed
+            raise CIClientError(
+                f"malformed JSON from {url}", error_type="decode_error", url=url
+            ) from exc
+        except httpx.HTTPError as exc:  # type: ignore[union-attr]  # ConnectError, transport, etc.
+            raise CIClientError(
+                f"connection error to {url}: {exc}", error_type="connection_error", url=url
+            ) from exc
+
+    async def delete_session(self, session_id: str) -> dict[str, Any]:
+        """Delete a session's whole graph from the server (a real, permanent change; async).
+
+        Calls ``DELETE /sessions/{session_id}``. There is no workspace input and
+        no "preview only" flag -- the server resolves the session by id and this
+        always performs the delete. Returns the parsed JSON dict with the result
+        counts (how many nodes/relationships/blobs were removed, and so on).
+
+        Parameters
+        ----------
+        session_id:
+            The session to delete.
+
+        Returns
+        -------
+        dict
+            The parsed result counts.
+
+        Raises
+        ------
+        CIClientError
+            The request genuinely failed: an unusable credential (``auth_error``), connection error/refused, timeout,
+            non-2xx HTTP status, or a malformed (non-JSON) body. A 404 means
+            the session id is not known to the server; a 409 means the
+            session is still receiving data (not safe to delete yet) or the
+            id is ambiguous across workspaces -- ``status_code`` carries the
+            exact number so the caller can give a clear message.
+        """
+        url = f"{self._server_url}/sessions/{session_id}"
+        headers = self._auth_headers(url)
+        try:
+            async with httpx.AsyncClient(timeout=self._timeout) as client:  # type: ignore[union-attr]
+                resp = await client.delete(url, headers=headers)
+                resp.raise_for_status()
+                return resp.json()
+        except httpx.TimeoutException as exc:  # type: ignore[union-attr]
+            raise CIClientError(f"timeout deleting {url}", error_type="timeout", url=url) from exc
+        except httpx.HTTPStatusError as exc:  # type: ignore[union-attr]
+            raise CIClientError(
+                f"HTTP {exc.response.status_code} from {url}",
+                error_type="http_status",
+                url=url,
+                status_code=exc.response.status_code,
+            ) from exc
+        except (ValueError, json.JSONDecodeError) as exc:  # resp.json() failed
+            raise CIClientError(
+                f"malformed JSON from {url}", error_type="decode_error", url=url
+            ) from exc
+        except httpx.HTTPError as exc:  # type: ignore[union-attr]  # ConnectError, transport, etc.
+            raise CIClientError(
+                f"connection error to {url}: {exc}", error_type="connection_error", url=url
+            ) from exc
+
+    async def whoami(self) -> dict[str, Any]:
+        """Resolve the authenticated caller's identity from the server (async).
+
+        Calls ``GET /whoami`` and returns the parsed JSON dict: the server's
+        view of who is making the request right now (e.g.
+        ``{"contributor_id": "<github-id>"}``). ``contributor_id`` is ``None``
+        when auth is disabled server-side.
+
+        Returns
+        -------
+        dict
+            The parsed identity dict.
+
+        Raises
+        ------
+        CIClientError
+            The request genuinely failed: an unusable credential (``auth_error``), connection error/refused, timeout,
+            non-2xx HTTP status, or a malformed (non-JSON) body.
+            ``status_code`` carries the exact number so the caller can give a
+            clear message. Honors ``self._timeout`` like ``session_summary()``.
+        """
+        url = f"{self._server_url}/whoami"
+        headers = self._auth_headers(url)
+        try:
+            async with httpx.AsyncClient(timeout=self._timeout) as client:  # type: ignore[union-attr]
+                resp = await client.get(url, headers=headers)
+                resp.raise_for_status()
+                return resp.json()
+        except httpx.TimeoutException as exc:  # type: ignore[union-attr]
+            raise CIClientError(f"timeout fetching {url}", error_type="timeout", url=url) from exc
+        except httpx.HTTPStatusError as exc:  # type: ignore[union-attr]
+            raise CIClientError(
+                f"HTTP {exc.response.status_code} from {url}",
+                error_type="http_status",
+                url=url,
+                status_code=exc.response.status_code,
+            ) from exc
+        except (ValueError, json.JSONDecodeError) as exc:  # resp.json() failed
+            raise CIClientError(
+                f"malformed JSON from {url}", error_type="decode_error", url=url
+            ) from exc
+        except httpx.HTTPError as exc:  # type: ignore[union-attr]  # ConnectError, transport, etc.
+            raise CIClientError(
+                f"connection error to {url}: {exc}", error_type="connection_error", url=url
+            ) from exc
 
     async def health_check(self) -> dict[str, Any]:
         """Check server health by running a simple count query (async).

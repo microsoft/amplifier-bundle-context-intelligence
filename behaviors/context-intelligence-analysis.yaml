@@ -2,24 +2,23 @@ bundle:
   name: context-intelligence-analysis-behavior
   version: 0.1.0
   description: >
-    LAYER 2 of 3. Adds graph-analyst + graph skills (blob-reading, graph-query,
-    session-reconstruction, workflow-pattern-analysis). Includes
-    context-intelligence-navigation. Use for graph read/query/exploration
-    without the design mode.
+    Imports the navigation behavior for the three context-intelligence agents
+    (graph-analyst, session-navigator, server-data-ops) instead of listing them
+    again, and adds the graph skills (blob-reading, graph-query,
+    session-reconstruction, workflow-pattern-analysis). Use for graph
+    read/query/exploration and session data operations without the design mode.
 
 includes:
+  # The three agents (and tool-delegate + the session-navigation skill) come from
+  # here; this behavior only adds the graph skills below, which list-merge with
+  # the navigation layer's skill list.
   - bundle: context-intelligence:behaviors/context-intelligence-navigation
-
-agents:
-  include:
-    - context-intelligence:graph-analyst
 
 tools:
   - module: tool-skills
     source: git+https://github.com/microsoft/amplifier-bundle-skills@main#subdirectory=modules/tool-skills
     config:
       skills:
-        # Concatenates with the navigation layer's skill list (list-merge with dedup).
         - "git+https://github.com/microsoft/amplifier-bundle-context-intelligence@main#subdirectory=skills/blob-reading"
         - "git+https://github.com/microsoft/amplifier-bundle-context-intelligence@main#subdirectory=skills/context-intelligence-graph-query"
         - "git+https://github.com/microsoft/amplifier-bundle-context-intelligence@main#subdirectory=skills/context-intelligence-session-reconstruction"

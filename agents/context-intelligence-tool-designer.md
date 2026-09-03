@@ -28,6 +28,12 @@ model_role: [reasoning, general]
 tools:
   - module: tool-delegate
     source: git+https://github.com/microsoft/amplifier-foundation@main#subdirectory=modules/tool-delegate
+  # Declared explicitly (not just relied on via inheritance): this agent
+  # genuinely needs read_file/write_file (Step 2.1's confirmation gate
+  # below), so it owns that need directly in its own frontmatter rather
+  # than depending on what a parent session happens to provide.
+  - module: tool-filesystem
+    source: git+https://github.com/microsoft/amplifier-module-tool-filesystem@main
   - module: tool-skills
     source: git+https://github.com/microsoft/amplifier-bundle-skills@main#subdirectory=modules/tool-skills
     config:

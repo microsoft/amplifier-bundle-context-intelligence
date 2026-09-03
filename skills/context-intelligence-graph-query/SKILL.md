@@ -179,6 +179,31 @@ ORDER BY sessions DESC
 LIMIT 25
 ```
 
+### Resolving "my" — use `whoami`, don't guess
+
+`created_by` scopes by *who produced the data*, but the graph never tells you
+who "you" are. When a request is scoped to the acting user themselves —
+"my sessions", "sessions I created", "what have I been working on" — call the
+`whoami` tool for the relevant server before filtering on `created_by`:
+
+```python
+whoami()                       # default endpoint
+whoami(source="prod")          # a specific configured endpoint
+```
+
+It returns `{"contributor_id": "<github-id-or-null>", "source": {...}}`. Use
+`contributor_id` as the value to match against `created_by`:
+
+```cypher
+MATCH (s:Session {workspace: $workspace, created_by: $contributor_id})
+RETURN count(s) AS my_sessions
+```
+
+**Null case.** A null `contributor_id` means auth is disabled (or otherwise
+unknown) on that server — there is no acting-user identity to filter by. Do
+**not** guess or fall back to some other field. Ask the user how they want to
+scope the query instead (e.g. by name, by workspace, or "show everyone's").
+
 ---
 
 ## Section 3 — Traps: Where the Shapes Lie About Their Meaning

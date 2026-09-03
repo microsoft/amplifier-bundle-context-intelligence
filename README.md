@@ -84,7 +84,7 @@ The hook resolves `workspace` using the same `config → coordinator → default
 amplifier bundle add git+https://github.com/microsoft/amplifier-bundle-context-intelligence@main#subdirectory=behaviors/context-intelligence.yaml --app
 ```
 
-**Standalone** — creates a dedicated session configuration using the full root bundle (includes foundation):
+**Standalone** — creates a dedicated session configuration using the full root bundle (includes foundation). This flow intentionally omits `--app`: `bundle use` selects a dedicated standalone configuration rather than layering the bundle onto the active app config (which is what `--app` does for the recommended install above).
 
 ```bash
 amplifier bundle add git+https://github.com/microsoft/amplifier-bundle-context-intelligence@main
@@ -774,7 +774,7 @@ uv run pytest ../../tests/ -q
 
 # YAML validation — requires pyyaml (not installed by default in the bundle virtualenv)
 # Install pyyaml first if the command fails with "No module named 'yaml'":
-#   pip install pyyaml   OR   uv pip install pyyaml
+#   uv pip install pyyaml
 uv run python -c "
 import yaml; from pathlib import Path
 data = yaml.safe_load(Path('behaviors/context-intelligence.yaml').read_text())

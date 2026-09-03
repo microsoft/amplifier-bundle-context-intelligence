@@ -1,9 +1,9 @@
 """Module-level contract tests for tool-context-intelligence-query.
 
-Tests for the merged two-tool module: mount registers both tools from one call,
-the ToolConfigResolver is shared (one instance, identical resolution), the lazy
-hook lookup stays lazy (not cached at mount time), and malformed/empty destination
-inputs fail loud or fall through correctly.
+Tests for the merged three-tool module: mount registers all three tools from
+one call, the ToolConfigResolver is shared (one instance, identical resolution),
+the lazy hook lookup stays lazy (not cached at mount time), and malformed/empty
+destination inputs fail loud or fall through correctly.
 """
 
 from __future__ import annotations
@@ -93,22 +93,22 @@ class TestModuleContract:
 
 
 # ---------------------------------------------------------------------------
-# TestMountRegistersExactlyTwoTools
+# TestMountRegistersExactlyThreeTools
 # ---------------------------------------------------------------------------
 
 
-class TestMountRegistersExactlyTwoTools:
-    """mount() must register exactly two tools with distinct names."""
+class TestMountRegistersExactlyThreeTools:
+    """mount() must register exactly three tools with distinct names."""
 
-    async def test_mount_registers_exactly_two_tools(self) -> None:
+    async def test_mount_registers_exactly_three_tools(self) -> None:
         from amplifier_module_tool_context_intelligence_query import mount
 
         coordinator = _make_coordinator()
         await mount(coordinator, config={})
 
-        assert coordinator.mount.call_count == 2
+        assert coordinator.mount.call_count == 3
 
-    async def test_both_tool_calls_use_tools_category(self) -> None:
+    async def test_all_tool_calls_use_tools_category(self) -> None:
         from amplifier_module_tool_context_intelligence_query import mount
 
         coordinator = _make_coordinator()
@@ -117,14 +117,14 @@ class TestMountRegistersExactlyTwoTools:
         for call in coordinator.mount.call_args_list:
             assert call.args[0] == "tools"
 
-    async def test_tool_names_are_graph_query_and_blob_read(self) -> None:
+    async def test_tool_names_are_graph_query_blob_read_and_whoami(self) -> None:
         from amplifier_module_tool_context_intelligence_query import mount
 
         coordinator = _make_coordinator()
         await mount(coordinator, config={})
 
         registered_names = {call.kwargs["name"] for call in coordinator.mount.call_args_list}
-        assert registered_names == {"graph_query", "blob_read"}
+        assert registered_names == {"graph_query", "blob_read", "whoami"}
 
     async def test_mounted_tools_are_protocol_compliant(self) -> None:
         from amplifier_module_tool_context_intelligence_query import mount
@@ -171,14 +171,14 @@ class TestSeam1SkillSyncLifecycleCutover:
     pre-change code.
     """
 
-    async def test_mount_registers_both_tools_by_name(self) -> None:
+    async def test_mount_registers_all_tools_by_name(self) -> None:
         from amplifier_module_tool_context_intelligence_query import mount
 
         coordinator = _make_coordinator()
         await mount(coordinator, config={})
 
         registered_names = {call.kwargs["name"] for call in coordinator.mount.call_args_list}
-        assert registered_names == {"graph_query", "blob_read"}
+        assert registered_names == {"graph_query", "blob_read", "whoami"}
 
     async def test_module_has_no_on_session_ready(self) -> None:
         import amplifier_module_tool_context_intelligence_query as module
@@ -263,8 +263,8 @@ class TestSeam2SkillSyncEnabledCutover:
 class TestSharedResolverInvariant:
     """The ToolConfigResolver is shared: one instance, identical resolution."""
 
-    async def test_both_tools_have_same_resolver_instance(self) -> None:
-        """gq._tool_resolver is br._tool_resolver: same object from mount()."""
+    async def test_all_three_tools_have_same_resolver_instance(self) -> None:
+        """gq/br/whoami._tool_resolver are all the SAME object from mount()."""
         from amplifier_module_tool_context_intelligence_query import mount
 
         coordinator = _make_coordinator()
@@ -273,10 +273,12 @@ class TestSharedResolverInvariant:
         tools = {call.kwargs["name"]: call.args[1] for call in coordinator.mount.call_args_list}
         gq = tools["graph_query"]
         br = tools["blob_read"]
+        whoami = tools["whoami"]
         assert gq._tool_resolver is br._tool_resolver
+        assert gq._tool_resolver is whoami._tool_resolver
 
     async def test_shared_resolver_consistency_same_url_and_api_key(self) -> None:
-        """Both tools resolve to the SAME (url, api_key) from sources.
+        """All three tools resolve to the SAME (url, api_key) from sources.
 
         This is the load-bearing correctness invariant: with a shared resolver,
         divergent read-endpoint config is structurally impossible.
@@ -295,13 +297,15 @@ class TestSharedResolverInvariant:
         tools = {call.kwargs["name"]: call.args[1] for call in coordinator.mount.call_args_list}
         gq = tools["graph_query"]
         br = tools["blob_read"]
+        whoami = tools["whoami"]
 
         # Resolve using the shared resolver (no hook resolver needed for tier-1 hit)
         gq_conn = resolve_query_connection(None, gq._tool_resolver)
         br_conn = resolve_query_connection(None, br._tool_resolver)
+        whoami_conn = resolve_query_connection(None, whoami._tool_resolver)
 
-        assert gq_conn.url == br_conn.url == "http://read.example.com"
-        assert gq_conn.api_key == br_conn.api_key == "shared-key"
+        assert gq_conn.url == br_conn.url == whoami_conn.url == "http://read.example.com"
+        assert gq_conn.api_key == br_conn.api_key == whoami_conn.api_key == "shared-key"
 
     async def test_concurrent_resolution_is_consistent(self) -> None:
         """Execute both tools 'concurrently'; both resolve to the same endpoint.
@@ -649,7 +653,7 @@ class TestMountWithMisconfiguredSource:
         result = await mount(coordinator, config=config)
         assert result is None
 
-    async def test_mount_registers_both_tools_with_one_bad_source(self) -> None:
+    async def test_mount_registers_all_tools_with_one_bad_source(self) -> None:
         from amplifier_module_tool_context_intelligence_query import mount
 
         config = {
@@ -661,9 +665,9 @@ class TestMountWithMisconfiguredSource:
         coordinator = _make_coordinator()
         await mount(coordinator, config=config)
 
-        assert coordinator.mount.call_count == 2
+        assert coordinator.mount.call_count == 3
         registered_names = {call.kwargs["name"] for call in coordinator.mount.call_args_list}
-        assert registered_names == {"graph_query", "blob_read"}
+        assert registered_names == {"graph_query", "blob_read", "whoami"}
 
     async def test_mount_logs_warning_with_one_bad_source(self, caplog: Any) -> None:
         import logging
