@@ -1,0 +1,19 @@
+<system-reminder source="hooks-skills-visibility">
+Available skills (use load_skill tool):
+
+- **context-intelligence-graph-query**: Use when querying the context-intelligence property graph for session history, tool call traces, LLM iteration analysis, execution scale metrics, agent delegation trees, skill loading, and recipe orchestration. Covers all graph layers, cross-layer SOURCED_FROM joins, SST navigation, blob handling, and verified Cypher patterns.
+
+- **workflow-pattern-analysis**: Analyse failure/success patterns across many runs of a workflow using context-intelligence session data. Use when asked "How is <workflow> failing?", "What does a successful run look like vs a failing one?", "Which steps are the most common failure points?", or "What patterns appear consistently across sessions?" — also triggers on session failure analysis and identifying failure/success signals.
+
+- **blob-reading**: Use when a graph result contains a ci-blob:// URI — resolve it by extracting only the fields you need, never the full payload.
+- **context-intelligence-derived-metrics**: Use when a graph query returns structurally-identical rows hiding different intent — many delegations all "none/conversation", look-alike sessions, identical tool calls. Derives an INTERPRETIVE metric by joining a second graph layer onto the blanket shape (flagship: transport × sub-session skill payload = "flavour"). Complements graph-query (READ the graph) by making blanket reads MEAN something.
+
+- **context-intelligence-eval-design**: Use when designing evaluation scenarios for a context-intelligence tool signal. Derives success criteria from domain-concepts.md and produces evaluation-scenarios.md entries plus DTU profile templates.
+- **context-intelligence-evaluation-methodology**: Use when deciding how to measure a context-intelligence tool signal. Covers metric design across quality/efficiency/efficacy axes, artifact-metric avoidance via precursor measurement, A/B and statistical-N discipline, and test-data fidelity.
+- **context-intelligence-gds**: Use when about to write naive Cypher for a graph-topology question — pathfinding, reachability, centrality/influence, community/clustering, structural similarity, or similar event paths/trajectories (with/without time) — reach for Neo4j GDS or APOC instead of hand-rolling traversals one hop at a time. WHEN/WHY layer; graph-query's "Push Work to the Database" section is the HOW.
+
+- **context-intelligence-hill-climbing**: Use when an investigation needs more than one step — track it in todo as a hill climb so progress and dead leads leave an audit trail. Governs HOW you track the climb, not how you query or extract — that stays in graph-query / session-navigation.
+- **context-intelligence-session-navigation**: Use when extracting session data directly from JSONL files — the fallback when the graph server is unavailable or outside graph-analyst.
+- **context-intelligence-session-reconstruction**: Reconstruct local Amplifier session files from the context-intelligence graph server — events.jsonl, transcript.jsonl, and metadata.json
+- **context-intelligence-tool-design**: Use when selecting a detection strategy and implementation primitive for a context-intelligence signal. Classifies signals as deterministic, probabilistic, llm-evaluated, or hybrid, and applies the cheapest-sufficient-capability principle.
+</system-reminder>

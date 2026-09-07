@@ -1,0 +1,73 @@
+Available agents:
+  - context-intelligence-design-facilitator: Phase 0 (concept elicitation) and Phase 1 (signal discovery) specialist
+for the context-intelligence mode.
+
+This agent does NOT do detection strategy classification, primitive
+selection, tool design, or evaluation design — those are the
+context-intelligence-tool-designer's responsibilities.
+
+This agent does NOT do investigation itself — all investigation queries
+are delegated to context-intelligence:graph-analyst with
+context_depth="none". The facilitator synthesises only.
+
+Use this agent when:
+- Starting a new context-intelligence design session (Phase 0)
+- Eliciting and confirming domain concept definitions
+- Coordinating signal discovery via graph-analyst delegation (Phase 1)
+- Resolving a signal-gap entry written by the tool-designer
+
+  - context-intelligence-tool-designer: Phase 2 + Phase 3 specialist. Consumes confirmed signals from
+domain-signals.md and domain-concepts.md. Classifies each signal's
+detection strategy and reasoning requirement. Selects the appropriate
+implementation primitive using the context-intelligence-tool-design
+skill. Designs evaluation scenarios using the
+context-intelligence-eval-design skill. Delegates all per-signal and
+per-concept work to focused sub-sessions (context_depth="none") to
+stay lean.
+
+Does NOT investigate signals or refine concept definitions — gaps go
+to context-intelligence-design-facilitator via signal-gaps.md.
+
+Phase 2 entry: loads context-intelligence-tool-design skill.
+Phase 3 entry: loads context-intelligence-eval-design skill.
+Signal gap: appends to signal-gaps.md, continues — never blocks on
+one gap.
+
+  - graph-analyst: MUST be used for all context-intelligence session analysis, delegation chain tracing, and ci-blob:// URI resolution. ALWAYS delegate to this agent first — it checks server availability automatically and falls back to session-navigator when needed.
+
+Primary agent for graph-powered session and event analysis using Cypher queries and blob resolution. Queries the context-intelligence property graph to trace delegation trees, cross-session relationships, and structural patterns. Resolves ci-blob:// URIs from graph results and extracts fields safely using jq. Automatically delegates to session-navigator when the graph server is unreachable or returns 0 sessions.
+
+Use this agent when:
+- Querying the context-intelligence graph with Cypher for session analysis
+- Tracing delegation chains or parent-child session relationships across many sessions
+- Resolving ci-blob:// URIs and extracting fields from large event payloads
+- Analyzing event patterns, tool usage, or error frequencies via graph traversal
+- When graph server availability is uncertain (agent will check and fall back automatically)
+
+This agent checks server availability before every analysis run. If the server is unreachable or the workspace contains 0 sessions, it delegates to session-navigator which uses local JSONL files instead.
+
+<example>
+Context: User wants to query session events using the graph
+user: 'Find all tool errors in my last session using the graph'
+assistant: 'I will use graph-analyst to run a Cypher query for tool error events — it checks server availability first and falls back to session-navigator if the server is unreachable.'
+</example>
+
+<example>
+Context: User needs to trace a delegation tree
+user: 'Show me the full delegation tree for my last recipe run'
+assistant: 'I will delegate to graph-analyst to trace the parent-child session chain and map the delegation tree using Cypher graph traversal.'
+</example>
+
+  - session-navigator: MUST NOT be invoked directly by external callers. ALWAYS delegated to by graph-analyst when the graph server is unreachable or returns 0 sessions.
+
+Local fallback agent for navigating session data via flat JSONL files using bash/jq/grep safe extraction patterns. Handles session discovery, event search, and session navigation under the root resolved from `CONTEXT_INTELLIGENCE_ROOT="${AMPLIFIER_CONTEXT_INTELLIGENCE_BASE_PATH:-$HOME/.amplifier/projects}"` when the context-intelligence graph server is unavailable.
+
+This agent is NOT called directly by external callers. It is only delegated to by graph-analyst when the graph server is unreachable or returns 0 sessions. External callers should use graph-analyst instead.
+
+All operations use safe bash/jq/grep patterns that avoid loading 100k+ token events.jsonl lines into context. Never uses graph_query or blob_read — operates entirely on local filesystem files.
+
+<example>
+Context: Graph analyst delegating because server is unreachable
+user: [graph-analyst delegates] 'Find tool errors in session abc123 — graph server is unreachable. Workspace: my-project'
+assistant: 'I will scope search to workspace my-project. I will first resolve CONTEXT_INTELLIGENCE_ROOT="${AMPLIFIER_CONTEXT_INTELLIGENCE_BASE_PATH:-$HOME/.amplifier/projects}", then look in "$CONTEXT_INTELLIGENCE_ROOT"/my-project/sessions/ first, then filter by workspace field if needed. I will search for tool errors using safe jq extraction patterns.'
+</example>

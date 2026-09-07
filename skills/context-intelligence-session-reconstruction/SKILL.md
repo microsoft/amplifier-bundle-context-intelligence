@@ -1,7 +1,7 @@
 ---
 name: context-intelligence-session-reconstruction
 version: 1.0.0
-description: Reconstruct local Amplifier session files from the context-intelligence graph server — events.jsonl, transcript.jsonl, and metadata.json
+description: Use when local Amplifier session files are missing, broken, or incomplete — rebuilds events.jsonl, transcript.jsonl, and metadata.json from the context-intelligence graph server.
 license: MIT
 ---
 
