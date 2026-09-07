@@ -251,8 +251,24 @@ Run locally on the branch, all green:
 
 The repo **has** CI (`.github/workflows/ci.yml`: lint + root tests on Python
 3.11/3.12/3.13 + a per-module test matrix). The commands above are the same ones
-CI runs. CI's own verdict on the PR is reported on the PR itself; this note does
-not claim a green remote run it has not read.
+CI runs.
+
+**Remote CI on PR #109 is green — read back, not assumed**
+(`gh pr checks 109`, run `34145509913`):
+
+| check | result |
+|---|---|
+| Lint | pass |
+| Tests — root (Python 3.11) | pass |
+| Tests — root (Python 3.12) | pass |
+| Tests — root (Python 3.13) | pass |
+| Tests — hook-context-intelligence | pass |
+| Tests — tool-context-intelligence-query | pass |
+| Tests — tool-context-intelligence-upload | pass |
+| license/cla | pass |
+
+8 of 8 pass, 0 fail. The PR was opened as a draft and **marked ready** once these
+were green, per the lane procedure. It is **not merged** — the manager merges.
 
 `modules/tool-context-intelligence-upload/uv.lock` was touched by a local
 `uv run` and **reverted** before committing — CI installs with `--frozen`, and a
