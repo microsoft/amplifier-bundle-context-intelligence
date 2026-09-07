@@ -1,0 +1,10 @@
+{
+  "repo": "/home/bkrabach/dev/hw-model-performance/lanes/kv98-catalog-context-intelligence/amplifier-bundle-context-intelligence",
+  "agents_on_disk": 4,
+  "agents_rendered": 4,
+  "skills_on_disk": 11,
+  "skills_rendered": 11,
+  "agent_catalog_bytes": 2502,
+  "skills_visibility_bytes": 3344,
+  "total_bytes": 5846
+}

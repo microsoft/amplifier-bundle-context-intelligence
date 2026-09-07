@@ -1,0 +1,11 @@
+{
+  "note": "The recipe's own v1.4.0+ structural gate, applied to the PRE-CHANGE agent files (HEAD~1) deterministically -- no LLM call, $0. Any <example>/<commentary> block in a description is a structural ERROR; any ERROR classifies the agent 'critical'; any 'critical' agent makes the recipe verdict FAIL.",
+  "phase": "structural (pre-change, HEAD~1)",
+  "agents": [
+    {"agent": "context-intelligence-design-facilitator", "description_length": 748,  "description_tokens": 187, "example_count": 0, "commentary_count": 0, "errors": [], "quality": "good"},
+    {"agent": "context-intelligence-tool-designer",      "description_length": 792,  "description_tokens": 198, "example_count": 0, "commentary_count": 0, "errors": [], "quality": "good"},
+    {"agent": "graph-analyst",                            "description_length": 1913, "description_tokens": 478, "example_count": 2, "commentary_count": 0, "errors": ["EXAMPLE_BLOCK_PRESENT x2"], "quality": "critical"},
+    {"agent": "session-navigator",                        "description_length": 1482, "description_tokens": 370, "example_count": 1, "commentary_count": 0, "errors": ["EXAMPLE_BLOCK_PRESENT x1"], "quality": "critical"}
+  ],
+  "summary": {"total": 4, "errors": 2, "quality_level": "critical", "verdict": "FAIL"}
+}

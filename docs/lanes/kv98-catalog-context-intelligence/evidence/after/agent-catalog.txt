@@ -1,0 +1,24 @@
+Available agents:
+  - context-intelligence-design-facilitator: Use to run Phase 0 (concept elicitation) and Phase 1 (signal discovery) of the context-intelligence design mode. It synthesises only — every investigation query goes to context-intelligence:graph-analyst with context_depth="none".
+
+USE WHEN: starting a design session; eliciting or confirming domain concept definitions; coordinating signal discovery through graph-analyst; resolving a signal-gap entry written by the tool-designer.
+
+DO NOT USE WHEN: the work is detection-strategy classification, primitive selection, tool design or evaluation design — that is context-intelligence-tool-designer.
+
+  - context-intelligence-tool-designer: Use to run Phase 2 (detection strategy and primitive selection) and Phase 3 (evaluation design) of the context-intelligence design mode. It consumes confirmed signals from domain-signals.md and domain-concepts.md, classifies each signal's detection strategy and reasoning need, and delegates per-signal work to sub-sessions (context_depth="none").
+
+USE WHEN: a confirmed signal needs an implementation primitive chosen, or an evaluation scenario designed.
+
+DO NOT USE WHEN: signals still need investigating or concepts refining — that is context-intelligence-design-facilitator, via signal-gaps.md.
+
+  - graph-analyst: Use for context-intelligence session/event analysis, delegation-chain tracing, or ci-blob:// URI resolution — reach for this first. It checks graph-server availability every run and falls back to session-navigator when the server is down or the workspace holds 0 sessions.
+
+USE WHEN: running Cypher over that graph; tracing delegation trees or parent/child session links; resolving ci-blob:// URIs and extracting fields from large payloads; analysing event, tool-usage or error-frequency patterns; availability is uncertain.
+
+DO NOT USE WHEN: the answer is in source code, not session captures.
+
+  - session-navigator: Use only when graph-analyst delegates here because the context-intelligence graph server is unreachable or returned 0 sessions. It navigates session data straight from local JSONL on disk — session discovery, event search, navigation — with bash/jq/grep extraction that never pulls a 100k+ token events.jsonl line into context, and never calls graph_query or blob_read.
+
+USE WHEN: graph-analyst has handed off a workspace-scoped local-file query.
+
+DO NOT USE WHEN: you are an external caller — route to graph-analyst, which picks the path for you.
