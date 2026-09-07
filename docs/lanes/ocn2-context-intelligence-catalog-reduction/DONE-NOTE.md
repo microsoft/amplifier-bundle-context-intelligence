@@ -129,6 +129,13 @@ expect is the one §4 already measured deterministically: 3 visible + 1 user-inv
 | before/after visibility probe | ran clean on both trees, self-check passed |
 | hidden-skill load-by-name | passed on the AFTER tree (7,281 chars, no error) |
 
+**Remote CI:** PR #110 shows only `license/cla` (pass) — `gh run list` reports **no
+workflow run at all** for this branch ~3 minutes after push. The repo's `ci.yml`
+triggers on `pull_request: branches: [main]`; the observed difference from lane kv98's
+PR #109 (which did get a green CI run) is that this one is a **draft**. Expect CI to
+start when the manager marks it ready for review — re-check then rather than reading
+the CLA-only rollup as "CI passed".
+
 `scripts/validate-full.sh` and a DTU run (AGENTS.md's seam gate for skill edits) were
 **not** run: both need spend/time beyond the $0 authority, and this change moves no
 code — it moves one markdown file, drops one mount line, and adds one frontmatter key.
