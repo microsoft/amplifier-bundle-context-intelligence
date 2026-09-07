@@ -147,7 +147,7 @@ Or for recipe work:
 
 ### Scenario E — Large Payload Exploration with Blob Reading
 
-**The idea:** Test the blob-reading skill's ability to safely peek at large payloads without dumping everything.
+**The idea:** Test the blob-reading guidance (the level-3 reference file inside the `context-intelligence-graph-query` skill) for its ability to safely peek at large payloads without dumping everything.
 
 Ask the agent to drill into a specific tool call:
 
@@ -162,7 +162,7 @@ Or:
 - Only the relevant field is returned, not the entire 100k-token payload
 - The extracted content is coherent and matches what you'd expect
 
-**If something looks off:** If the agent returns a wall of JSON, or says it can't read the blob, or the extracted field is garbled — that's a blob-reading skill issue. David — the `jq` extraction path is the one to watch here. Also interesting: how long are your prompt payloads? The extracted size tells you something about context efficiency.
+**If something looks off:** If the agent returns a wall of JSON, or says it can't read the blob, or the extracted field is garbled — that's a blob-reading issue (`skills/context-intelligence-graph-query/blob-reading.md`). David — the `jq` extraction path is the one to watch here. Also interesting: how long are your prompt payloads? The extracted size tells you something about context efficiency.
 
 ---
 
@@ -287,7 +287,7 @@ As you explore, note these. I've been collecting them as I test:
 | Agent says "no sessions found" when there clearly are some | Workspace scoping issue |
 | Delegation tree looks flat when it shouldn't | Parent-child session linking broken |
 | Tool call counts don't match your mental model | `tool:error` not being counted, or pre/post double-counting |
-| Blob reads return too much data | `blob-reading` skill not being applied |
+| Blob reads return too much data | the `blob-reading.md` reference (inside `context-intelligence-graph-query`) not being applied |
 | Queries time out on large session histories | Neo4j index gaps |
 | Agent confuses root sessions with sub-sessions | Session sub-type labeling issue |
 | "What happened?" query is missing a tool you clearly ran | Event not reaching the server (hook issue) |

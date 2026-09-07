@@ -1,13 +1,12 @@
----
-name: blob-reading
-version: 1.0.0
-description: Use when a graph result contains a ci-blob:// URI — resolve it by extracting only the fields you need, never the full payload.
-license: MIT
----
+# Blob Reading — resolving `ci-blob://` URIs safely
 
-# Blob Reading
+> **Level-3 reference for the `context-intelligence-graph-query` skill.** Read it
+> with `read_file` when a graph result carries a `ci-blob://` URI; Section 6 of
+> `SKILL.md` carries the short version. Formerly the standalone `blob-reading`
+> skill — same content, folded in here so the always-visible catalog lists one
+> entry for graph work instead of two.
 
-`ci-blob://` URIs appear in graph query results when a payload is too large to inline. This skill covers safe resolution patterns to extract only the data you need.
+`ci-blob://` URIs appear in graph query results when a payload is too large to inline. This reference covers safe resolution patterns to extract only the data you need.
 
 ---
 

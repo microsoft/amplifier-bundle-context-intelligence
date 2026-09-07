@@ -1,0 +1,16 @@
+{
+  "repo": "/tmp/ocn2-before",
+  "mounted_skill_sources": [
+    "skills/context-intelligence-session-navigation",
+    "skills/blob-reading",
+    "skills/context-intelligence-graph-query",
+    "skills/context-intelligence-session-reconstruction",
+    "skills/workflow-pattern-analysis"
+  ],
+  "mounted_count": 5,
+  "visible_skills": 5,
+  "user_invoked_skills": 0,
+  "visibility_block_bytes": 1046,
+  "hidden_skill_loads": true,
+  "hidden_skill_loaded_chars": 7281
+}

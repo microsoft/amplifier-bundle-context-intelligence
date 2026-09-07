@@ -1,0 +1,15 @@
+{
+  "repo": "/home/bkrabach/dev/hw-model-performance/lanes/ocn2-context-intelligence-catalog-reduction/amplifier-bundle-context-intelligence",
+  "mounted_skill_sources": [
+    "skills/context-intelligence-session-navigation",
+    "skills/context-intelligence-graph-query",
+    "skills/context-intelligence-session-reconstruction",
+    "skills/workflow-pattern-analysis"
+  ],
+  "mounted_count": 4,
+  "visible_skills": 3,
+  "user_invoked_skills": 1,
+  "visibility_block_bytes": 981,
+  "hidden_skill_loads": true,
+  "hidden_skill_loaded_chars": 7281
+}

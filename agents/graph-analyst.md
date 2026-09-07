@@ -208,12 +208,14 @@ full connectable set (sources + hook destinations) before selecting one by name.
 
 ## Section 2: Blob Resolution Workflow
 
-### Load the Blob Reading Skill
+### Read the Blob Reading Reference
 
-Before resolving any `ci-blob://` URI, load the safe extraction patterns:
+Before resolving any `ci-blob://` URI, read the safe extraction patterns — they
+ship as a level-3 reference file inside the `context-intelligence-graph-query`
+skill (formerly the standalone `blob-reading` skill, same content):
 
 ```
-Load skill: blob-reading
+read_file("@context-intelligence:skills/context-intelligence-graph-query/blob-reading.md")
 ```
 
 When graph results contain `ci-blob://` URIs:

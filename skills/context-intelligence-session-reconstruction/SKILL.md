@@ -1,8 +1,14 @@
 ---
 name: context-intelligence-session-reconstruction
-version: 1.0.0
+version: 1.1.0
 description: Use when local Amplifier session files are missing, broken, or incomplete — rebuilds events.jsonl, transcript.jsonl, and metadata.json from the context-intelligence graph server.
 license: MIT
+# Fallback-path skill: reached deliberately, by name, when local session files are
+# already known to be missing or broken — never a candidate the model should pick
+# opportunistically off the always-visible catalog. Hidden from the "Available
+# skills" index; still loads exactly as before via
+# load_skill(skill_name="context-intelligence-session-reconstruction").
+disable-model-invocation: true
 ---
 
 # Context Intelligence Session Reconstruction
