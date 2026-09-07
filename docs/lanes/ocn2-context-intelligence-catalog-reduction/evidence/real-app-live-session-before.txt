@@ -1,0 +1,27 @@
+REAL-APP BEFORE — verbatim excerpt of the hooks-skills-visibility block as injected
+into a live Amplifier session on the owner's real app list.
+
+Session: a695484a-4944-4b06-b3ee-cde36749bad8 (this lane's own session), 2026-09-07.
+App list: ~/.amplifier/settings.yaml -> bundle.app (20 behaviors), context-intelligence
+mounted from git+...@main (pre-change published tree).
+
+The block lists every bundle's contribution; reproduced below are ONLY the five
+entries contributed by amplifier-bundle-context-intelligence, verbatim, under the
+section header they appeared beneath. All five sit in the model-invocable section;
+the session's "User-invoked skills" section carried NO context-intelligence entry.
+
+Available skills (use load_skill tool):
+
+- **context-intelligence-graph-query**: Use when querying the context-intelligence property graph for session history, tool call traces, LLM iteration analysis, execution scale metrics, agent delegation trees, skill…
+- **workflow-pattern-analysis**: Use when asked how a workflow is failing, what separates a successful run from a failing one, which steps are the most common failure points, or what patterns recur across…
+- **blob-reading**: Use when a graph result contains a ci-blob:// URI — resolve it by extracting only the fields you need, never the full payload.
+- **context-intelligence-session-navigation**: Use when extracting session data directly from JSONL files — the fallback when the graph server is unavailable or outside graph-analyst.
+- **context-intelligence-session-reconstruction**: Use when local Amplifier session files are missing, broken, or incomplete — rebuilds events.jsonl, transcript.jsonl, and metadata.json from the context-intelligence graph server.
+
+COUNT: 5 context-intelligence entries visible (model-invocable), 0 user-invoked.
+
+NOTE on wording drift: these descriptions are the ones published on origin/main
+(a2dfa06, lane kv98's PR #109), which is AHEAD of this lane's base commit c614dc4.
+The $0 before/after probe in evidence/before|after was run against c614dc4 and
+this branch, so its description text differs; the COUNTS — the thing measured —
+are identical (5 visible on both pre-change trees).

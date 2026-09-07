@@ -754,6 +754,7 @@ amplifier-bundle-context-intelligence/
 │   └── logging-handler-flow.dot        ← thin forwarder architecture
 ├── skills/
 │   ├── context-intelligence-graph-query/  ← vendored statically (real body + no-server block)
+│   │   └── blob-reading.md                ← level-3 reference: ci-blob:// resolution
 │   ├── context-intelligence-session-navigation/
 │   └── …                               ← additional graph/design skills
 └── tests/

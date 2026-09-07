@@ -1,0 +1,6 @@
+{
+  "skill_name": "context-intelligence-session-reconstruction",
+  "error": null,
+  "loaded_chars": 7281,
+  "head": "# context-intelligence-session-reconstruction\n\n# Context Intelligence Session Reconstruction\n\nLocal Amplifier session files (`events.jsonl`, `transcript.jsonl`, `metadata.json`) can be reconstructed from the context-intelligence Neo4j graph server when the local files are missing, broken, or incomplete. This skill covers when and how to run the reconstruction tool safely.\n\n---\n\n## When to Use\n\nUse"
+}

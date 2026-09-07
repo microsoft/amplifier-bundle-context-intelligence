@@ -1,0 +1,9 @@
+<system-reminder source="hooks-skills-visibility">
+Available skills (use load_skill tool):
+
+- **blob-reading**: Safe resolution of ci-blob:// URIs — extract specific fields without dumping full payloads
+- **context-intelligence-graph-query**: Use when querying the context-intelligence property graph for session history, tool call traces, LLM iteration analysis, execution scale metrics, agent delegation trees, skill…
+- **context-intelligence-session-navigation**: Use when extracting session data directly from JSONL files — the baseline path when the graph server is unavailable or when operating outside graph-analyst
+- **context-intelligence-session-reconstruction**: Reconstruct local Amplifier session files from the context-intelligence graph server — events.jsonl, transcript.jsonl, and metadata.json
+- **workflow-pattern-analysis**: Analyse failure and success patterns across many runs of a specific workflow using… Use when you want to answer: "How is <workflow> failing?", "What does a successful run…
+</system-reminder>

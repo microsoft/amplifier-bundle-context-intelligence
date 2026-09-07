@@ -11,8 +11,14 @@ visibility:
   priority: 5
   summary: Query the context-intelligence property graph for session history, tool traces, delegation trees, skills, and recipe orchestration via verified Cypher patterns.
 metadata:
-  version: "2.5.0"
+  version: "2.6.0"
   changelog:
+    - "2.6.0: Absorbed the former standalone `blob-reading` skill as the level-3 reference
+      `blob-reading.md` beside this file (same content, verbatim), and pointed Section 6 at it.
+      The catalog now carries one always-visible entry for graph work instead of two; nothing was
+      dropped - the full blob contract (when not to resolve, the four-step resolution, blob_read's
+      success/failure shapes and which errors carry a citable `source`, the safe jq patterns,
+      blob-vs-inline detection) moved intact into the reference file."
     - "2.5.0: Elevated the anti-multi-count guidance scattered across Trap 6 (cost) and Trap 8
       (tokens) into a single named cross-cutting rule (Section 3: \"Rule \u2014 one owner per numeric
       fact: never multi-count cost or tokens by over-reading events\") \u2014 every usage value is
@@ -584,6 +590,14 @@ jq '.messages[-1].content' "$BLOB_PATH"
 
 **Rules:** check for a `ci-blob://` prefix before parsing as JSON; lifted properties
 bypass blobs entirely; always bound before loading.
+
+**Going further — `blob-reading.md`, beside this file.** When you actually have to
+resolve a blob (rather than avoid one), read the level-3 reference
+`@context-intelligence:skills/context-intelligence-graph-query/blob-reading.md`
+with `read_file`. It carries the full contract: when NOT to resolve at all, the
+four-step resolution, `blob_read`'s success and failure shapes (including which
+errors carry a `source` you must cite and which do not), the safe `jq` extraction
+patterns, and blob-vs-inline field detection.
 
 ---
 
