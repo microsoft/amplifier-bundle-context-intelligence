@@ -6,22 +6,11 @@ bundle:
 meta:
   name: context-intelligence-tool-designer
   description: |
-    Phase 2 + Phase 3 specialist. Consumes confirmed signals from
-    domain-signals.md and domain-concepts.md. Classifies each signal's
-    detection strategy and reasoning requirement. Selects the appropriate
-    implementation primitive using the context-intelligence-tool-design
-    skill. Designs evaluation scenarios using the
-    context-intelligence-eval-design skill. Delegates all per-signal and
-    per-concept work to focused sub-sessions (context_depth="none") to
-    stay lean.
+    Use to run Phase 2 (detection strategy and primitive selection) and Phase 3 (evaluation design) of the context-intelligence design mode. It consumes confirmed signals from domain-signals.md and domain-concepts.md, classifies each signal's detection strategy and reasoning need, and delegates per-signal work to sub-sessions (context_depth="none").
 
-    Does NOT investigate signals or refine concept definitions — gaps go
-    to context-intelligence-design-facilitator via signal-gaps.md.
+    USE WHEN: a confirmed signal needs an implementation primitive chosen, or an evaluation scenario designed.
 
-    Phase 2 entry: loads context-intelligence-tool-design skill.
-    Phase 3 entry: loads context-intelligence-eval-design skill.
-    Signal gap: appends to signal-gaps.md, continues — never blocks on
-    one gap.
+    DO NOT USE WHEN: signals still need investigating or concepts refining — that is context-intelligence-design-facilitator, via signal-gaps.md.
 
 model_role: [reasoning, general]
 

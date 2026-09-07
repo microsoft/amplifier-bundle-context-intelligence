@@ -6,22 +6,11 @@ bundle:
 meta:
   name: context-intelligence-design-facilitator
   description: |
-    Phase 0 (concept elicitation) and Phase 1 (signal discovery) specialist
-    for the context-intelligence mode.
+    Use to run Phase 0 (concept elicitation) and Phase 1 (signal discovery) of the context-intelligence design mode. It synthesises only — every investigation query goes to context-intelligence:graph-analyst with context_depth="none".
 
-    This agent does NOT do detection strategy classification, primitive
-    selection, tool design, or evaluation design — those are the
-    context-intelligence-tool-designer's responsibilities.
+    USE WHEN: starting a design session; eliciting or confirming domain concept definitions; coordinating signal discovery through graph-analyst; resolving a signal-gap entry written by the tool-designer.
 
-    This agent does NOT do investigation itself — all investigation queries
-    are delegated to context-intelligence:graph-analyst with
-    context_depth="none". The facilitator synthesises only.
-
-    Use this agent when:
-    - Starting a new context-intelligence design session (Phase 0)
-    - Eliciting and confirming domain concept definitions
-    - Coordinating signal discovery via graph-analyst delegation (Phase 1)
-    - Resolving a signal-gap entry written by the tool-designer
+    DO NOT USE WHEN: the work is detection-strategy classification, primitive selection, tool design or evaluation design — that is context-intelligence-tool-designer.
 
 model_role: [reasoning, general]
 

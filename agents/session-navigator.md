@@ -6,19 +6,11 @@ bundle:
 meta:
   name: session-navigator
   description: |
-    MUST NOT be invoked directly by external callers. ALWAYS delegated to by graph-analyst when the graph server is unreachable or returns 0 sessions.
+    Use only when graph-analyst delegates here because the context-intelligence graph server is unreachable or returned 0 sessions. It navigates session data straight from local JSONL on disk — session discovery, event search, navigation — with bash/jq/grep extraction that never pulls a 100k+ token events.jsonl line into context, and never calls graph_query or blob_read.
 
-    Local fallback agent for navigating session data via flat JSONL files using bash/jq/grep safe extraction patterns. Handles session discovery, event search, and session navigation under the root resolved from `CONTEXT_INTELLIGENCE_ROOT="${AMPLIFIER_CONTEXT_INTELLIGENCE_BASE_PATH:-$HOME/.amplifier/projects}"` when the context-intelligence graph server is unavailable.
+    USE WHEN: graph-analyst has handed off a workspace-scoped local-file query.
 
-    This agent is NOT called directly by external callers. It is only delegated to by graph-analyst when the graph server is unreachable or returns 0 sessions. External callers should use graph-analyst instead.
-
-    All operations use safe bash/jq/grep patterns that avoid loading 100k+ token events.jsonl lines into context. Never uses graph_query or blob_read — operates entirely on local filesystem files.
-
-    <example>
-    Context: Graph analyst delegating because server is unreachable
-    user: [graph-analyst delegates] 'Find tool errors in session abc123 — graph server is unreachable. Workspace: my-project'
-    assistant: 'I will scope search to workspace my-project. I will first resolve CONTEXT_INTELLIGENCE_ROOT="${AMPLIFIER_CONTEXT_INTELLIGENCE_BASE_PATH:-$HOME/.amplifier/projects}", then look in "$CONTEXT_INTELLIGENCE_ROOT"/my-project/sessions/ first, then filter by workspace field if needed. I will search for tool errors using safe jq extraction patterns.'
-    </example>
+    DO NOT USE WHEN: you are an external caller — route to graph-analyst, which picks the path for you.
 
 model_role: general
 
