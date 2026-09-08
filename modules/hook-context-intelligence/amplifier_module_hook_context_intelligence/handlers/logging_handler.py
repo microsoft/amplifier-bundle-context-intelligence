@@ -164,11 +164,15 @@ def _classify_http_outcome(status_code: int) -> str:
         # Do NOT follow — silently following an authenticated POST redirect risks
         # leaking the bearer token to a different host.
         return _PERMANENT
-    if status_code == 401 or status_code == 429 or status_code >= 500:
+    if status_code == 401 or status_code == 408 or status_code == 429 or status_code >= 500:
+        # 408 (Request Timeout) is transient by definition — the request did not
+        # arrive/complete in time; retrying with backoff is the correct response,
+        # exactly like a 5xx or a 429. It is enumerated explicitly here rather than
+        # left to fall through to the permanent catch-all below.
         return _TRANSIENT
     # 403, 400, 413, 422, 404, 410, and any other 4xx — all non-retryable, but
     # NOT all "malformed"; see the message-layer branches in _worker for the
-    # per-status cause.
+    # per-status cause. (408 is deliberately NOT here — see the transient set above.)
     return _PERMANENT
 
 
@@ -382,6 +386,28 @@ class _DestinationDispatcher:
         # attempt so a stale value can never be inherited by an unrelated
         # outcome.
         self._auth_token_failed: bool = False
+        # Set True once the first successful delivery of this session emits a
+        # positive `delivery_ok` liveness record (D3). One heartbeat per
+        # dispatcher lifetime (per session); routine subsequent deliveries stay
+        # silent so the diagnostics file is not flooded on the happy path.
+        self._heartbeat_emitted: bool = False
+
+    def _emit_delivery_heartbeat(self) -> None:
+        """Emit a one-time positive liveness record on first successful delivery.
+
+        The forwarding-diagnostics sink otherwise only ever writes on a PROBLEM
+        (breaker_open, permanent_reject, auth_token_unavailable, ...), so an empty
+        log is structurally ambiguous between "healthy and delivering", "never
+        started", and "no sessions ran". A single `delivery_ok` record per session,
+        written the first time a destination actually delivers, disambiguates the
+        empty-log case: no record means no delivery happened, not a silent outage.
+        Fires at most once per dispatcher (per session); best-effort and never
+        raises into the delivery path.
+        """
+        if self._heartbeat_emitted:
+            return
+        self._heartbeat_emitted = True
+        self._record_forwarding_issue("delivery_ok", "first successful delivery this session")
 
     def _ensure_worker(self) -> None:
         if self._worker_task is None or self._worker_task.done():
@@ -703,6 +729,7 @@ class _DestinationDispatcher:
                     outcome = await self._post(event, payload_data)
                     if outcome == _DELIVERED:
                         self._breaker_record_delivered()
+                        self._emit_delivery_heartbeat()
                         self._degraded_warned = False
                         self._degraded_since = None
                     elif outcome == _TRANSIENT and self._is_hard_outcome():
@@ -837,6 +864,7 @@ class _DestinationDispatcher:
                     # _DELIVERED or _PERMANENT — advance to next event
                     if outcome == _DELIVERED:
                         self._breaker_record_delivered()
+                        self._emit_delivery_heartbeat()
                         if self._degraded_warned:
                             logger.info(
                                 "Reconnected to %s — resuming delivery.",
@@ -1065,6 +1093,24 @@ class _DestinationDispatcher:
             # credential problem instead of retrying forever in silence.
             self._last_status = None
             self._auth_token_failed = True
+            # Durable diagnostic record: written on EVERY auth-token failure, NOT
+            # gated by the console rate-limit below, and carrying the exception TYPE
+            # and MESSAGE. Previously this was a hardcoded "auth token production
+            # failed" string written from inside the rate-limit branch, so every
+            # distinct fault -- expired token, wrong audience, broker unavailable,
+            # a masked TypeError -- collapsed to one byte-identical, uninformative
+            # record (and a burst within the rate-limit window dropped all but the
+            # first). Now each fault is individually diagnosable in the forwarding
+            # JSONL. Write volume is bounded by dispatch backoff, which throttles
+            # how often _post is attempted; _record_forwarding_issue is best-effort
+            # and never raises into this path.
+            self._record_forwarding_issue(
+                "auth_token_unavailable",
+                f"auth token production failed: {type(exc).__name__}: {exc}",
+            )
+            # Console logging (WARNING + DEBUG traceback) stays rate-limited to avoid
+            # spamming the log during a sustained outage; the durable record above is
+            # the diagnostic of record and is intentionally not throttled.
             now = time.monotonic()
             if now - self._last_headers_error_log >= _LOG_RATE_LIMIT_SECONDS:
                 self._last_headers_error_log = now
@@ -1075,9 +1121,6 @@ class _DestinationDispatcher:
                     self._name,
                     self._url,
                     type(exc).__name__,
-                )
-                self._record_forwarding_issue(
-                    "auth_token_unavailable", "auth token production failed"
                 )
                 logger.debug(
                     "%s auth-header production failed: %r",

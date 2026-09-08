@@ -17,6 +17,7 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from amplifier_module_hook_context_intelligence.handlers.logging_handler import (
+    _TRANSIENT,
     _DestinationDispatcher,
     _write_forwarding_record,
 )
@@ -223,4 +224,127 @@ class TestDispatcherForwardingSink:
         records = [json.loads(line) for line in log_file.read_text().splitlines()]
         kinds = {r["kind"] for r in records}
         assert "breaker_open" not in kinds, f"breaker must not have opened: {kinds}"
+
+
+class TestAuthTokenUnavailableDurableRecord:
+    """Issue #431 D2: the durable auth_token_unavailable record must carry the
+    exception TYPE and MESSAGE (not a byte-identical constant), and distinct
+    failures must not be collapsed by the console rate-limit.
+
+    Drives the auth-strategy header-production failure path directly: a mocked
+    _strategy.headers() that raises is exactly what an expired `az login` /
+    broken credential chain produces at runtime (static ApiKeyAuth never raises,
+    so this path is entra-only).
+    """
+
+    async def test_record_carries_exception_type_and_message(self, tmp_path: Path) -> None:
+        d = _dispatcher(forwarding_log_dir=tmp_path)
+        d._client = MagicMock()  # headers() raises before any request is issued
+        d._strategy = MagicMock()
+        d._strategy.headers.side_effect = RuntimeError("token expired: refresh needed")
+
+        with patch(LOGGER_PATH):
+            result = await d._post("evt:x", {"session_id": "sess-9"})
+
+        assert result == _TRANSIENT  # auth failure stays on the retry path
+        log_file = tmp_path / f"forwarding-{_today_utc()}.jsonl"
+        records = [json.loads(line) for line in log_file.read_text().splitlines()]
+        rec = next(r for r in records if r["kind"] == "auth_token_unavailable")
+        # http_status None distinguishes this from a real HTTP 401 auth_failure.
+        assert rec["http_status"] is None
+        assert "RuntimeError" in rec["detail"], f"exception type missing: {rec['detail']!r}"
+        assert "token expired: refresh needed" in rec["detail"], (
+            f"exception message missing: {rec['detail']!r}"
+        )
+
+    async def test_distinct_failures_each_recorded_not_collapsed(self, tmp_path: Path) -> None:
+        """Two distinct auth faults in quick succession (within the console
+        rate-limit window) must each produce their own durable record -- the
+        durable write is no longer gated by the rate-limit branch."""
+        d = _dispatcher(forwarding_log_dir=tmp_path)
+        d._client = MagicMock()
+        d._strategy = MagicMock()
+        d._strategy.headers.side_effect = [
+            RuntimeError("expired token"),
+            ValueError("wrong audience"),
+        ]
+
+        with patch(LOGGER_PATH):
+            await d._post("e1", {"session_id": "s1"})
+            await d._post("e2", {"session_id": "s1"})
+
+        log_file = tmp_path / f"forwarding-{_today_utc()}.jsonl"
+        records = [json.loads(line) for line in log_file.read_text().splitlines()]
+        auth_recs = [r for r in records if r["kind"] == "auth_token_unavailable"]
+        assert len(auth_recs) == 2, f"expected 2 distinct durable records, got {len(auth_recs)}"
+        blob = " || ".join(r["detail"] for r in auth_recs)
+        assert "RuntimeError" in blob and "expired token" in blob
+        assert "ValueError" in blob and "wrong audience" in blob
+
+
+class TestDeliveryHeartbeat:
+    """Issue #431 D3: a destination that delivers successfully must emit a
+    positive `delivery_ok` liveness record once per session, so an EMPTY
+    forwarding log unambiguously means "no delivery happened" rather than
+    "possibly a silent outage". The sink otherwise only ever writes on problems.
+    """
+
+    async def test_first_successful_delivery_writes_heartbeat(self, tmp_path: Path) -> None:
+        d = _dispatcher(forwarding_log_dir=tmp_path)
+        d._client = _mock_client([_make_response(200)])
+        d._sleep_backoff = AsyncMock()  # type: ignore[method-assign]
+
+        with patch(LOGGER_PATH):
+            d.enqueue("e1", {"session_id": "sess-1"})
+            await asyncio.wait_for(d._queue.join(), timeout=2.0)
+
+        log_file = tmp_path / f"forwarding-{_today_utc()}.jsonl"
+        assert log_file.exists(), "a healthy delivery must still write a liveness record"
+        records = [json.loads(line) for line in log_file.read_text().splitlines()]
+        heartbeats = [r for r in records if r["kind"] == "delivery_ok"]
+        assert len(heartbeats) == 1, f"expected exactly one delivery_ok record, got {heartbeats}"
+        assert heartbeats[0]["destination"] == "test-dest"
+        await d.close()
+
+    async def test_heartbeat_emitted_only_once_per_session(self, tmp_path: Path) -> None:
+        """Multiple successful deliveries in one session produce exactly ONE
+        heartbeat -- the happy path is not flooded with liveness records."""
+        d = _dispatcher(forwarding_log_dir=tmp_path)
+        d._client = _mock_client([_make_response(200)] * 5)
+        d._sleep_backoff = AsyncMock()  # type: ignore[method-assign]
+
+        with patch(LOGGER_PATH):
+            for i in range(5):
+                d.enqueue(f"e{i}", {"session_id": "sess-1"})
+            await asyncio.wait_for(d._queue.join(), timeout=3.0)
+
+        log_file = tmp_path / f"forwarding-{_today_utc()}.jsonl"
+        records = [json.loads(line) for line in log_file.read_text().splitlines()]
+        heartbeats = [r for r in records if r["kind"] == "delivery_ok"]
+        assert len(heartbeats) == 1, (
+            f"heartbeat must fire at most once per session, got {len(heartbeats)}"
+        )
+        await d.close()
+
+    async def test_no_delivery_no_heartbeat(self, tmp_path: Path) -> None:
+        """A destination that never delivers writes no delivery_ok record -- the
+        empty/heartbeat-less case is what makes the signal meaningful."""
+        d = _dispatcher(forwarding_log_dir=tmp_path, failure_threshold=1)
+        d._client = _mock_client([_make_response(403)])  # permanent skip, never delivered
+        d._sleep_backoff = AsyncMock()  # type: ignore[method-assign]
+
+        with patch(LOGGER_PATH):
+            d.enqueue("e1", {"session_id": "sess-1"})
+            await asyncio.wait_for(d._queue.join(), timeout=2.0)
+
+        log_file = tmp_path / f"forwarding-{_today_utc()}.jsonl"
+        records = (
+            [json.loads(line) for line in log_file.read_text().splitlines()]
+            if log_file.exists()
+            else []
+        )
+        assert not [r for r in records if r["kind"] == "delivery_ok"], (
+            "no successful delivery must mean no delivery_ok heartbeat"
+        )
+        await d.close()
         await d.close()
