@@ -7,6 +7,7 @@ Writes per-session events.jsonl and metadata.json files.
 from __future__ import annotations
 
 import asyncio
+import errno
 import json
 import logging
 import os
@@ -19,14 +20,13 @@ from pathlib import Path
 from typing import Any
 
 import httpx
+from amplifier_core.models import HookResult
 
 from amplifier_module_hook_context_intelligence.upload import (
     _canonical_json,
     _compute_idempotency_key,  # noqa: F401 — re-exported for test imports
     build_payload,
 )
-
-from amplifier_core.models import HookResult
 
 logger = logging.getLogger(__name__)
 
@@ -52,6 +52,19 @@ _BACKOFF_MAX_EXPONENT = 64
 _CLOSE_HARD_TIMEOUT = 5.0
 _METADATA_FORMAT = "context-intelligence"
 _METADATA_VERSION = "1.0.0"
+
+#: Disk-pressure circuit breaker. When a session disk write fails with one of
+#: these errnos, the whole filesystem is out of room (or over quota) -- retrying
+#: on the very next event is futile and only burns syscalls and (worse) tries to
+#: append warning lines to a log file that also cannot be written. So we OPEN a
+#: breaker: skip disk writes for a growing cooldown, then let a single event
+#: PROBE whether space has returned. This bounds the retry rate without ever
+#: giving up permanently. Atomic-write recovery (temp + os.replace) lives in the
+#: metadata helpers; this breaker is the layer above that keeps a full disk from
+#: turning into an every-event failure loop.
+_DISK_PRESSURE_ERRNOS = frozenset({errno.ENOSPC, errno.EDQUOT})
+_DISK_BACKOFF_INITIAL_SECONDS = 5.0
+_DISK_BACKOFF_MAX_SECONDS = 300.0
 _CONNECT_TIMEOUT = 3.0
 _READ_TIMEOUT = 3.0
 _POOL_TIMEOUT = 0.5
@@ -395,8 +408,14 @@ class _DestinationDispatcher:
                 partial(_retrieve_task_exception, context=f"{self._name} dispatch worker")
             )
 
-    def enqueue(self, event: str, data: dict[str, Any]) -> None:
+    def enqueue(self, event: str, data: dict[str, Any]) -> bool:
         """Enqueue an event for dispatch. HOT PATH — zero awaits, zero I/O.
+
+        Returns ``True`` if the event was queued for delivery, ``False`` if it
+        was dropped because the queue is full. The caller uses this to tell
+        "delivered to the server pipeline" apart from "dropped" — which, when
+        the disk is ALSO full, is the difference between a stale local log and
+        outright permanent data loss.
 
         Drops on full queue (bumps _overflow_dropped counter). Never disables.
 
@@ -411,6 +430,7 @@ class _DestinationDispatcher:
         self._ensure_worker()
         try:
             self._queue.put_nowait((event, data))
+            return True
         except asyncio.QueueFull:
             self._overflow_dropped += 1
             now = time.monotonic()
@@ -418,13 +438,15 @@ class _DestinationDispatcher:
                 self._last_overflow_log = now
                 logger.warning(
                     "%s buffer full — %d events dropped since last warning;"
-                    " events are durable in events.jsonl."
+                    " events are durable in events.jsonl UNLESS the disk is also full"
+                    " (see any DISK FULL alert)."
                     " To manually upload run: context-intelligence-upload --path %s"
                     " (--server-url/--api-key come from flags or env/config; see --help)",
                     self._name,
                     self._overflow_dropped,
                     self._storage_path,
                 )
+            return False
 
     def _record_forwarding_issue(self, kind: str, detail: str) -> None:
         """Write a durable forwarding-diagnostics record for this destination.
@@ -1268,6 +1290,20 @@ class LoggingHandler:
         self._parent_id: str = getattr(resolver, "parent_id", "") or ""
         self._resolve_instance_id: str = getattr(resolver, "resolve_instance_id", "") or ""
         self._dispatchers: list[_DestinationDispatcher] = []
+        # Disk-pressure circuit breaker state (see _DISK_* constants).
+        # _disk_backoff_seconds == 0.0 means healthy; > 0.0 means the breaker is
+        # open and this is the current cooldown length. _disk_retry_at is the
+        # monotonic time the next probe is allowed.
+        self._disk_backoff_seconds: float = 0.0
+        self._disk_retry_at: float = 0.0
+        # Per-episode state, all reset when the breaker closes. _disk_alert_sent
+        # enforces the at-most-one-notice-per-episode contract (see
+        # _build_disk_alert); the other three are the facts the durable
+        # disk-pressure record reports on recovery.
+        self._disk_alert_sent: bool = False
+        self._disk_degraded_since: float = 0.0
+        self._disk_events_skipped: int = 0
+        self._disk_episode_delivered: bool = False
 
     async def set_dispatchers(self, dispatchers: list[_DestinationDispatcher]) -> None:
         """Install the active per-destination dispatchers (called from on_session_ready).
@@ -1286,36 +1322,27 @@ class LoggingHandler:
 
     async def __call__(self, event: str, data: dict[str, Any]) -> HookResult:
         sanitized_data = _sanitize_for_json(data)
-        try:
-            session_id = sanitized_data.get("session_id")
-            if not session_id:
-                return HookResult(action="continue")
+        session_id = sanitized_data.get("session_id")
+        if not session_id:
+            return HookResult(action="continue")
 
-            session_dir = self._session_dir(session_id)
-            session_dir.mkdir(parents=True, exist_ok=True)
-
-            # Lazy metadata init: create metadata.json on the very first
-            # event we see for a given session_id, regardless of event type.
-            if session_id not in self._seen_sessions:
-                self._seen_sessions.add(session_id)
-                self._ensure_metadata(session_dir, session_id, sanitized_data)
-
-            if event in ("session:start", "session:fork"):
-                self._enrich_metadata_from_session_init(session_dir, session_id, sanitized_data)
-            elif event in ("session:end", "execution:end"):
-                self._finalize_metadata(session_dir, sanitized_data)
-
-            self._append_event(session_dir, event, sanitized_data, self._workspace)
-            self._touch_last_event_at(session_dir, sanitized_data.get("timestamp", ""))
-        except Exception:
-            logger.warning("LoggingHandler disk write error processing %s", event, exc_info=True)
+        # Disk write is guarded by the ENOSPC breaker and NEVER raises; the
+        # network fan-out below runs regardless of disk state so that events
+        # keep flowing to the server even when the disk is full. The two
+        # destinations are independent on purpose.
+        disk_state = self._persist_to_disk(event, session_id, sanitized_data)
 
         # Fan-out to all active dispatchers — each enqueue is isolated so that
-        # one dispatcher's failure does not starve the others (mirrors the
-        # defensive disk-write block above).
+        # one dispatcher's failure does not starve the others. Independent of
+        # disk state: enqueue is a zero-I/O in-memory hot path, so a full disk
+        # never blocks it. We track whether the event reached AT LEAST ONE
+        # server pipeline, because "disk full but delivered" is a stale local
+        # log, while "disk full AND not delivered" is permanent data loss.
+        delivered_to_server = False
         for dispatcher in self._dispatchers:
             try:
-                dispatcher.enqueue(event, sanitized_data)
+                if dispatcher.enqueue(event, sanitized_data):
+                    delivered_to_server = True
             except Exception:
                 logger.warning(
                     "LoggingHandler dispatcher enqueue failed for %s",
@@ -1323,6 +1350,25 @@ class LoggingHandler:
                     exc_info=True,
                 )
 
+        # Remember, for the whole degraded episode, whether ANY event still
+        # reached a server. That is the difference between "the local log is
+        # stale" and "these events are gone", and it is the fact the durable
+        # disk-pressure record reports on recovery.
+        if disk_state == "degraded" and delivered_to_server:
+            self._disk_episode_delivered = True
+
+        # A user-visible alert MUST ride HookResult.user_message (not just the
+        # logger): when the disk is full the log file cannot be written either,
+        # so a plain logger.warning would be invisible to the user.
+        alert = self._build_disk_alert(disk_state, delivered_to_server=delivered_to_server)
+        if alert is not None:
+            text, level = alert
+            return HookResult(
+                action="continue",
+                user_message=text,
+                user_message_level=level,  # type: ignore[arg-type]
+                user_message_source="context-intelligence",
+            )
         return HookResult(action="continue")
 
     # -- metadata read/write primitives -------------------------------------
@@ -1372,6 +1418,208 @@ class LoggingHandler:
             except OSError:
                 pass
             raise
+
+    # -- disk-write path with ENOSPC circuit breaker ------------------------
+    def _persist_to_disk(self, event: str, session_id: str, data: dict[str, Any]) -> str:
+        """Write this event's session files, guarded by the disk-pressure breaker.
+
+        Returns a disk-state token the caller combines with the network-dispatch
+        outcome to phrase the right user alert:
+
+        * ``"ok"``        — written to disk (or nothing to report).
+        * ``"degraded"``  — disk full: this event was NOT written to disk.
+        * ``"recovered"`` — a probe just succeeded after being degraded.
+
+        Never raises: event capture and dispatch must proceed even when the disk
+        cannot be written. Relies on the metadata helpers re-raising OSError
+        (their atomic writer cleans up its temp file and re-raises) so ENOSPC can
+        be classified here.
+        """
+        now = time.monotonic()
+
+        # Breaker OPEN: within the cooldown window, skip disk writes entirely
+        # rather than hammer a full filesystem on every event.
+        if self._disk_backoff_seconds > 0.0 and now < self._disk_retry_at:
+            self._disk_events_skipped += 1
+            return "degraded"
+
+        try:
+            self._write_session_to_disk(event, session_id, data)
+        except OSError as exc:
+            if exc.errno in _DISK_PRESSURE_ERRNOS:
+                if self._disk_backoff_seconds <= 0.0:
+                    self._disk_degraded_since = now
+                self._open_disk_breaker(now)
+                self._disk_events_skipped += 1
+                # Best-effort console log (may not reach disk — exactly why the
+                # caller also surfaces a user_message that bypasses the log
+                # file). WARNING, not ERROR: this repo reserves ERROR for a
+                # sustained operator-actionable failure, and disk I/O trouble is
+                # covered by the silent-by-default contract in
+                # test_silent_by_default.py.
+                logger.warning(
+                    "LoggingHandler disk write failed (errno %s): session data not written",
+                    exc.errno,
+                )
+                return "degraded"
+            # Non-pressure OSError (e.g. a single bad path): best-effort log,
+            # do NOT open the global breaker.
+            logger.warning("LoggingHandler disk write error processing %s", event, exc_info=True)
+            return "ok"
+        except Exception:
+            logger.warning("LoggingHandler disk write error processing %s", event, exc_info=True)
+            return "ok"
+
+        # Success. If the breaker had been open, this was a recovery probe:
+        # write the durable episode record (the disk is writable again, so this
+        # is the first moment it CAN be written), then close the breaker and
+        # reset the per-episode counters.
+        if self._disk_backoff_seconds > 0.0:
+            degraded_seconds = now - self._disk_degraded_since
+            self._record_disk_pressure_episode(self._session_dir(session_id), degraded_seconds)
+            logger.warning(
+                "LoggingHandler disk pressure cleared after %.0fs; session logging resumed "
+                "(%d event(s) were not written)",
+                degraded_seconds,
+                self._disk_events_skipped,
+            )
+            self._disk_backoff_seconds = 0.0
+            self._disk_retry_at = 0.0
+            self._disk_degraded_since = 0.0
+            self._disk_events_skipped = 0
+            self._disk_episode_delivered = False
+            return "recovered"
+        return "ok"
+
+    def _write_session_to_disk(self, event: str, session_id: str, data: dict[str, Any]) -> None:
+        """The actual per-event disk writes. Lets OSError propagate for classification.
+
+        The metadata helpers (``_ensure_metadata`` / ``_enrich`` / ``_finalize`` /
+        ``_touch_last_event_at``) already read tolerantly and write atomically,
+        so a corrupt file self-heals; this method adds the ENOSPC-classification
+        seam by letting their OSError propagate to ``_persist_to_disk``.
+        """
+        session_dir = self._session_dir(session_id)
+        session_dir.mkdir(parents=True, exist_ok=True)
+
+        # Lazy metadata init: create metadata.json on the very first event we
+        # see for a given session_id. Only mark the session seen AFTER the write
+        # succeeds, so a write that fails under disk pressure is retried on the
+        # next event instead of being permanently skipped.
+        if session_id not in self._seen_sessions:
+            self._ensure_metadata(session_dir, session_id, data)
+            self._seen_sessions.add(session_id)
+
+        if event in ("session:start", "session:fork"):
+            self._enrich_metadata_from_session_init(session_dir, session_id, data)
+        elif event in ("session:end", "execution:end"):
+            self._finalize_metadata(session_dir, data)
+
+        self._append_event(session_dir, event, data, self._workspace)
+        self._touch_last_event_at(session_dir, data.get("timestamp", ""))
+
+    def _open_disk_breaker(self, now: float) -> None:
+        """Open or widen the disk-pressure breaker with capped exponential backoff."""
+        if self._disk_backoff_seconds <= 0.0:
+            self._disk_backoff_seconds = _DISK_BACKOFF_INITIAL_SECONDS
+        else:
+            self._disk_backoff_seconds = min(
+                self._disk_backoff_seconds * 2, _DISK_BACKOFF_MAX_SECONDS
+            )
+        self._disk_retry_at = now + self._disk_backoff_seconds
+
+    def _build_disk_alert(
+        self, disk_state: str, *, delivered_to_server: bool
+    ) -> tuple[str, str] | None:
+        """Phrase the user-visible alert from the disk state AND the network outcome.
+
+        DELIBERATELY QUIET. This is telemetry, not the user's work, and the
+        person at the keyboard usually cannot act on it mid-session beyond
+        "free some disk". So the contract is **at most one notice per degraded
+        episode**, plus at most one matching all-clear:
+
+        * first degraded event of an episode -> one ``warning``
+        * every subsequent degraded event    -> ``None`` (silence)
+        * recovery, but only if we warned    -> one ``info`` all-clear
+        * recovery we never warned about     -> ``None`` (nothing to un-say)
+
+        Severity is ``warning``, never ``error``, in both degraded shapes. What
+        is lost is session observability data; the user's session itself is
+        unaffected, and this repo reserves ERROR for a sustained, operator-
+        actionable failure (see ``_maybe_escalate_sustained_failure``). An
+        error-level banner on what is, by default, the ordinary local-only
+        configuration would train people to ignore the channel.
+
+        The *durable* record of the episode is NOT this message -- it is the
+        ``context-intelligence:disk-pressure`` event written to events.jsonl on
+        recovery (see ``_record_disk_pressure_episode``). This alert exists only
+        because while the disk is full neither that record nor the log file can
+        be written, so a live signal has to ride ``HookResult.user_message``.
+        """
+        if disk_state == "recovered":
+            if not self._disk_alert_sent:
+                return None
+            self._disk_alert_sent = False
+            return (
+                "context-intelligence: disk space recovered — session logging has resumed.",
+                "info",
+            )
+        if disk_state != "degraded":
+            return None
+
+        # One notice per episode. Cleared only when the breaker closes.
+        if self._disk_alert_sent:
+            return None
+        self._disk_alert_sent = True
+
+        if delivered_to_server:
+            return (
+                "context-intelligence: disk full — local session telemetry is not being "
+                "written, but events are still reaching the configured server. Free disk "
+                "space to restore local logging.",
+                "warning",
+            )
+        return (
+            "context-intelligence: disk full — session telemetry is not being recorded "
+            "and no server destination is configured, so these events are not "
+            "recoverable. This is observability data only; your session is unaffected. "
+            "Free disk space to resume logging.",
+            "warning",
+        )
+
+    def _record_disk_pressure_episode(self, session_dir: Path, degraded_seconds: float) -> None:
+        """Write the durable record of a completed disk-pressure episode.
+
+        Called from ``_persist_to_disk`` ONLY on the recovery probe, which is
+        the first moment the disk is known-writable again -- so this is the
+        earliest point the episode CAN be recorded durably. While degraded,
+        nothing can be written by definition; that window is covered by the
+        live ``user_message`` alert instead.
+
+        Written as a namespaced ``context-intelligence:disk-pressure`` event in
+        the session's own events.jsonl via the shared appender, so it lands in
+        the same stream (and the same graph) an operator already reads. Nothing
+        about the existing record shape changes -- only a new event name, which
+        readers that filter on known Amplifier event names simply will not
+        match.
+
+        Best-effort: a diagnostics write must never raise into the event path.
+        """
+        try:
+            self._append_event(
+                session_dir,
+                "context-intelligence:disk-pressure",
+                {
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                    "degraded_seconds": round(degraded_seconds, 1),
+                    "events_not_written": self._disk_events_skipped,
+                    "delivered_to_server": self._disk_episode_delivered,
+                    "user_alerted": self._disk_alert_sent,
+                },
+                self._workspace,
+            )
+        except Exception:
+            logger.debug("disk-pressure episode record write failed", exc_info=True)
 
     # -- metadata lifecycle -------------------------------------------------
     def _ensure_metadata(
