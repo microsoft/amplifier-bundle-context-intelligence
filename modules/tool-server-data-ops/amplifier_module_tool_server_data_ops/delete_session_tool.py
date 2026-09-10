@@ -199,9 +199,15 @@ class DeleteSessionTool:
                         "and try again"
                     )
                 elif exc.status_code == 409:
+                    # The server only returns a 409 WITHOUT a Retry-After for the
+                    # ambiguous-id case (a still-draining graph always carries the
+                    # retry hint handled above; a genuine server-side failure is a
+                    # 500, not a 409). So a 409 here means the delete was refused
+                    # up front and nothing was removed.
                     message = (
-                        f"session {session_id!r} on {origin_name} could not be deleted: "
-                        "the id is ambiguous across workspaces"
+                        f"session {session_id!r} on {origin_name} was not deleted: "
+                        "the server refused it because the id resolves in more than "
+                        "one workspace"
                     )
                 return ToolResult(
                     success=False,

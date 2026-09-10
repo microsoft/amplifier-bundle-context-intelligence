@@ -448,7 +448,7 @@ class TestDeleteSessionServerErrors:
         assert result.success is False
         assert result.error is not None
         assert result.error["status_code"] == 409
-        assert "ambiguous" in result.error["message"]
+        assert "more than one workspace" in result.error["message"]
         assert mock_instance.delete_session.await_count == 1  # never retried
 
     async def test_409_still_draining_retries_then_surfaces_precise_error(self) -> None:
