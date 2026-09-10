@@ -2,17 +2,14 @@ bundle:
   name: context-intelligence-analysis-behavior
   version: 0.1.0
   description: >
-    LAYER 2 of 3. Adds graph-analyst + graph skills (graph-query — which carries
-    the blob-reading reference as a level-3 file — session-reconstruction, and
-    workflow-pattern-analysis). Includes context-intelligence-navigation. Use for
-    graph read/query/exploration without the design mode.
+    LAYER 2 of 3. Includes context-intelligence-navigation for the three agents
+    (graph-analyst, session-navigator, server-data-ops) and adds the graph skills
+    (graph-query — which carries the blob-reading reference as a level-3 file —
+    session-reconstruction, and workflow-pattern-analysis). Use for graph
+    read/query/exploration without the design mode.
 
 includes:
   - bundle: context-intelligence:behaviors/context-intelligence-navigation
-
-agents:
-  include:
-    - context-intelligence:graph-analyst
 
 tools:
   - module: tool-skills

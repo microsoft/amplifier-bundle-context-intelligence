@@ -1,0 +1,54 @@
+[project]
+name = "amplifier-module-hook-server-data-ops-lockdown"
+version = "0.1.0"
+description = "Agent-scoped tool:pre lockdown hook for server-data-ops -- denies write_file/edit_file/apply_patch/graph_query regardless of how the agent inherits them"
+requires-python = ">=3.11"
+license = "MIT"
+
+# No runtime dependencies: amplifier-core (HookResult) is a peer dependency
+# provided by the host process (see amplifier-foundation's BUNDLE_GUIDE.md,
+# "Declaring amplifier-core as Runtime Dependency" anti-pattern).
+dependencies = []
+
+[project.entry-points."amplifier.modules"]
+hook-server-data-ops-lockdown = "amplifier_module_hook_server_data_ops_lockdown:mount"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.uv]
+package = true
+
+[tool.hatch.build.targets.wheel]
+packages = ["amplifier_module_hook_server_data_ops_lockdown"]
+
+[dependency-groups]
+dev = [
+    "amplifier-core>=1.6.0",
+    "pytest>=9.0.3",
+    "pytest-asyncio>=0.24",
+    "pyright>=1.1.411",
+    "ruff>=0.14",
+    # Parses agents/server-data-ops.md's frontmatter in
+    # tests/test_module.py's TestSessionScopeComposition -- verifies the
+    # companion settings.exclude_hooks fix (see this module's own
+    # docstring) is actually declared, not just documented. Same version
+    # floor as this repo's own root pyproject.toml dev group.
+    "PyYAML>=6.0",
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+
+[tool.pyright]
+pythonVersion = "3.11"
+typeCheckingMode = "basic"
+venvPath = "."
+venv = ".venv"
+extraPaths = ["../.."]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100

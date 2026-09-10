@@ -76,9 +76,15 @@ jobs:
       fail-fast: false
       matrix:
         module:
+          # Every module under modules/ that owns a tests/ directory. A module
+          # without one (tool-context-intelligence-set-filters, whose tests live
+          # with hook-context-intelligence) is deliberately absent: pytest exits
+          # 5 on an empty collection and would fail the job.
           - hook-context-intelligence
+          - hook-server-data-ops-lockdown
           - tool-context-intelligence-query
           - tool-context-intelligence-upload
+          - tool-server-data-ops
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
