@@ -14,6 +14,7 @@ visible. The tests below encode that asymmetry rather than just "it works".
 
 from __future__ import annotations
 
+import asyncio
 import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -359,3 +360,66 @@ class TestSweep:
         assert report.sessions_considered == 0
         assert report.had_work is False
         assert report.made_progress is False
+
+
+@pytest.mark.asyncio
+class TestCancellationSafety:
+    """A cancelled sweep must KEEP the progress it actually made.
+
+    Found in a DTU, not in a unit test: the watermark used to be written only
+    after the whole window completed, so teardown cancellation threw away every
+    delivery the pass had made and the work had to be redone from scratch next
+    session. Delivery now commits in chunks, and cancellation persists the
+    contiguous prefix reached so far.
+    """
+
+    async def test_cancelled_sweep_keeps_its_contiguous_prefix(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        session_dir = _make_session(tmp_path, "s1", events=20)
+        boundaries = [end for _s, end, _t in iter_records_from(session_dir / "events.jsonl", 0)]
+
+        posted = 0
+
+        class _SlowClient(_FakeClient):
+            async def post(self, url: str, **kwargs: Any) -> _FakeResponse:
+                nonlocal posted
+                posted += 1
+                if posted > 5:
+                    # Stand in for teardown arriving mid-pass.
+                    raise asyncio.CancelledError
+                return await super().post(url, **kwargs)
+
+        monkeypatch.setattr(
+            "amplifier_module_hook_context_intelligence.handlers.backlog_sweep.httpx.AsyncClient",
+            lambda *a, **k: _SlowClient(),
+        )
+        with pytest.raises(asyncio.CancelledError):
+            await _sweeper(tmp_path).run()
+
+        watermark, _ = DeliveryWatermark.load(session_dir, DEST, destination_url=URL)
+        assert watermark.offset == boundaries[4], (
+            f"cancelled sweep lost its progress: offset {watermark.offset}, "
+            f"expected {boundaries[4]} (5 delivered records)"
+        )
+        assert watermark.last_outcome == "cancelled"
+
+    async def test_cancelled_before_any_delivery_records_no_progress(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        session_dir = _make_session(tmp_path, "s1", events=5)
+
+        class _DeadClient(_FakeClient):
+            async def post(self, url: str, **kwargs: Any) -> _FakeResponse:
+                raise asyncio.CancelledError
+
+        monkeypatch.setattr(
+            "amplifier_module_hook_context_intelligence.handlers.backlog_sweep.httpx.AsyncClient",
+            lambda *a, **k: _DeadClient(),
+        )
+        with pytest.raises(asyncio.CancelledError):
+            await _sweeper(tmp_path).run()
+
+        watermark, _ = DeliveryWatermark.load(session_dir, DEST, destination_url=URL)
+        assert watermark.offset == 0
+        assert watermark.last_outcome == "no_progress"

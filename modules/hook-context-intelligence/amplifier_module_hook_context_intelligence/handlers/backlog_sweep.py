@@ -323,50 +323,62 @@ class BacklogSweeper:
         if not window:
             return 0
 
-        semaphore = asyncio.Semaphore(max(1, self._bounds.concurrency))
-
-        async def deliver(index: int) -> tuple[int, bool, str]:
-            async with semaphore:
-                delivered, detail = await self._post(client, window[index][2])
-                return index, delivered, detail
-
-        results = await asyncio.gather(*(deliver(i) for i in range(len(window))))
-        outcomes = {index: (ok, detail) for index, ok, detail in results}
-
-        # CONTIGUOUS PREFIX ONLY. With N in flight, a failure at position k caps
-        # the watermark at k-1 even if k+1.. succeeded; those are re-sent next
-        # pass. That redundancy is the price of a single-number cursor, and the
-        # alternative — tracking a sparse delivered-set — is unbounded state.
+        # Deliver in CHUNKS, committing the watermark after each one.
+        #
+        # A single gather over the whole window looks tidier and is wrong: this
+        # task is cancelled at session teardown, and a cancellation mid-gather
+        # threw away EVERY delivery the pass had made, because the watermark was
+        # only written at the end. Measured in a DTU: a sweep that genuinely
+        # re-sent events left its cursor at 0 and the work had to be redone.
+        # Chunking bounds that loss to one chunk.
+        chunk = max(1, self._bounds.concurrency)
         prefix_end = watermark.offset
         delivered_count = 0
-        for index, (_start, end, _payload) in enumerate(window):
-            ok, _detail = outcomes[index]
-            if not ok:
-                break
-            prefix_end = end
-            delivered_count += 1
+        failed = 0
+        first_error: str | None = None
+        stop = False
 
-        failed = sum(1 for ok, _ in outcomes.values() if not ok)
-        first_error = next((detail for ok, detail in outcomes.values() if not ok), None)
-
-        advanced = prefix_end - watermark.offset
-        watermark.offset = prefix_end
-        watermark.delivered_lines += delivered_count
-        watermark.last_attempt_at = datetime.now(UTC).isoformat()
-        watermark.last_outcome = "delivered" if delivered_count else "no_progress"
-        watermark.last_error = first_error
-        if delivered_count:
-            watermark.last_delivered_at = watermark.last_attempt_at
-            watermark.consecutive_sweeps_without_progress = 0
-        else:
-            watermark.consecutive_sweeps_without_progress += 1
+        def _persist(outcome: str) -> None:
+            advanced_now = prefix_end - watermark.offset
+            watermark.offset = prefix_end
+            watermark.delivered_lines += delivered_count
+            watermark.last_attempt_at = datetime.now(UTC).isoformat()
+            watermark.last_outcome = outcome
+            watermark.last_error = first_error
+            if delivered_count:
+                watermark.last_delivered_at = watermark.last_attempt_at
+                watermark.consecutive_sweeps_without_progress = 0
+            elif outcome == "no_progress":
+                watermark.consecutive_sweeps_without_progress += 1
+            try:
+                watermark.save(session_dir)
+            except OSError as exc:
+                report.notes.append(f"watermark write failed at {session_dir}: {exc}")
+            return advanced_now
 
         try:
-            watermark.save(session_dir)
-        except OSError as exc:
-            # Best-effort telemetry: a failed watermark write must not fail the
-            # sweep. The cost is re-delivery next session, which MERGE absorbs.
-            report.notes.append(f"watermark write failed at {session_dir}: {exc}")
+            for start_index in range(0, len(window), chunk):
+                batch = window[start_index : start_index + chunk]
+                results = await asyncio.gather(
+                    *(self._post(client, payload) for _s, _e, payload in batch)
+                )
+                for (_start, end, _payload), (delivered, detail) in zip(batch, results):
+                    if not delivered:
+                        failed += 1
+                        first_error = first_error or detail
+                        stop = True
+                        break
+                    # CONTIGUOUS PREFIX ONLY: the cursor may only pass a record
+                    # once every record before it has been accepted.
+                    prefix_end = end
+                    delivered_count += 1
+                if stop:
+                    break
+            advanced = _persist("delivered" if delivered_count else "no_progress")
+        except asyncio.CancelledError:
+            # Teardown. Keep what we actually achieved rather than redoing it.
+            _persist("cancelled" if delivered_count else "no_progress")
+            raise
 
         report.events_delivered += delivered_count
         report.events_failed += failed

@@ -232,7 +232,8 @@ provision:
       . /root/_common.sh
       echo "=== S3: replay is duplicate-free -- proven as a FIXED POINT on node counts ==="
       SD=$(cat /root/.s1_session)
-      BEFORE=$(python3 -c "import json,sys;print(json.load(open('/root/.s2_nodes'))['nodes'])")
+      # verify.py prints the JSON line THEN a PASS: line, so take the JSON one.
+      BEFORE=$(grep -m1 '^{' /root/.s2_nodes | python3 -c "import json,sys;print(json.load(sys.stdin)['nodes'])")
       echo "nodes after S2: $BEFORE"
       # Rewind the watermark and force a FULL re-send of the same records.
       python3 - "$SD" <<'PY'
