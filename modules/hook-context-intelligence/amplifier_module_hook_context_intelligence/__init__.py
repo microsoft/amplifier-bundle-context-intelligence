@@ -193,7 +193,7 @@ async def apply_active_dispatchers(
     return match_key, sorted(active)
 
 
-def _describe_sweep(report: Any) -> None:
+def _describe_sweep(report: Any, *, suppress_stranded: bool = False) -> None:
     """Console policy for one sweep result -- the loudness gate.
 
     The question this asks is deliberately NOT "is there a backlog?" (which is
@@ -208,7 +208,7 @@ def _describe_sweep(report: Any) -> None:
     """
     # LOUD 4 -- outside the age bound. These will NEVER be delivered
     # automatically, so the bound must be audible or it becomes a silent drop.
-    if report.stranded_sessions:
+    if report.stranded_sessions and not suppress_stranded:
         log.warning(
             "context-intelligence %s: %d session(s) hold events older than the sweep"
             " window (oldest %.0fh) and will NOT be delivered automatically."
@@ -253,11 +253,22 @@ def _describe_sweep(report: Any) -> None:
 
 
 def schedule_backlog_sweeps(resolver: Any, dispatchers: list[Any]) -> list[Any]:
-    """Start one background catch-up sweep per active destination.
+    """Start one CONTINUOUS catch-up sweep per active destination.
 
-    Fire-and-forget by contract: event delivery is best-effort and must never
-    block or slow a session. The tasks are cancelled during cleanup, and whatever
-    the watermark says at that moment is simply where the next session resumes.
+    Runs an immediate pass at session start, then repeats every
+    ``sweep_interval_seconds``. Continuous rather than one-shot for two reasons,
+    both measured rather than assumed:
+
+    * A one-shot start-of-session sweep is hostage to how long the session
+      happens to last. In a DTU against a real server it delivered ZERO events,
+      because teardown cancelled it before the first round-trip completed.
+    * Repeating during the session is what actually stops a busy session's
+      backlog growing all day -- the live dispatcher's ceiling is one event per
+      round-trip, and nothing else reduces the queue while events keep arriving.
+
+    Still best-effort: the tasks are cancelled at teardown after a bounded grace
+    (``sweep_close_grace_seconds``), and the watermark on disk is where the next
+    session resumes from.
     """
     from .handlers.backlog_sweep import BacklogSweeper, SweepBounds
 
@@ -286,13 +297,23 @@ def schedule_backlog_sweeps(resolver: Any, dispatchers: list[Any]) -> list[Any]:
             timeout=resolver.dispatch_timeout,
         )
 
-        async def _run(s: Any = sweeper) -> None:
-            try:
-                _describe_sweep(await s.run())
-            except asyncio.CancelledError:
-                raise
-            except Exception:
-                log.debug("context-intelligence backlog sweep failed", exc_info=True)
+        async def _run(s: Any = sweeper, interval: float = resolver.sweep_interval_seconds) -> None:
+            # Stranded-session warnings are a property of the BACKLOG, not of a
+            # pass, so they would repeat verbatim every interval. Report once per
+            # session and let the durable forwarding record carry the rest.
+            reported_stranded = False
+            while True:
+                try:
+                    report = await s.run()
+                    _describe_sweep(report, suppress_stranded=reported_stranded)
+                    reported_stranded = reported_stranded or bool(report.stranded_sessions)
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    log.debug("context-intelligence backlog sweep failed", exc_info=True)
+                if interval <= 0:
+                    return
+                await asyncio.sleep(interval)
 
         task = asyncio.create_task(_run())
         task.add_done_callback(_retrieve_sweep_exception)
@@ -604,11 +625,26 @@ async def mount(
     )
 
     async def cleanup() -> None:
-        # Cancel catch-up sweeps FIRST. Delivery is best-effort and must never
-        # slow process exit; the watermark already on disk is where the next
-        # session resumes from.
-        for task in _hook_state.get("sweep_tasks") or []:
-            task.cancel()
+        # Give a catch-up sweep a BOUNDED grace to land, then cancel it.
+        #
+        # The original contract was "never slows process exit". It kept that
+        # promise so literally that the sweep never ran at all: a short session
+        # ends before the first several-hundred-millisecond POST completes, so a
+        # DTU run measured ZERO events delivered while the same sweep, given
+        # wall-clock, cleared the backlog in seconds. The constraint is now an
+        # explicit budget -- "never slows exit by more than
+        # sweep_close_grace_seconds" (default 2.0, set 0.0 to disable) -- which
+        # is bounded, configurable and testable, where an absolute was neither.
+        sweep_tasks = list(_hook_state.get("sweep_tasks") or [])
+        if sweep_tasks:
+            grace = resolver.sweep_close_grace_seconds
+            if grace > 0:
+                try:
+                    await asyncio.wait(sweep_tasks, timeout=grace)
+                except Exception:
+                    log.debug("sweep grace wait failed", exc_info=True)
+            for task in sweep_tasks:
+                task.cancel()
         try:
             await logging_handler.close()
         except Exception:

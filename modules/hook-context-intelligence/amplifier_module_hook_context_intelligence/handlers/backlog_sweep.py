@@ -23,6 +23,15 @@ before this shipped:
 The sweep lives in the hook and imports nothing from the upload tool: the
 dependency arrow is tool -> hook, so the reverse would be a circular import. It
 does not need to — ``build_payload`` already lives here.
+
+**Interaction with the live path, when running continuously.** The two never
+fight over the same records, and nothing has to coordinate them. While the live
+dispatcher keeps up it advances that session's watermark itself, so the sweep
+sees the session as caught up and skips it entirely. The moment the live path
+drops or fails a record it FREEZES the watermark there — it can no longer
+honestly advance — and the sweep resumes from exactly that point. So the sweep
+is idle on healthy sessions and is the only thing that can recover an unhealthy
+one.
 """
 
 from __future__ import annotations

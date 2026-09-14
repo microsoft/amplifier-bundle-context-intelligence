@@ -180,6 +180,11 @@ provision:
       . /root/ci-verify.env
       export PATH="/root/.local/bin:$PATH"
       V=/root/support/verify.py
+      # The hook module is loaded from the CLI-resolved bundle cache, not from the
+      # tool venv's site-packages -- so anything importing it must say so.
+      CI_CACHE=$(ls -d /root/.amplifier/cache/amplifier-bundle-context-intelligence-* | head -1)
+      export PYTHONPATH="$CI_CACHE:$CI_CACHE/modules/hook-context-intelligence"
+      CI_PY=/root/.local/share/uv/tools/amplifier/bin/python
       newest_session() {
         python3 - <<'PY'
       import pathlib
@@ -190,7 +195,7 @@ provision:
       PY
       }
       run_session() {
-        amplifier run "$1" --output json > /tmp/session-$$.json 2>/tmp/session-$$.err || {
+        amplifier run "$1" --output-format json > /tmp/session-$$.json 2>/tmp/session-$$.err || {
           echo "session failed"; tail -20 /tmp/session-$$.err; exit 1; }
       }
       COMMONEOF
@@ -263,9 +268,8 @@ provision:
           "working_dir":"/outage","started_at":now,"last_event_at":now,"status":"completed"}))
       PY
       # A destination that is genuinely broken: nothing is listening on 59999.
-      python3 - <<'PY'
-      import asyncio, sys
-      sys.path.insert(0, "/root/.local/share/uv/tools/amplifier/lib/python3.13/site-packages")
+      $CI_PY - <<'PY'
+      import asyncio
       from amplifier_module_hook_context_intelligence.handlers.backlog_sweep import (
           BacklogSweeper, SweepBounds)
       class A:
@@ -298,9 +302,8 @@ provision:
       (d/"metadata.json").write_text(json.dumps({"session_id":"s-old","workspace":ws,
           "working_dir":"/ancient","started_at":old,"last_event_at":old,"status":"completed"}))
       PY
-      python3 - <<'PY'
-      import asyncio, sys, pathlib
-      sys.path.insert(0, "/root/.local/share/uv/tools/amplifier/lib/python3.13/site-packages")
+      $CI_PY - <<'PY'
+      import asyncio, pathlib
       from amplifier_module_hook_context_intelligence.handlers.backlog_sweep import (
           BacklogSweeper, SweepBounds)
       class A:
@@ -340,36 +343,45 @@ readiness:
       print(f"ready: proxy adds {dt:.0f}ms per request")
       PY
 
-  - name: logging-hook-present
+  - name: branch-bundle-resolved-from-mirror
+    # The code under test must be THIS branch, not main. Assert on the cache the
+    # CLI actually resolved, so a silently-stale mirror cannot produce a green run.
     command: >
-      amplifier bundle show context-intelligence-logging 2>/dev/null
-      | grep -q "hook-context-intelligence"
-      && echo "ready: logging hook loaded via CLI"
+      C=$(ls -d /root/.amplifier/cache/amplifier-bundle-context-intelligence-* | head -1);
+      test -f "$C/modules/hook-context-intelligence/amplifier_module_hook_context_intelligence/handlers/delivery_watermark.py"
+      && test -f "$C/modules/hook-context-intelligence/amplifier_module_hook_context_intelligence/handlers/backlog_sweep.py"
+      && echo "ready: branch bundle in cache @ $(git -C "$C" log -1 --pretty=%h) with the new handlers"
 
   - name: sweep-defaults-on
     # The shipped DEFAULT is the thing under test: settings.yaml deliberately
-    # does NOT set sweep_enabled.
+    # does NOT set sweep_enabled. Imported from the CLI-resolved cache (the hook
+    # module is loaded from there, not installed into the tool venv).
     command: |
-      python3 - <<'PY'
-      import sys
-      sys.path.insert(0, "/root/.local/share/uv/tools/amplifier/lib/python3.13/site-packages")
+      C=$(ls -d /root/.amplifier/cache/amplifier-bundle-context-intelligence-* | head -1)
+      PYTHONPATH="$C:$C/modules/hook-context-intelligence" \
+      /root/.local/share/uv/tools/amplifier/bin/python - <<'PY'
       from amplifier_module_hook_context_intelligence.config_resolver import HookConfigResolver
       r = HookConfigResolver({}, None)
       assert r.sweep_enabled is True, "sweep must default ON"
-      assert r.sweep_max_age_hours == 48.0
-      assert r.sweep_max_events == 5000
-      print(f"ready: sweep defaults on (max_events={r.sweep_max_events}, "
-            f"max_age_hours={r.sweep_max_age_hours})")
+      assert r.sweep_max_events == 5000, r.sweep_max_events
+      assert r.sweep_max_age_hours == 48.0, r.sweep_max_age_hours
+      assert r.sweep_max_sessions == 20, r.sweep_max_sessions
+      assert r.sweep_concurrency == 1, r.sweep_concurrency
+      print(f"ready: sweep defaults ON (max_events={r.sweep_max_events}, "
+            f"max_age_hours={r.sweep_max_age_hours}, max_sessions={r.sweep_max_sessions}, "
+            f"concurrency={r.sweep_concurrency})")
       PY
 
-  - name: watermark-module-importable
+  - name: new-handlers-importable
     command: |
-      python3 - <<'PY'
-      import sys
-      sys.path.insert(0, "/root/.local/share/uv/tools/amplifier/lib/python3.13/site-packages")
+      C=$(ls -d /root/.amplifier/cache/amplifier-bundle-context-intelligence-* | head -1)
+      PYTHONPATH="$C:$C/modules/hook-context-intelligence" \
+      /root/.local/share/uv/tools/amplifier/bin/python - <<'PY'
       from amplifier_module_hook_context_intelligence.handlers.delivery_watermark import (
-          DeliveryWatermark)
-      print("ready:", DeliveryWatermark.__module__)
+          DeliveryWatermark, SweepLock)
+      from amplifier_module_hook_context_intelligence.handlers.backlog_sweep import (
+          BacklogSweeper, SweepBounds)
+      print("ready:", DeliveryWatermark.__module__, "+", BacklogSweeper.__module__)
       PY
 
   - name: real-backend-reachable

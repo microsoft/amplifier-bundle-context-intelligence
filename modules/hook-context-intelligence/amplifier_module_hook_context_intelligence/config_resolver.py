@@ -563,6 +563,39 @@ class HookConfigResolver:
         return max(1, int(self._config.get("sweep_max_sessions", 20)))
 
     @property
+    def sweep_close_grace_seconds(self) -> float:
+        """Seconds a catch-up sweep may keep running at teardown. Default 2.0.
+
+        An EXPLICIT, DECLARED budget replacing an absolute that defeated the
+        feature. The original contract was "never slows process exit", and it
+        kept that promise so literally that the sweep never ran: cleanup()
+        cancelled the task at session teardown, and a short session ends before
+        the first several-hundred-millisecond POST lands. Measured in a DTU
+        against a real server: a session-scheduled sweep delivered ZERO events,
+        while the same sweep given wall-clock cleared the whole backlog in 6.6s.
+
+        So the constraint is now "never slows exit by more than this many
+        seconds", which is bounded, configurable, and testable. Set 0.0 to
+        restore cancel-immediately behaviour.
+        """
+        return _coerce_positive_float(
+            self._config.get("sweep_close_grace_seconds"), default=2.0, minimum=0.0
+        )
+
+    @property
+    def sweep_interval_seconds(self) -> float:
+        """Cadence of the in-session catch-up sweep. Default 60.0; 0 disables.
+
+        With a repeat interval the sweep stops being a start-of-session event and
+        becomes continuous catch-up -- which is what actually keeps a busy
+        session's backlog from growing all day, and what makes teardown timing
+        stop mattering. Set 0.0 for a single pass at session start.
+        """
+        return _coerce_positive_float(
+            self._config.get("sweep_interval_seconds"), default=60.0, minimum=0.0
+        )
+
+    @property
     def sweep_concurrency(self) -> int:
         """Concurrent in-flight POSTs during a sweep. Defaults to 1.
 
