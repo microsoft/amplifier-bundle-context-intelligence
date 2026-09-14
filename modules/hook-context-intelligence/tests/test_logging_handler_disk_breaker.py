@@ -130,7 +130,7 @@ class TestDiskBreaker:
         monkeypatch.setattr(handler, "_write_session_to_disk", _enospc)
 
         class _OkDispatcher:
-            def enqueue(self, event, data):
+            def enqueue(self, event, data, **_kwargs):
                 return True  # accepted for delivery
 
         handler._dispatchers = [_OkDispatcher()]  # type: ignore[list-item]
@@ -152,7 +152,7 @@ class TestDiskBreaker:
         monkeypatch.setattr(handler, "_write_session_to_disk", _enospc)
 
         class _FullDispatcher:
-            def enqueue(self, event, data):
+            def enqueue(self, event, data, **_kwargs):
                 return False  # queue full, dropped
 
         handler._dispatchers = [_FullDispatcher()]  # type: ignore[list-item]
@@ -387,7 +387,7 @@ class TestBreakerMechanics:
         enqueued = []
 
         class _Dispatcher:
-            def enqueue(self, event, data):
+            def enqueue(self, event, data, **_kwargs):
                 enqueued.append(event)
                 return True
 
