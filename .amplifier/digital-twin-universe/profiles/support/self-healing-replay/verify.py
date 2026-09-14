@@ -91,6 +91,25 @@ def wait_drained(server: str, token: str, workspace: str, timeout: float = 240.0
     return count_nodes(server, token, workspace)
 
 
+def count_session_nodes(server: str, token: str, workspace: str, session_id: str) -> int:
+    """Nodes belonging to ONE session.
+
+    The fixed-point check must be scoped this way. A workspace-wide count is
+    wrong the moment the scenario runs further sessions to drive the sweep --
+    their brand-new events inflate the total and look exactly like duplicates.
+    node_id is deterministic and prefixed with the session id (see the server's
+    make_node_id), so the prefix is an exact per-session filter.
+    """
+    rows = cypher(
+        server,
+        token,
+        "MATCH (n) WHERE n.workspace = $ws AND n.node_id STARTS WITH $prefix "
+        "RETURN count(n) AS c",
+        {"ws": workspace, "prefix": f"{session_id}__"},
+    )
+    return int(rows[0]["c"]) if rows else 0
+
+
 def count_lines(session_dir: Path) -> int:
     path = session_dir / "events.jsonl"
     if not path.exists():
@@ -176,6 +195,21 @@ def main() -> None:
         )
         return
 
+    if args.command == "session-nodes":
+        assert session_dir
+        session_id = session_dir.parent.name
+        print(
+            json.dumps(
+                {
+                    "session_id": session_id,
+                    "nodes": count_session_nodes(
+                        args.server, args.token, args.workspace, session_id
+                    ),
+                }
+            )
+        )
+        return
+
     if args.command == "healed":
         # S2/S3: converge, watermark at EOF, and a further replay is a no-op.
         assert session_dir
@@ -184,8 +218,15 @@ def main() -> None:
         watermark = load_watermark(session_dir, args.destination)
         if watermark["offset"] != size:
             fail(f"watermark {watermark['offset']} != EOF {size} -- backlog not fully swept")
-        if args.expect_nodes >= 0 and total != args.expect_nodes:
-            fail(f"NOT a fixed point: {args.expect_nodes} -> {total} nodes on replay")
+        if args.expect_nodes >= 0:
+            session_id = session_dir.parent.name
+            scoped = count_session_nodes(args.server, args.token, args.workspace, session_id)
+            if scoped != args.expect_nodes:
+                fail(
+                    f"NOT a fixed point for session {session_id}: "
+                    f"{args.expect_nodes} -> {scoped} nodes after a full replay"
+                )
+            print(json.dumps({"session_nodes": scoped, "workspace_nodes": total}))
         print(json.dumps({"nodes": total, "watermark": watermark}))
         ok(f"healed: watermark at EOF ({size}), {total} nodes for {args.workspace}")
         return

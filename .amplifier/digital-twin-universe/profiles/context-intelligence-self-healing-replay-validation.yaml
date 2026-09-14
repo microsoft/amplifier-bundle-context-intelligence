@@ -232,9 +232,13 @@ provision:
       . /root/_common.sh
       echo "=== S3: replay is duplicate-free -- proven as a FIXED POINT on node counts ==="
       SD=$(cat /root/.s1_session)
-      # verify.py prints the JSON line THEN a PASS: line, so take the JSON one.
-      BEFORE=$(grep -m1 '^{' /root/.s2_nodes | python3 -c "import json,sys;print(json.load(sys.stdin)['nodes'])")
-      echo "nodes after S2: $BEFORE"
+      # Scope the baseline to THIS session: driving more sessions below adds their own
+      # new events to the workspace, which a workspace-wide count cannot tell apart
+      # from duplicates.
+      BEFORE=$(python3 $V session-nodes --session-dir "$SD" --server "$SERVER_URL" \
+        --token "$SERVER_TOKEN" --workspace "$WORKSPACE" \
+        | python3 -c "import json,sys;print(json.load(sys.stdin)['nodes'])")
+      echo "session nodes after S2: $BEFORE"
       # Rewind the watermark and force a FULL re-send of the same records.
       python3 - "$SD" <<'PY'
       import json, sys, pathlib
@@ -243,8 +247,19 @@ provision:
       p.write_text(json.dumps(wm))
       print("watermark rewound to 0")
       PY
-      run_session "Say OK."
-      sleep 20
+      # A forced full re-send is larger than one short session's sweep budget, so drive
+      # sessions until the cursor is back at EOF. Each session's sweep keeps the
+      # progress it made (chunked commit); this proves that accumulation works, and is
+      # the honest way to reach the state the fixed-point claim is actually about.
+      SIZE=$(stat -c%s "$SD/events.jsonl")
+      for i in 1 2 3 4 5; do
+        OFF=$(python3 -c "import json;print(json.load(open('$SD/delivery/main.json'))['offset'])")
+        echo "  attempt $i: watermark $OFF / $SIZE"
+        [ "$OFF" = "$SIZE" ] && break
+        run_session "Say OK."
+        sleep 8
+      done
+      sleep 12
       python3 $V healed --session-dir "$SD" --server "$SERVER_URL" \
         --token "$SERVER_TOKEN" --workspace "$WORKSPACE" --destination main \
         --expect-nodes "$BEFORE"
@@ -409,9 +424,12 @@ manual_validation_steps:
   - name: S3-replay-is-duplicate-free
     command: bash /root/s3_fixed_point.sh
     expect: >
-      PASS: the node count is UNCHANGED after a full re-send of the same records
-      (fixed point). Asserted on real Neo4j node counts, NOT on a "duplicate"
-      response -- the idempotency cache is in-memory and ?replay bypasses it.
+      PASS: the count of nodes belonging to THAT SESSION is unchanged after a full
+      re-send of every one of its records (fixed point). Asserted on real Neo4j
+      node counts, NOT on a "duplicate" response -- the idempotency cache is
+      in-memory and ?replay bypasses it. Scoped per session because the sessions
+      this scenario drives to advance the sweep add their own new events to the
+      workspace, which a workspace-wide count cannot tell apart from duplicates.
 
   - name: S4-a-real-outage-stays-loud
     command: bash /root/s4_outage_loud.sh
