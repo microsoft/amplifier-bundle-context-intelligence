@@ -514,6 +514,66 @@ class HookConfigResolver:
             self._config.get("close_drain_timeout"), default=20.0, minimum=0.1
         )
 
+    # -- self-healing backlog sweep (Increment 1) ---------------------------
+
+    @property
+    def sweep_enabled(self) -> bool:
+        """Whether the backlog sweep runs at session start. Defaults to True.
+
+        Reads directly from config['sweep_enabled']. No coordinator fallback.
+        Coerced via _coerce_bool so 'false' from an env var actually disables it.
+
+        DEFAULT-ON deliberately. The measured failure this sweep exists to fix --
+        a healthy-but-slow remote destination silently losing the majority of a
+        session's events -- is invisible to the user and has no other automatic
+        recovery path. A knob defaulted off would leave that unfixed for everyone
+        who never reads the release notes. The blast radius is bounded by the
+        other knobs here, and re-delivery is absorbed by the server's MERGE on a
+        deterministic node_id, so the worst case of a wrong watermark is wasted
+        work rather than corruption. Set ``sweep_enabled: false`` to opt out.
+        """
+        return _coerce_bool(self._config.get("sweep_enabled"), default=True)
+
+    @property
+    def sweep_max_events(self) -> int:
+        """Hard ceiling on events POSTed per sweep pass. Defaults to 5000.
+
+        Bounds the work a single session start can trigger. The remainder is
+        picked up by the next pass, so a large backlog drains over several
+        sessions instead of holding one launch hostage to history.
+        """
+        return max(1, int(self._config.get("sweep_max_events", 5000)))
+
+    @property
+    def sweep_max_age_hours(self) -> float:
+        """Only sweep sessions whose last event is within this window. Default 48.
+
+        This is the "a launch never re-POSTs a week of history" bound. Events
+        older than the window are NOT delivered automatically -- and that is a
+        LOUD condition, never a silent drop: the sweep reports the stranded count
+        and age so an operator can run context-intelligence-upload deliberately.
+        """
+        return _coerce_positive_float(
+            self._config.get("sweep_max_age_hours"), default=48.0, minimum=0.1
+        )
+
+    @property
+    def sweep_max_sessions(self) -> int:
+        """Ceiling on session directories visited per sweep pass. Defaults to 20."""
+        return max(1, int(self._config.get("sweep_max_sessions", 20)))
+
+    @property
+    def sweep_concurrency(self) -> int:
+        """Concurrent in-flight POSTs during a sweep. Defaults to 1.
+
+        Server ingest is order-independent (edges MERGE both endpoints and
+        placeholder nodes converge), so concurrency cannot corrupt the graph.
+        It is still defaulted to 1 -- exactly today's behaviour -- because the
+        server is single-process with NO rate limiting of its own, which makes
+        this client the rate limiter. Raise deliberately, after measuring.
+        """
+        return max(1, int(self._config.get("sweep_concurrency", 1)))
+
     @property
     def dispatch_backoff_initial(self) -> float:
         """Initial retry backoff interval in seconds after a dispatch failure.

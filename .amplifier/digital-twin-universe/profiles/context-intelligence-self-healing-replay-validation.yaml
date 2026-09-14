@@ -1,0 +1,414 @@
+# context-intelligence-self-healing-replay-validation.yaml
+#
+# RUNNABLE amplifier-digital-twin profile. Proves the SELF-HEALING EVENT REPLAY
+# seam (issue microsoft/amplifier#403): a healthy-but-SLOW remote destination no
+# longer silently loses the majority of a session's events, because a later
+# session sweeps the backlog forward from a durable per-destination watermark.
+#
+# WHY A LATENCY PROXY IS THE CRUX
+#   The shortfall only exists when the destination is slower than the producer.
+#   Against localhost a POST is sub-millisecond, the single-in-flight dispatcher
+#   keeps up trivially, and NOTHING reproduces. support/self-healing-replay/
+#   latency_proxy.py injects a measured per-REQUEST delay (default 250 ms,
+#   matching the observed Azure/APIM round-trip) in front of a REAL server.
+#   Per-request, not per-connection: httpx reuses keep-alive connections, so a
+#   connection-level delay would never build a queue.
+#
+# WHAT IS REAL HERE (no inbound mock on the seam -- see AGENTS.md)
+#   * a REAL context-intelligence-server + REAL Neo4j (this repo's own
+#     context-intelligence-backend.yaml, launched first)
+#   * the REAL bundle, installed THROUGH the Amplifier CLI from a Gitea mirror
+#   * REAL `amplifier` sessions driving the REAL hook
+#   The ONLY synthetic element is the injected latency, which makes a real
+#   network condition reproducible.
+#
+# THREE ASSERTION RULES, each learned from a spike that got it wrong first
+#   1. WAIT FOR THE DRAIN. POST /events returns 202 after a durable append,
+#      BEFORE the flush to Neo4j. Counting immediately reads a climbing number.
+#   2. NEVER assert `:Event count == record count`. Some records become
+#      ContentBlock/SST_EVENT nodes; the naive assertion fails at 399 vs 400 on a
+#      HEALTHY system. Convergence is proven as a FIXED POINT instead.
+#   3. NAMESPACE THE WORKSPACE PER RUN. The graph persists between runs; a reused
+#      workspace name makes run 2 read run 1's nodes and report "bug did not
+#      reproduce" -- a false GREEN, the worst possible outcome for this profile.
+#
+# REQUIRED --var
+#   --var gitea_host=<base-url>        mirror serving the branch under test
+#   --var server_url=<url>             REAL backend (context-intelligence-backend.yaml)
+#   --var server_token=<token>         its API_KEY
+#   --var run_id=<unique>              workspace namespace for THIS run (rule 3)
+#   --var latency_ms=<ms>              injected per-request delay (250 recommended)
+#   --var queue_capacity=<n>           dispatch_queue_capacity (32 recommended)
+#
+# HOW TO RUN
+#   # 1. stand up the REAL backend first:
+#   amplifier-digital-twin launch \
+#     .amplifier/digital-twin-universe/profiles/context-intelligence-backend.yaml \
+#     --name ci-heal-backend --var HOST_PORT=38020 \
+#     --var NEO4J_PASSWORD=<pw> --var API_KEY=<token> \
+#     --var SERVER_REF=766a9691850e6d7c29e7d4e90b537e88e69736bf
+#   # 2. find the Incus host-gateway IP reachable from this DTU, then:
+#   export GH_TOKEN=$(gh auth token)
+#   amplifier-digital-twin launch \
+#     .amplifier/digital-twin-universe/profiles/context-intelligence-self-healing-replay-validation.yaml \
+#     --name ci-heal --var gitea_host=<gitea-base-url> \
+#     --var server_url=http://<gateway-ip>:38020 --var server_token=<token> \
+#     --var run_id=$(date +%s) --var latency_ms=250 --var queue_capacity=32
+#   # 3. amplifier-digital-twin check-readiness ci-heal
+#   # 4. run the scenarios in order (each is a separate exec; S1 must pass first):
+#   amplifier-digital-twin exec ci-heal -- bash -lc 'bash /root/s1_reproduce.sh'
+#   amplifier-digital-twin exec ci-heal -- bash -lc 'bash /root/s2_heal.sh'
+#   amplifier-digital-twin exec ci-heal -- bash -lc 'bash /root/s3_fixed_point.sh'
+#   amplifier-digital-twin exec ci-heal -- bash -lc 'bash /root/s4_outage_loud.sh'
+#   amplifier-digital-twin exec ci-heal -- bash -lc 'bash /root/s5_age_bound.sh'
+
+name: context-intelligence-self-healing-replay-validation
+description: >
+  Runnable proof of self-healing event replay (#403): reproduces the delivery
+  shortfall against a REAL server through a latency proxy, then proves a later
+  session heals it from the delivery watermark without user action, without
+  duplicates, and without silencing a genuine outage.
+
+base:
+  image: ubuntu:24.04
+
+passthrough:
+  allow_external: true
+  services:
+    - name: anthropic
+      key_env: ANTHROPIC_API_KEY
+    - name: github
+      key_env: GH_TOKEN
+
+provision:
+  files:
+    - src: ./support/self-healing-replay/latency_proxy.py
+      dest: /root/support/latency_proxy.py
+      mode: "0755"
+    - src: ./support/self-healing-replay/verify.py
+      dest: /root/support/verify.py
+      mode: "0755"
+
+  setup_cmds:
+    - apt-get update && apt-get install -y git curl python3 python3-venv python3-yaml jq
+
+    - curl -LsSf https://astral.sh/uv/install.sh | sh
+
+    - |
+      if [ -n "${GH_TOKEN:-}" ]; then
+        echo "machine github.com login x-token-auth password $GH_TOKEN" > /root/.netrc
+        chmod 600 /root/.netrc
+        git config --global credential.helper 'store'
+      fi
+
+    - |
+      git config --global \
+        url."${gitea_host}/microsoft/amplifier-bundle-context-intelligence".insteadOf \
+        "https://github.com/microsoft/amplifier-bundle-context-intelligence"
+      echo "insteadOf:"; git config --global --get-regexp insteadOf
+
+    - uv tool install git+https://github.com/microsoft/amplifier@main
+
+    # ---- the latency proxy: the crux of this harness. Started in the
+    # background BEFORE any session runs (the script itself is pushed by
+    # provision.files above). The hook is pointed at the PROXY; the proxy
+    # forwards to the REAL server.
+    - |
+      nohup python3 /root/support/latency_proxy.py \
+        --listen 8100 --upstream "${server_url}" --latency-ms ${latency_ms} \
+        --stats /root/proxy-stats.json > /var/log/latency-proxy.log 2>&1 &
+      for i in $(seq 1 30); do
+        curl -sf http://127.0.0.1:8100/status >/dev/null 2>&1 && break
+        sleep 1
+      done
+      curl -sf http://127.0.0.1:8100/status | jq -r '.status' || {
+        echo "proxy not forwarding"; cat /var/log/latency-proxy.log; exit 1; }
+
+    - |
+      mkdir -p /root/.amplifier
+      cat > /root/.amplifier/keys.env << 'KEYSEOF'
+      MAIN_CI_KEY=${server_token}
+      KEYSEOF
+      chmod 600 /root/.amplifier/keys.env
+
+    # ---- settings.yaml: the DOCUMENTED config path.
+    # url points at the PROXY (127.0.0.1:8100), never the backend directly.
+    # dispatch_queue_capacity is lowered so the shortfall reproduces in a short
+    # session instead of needing an all-day one.
+    # sweep_enabled is NOT set -- proving the shipped DEFAULT is on.
+    - |
+      cat > /root/.amplifier/settings.yaml << 'SETTINGSEOF'
+      config:
+        providers:
+          - module: provider-anthropic
+            source: git+https://github.com/microsoft/amplifier-module-provider-anthropic@main
+            config:
+              api_key_env: ANTHROPIC_API_KEY
+      overrides:
+        hook-context-intelligence:
+          config:
+            workspace: "heal-${run_id}"
+            dispatch_queue_capacity: ${queue_capacity}
+            close_drain_timeout: 2.0
+            destinations:
+              main:
+                url: "http://127.0.0.1:8100"
+                api_key: "${MAIN_CI_KEY}"
+                include: ["**"]
+      SETTINGSEOF
+      echo "== settings.yaml =="; cat /root/.amplifier/settings.yaml
+
+    - |
+      amplifier bundle add \
+        git+https://github.com/microsoft/amplifier-bundle-context-intelligence@main#subdirectory=behaviors/context-intelligence-logging.yaml \
+        --app
+
+    - |
+      cat > /root/ci-verify.env << 'VERIFYENVEOF'
+      SERVER_URL=${server_url}
+      SERVER_TOKEN=${server_token}
+      WORKSPACE=heal-${run_id}
+      PROJECTS=/root/.amplifier/projects
+      VERIFYENVEOF
+      echo 'export PATH="/root/.local/bin:$PATH"' >> /root/.bashrc
+      echo 'PATH=/root/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin' >> /etc/environment
+
+    # ---- scenario scripts ------------------------------------------------
+    - |
+      cat > /root/_common.sh << 'COMMONEOF'
+      set -euo pipefail
+      . /root/ci-verify.env
+      export PATH="/root/.local/bin:$PATH"
+      V=/root/support/verify.py
+      newest_session() {
+        python3 - <<'PY'
+      import pathlib
+      root = pathlib.Path("/root/.amplifier/projects")
+      c = sorted(root.glob("*/sessions/*/context-intelligence"),
+                 key=lambda p: (p/"events.jsonl").stat().st_mtime if (p/"events.jsonl").exists() else 0)
+      print(c[-1] if c else "")
+      PY
+      }
+      run_session() {
+        amplifier run "$1" --output json > /tmp/session-$$.json 2>/tmp/session-$$.err || {
+          echo "session failed"; tail -20 /tmp/session-$$.err; exit 1; }
+      }
+      COMMONEOF
+
+    - |
+      cat > /root/s1_reproduce.sh << 'S1EOF'
+      . /root/_common.sh
+      echo "=== S1: reproduce the shortfall against a SLOW real destination ==="
+      run_session "List five short facts about the number seven, one per line."
+      SD=$(newest_session)
+      echo "session dir: $SD"
+      sleep 5
+      python3 $V reproduced --session-dir "$SD" --server "$SERVER_URL" \
+        --token "$SERVER_TOKEN" --workspace "$WORKSPACE" --destination main
+      echo "$SD" > /root/.s1_session
+      grep -c shutdown_undelivered /root/.amplifier/context-intelligence-logs/forwarding-*.jsonl \
+        || echo "(no shutdown_undelivered record -- drain window covered the tail)"
+      S1EOF
+
+    - |
+      cat > /root/s2_heal.sh << 'S2EOF'
+      . /root/_common.sh
+      echo "=== S2: a LATER session must sweep S1's backlog, with no user action ==="
+      SD=$(cat /root/.s1_session)
+      run_session "Say OK." 
+      sleep 20
+      python3 $V healed --session-dir "$SD" --server "$SERVER_URL" \
+        --token "$SERVER_TOKEN" --workspace "$WORKSPACE" --destination main \
+        | tee /root/.s2_nodes
+      S2EOF
+
+    - |
+      cat > /root/s3_fixed_point.sh << 'S3EOF'
+      . /root/_common.sh
+      echo "=== S3: replay is duplicate-free -- proven as a FIXED POINT on node counts ==="
+      SD=$(cat /root/.s1_session)
+      BEFORE=$(python3 -c "import json,sys;print(json.load(open('/root/.s2_nodes'))['nodes'])")
+      echo "nodes after S2: $BEFORE"
+      # Rewind the watermark and force a FULL re-send of the same records.
+      python3 - "$SD" <<'PY'
+      import json, sys, pathlib
+      p = pathlib.Path(sys.argv[1]) / "delivery" / "main.json"
+      wm = json.loads(p.read_text()); wm["offset"] = 0
+      p.write_text(json.dumps(wm))
+      print("watermark rewound to 0")
+      PY
+      run_session "Say OK."
+      sleep 20
+      python3 $V healed --session-dir "$SD" --server "$SERVER_URL" \
+        --token "$SERVER_TOKEN" --workspace "$WORKSPACE" --destination main \
+        --expect-nodes "$BEFORE"
+      S3EOF
+
+    - |
+      cat > /root/s4_outage_loud.sh << 'S4EOF'
+      . /root/_common.sh
+      echo "=== S4: a REAL outage must stay loud -- watermark must NOT advance ==="
+      mkdir -p /root/.amplifier/projects/-outage/sessions/s-outage/context-intelligence
+      SD=/root/.amplifier/projects/-outage/sessions/s-outage/context-intelligence
+      python3 - "$SD" "$WORKSPACE" <<'PY'
+      import json, sys, pathlib, datetime
+      d = pathlib.Path(sys.argv[1]); ws = sys.argv[2] + "-outage"
+      with (d/"events.jsonl").open("w") as fh:
+          for i in range(20):
+              fh.write(json.dumps({"event": f"probe:{i}", "workspace": ws,
+                  "timestamp": "2026-09-14T00:00:00Z",
+                  "data": {"session_id": "s-outage", "timestamp": "2026-09-14T00:00:00Z"}})+"\n")
+      now = datetime.datetime.now(datetime.timezone.utc).isoformat()
+      (d/"metadata.json").write_text(json.dumps({"session_id":"s-outage","workspace":ws,
+          "working_dir":"/outage","started_at":now,"last_event_at":now,"status":"completed"}))
+      PY
+      # A destination that is genuinely broken: nothing is listening on 59999.
+      python3 - <<'PY'
+      import asyncio, sys
+      sys.path.insert(0, "/root/.local/share/uv/tools/amplifier/lib/python3.13/site-packages")
+      from amplifier_module_hook_context_intelligence.handlers.backlog_sweep import (
+          BacklogSweeper, SweepBounds)
+      class A:
+          def headers(self): return {"Authorization": "Bearer x"}
+      import pathlib
+      r = asyncio.run(BacklogSweeper(destination="main", url="http://127.0.0.1:59999",
+          auth=A(), project_dir=pathlib.Path("/root/.amplifier/projects/-outage"),
+          bounds=SweepBounds()).run())
+      print("delivered:", r.events_delivered, "failed:", r.events_failed)
+      PY
+      python3 $V stalled --session-dir "$SD" --destination main
+      S4EOF
+
+    - |
+      cat > /root/s5_age_bound.sh << 'S5EOF'
+      . /root/_common.sh
+      echo "=== S5: the age bound must strand old events -- and SAY SO ==="
+      mkdir -p /root/.amplifier/projects/-ancient/sessions/s-old/context-intelligence
+      SD=/root/.amplifier/projects/-ancient/sessions/s-old/context-intelligence
+      python3 - "$SD" "$WORKSPACE" <<'PY'
+      import json, sys, pathlib, datetime
+      d = pathlib.Path(sys.argv[1]); ws = sys.argv[2] + "-ancient"
+      with (d/"events.jsonl").open("w") as fh:
+          for i in range(20):
+              fh.write(json.dumps({"event": f"old:{i}", "workspace": ws,
+                  "timestamp": "2026-09-01T00:00:00Z",
+                  "data": {"session_id": "s-old", "timestamp": "2026-09-01T00:00:00Z"}})+"\n")
+      old = (datetime.datetime.now(datetime.timezone.utc)
+             - datetime.timedelta(days=7)).isoformat()
+      (d/"metadata.json").write_text(json.dumps({"session_id":"s-old","workspace":ws,
+          "working_dir":"/ancient","started_at":old,"last_event_at":old,"status":"completed"}))
+      PY
+      python3 - <<'PY'
+      import asyncio, sys, pathlib
+      sys.path.insert(0, "/root/.local/share/uv/tools/amplifier/lib/python3.13/site-packages")
+      from amplifier_module_hook_context_intelligence.handlers.backlog_sweep import (
+          BacklogSweeper, SweepBounds)
+      class A:
+          def headers(self): return {"Authorization": "Bearer x"}
+      r = asyncio.run(BacklogSweeper(destination="main", url="http://127.0.0.1:8100",
+          auth=A(), project_dir=pathlib.Path("/root/.amplifier/projects/-ancient"),
+          bounds=SweepBounds(max_age_hours=48.0)).run())
+      assert r.events_delivered == 0, f"BOUND VIOLATED: sent {r.events_delivered} ancient events"
+      assert r.stranded_sessions == 1, r.stranded_sessions
+      assert r.oldest_stranded_age_hours > 48, r.oldest_stranded_age_hours
+      print(f"PASS: 0 sent; {r.stranded_sessions} stranded session reported, "
+            f"oldest {r.oldest_stranded_age_hours:.0f}h -- audible, not silent")
+      PY
+      S5EOF
+
+    - amplifier --version
+
+readiness:
+  - name: amplifier-usable
+    command: "amplifier --version"
+
+  - name: latency-proxy-forwarding
+    # Proves the proxy is live AND actually reaching the real backend.
+    command: >
+      curl -sf http://127.0.0.1:8100/status
+      | python3 -c "import sys,json;d=json.load(sys.stdin);assert d['status']=='ok';print('ready: proxy -> real server')"
+
+  - name: latency-proxy-actually-delays
+    # The harness is worthless if the delay is not real -- assert it, never assume.
+    command: |
+      python3 - <<'PY'
+      import time, urllib.request
+      t = time.monotonic()
+      urllib.request.urlopen("http://127.0.0.1:8100/status", timeout=30).read()
+      dt = (time.monotonic() - t) * 1000
+      assert dt >= ${latency_ms} * 0.8, f"proxy added only {dt:.0f}ms, expected ~${latency_ms}ms"
+      print(f"ready: proxy adds {dt:.0f}ms per request")
+      PY
+
+  - name: logging-hook-present
+    command: >
+      amplifier bundle show context-intelligence-logging 2>/dev/null
+      | grep -q "hook-context-intelligence"
+      && echo "ready: logging hook loaded via CLI"
+
+  - name: sweep-defaults-on
+    # The shipped DEFAULT is the thing under test: settings.yaml deliberately
+    # does NOT set sweep_enabled.
+    command: |
+      python3 - <<'PY'
+      import sys
+      sys.path.insert(0, "/root/.local/share/uv/tools/amplifier/lib/python3.13/site-packages")
+      from amplifier_module_hook_context_intelligence.config_resolver import HookConfigResolver
+      r = HookConfigResolver({}, None)
+      assert r.sweep_enabled is True, "sweep must default ON"
+      assert r.sweep_max_age_hours == 48.0
+      assert r.sweep_max_events == 5000
+      print(f"ready: sweep defaults on (max_events={r.sweep_max_events}, "
+            f"max_age_hours={r.sweep_max_age_hours})")
+      PY
+
+  - name: watermark-module-importable
+    command: |
+      python3 - <<'PY'
+      import sys
+      sys.path.insert(0, "/root/.local/share/uv/tools/amplifier/lib/python3.13/site-packages")
+      from amplifier_module_hook_context_intelligence.handlers.delivery_watermark import (
+          DeliveryWatermark)
+      print("ready:", DeliveryWatermark.__module__)
+      PY
+
+  - name: real-backend-reachable
+    command: >
+      . /root/ci-verify.env;
+      curl -sf "$SERVER_URL/status"
+      | python3 -c "import sys,json;d=json.load(sys.stdin);assert d['status']=='ok' and d['neo4j_connected'];print('ready: real server + neo4j')"
+
+manual_validation_steps:
+  - name: S1-reproduce-the-shortfall
+    command: bash /root/s1_reproduce.sh
+    expect: >
+      PASS: reproduced -- the server holds FEWER :Event nodes than events.jsonl has
+      records, and the watermark is short of EOF. If this FAILS with "bug did not
+      reproduce", raise --var latency_ms or lower --var queue_capacity; every later
+      scenario is meaningless without it.
+
+  - name: S2-a-later-session-heals-it
+    command: bash /root/s2_heal.sh
+    expect: >
+      PASS: healed -- the watermark reaches EOF and the server converges, with NO
+      user action and NO console warning. This is acceptance criterion 1 of #403.
+
+  - name: S3-replay-is-duplicate-free
+    command: bash /root/s3_fixed_point.sh
+    expect: >
+      PASS: the node count is UNCHANGED after a full re-send of the same records
+      (fixed point). Asserted on real Neo4j node counts, NOT on a "duplicate"
+      response -- the idempotency cache is in-memory and ?replay bypasses it.
+
+  - name: S4-a-real-outage-stays-loud
+    command: bash /root/s4_outage_loud.sh
+    expect: >
+      PASS: against a dead destination the watermark stays at 0, last_outcome is
+      no_progress, a real error is recorded, and the no-progress counter
+      increments. Self-healing must never mask a genuine outage.
+
+  - name: S5-the-age-bound-is-audible
+    command: bash /root/s5_age_bound.sh
+    expect: >
+      PASS: a 7-day-old session is NOT swept, and is REPORTED as stranded with its
+      age. The bound must never become a silent drop.

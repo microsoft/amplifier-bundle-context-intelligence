@@ -45,6 +45,7 @@ additional_events : list[str], optional
 
 from __future__ import annotations
 
+import asyncio
 import fnmatch
 import logging
 from collections.abc import Callable, Coroutine
@@ -162,6 +163,23 @@ async def apply_active_dispatchers(
             )
     await logging_handler.set_dispatchers(dispatchers)
 
+    # Self-healing catch-up for anything a PREVIOUS session left undelivered.
+    # Started after the dispatchers are installed so the live path owns this
+    # session's own events and the sweep only ever chases what is already behind.
+    #
+    # Stashed on the hook state rather than returned, so this function's arity --
+    # which set_ingestion_filters also depends on -- stays unchanged. Re-running
+    # this function (a mid-session filter swap) cancels the previous round's
+    # sweeps first: the destination set may have just changed underneath them.
+    get_cap_state = getattr(coordinator, "get_capability", None)
+    state = get_cap_state("context_intelligence._hook_state") if get_cap_state else None
+    if isinstance(state, dict):
+        for previous in state.get("sweep_tasks") or []:
+            previous.cancel()
+        state["sweep_tasks"] = schedule_backlog_sweeps(resolver, dispatchers)
+    else:
+        schedule_backlog_sweeps(resolver, dispatchers)
+
     if not destinations:
         log.info("context-intelligence fan-out: no destinations configured — local JSONL only")
     elif active:
@@ -173,6 +191,122 @@ async def apply_active_dispatchers(
         )
 
     return match_key, sorted(active)
+
+
+def _describe_sweep(report: Any) -> None:
+    """Console policy for one sweep result -- the loudness gate.
+
+    The question this asks is deliberately NOT "is there a backlog?" (which is
+    what the shutdown warning asks today, and why a perfectly healthy
+    destination warned on 215 of 215 measured shutdowns). It asks **"is the
+    backlog being retired?"** -- a question about progress over time, which only
+    became answerable once a watermark existed.
+
+    Quiet means the sweep delivered something and nothing is stuck. It never
+    means "we hid a failure": the durable forwarding-*.jsonl record is written
+    by the dispatcher regardless of anything decided here.
+    """
+    # LOUD 4 -- outside the age bound. These will NEVER be delivered
+    # automatically, so the bound must be audible or it becomes a silent drop.
+    if report.stranded_sessions:
+        log.warning(
+            "context-intelligence %s: %d session(s) hold events older than the sweep"
+            " window (oldest %.0fh) and will NOT be delivered automatically."
+            " Run: context-intelligence-upload",
+            report.destination,
+            report.stranded_sessions,
+            report.oldest_stranded_age_hours,
+        )
+
+    if not report.had_work:
+        return
+
+    # LOUD 2 -- work exists and nothing moved. This is the real "delivery is
+    # broken" signal; the auth-only circuit breaker cannot produce it.
+    if not report.made_progress:
+        log.warning(
+            "context-intelligence %s: %d byte(s) of backlog and NOT shrinking"
+            " -- sweep delivered 0 event(s).%s",
+            report.destination,
+            report.backlog_bytes_remaining,
+            f" Last error: {report.last_error}" if report.last_error else "",
+        )
+        return
+
+    # Progress, but still behind: proportional, and INFO rather than WARNING --
+    # catching up is not a problem the user can act on.
+    if report.backlog_bytes_remaining:
+        log.info(
+            "context-intelligence %s: delivered %d backlogged event(s);"
+            " %d byte(s) remain -- catching up, no action needed.",
+            report.destination,
+            report.events_delivered,
+            report.backlog_bytes_remaining,
+        )
+        return
+
+    log.info(
+        "context-intelligence %s: delivered %d backlogged event(s) -- backlog clear.",
+        report.destination,
+        report.events_delivered,
+    )
+
+
+def schedule_backlog_sweeps(resolver: Any, dispatchers: list[Any]) -> list[Any]:
+    """Start one background catch-up sweep per active destination.
+
+    Fire-and-forget by contract: event delivery is best-effort and must never
+    block or slow a session. The tasks are cancelled during cleanup, and whatever
+    the watermark says at that moment is simply where the next session resumes.
+    """
+    from .handlers.backlog_sweep import BacklogSweeper, SweepBounds
+
+    if not resolver.sweep_enabled:
+        log.debug("context-intelligence: backlog sweep disabled by config")
+        return []
+
+    bounds = SweepBounds(
+        max_events=resolver.sweep_max_events,
+        max_age_hours=resolver.sweep_max_age_hours,
+        max_sessions=resolver.sweep_max_sessions,
+        concurrency=resolver.sweep_concurrency,
+    )
+    project_dir = resolver.base_path / resolver.project_slug
+
+    tasks: list[Any] = []
+    for dispatcher in dispatchers:
+        sweeper: Any = BacklogSweeper(
+            destination=dispatcher.name,
+            url=dispatcher.url,
+            # Reuse the dispatcher's own strategy so a sweep cannot acquire a
+            # second Entra token or diverge from live-path auth.
+            auth=dispatcher.auth_strategy,
+            project_dir=project_dir,
+            bounds=bounds,
+            timeout=resolver.dispatch_timeout,
+        )
+
+        async def _run(s: Any = sweeper) -> None:
+            try:
+                _describe_sweep(await s.run())
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                log.debug("context-intelligence backlog sweep failed", exc_info=True)
+
+        task = asyncio.create_task(_run())
+        task.add_done_callback(_retrieve_sweep_exception)
+        tasks.append(task)
+    return tasks
+
+
+def _retrieve_sweep_exception(task: Any) -> None:
+    """Retrieve a finished sweep's exception so asyncio never warns about it."""
+    if task.cancelled():
+        return
+    exc = task.exception()
+    if exc is not None:
+        log.debug("context-intelligence backlog sweep raised", exc_info=exc)
 
 
 def _read_destinations_from_settings(settings_path: str) -> dict[str, Any]:
@@ -350,6 +484,8 @@ async def mount(
         "logging_handler": logging_handler,
         "resolver": resolver,
         "destinations": all_destinations,
+        # Background catch-up sweeps, owned here so cleanup() can cancel them.
+        "sweep_tasks": [],
     }
     coordinator.register_capability("context_intelligence._hook_state", _hook_state)
 
@@ -468,6 +604,11 @@ async def mount(
     )
 
     async def cleanup() -> None:
+        # Cancel catch-up sweeps FIRST. Delivery is best-effort and must never
+        # slow process exit; the watermark already on disk is where the next
+        # session resumes from.
+        for task in _hook_state.get("sweep_tasks") or []:
+            task.cancel()
         try:
             await logging_handler.close()
         except Exception:

@@ -92,9 +92,19 @@ overrides:
   **healthy**, just slower than you produce.
 - **Do NOT** just raise `close_drain_timeout`: no drain window empties a 150-deep queue,
   and you will only lengthen shutdown.
-- **Fix today:** replay with `context-intelligence-upload` (the `idempotency_key` on every
-  payload makes replay duplicate-free). Raising `dispatch_queue_capacity` converts
-  *overflow drops* into *queued* events — it does not make them deliver.
+- **Fix — now automatic.** The next session's backlog sweep replays this from the
+  delivery watermark with no action from you. Confirm it is working by reading
+  `<session_dir>/delivery/<destination>.json`: `offset` should be climbing toward the
+  size of `events.jsonl`, with `last_outcome: delivered`. The signals that mean
+  something is genuinely wrong are `last_outcome: no_progress`, a non-null
+  `last_error`, or a rising `consecutive_sweeps_without_progress`.
+- Replay is duplicate-free because the server MERGEs on a deterministic `node_id`
+  under a `(node_id, workspace)` uniqueness constraint — not because of
+  `idempotency_key`, which is an in-memory 7-day cache that a restart clears.
+- Events older than `sweep_max_age_hours` (default 48) are **not** swept; they are
+  reported, and need `context-intelligence-upload` or `context-intelligence-recover`.
+- Raising `dispatch_queue_capacity` converts *overflow drops* into *queued* events —
+  it does not make them deliver.
 
 To see which case you are in across all sessions, aggregate the durable records:
 
@@ -261,7 +271,9 @@ you want to backfill a destination that was down.
 
 | You see… | Do this |
 |----------|---------|
-| `shutdown: N undelivered event(s)` | Read `queued=`. Small → raise `close_drain_timeout`. Deep / `overflow-dropped>0` → throughput, not the drain window; replay with `context-intelligence-upload`. Safe in `events.jsonl` either way. |
+| `shutdown: N undelivered event(s)` | Read `queued=`. Small → raise `close_drain_timeout`. Deep / `overflow-dropped>0` → throughput, not the drain window; the next session's sweep now recovers it automatically (confirm via the watermark's `offset`/`last_outcome`). Safe in `events.jsonl` either way. |
+| `N session(s) older than the sweep window` | Those events won't be swept automatically — recover with `context-intelligence-upload` or `context-intelligence-recover`. |
+| Session exit took a couple seconds longer | Normal when a sweep was mid-delivery at teardown, bounded by `sweep_close_grace_seconds` (default `2.0`). Set `0.0` for immediate exit. |
 | `unreachable, retrying with backoff` | One-off → ignore. Sustained → raise `dispatch_read_timeout`, check the path. |
 | `still rejecting auth (HTTP 401)` | Probe the key (`422` = OK); check `auth_mode`; if key was rotated, **restart** the session. |
 | A key was rotated mid-session | Restart the session — the old key is cached until then. |
