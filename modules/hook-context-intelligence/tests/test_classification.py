@@ -134,9 +134,9 @@ class TestDelivered:
 
 
 class TestTransientHttp:
-    """HTTP 5xx, 429, and 401 return _TRANSIENT."""
+    """HTTP 5xx, 429, 401, and 408 return _TRANSIENT."""
 
-    @pytest.mark.parametrize("status_code", [401, 429, 500, 502, 503])
+    @pytest.mark.parametrize("status_code", [401, 408, 429, 500, 502, 503])
     async def test_transient_status_codes(self, status_code: int) -> None:
         d = _dispatcher()
         d._client = _mock_client_for_response(_mock_response(status_code))
@@ -145,7 +145,7 @@ class TestTransientHttp:
 
         assert result == _TRANSIENT
 
-    @pytest.mark.parametrize("status_code", [401, 429, 500, 502, 503])
+    @pytest.mark.parametrize("status_code", [401, 408, 429, 500, 502, 503])
     async def test_transient_sets_last_status(self, status_code: int) -> None:
         d = _dispatcher()
         d._client = _mock_client_for_response(_mock_response(status_code))
@@ -153,6 +153,18 @@ class TestTransientHttp:
         await d._post("test:event", {"session_id": "s1"})
 
         assert d._last_status == status_code
+
+    async def test_408_is_transient_not_permanent(self) -> None:
+        """Issue #431 D1: 408 Request Timeout is transient by definition and must
+        be retried, not skipped. Regression guard against it falling through the
+        transient check into the _PERMANENT catch-all (as it did before the fix)."""
+        d = _dispatcher()
+        d._client = _mock_client_for_response(_mock_response(408))
+
+        result = await d._post("test:event", {"session_id": "s1"})
+
+        assert result == _TRANSIENT
+        assert result != _PERMANENT
 
 
 # ---------------------------------------------------------------------------

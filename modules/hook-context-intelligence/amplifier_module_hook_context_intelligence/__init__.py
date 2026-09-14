@@ -48,6 +48,7 @@ from __future__ import annotations
 import fnmatch
 import logging
 from collections.abc import Callable, Coroutine
+from datetime import datetime, timezone
 from typing import Any
 
 log = logging.getLogger(__name__)
@@ -93,7 +94,7 @@ async def apply_active_dispatchers(
     """
     from .config_resolver import Destination
     from .fanout import normalize_match_key, select_active
-    from .handlers.logging_handler import _DestinationDispatcher
+    from .handlers.logging_handler import _DestinationDispatcher, _write_forwarding_record
 
     active: dict[str, Destination] = {}
     match_key: str = ""
@@ -109,29 +110,56 @@ async def apply_active_dispatchers(
             match_key = normalize_match_key(working_dir)
             active = select_active(destinations, match_key)
 
-    dispatchers = [
-        _DestinationDispatcher(
-            name=d.name,
-            url=d.url,
-            api_key=d.api_key,
-            workspace=resolver.workspace,
-            working_dir=resolver.working_dir,
-            dispatch_timeout=resolver.dispatch_timeout,
-            read_timeout=resolver.dispatch_read_timeout,
-            connect_timeout=resolver.dispatch_connect_timeout,
-            failure_threshold=resolver.dispatch_failure_threshold,
-            queue_capacity=resolver.dispatch_queue_capacity,
-            close_drain_timeout=resolver.close_drain_timeout,
-            backoff_initial=resolver.dispatch_backoff_initial,
-            backoff_max=resolver.dispatch_backoff_max,
-            backoff_jitter=resolver.dispatch_backoff_jitter,
-            storage_path=str(resolver.base_path),
-            forwarding_log_dir=resolver.forwarding_log_dir,
-            auth_mode=d.auth_mode,
-            auth_resource=d.auth_resource,
-        )
-        for d in active.values()
-    ]
+    # Build one dispatcher per ACTIVE destination. Each construction is isolated:
+    # _DestinationDispatcher.__init__ builds auth eagerly, and an environmental
+    # auth failure for one destination must not abort local JSONL capture or any
+    # other healthy destination.
+    dispatchers: list[_DestinationDispatcher] = []
+    for d in active.values():
+        try:
+            dispatchers.append(
+                _DestinationDispatcher(
+                    name=d.name,
+                    url=d.url,
+                    api_key=d.api_key,
+                    workspace=resolver.workspace,
+                    working_dir=resolver.working_dir,
+                    dispatch_timeout=resolver.dispatch_timeout,
+                    read_timeout=resolver.dispatch_read_timeout,
+                    connect_timeout=resolver.dispatch_connect_timeout,
+                    failure_threshold=resolver.dispatch_failure_threshold,
+                    queue_capacity=resolver.dispatch_queue_capacity,
+                    close_drain_timeout=resolver.close_drain_timeout,
+                    backoff_initial=resolver.dispatch_backoff_initial,
+                    backoff_max=resolver.dispatch_backoff_max,
+                    backoff_jitter=resolver.dispatch_backoff_jitter,
+                    storage_path=str(resolver.base_path),
+                    forwarding_log_dir=resolver.forwarding_log_dir,
+                    auth_mode=d.auth_mode,
+                    auth_resource=d.auth_resource,
+                )
+            )
+        except Exception as exc:
+            _write_forwarding_record(
+                resolver.forwarding_log_dir,
+                {
+                    "ts": datetime.now(timezone.utc).isoformat(),
+                    "destination": d.name,
+                    "url": d.url,
+                    "kind": "dispatcher_construction_failed",
+                    "http_status": None,
+                    "session_id": "",
+                    "workspace": resolver.workspace or "",
+                    "detail": (f"dispatcher construction failed: {type(exc).__name__}: {exc}"),
+                },
+            )
+            log.error(
+                "context-intelligence: destination %r failed to construct its dispatcher "
+                "-- dispatch disabled for this destination only; local JSONL and any "
+                "other configured destinations are unaffected.",
+                d.name,
+                exc_info=True,
+            )
     await logging_handler.set_dispatchers(dispatchers)
 
     if not destinations:

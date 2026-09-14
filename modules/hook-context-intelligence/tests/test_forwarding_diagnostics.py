@@ -17,7 +17,9 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from amplifier_module_hook_context_intelligence.handlers.logging_handler import (
+    _TRANSIENT,
     _DestinationDispatcher,
+    LoggingHandler,
     _write_forwarding_record,
 )
 
@@ -63,6 +65,21 @@ def _dispatcher(**overrides: Any) -> _DestinationDispatcher:
 
 def _today_utc() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%d")
+
+
+class _FakeResolver:
+    """Minimal resolver for LoggingHandler (mirrors test_logging_handler_fanout.py)."""
+
+    def __init__(self, base_path: Path, project_slug: str = "proj") -> None:
+        self.base_path = base_path
+        self.project_slug = project_slug
+        self.workspace: str | None = "ws"
+        self.parent_id: str = ""
+        self.resolve_instance_id: str = ""
+        self.working_dir: str = ""
+
+    def session_dir(self, session_id: str) -> Path:
+        return self.base_path / self.project_slug / "sessions" / session_id / "context-intelligence"
 
 
 # ---------------------------------------------------------------------------
@@ -223,4 +240,313 @@ class TestDispatcherForwardingSink:
         records = [json.loads(line) for line in log_file.read_text().splitlines()]
         kinds = {r["kind"] for r in records}
         assert "breaker_open" not in kinds, f"breaker must not have opened: {kinds}"
+
+
+class TestAuthTokenUnavailableDurableRecord:
+    """Issue #431 D2: the durable auth_token_unavailable record must carry the
+    exception TYPE and MESSAGE (not a byte-identical constant), and distinct
+    failures must not be collapsed by the console rate-limit.
+
+    Drives the auth-strategy header-production failure path directly: a mocked
+    _strategy.headers() that raises is exactly what an expired `az login` /
+    broken credential chain produces at runtime (static ApiKeyAuth never raises,
+    so this path is entra-only).
+    """
+
+    async def test_record_carries_exception_type_and_message(self, tmp_path: Path) -> None:
+        d = _dispatcher(forwarding_log_dir=tmp_path)
+        d._client = MagicMock()  # headers() raises before any request is issued
+        d._strategy = MagicMock()
+        d._strategy.headers.side_effect = RuntimeError("token expired: refresh needed")
+
+        with patch(LOGGER_PATH):
+            result = await d._post("evt:x", {"session_id": "sess-9"})
+
+        assert result == _TRANSIENT  # auth failure stays on the retry path
+        log_file = tmp_path / f"forwarding-{_today_utc()}.jsonl"
+        records = [json.loads(line) for line in log_file.read_text().splitlines()]
+        rec = next(r for r in records if r["kind"] == "auth_token_unavailable")
+        # http_status None distinguishes this from a real HTTP 401 auth_failure.
+        assert rec["http_status"] is None
+        assert "RuntimeError" in rec["detail"], f"exception type missing: {rec['detail']!r}"
+        assert "token expired: refresh needed" in rec["detail"], (
+            f"exception message missing: {rec['detail']!r}"
+        )
+
+    async def test_distinct_failures_each_recorded_not_collapsed(self, tmp_path: Path) -> None:
+        """Two distinct auth faults in quick succession (within the console
+        rate-limit window) must each produce their own durable record -- the
+        durable write is no longer gated by the rate-limit branch."""
+        d = _dispatcher(forwarding_log_dir=tmp_path)
+        d._client = MagicMock()
+        d._strategy = MagicMock()
+        d._strategy.headers.side_effect = [
+            RuntimeError("expired token"),
+            ValueError("wrong audience"),
+        ]
+
+        with patch(LOGGER_PATH):
+            await d._post("e1", {"session_id": "s1"})
+            await d._post("e2", {"session_id": "s1"})
+
+        log_file = tmp_path / f"forwarding-{_today_utc()}.jsonl"
+        records = [json.loads(line) for line in log_file.read_text().splitlines()]
+        auth_recs = [r for r in records if r["kind"] == "auth_token_unavailable"]
+        assert len(auth_recs) == 2, f"expected 2 distinct durable records, got {len(auth_recs)}"
+        blob = " || ".join(r["detail"] for r in auth_recs)
+        assert "RuntimeError" in blob and "expired token" in blob
+        assert "ValueError" in blob and "wrong audience" in blob
+
+
+class TestDeliveryHeartbeat:
+    """Issue #431 D3: a destination that delivers successfully must emit a
+    positive `delivery_ok` liveness record once per session, so an EMPTY
+    forwarding log unambiguously means "no delivery happened" rather than
+    "possibly a silent outage". The sink otherwise only ever writes on problems.
+    """
+
+    async def test_first_successful_delivery_writes_heartbeat(self, tmp_path: Path) -> None:
+        d = _dispatcher(forwarding_log_dir=tmp_path)
+        d._client = _mock_client([_make_response(200)])
+        d._sleep_backoff = AsyncMock()  # type: ignore[method-assign]
+
+        with patch(LOGGER_PATH):
+            d.enqueue("e1", {"session_id": "sess-1"})
+            await asyncio.wait_for(d._queue.join(), timeout=2.0)
+
+        log_file = tmp_path / f"forwarding-{_today_utc()}.jsonl"
+        assert log_file.exists(), "a healthy delivery must still write a liveness record"
+        records = [json.loads(line) for line in log_file.read_text().splitlines()]
+        heartbeats = [r for r in records if r["kind"] == "delivery_ok"]
+        assert len(heartbeats) == 1, f"expected exactly one delivery_ok record, got {heartbeats}"
+        assert heartbeats[0]["destination"] == "test-dest"
         await d.close()
+
+    async def test_heartbeat_emitted_only_once_per_session(self, tmp_path: Path) -> None:
+        """Multiple successful deliveries in one session produce exactly ONE
+        heartbeat -- the happy path is not flooded with liveness records."""
+        d = _dispatcher(forwarding_log_dir=tmp_path)
+        d._client = _mock_client([_make_response(200)] * 5)
+        d._sleep_backoff = AsyncMock()  # type: ignore[method-assign]
+
+        with patch(LOGGER_PATH):
+            for i in range(5):
+                d.enqueue(f"e{i}", {"session_id": "sess-1"})
+            await asyncio.wait_for(d._queue.join(), timeout=3.0)
+
+        log_file = tmp_path / f"forwarding-{_today_utc()}.jsonl"
+        records = [json.loads(line) for line in log_file.read_text().splitlines()]
+        heartbeats = [r for r in records if r["kind"] == "delivery_ok"]
+        assert len(heartbeats) == 1, (
+            f"heartbeat must fire at most once per session, got {len(heartbeats)}"
+        )
+        await d.close()
+
+    async def test_no_delivery_no_heartbeat(self, tmp_path: Path) -> None:
+        """A destination that never delivers writes no delivery_ok record -- the
+        empty/heartbeat-less case is what makes the signal meaningful."""
+        d = _dispatcher(forwarding_log_dir=tmp_path, failure_threshold=1)
+        d._client = _mock_client([_make_response(403)])  # permanent skip, never delivered
+        d._sleep_backoff = AsyncMock()  # type: ignore[method-assign]
+
+        with patch(LOGGER_PATH):
+            d.enqueue("e1", {"session_id": "sess-1"})
+            await asyncio.wait_for(d._queue.join(), timeout=2.0)
+
+        log_file = tmp_path / f"forwarding-{_today_utc()}.jsonl"
+        records = (
+            [json.loads(line) for line in log_file.read_text().splitlines()]
+            if log_file.exists()
+            else []
+        )
+        assert not [r for r in records if r["kind"] == "delivery_ok"], (
+            "no successful delivery must mean no delivery_ok heartbeat"
+        )
+        await d.close()
+        await d.close()
+
+
+class TestAuthRecordBoundedPerEpisode:
+    """PR #95 review fix: the durable `auth_token_unavailable` record must be
+    bounded to ONE RECORD PER DISTINCT EXCEPTION TYPE PER FAILURE EPISODE, not
+    one per failed event -- and NOT collapsed all the way down to one record
+    per episode regardless of type (see
+    ``TestAuthTokenUnavailableDurableRecord.test_distinct_failures_each_recorded_not_collapsed``,
+    which pins the "distinct types must each still get a record" half of this
+    contract).
+
+    A sustained token-production outage drains the whole queue at
+    event-loop speed: hard outcomes (see ``_is_hard_outcome``) call
+    ``task_done()`` and advance to the next queued event WITHOUT ever
+    reaching ``_sleep_backoff()``, so nothing throttles how often
+    ``_post`` is attempted. Without this bound, that would write one durable
+    record per queued event -- but bounding all the way down to one record
+    per episode (regardless of type) would silently merge genuinely distinct
+    faults, which is exactly the diagnosability regression D2 of this PR was
+    written to fix. Keying on distinct exception TYPE (not message -- azure
+    identity messages embed correlation IDs/timestamps that differ per
+    attempt) is what reconciles the two.
+    """
+
+    async def test_sustained_auth_failure_writes_one_record_per_episode(
+        self, tmp_path: Path
+    ) -> None:
+        """>= 50 queued events, headers() raising on EVERY call: exactly one
+        durable auth_token_unavailable record, not one per event -- and the
+        single record still carries the real exception TYPE and MESSAGE, and
+        every event is still processed (the bound must not change delivery
+        behavior)."""
+        num_events = 60
+        d = _dispatcher(forwarding_log_dir=tmp_path)
+        d._client = MagicMock()  # headers() raises before any request is issued
+        d._strategy = MagicMock()
+        d._strategy.headers.side_effect = RuntimeError(
+            "sustained token outage: credential unavailable"
+        )
+        d._sleep_backoff = AsyncMock()  # type: ignore[method-assign]
+
+        with patch(LOGGER_PATH):
+            for i in range(num_events):
+                d.enqueue(f"e{i}", {"session_id": f"sess-{i}"})
+            await asyncio.wait_for(d._queue.join(), timeout=5.0)
+
+        # All queued events were still processed -- the bound must not change
+        # delivery/drain behavior.
+        assert d._queue.qsize() == 0
+
+        log_file = tmp_path / f"forwarding-{_today_utc()}.jsonl"
+        assert log_file.exists()
+        records = [json.loads(line) for line in log_file.read_text().splitlines()]
+        auth_recs = [r for r in records if r["kind"] == "auth_token_unavailable"]
+        assert len(auth_recs) == 1, (
+            f"expected exactly 1 record for {num_events} sustained failures, got {len(auth_recs)}"
+        )
+        # Diagnosability must not be lost by the bound: the single surviving
+        # record still names the exception type and message.
+        assert "RuntimeError" in auth_recs[0]["detail"]
+        assert "sustained token outage: credential unavailable" in auth_recs[0]["detail"]
+
+        await d.close()
+
+    async def test_new_episode_after_recovery_gets_its_own_record(self, tmp_path: Path) -> None:
+        """headers() fails, then succeeds (delivery ok), then fails again:
+        exactly 2 auth_token_unavailable records -- the episode flag must
+        reset on recovery so a LATER, distinct outage is not silently
+        swallowed by the one-per-episode bound."""
+        d = _dispatcher(forwarding_log_dir=tmp_path)
+        d._client = _mock_client([_make_response(200)])
+        d._strategy = MagicMock()
+        d._strategy.headers.side_effect = [
+            RuntimeError("first outage"),
+            {"Authorization": "Bearer ok"},
+            RuntimeError("second outage"),
+        ]
+        d._sleep_backoff = AsyncMock()  # type: ignore[method-assign]
+
+        with patch(LOGGER_PATH):
+            outcome1 = await d._post("e1", {"session_id": "s1"})
+            outcome2 = await d._post("e2", {"session_id": "s1"})
+            outcome3 = await d._post("e3", {"session_id": "s1"})
+
+        assert outcome1 == _TRANSIENT
+        assert outcome2 == "delivered"
+        assert outcome3 == _TRANSIENT
+
+        log_file = tmp_path / f"forwarding-{_today_utc()}.jsonl"
+        records = [json.loads(line) for line in log_file.read_text().splitlines()]
+        auth_recs = [r for r in records if r["kind"] == "auth_token_unavailable"]
+        assert len(auth_recs) == 2, (
+            f"expected 2 distinct episode records (outage, recovery, outage), got {len(auth_recs)}"
+        )
+        blob = " || ".join(r["detail"] for r in auth_recs)
+        assert "first outage" in blob
+        assert "second outage" in blob
+
+    async def test_same_episode_distinct_types_are_bounded_by_type_not_event_count(
+        self, tmp_path: Path
+    ) -> None:
+        """>= 50 queued events within ONE episode, alternating between exactly
+        2 distinct exception types: exactly 2 durable records -- pinning that
+        the bound is by DISTINCT TYPE COUNT, not by event count (a naive
+        one-per-episode bound would collapse this to 1; an unbounded write
+        would produce 50+)."""
+        num_events = 60
+        d = _dispatcher(forwarding_log_dir=tmp_path)
+        d._client = MagicMock()  # headers() raises before any request is issued
+        d._strategy = MagicMock()
+        d._strategy.headers.side_effect = [
+            RuntimeError("credential unavailable") if i % 2 == 0 else ValueError("wrong audience")
+            for i in range(num_events)
+        ]
+        d._sleep_backoff = AsyncMock()  # type: ignore[method-assign]
+
+        with patch(LOGGER_PATH):
+            for i in range(num_events):
+                d.enqueue(f"e{i}", {"session_id": f"sess-{i}"})
+            await asyncio.wait_for(d._queue.join(), timeout=5.0)
+
+        assert d._queue.qsize() == 0
+
+        log_file = tmp_path / f"forwarding-{_today_utc()}.jsonl"
+        assert log_file.exists()
+        records = [json.loads(line) for line in log_file.read_text().splitlines()]
+        auth_recs = [r for r in records if r["kind"] == "auth_token_unavailable"]
+        assert len(auth_recs) == 2, (
+            f"expected exactly 2 records (2 distinct types) for {num_events} alternating "
+            f"failures, got {len(auth_recs)}"
+        )
+        blob = " || ".join(r["detail"] for r in auth_recs)
+        assert "RuntimeError" in blob and "credential unavailable" in blob
+        assert "ValueError" in blob and "wrong audience" in blob
+
+        await d.close()
+
+
+class TestHeartbeatSurvivesDispatcherReplacement:
+    """PR #95 review fix: the `delivery_ok` heartbeat's one-per-session
+    contract must survive ``LoggingHandler.set_dispatchers`` being re-run
+    mid-session (the live filter-reload path), which closes old dispatcher
+    instances and constructs brand-new ones.
+    """
+
+    async def test_heartbeat_not_duplicated_across_reload(self, tmp_path: Path) -> None:
+        handler = LoggingHandler(_FakeResolver(tmp_path))
+
+        d1 = _dispatcher(name="dest-a", forwarding_log_dir=tmp_path)
+        await handler.set_dispatchers([d1])
+        d1._emit_delivery_heartbeat()  # simulates first successful delivery
+
+        # Simulate a live filter reload: a brand-new dispatcher instance for
+        # the SAME destination name replaces the old one.
+        d2 = _dispatcher(name="dest-a", forwarding_log_dir=tmp_path)
+        await handler.set_dispatchers([d2])
+        assert d2._heartbeat_emitted is True, (
+            "heartbeat flag must be carried forward to the replacement by name"
+        )
+        d2._emit_delivery_heartbeat()  # would-be second delivery_ok if unguarded
+
+        log_file = tmp_path / f"forwarding-{_today_utc()}.jsonl"
+        records = [json.loads(line) for line in log_file.read_text().splitlines()]
+        heartbeats_a = [
+            r for r in records if r["kind"] == "delivery_ok" and r["destination"] == "dest-a"
+        ]
+        assert len(heartbeats_a) == 1, (
+            f"expected exactly one delivery_ok for dest-a across the reload, got {heartbeats_a}"
+        )
+
+        # A differently-named destination is NOT suppressed -- the carry-forward
+        # is keyed by name, not a blanket suppression.
+        d3 = _dispatcher(name="dest-b", forwarding_log_dir=tmp_path)
+        await handler.set_dispatchers([d3])
+        assert d3._heartbeat_emitted is False
+        d3._emit_delivery_heartbeat()
+
+        records = [json.loads(line) for line in log_file.read_text().splitlines()]
+        heartbeats_b = [
+            r for r in records if r["kind"] == "delivery_ok" and r["destination"] == "dest-b"
+        ]
+        assert len(heartbeats_b) == 1, (
+            f"a differently-named destination must still get its own heartbeat, got {heartbeats_b}"
+        )
+
+        await handler.close()

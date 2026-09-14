@@ -139,10 +139,10 @@ _DEGRADED_ESCALATION_SECONDS: float = 300.0
 #: Returned by _post when the event was successfully delivered (HTTP < 400).
 _DELIVERED: str = "delivered"
 #: Returned by _post when delivery should be retried with backoff (network
-#: errors, HTTP 5xx, HTTP 429, HTTP 401).
+#: errors, HTTP 5xx, HTTP 429, HTTP 408, HTTP 401).
 _TRANSIENT: str = "transient"
 #: Returned by _post when the event must be skipped permanently (HTTP 4xx
-#: other than 401/429). This is a RETRY-CLASSIFICATION bucket only -- it does
+#: other than 401/408/429). This is a RETRY-CLASSIFICATION bucket only -- it does
 #: NOT imply a single cause. The cause varies by status and is asserted only
 #: where actually known: 400/413/422 = malformed/unprocessable payload,
 #: 403 = forbidden (credentials), 404/410 = endpoint not found/gone (routing
@@ -161,7 +161,7 @@ def _classify_http_outcome(status_code: int) -> str:
     - ``_DELIVERED``:  status < 300 (2xx success)
     - ``_PERMANENT``:  300 <= status < 400 (3xx redirect — deliberately not following;
       authenticated POST redirects risk bearer-token leakage to another host)
-    - ``_TRANSIENT``:  401, 429, or any 5xx (retry forever w/ backoff)
+    - ``_TRANSIENT``:  401, 408, 429, or any 5xx (retry forever w/ backoff)
     - ``_PERMANENT``:  403, 400, 413, 422, 404, 410, and any other 4xx (loud skip)
 
     This is a RETRY decision only — every status below is uniformly non-retryable.
@@ -178,11 +178,15 @@ def _classify_http_outcome(status_code: int) -> str:
         # Do NOT follow — silently following an authenticated POST redirect risks
         # leaking the bearer token to a different host.
         return _PERMANENT
-    if status_code == 401 or status_code == 429 or status_code >= 500:
+    if status_code == 401 or status_code == 408 or status_code == 429 or status_code >= 500:
+        # 408 (Request Timeout) is transient by definition — the request did not
+        # arrive/complete in time; retrying with backoff is the correct response,
+        # exactly like a 5xx or a 429. It is enumerated explicitly here rather than
+        # left to fall through to the permanent catch-all below.
         return _TRANSIENT
     # 403, 400, 413, 422, 404, 410, and any other 4xx — all non-retryable, but
     # NOT all "malformed"; see the message-layer branches in _worker for the
-    # per-status cause.
+    # per-status cause. (408 is deliberately NOT here — see the transient set above.)
     return _PERMANENT
 
 
@@ -396,6 +400,60 @@ class _DestinationDispatcher:
         # attempt so a stale value can never be inherited by an unrelated
         # outcome.
         self._auth_token_failed: bool = False
+        # Scopes the durable `auth_token_unavailable` record to ONE RECORD PER
+        # DISTINCT EXCEPTION TYPE PER FAILURE EPISODE (a contiguous run of
+        # headers() failures), not one per failed event. Holds the exception
+        # TYPE NAMEs (``type(exc).__name__``) already recorded for the CURRENT
+        # episode; _post adds to it the first time each type is seen and skips
+        # the durable write for repeats. Cleared the moment headers() succeeds
+        # again (see _post), so the NEXT outage starts with a clean set.
+        #
+        # Keyed on TYPE NAME ONLY, deliberately never on the exception message:
+        # azure-identity failure messages routinely embed correlation IDs,
+        # timestamps, or token expiry times that differ on every single
+        # attempt, so keying on the message would make nearly every failure
+        # "distinct" and reintroduce the unbounded per-event write this bound
+        # exists to prevent. Exception types reachable from this one call site
+        # are a small, finite set, so this bound holds in practice to roughly
+        # 1-3 records per episode -- while still preserving the PR's
+        # diagnosability goal: a genuinely different fault (e.g. a masked
+        # TypeError appearing alongside an expected CredentialUnavailableError)
+        # still gets its own durable record instead of being silently merged
+        # into the first one seen.
+        #
+        # Distinct from _auth_token_failed, which is reset every attempt and
+        # cannot be reused here as the episode-scoped record of "already seen"
+        # types.
+        self._auth_recorded_types: set[str] = set()
+        # Set True once the first successful delivery of this session emits a
+        # positive `delivery_ok` liveness record (D3). One heartbeat per
+        # dispatcher lifetime (per session); routine subsequent deliveries stay
+        # silent so the diagnostics file is not flooded on the happy path.
+        self._heartbeat_emitted: bool = False
+
+    def _emit_delivery_heartbeat(self) -> None:
+        """Emit a one-time positive liveness record on first successful delivery.
+
+        The forwarding-diagnostics sink otherwise only ever writes on a PROBLEM
+        (breaker_open, permanent_reject, auth_token_unavailable, ...), so an empty
+        log is structurally ambiguous between "healthy and delivering", "never
+        started", and "no sessions ran". A single `delivery_ok` record per session,
+        written the first time a destination actually delivers, disambiguates the
+        empty-log case: no record means no delivery happened, not a silent outage.
+
+        Guarantee: at most ONE `delivery_ok` record per destination NAME per
+        session -- not per dispatcher instance. The flag this method guards
+        (`self._heartbeat_emitted`) is carried forward across dispatcher
+        replacement by ``LoggingHandler.set_dispatchers`` (keyed by destination
+        name), so a live filter reload mid-session -- which closes and replaces
+        dispatcher instances -- does not reset the count and cannot produce a
+        second heartbeat for the same destination. Best-effort; never raises
+        into the delivery path.
+        """
+        if self._heartbeat_emitted:
+            return
+        self._heartbeat_emitted = True
+        self._record_forwarding_issue("delivery_ok", "first successful delivery this session")
 
     def _ensure_worker(self) -> None:
         if self._worker_task is None or self._worker_task.done():
@@ -688,7 +746,7 @@ class _DestinationDispatcher:
 
         Holds the in-flight event in ``self._current`` during retries so the
         supervisor (Task 6) can inspect or reassert it. On ``_TRANSIENT``
-        outcomes (network errors, HTTP 5xx/429/401) the SAME event is retried
+        outcomes (network errors, HTTP 5xx/429/408/401) the SAME event is retried
         after a capped full-jitter backoff sleep; ``_consecutive_failures``
         grows the exponent each time. On ``_DELIVERED`` or ``_PERMANENT`` the
         counter resets, ``task_done()`` is called, ``_current`` is cleared, and
@@ -726,6 +784,7 @@ class _DestinationDispatcher:
                     outcome = await self._post(event, payload_data)
                     if outcome == _DELIVERED:
                         self._breaker_record_delivered()
+                        self._emit_delivery_heartbeat()
                         self._degraded_warned = False
                         self._degraded_since = None
                     elif outcome == _TRANSIENT and self._is_hard_outcome():
@@ -860,6 +919,7 @@ class _DestinationDispatcher:
                     # _DELIVERED or _PERMANENT — advance to next event
                     if outcome == _DELIVERED:
                         self._breaker_record_delivered()
+                        self._emit_delivery_heartbeat()
                         if self._degraded_warned:
                             logger.info(
                                 "Reconnected to %s — resuming delivery.",
@@ -1008,7 +1068,7 @@ class _DestinationDispatcher:
             Network-level httpx errors -- httpx.NetworkError (ConnectError, ReadError,
             WriteError, CloseError), httpx.TimeoutException (ConnectTimeout, ReadTimeout,
             WriteTimeout, PoolTimeout), or httpx.RemoteProtocolError -- or HTTP
-            401/429/5xx — caller should retry with backoff.
+            401/429/408/5xx — caller should retry with backoff.
         _PERMANENT
             HTTP 403, 404/410, 400/413/422, or any other 4xx — event cannot be
             delivered; caller should log loudly and skip. This is a uniform
@@ -1049,6 +1109,11 @@ class _DestinationDispatcher:
         # Per-request header: Entra SDK returns cached token and refreshes near expiry.
         try:
             auth_headers = self._strategy.headers()
+            # Headers succeeded: this failure episode (if any) is over --
+            # clear the set of exception types already recorded this episode
+            # so a LATER, distinct outage starts clean and gets its own fresh
+            # auth_token_unavailable record(s) (see the except block below).
+            self._auth_recorded_types.clear()
         except Exception as exc:
             # Auth-strategy failure producing the Authorization header -- e.g. an
             # expired `az login` causes EntraTokenAuth.headers() -> get_token() to
@@ -1088,6 +1153,50 @@ class _DestinationDispatcher:
             # credential problem instead of retrying forever in silence.
             self._last_status = None
             self._auth_token_failed = True
+            # Durable diagnostic record: carries the exception TYPE and MESSAGE so
+            # each distinct fault -- expired token, wrong audience, broker
+            # unavailable, a masked TypeError -- is individually diagnosable in the
+            # forwarding JSONL (a hardcoded, byte-identical string was the old,
+            # uninformative behavior).
+            #
+            # BOUNDED TO ONE RECORD PER DISTINCT EXCEPTION TYPE PER FAILURE
+            # EPISODE (self._auth_recorded_types), NOT one per failed event. It
+            # is tempting to assume the worker's dispatch backoff throttles how
+            # often this is reached -- it does NOT, for this specific path: a
+            # headers() failure makes _post return _TRANSIENT with
+            # self._auth_token_failed set, which _is_hard_outcome() classifies
+            # HARD; hard outcomes call task_done(), clear _current, and `break`
+            # straight to the NEXT queued event (see _worker) WITHOUT ever
+            # reaching _sleep_backoff(). During a sustained token outage the
+            # worker therefore drains the whole queue at event-loop speed --
+            # one record per queued event, with no dedupe or size cap on the
+            # diagnostics file -- unless bounded here.
+            #
+            # Keyed on the exception TYPE NAME only, never the message:
+            # azure-identity failure messages routinely embed correlation IDs,
+            # timestamps, or token expiry times that differ on every attempt,
+            # so keying on the message would make nearly every failure
+            # "distinct" and reintroduce the unbounded per-event write. Type
+            # names are a small, finite set for this call site, so this bound
+            # holds in practice to roughly 1-3 records per episode while still
+            # preserving the diagnosability goal: a genuinely different fault
+            # (e.g. a masked TypeError alongside an expected
+            # CredentialUnavailableError) still gets its own durable record
+            # instead of being silently merged into the first type seen.
+            # self._auth_recorded_types is cleared the moment headers()
+            # succeeds again (see above), so a later, distinct outage starts
+            # with a clean set. Console logging (below) remains separately
+            # rate-limited by _LOG_RATE_LIMIT_SECONDS regardless of this bound.
+            exc_type = type(exc).__name__
+            if exc_type not in self._auth_recorded_types:
+                self._auth_recorded_types.add(exc_type)
+                self._record_forwarding_issue(
+                    "auth_token_unavailable",
+                    f"auth token production failed: {type(exc).__name__}: {exc}",
+                )
+            # Console logging (WARNING + DEBUG traceback) stays rate-limited to avoid
+            # spamming the log during a sustained outage; the durable record above is
+            # the diagnostic of record and is intentionally not throttled.
             now = time.monotonic()
             if now - self._last_headers_error_log >= _LOG_RATE_LIMIT_SECONDS:
                 self._last_headers_error_log = now
@@ -1098,9 +1207,6 @@ class _DestinationDispatcher:
                     self._name,
                     self._url,
                     type(exc).__name__,
-                )
-                self._record_forwarding_issue(
-                    "auth_token_unavailable", "auth token production failed"
                 )
                 logger.debug(
                     "%s auth-header production failed: %r",
@@ -1311,8 +1417,36 @@ class LoggingHandler:
         Closes any previously-installed dispatchers before installing the new list,
         preventing background worker and httpx client leaks on repeated calls.
         First call is a no-op close (empty old list).
+
+        Carries the `delivery_ok` heartbeat flag forward from an old dispatcher to
+        its replacement when they share the same destination name. The heartbeat's
+        contract is one record per destination PER SESSION (see
+        ``_emit_delivery_heartbeat``), but `_heartbeat_emitted` is per-DISPATCHER-
+        INSTANCE state, and the live filter-reload capability
+        (``set_ingestion_filters``) re-runs this method mid-session, closing old
+        dispatchers and constructing brand-new ones -- each starting with
+        `_heartbeat_emitted = False`. Without carrying the flag forward, a reload
+        after a successful delivery would let the NEW instance emit a second
+        `delivery_ok` record on its own next successful delivery, silently
+        breaking the one-per-session contract. Matched by name only: a
+        differently-named destination is unaffected and gets its own heartbeat.
+
+        Uses ``getattr`` with a default rather than direct attribute access:
+        some callers (tests, and any future lightweight dispatcher stand-in)
+        pass objects that don't carry ``_name``/``_heartbeat_emitted`` at all,
+        and the carry-forward is a best-effort enhancement that must not raise
+        for those -- it simply no-ops when the attributes aren't present.
         """
         old = self._dispatchers
+        old_heartbeats_by_name: dict[str, bool] = {}
+        for d in old:
+            name = getattr(d, "_name", None)
+            if name is not None:
+                old_heartbeats_by_name[name] = getattr(d, "_heartbeat_emitted", False)
+        for dispatcher in dispatchers:
+            name = getattr(dispatcher, "_name", None)
+            if name is not None and old_heartbeats_by_name.get(name):
+                dispatcher._heartbeat_emitted = True
         self._dispatchers = dispatchers
         if old:
             await asyncio.gather(*(d.close() for d in old), return_exceptions=True)
