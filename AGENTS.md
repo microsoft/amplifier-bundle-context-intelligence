@@ -120,6 +120,38 @@ including ANY agent / skill / mode / tool / networking / auth edit → units + `
 real DTU run + the evaluation harness, with captured evidence.** Skipping the live run on a seam
 change is how a green build ships a broken bundle.
 
+## Scheduling defects: what a green unit suite structurally cannot see
+
+A worked example, from the self-healing replay work (#403), of *why* the seam gate above is
+not bureaucracy. Three defects shipped past a fully green 740-test suite and were each
+caught only by a real DTU run against a real, slow destination:
+
+1. **The background task never ran.** Scheduled inside a session it delivered **zero**
+   events, because `cleanup()` cancelled it before its first several-hundred-millisecond
+   request completed. The code was correct; it simply never got wall-clock.
+2. **Cancellation discarded completed work.** Progress was persisted only after a whole
+   batch finished, so teardown threw away every delivery already made.
+3. **The fix for (1) taxed every exit.** It waited on a task that never completes (an
+   infinite loop), turning a 2-second *ceiling* into a flat 2-second *cost* on every
+   session exit, including the common case with no work to do.
+
+All three are one shape: **work performed but not recorded, or a wait bounded on the wrong
+thing.** Unit tests do not cancel tasks mid-flight, do not measure teardown wall-clock, and
+do not run against a destination slow enough for the race to exist. So when a change adds
+background work, a timeout, a grace period, or anything cancelled at shutdown, treat
+"scheduling" as its own seam:
+
+- **Measure the teardown cost in both states** — with work in flight and with none. A
+  budget that is always spent is not a budget.
+- **Assert that cancellation preserves progress**, not merely that it terminates.
+- **Be precise about what you are waiting for.** "Wait for the work to finish" and "wait
+  for the worker to finish" read identically and diverge the moment the worker is a loop.
+
+A fourth defect in the same work was a *test* defect of this family: a duplicate-detection
+check counted workspace-wide nodes while itself creating new sessions, producing a
+confident false FAIL on a system behaving perfectly. **Scope a uniqueness assertion to the
+entity actually replayed**, never to a shared namespace the test is concurrently writing to.
+
 ## Authoring data-query & navigation skills — evidence-based, against a live graph
 
 The data-query and navigation skills (`context-intelligence-graph-query`, `-derived-metrics`,

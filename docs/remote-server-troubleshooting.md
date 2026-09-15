@@ -135,6 +135,27 @@ Real output from a workstation forwarding to an Azure/APIM destination — a tex
 
 A median `queued` in the dozens or higher is Case 2.
 
+### Why did my session take a couple of seconds longer to exit?
+
+- **Cause:** `sweep_close_grace_seconds` (default `2.0`) let a catch-up sweep keep running
+  at session teardown instead of being cancelled immediately. This only happens when a
+  sweep was still mid-delivery at the moment the session ended — a normal exit with
+  nothing in flight is unaffected (measured `0.000s` added). If you saw the delay, it
+  means the bundle was actively recovering backlog, not that something is wrong.
+- **Shared budget:** the grace period is one shared budget across **all** destinations
+  for that session, not one per destination — several slow destinations still cost a
+  single grace window, not several.
+- **Fix (if you want immediate exit instead):**
+  ```yaml
+  overrides:
+    hook-context-intelligence:
+      config:
+        sweep_close_grace_seconds: 0.0
+  ```
+  **Tradeoff:** with `0.0`, a sweep that gets cancelled mid-delivery simply resumes from
+  its last committed chunk on the next session — nothing is lost, it just takes more
+  sessions for the backlog to fully catch up.
+
 ### `<dest> unreachable, retrying with backoff — events still captured locally`
 
 - **Cause:** connect/read timeouts or transient network errors. The hook is retrying with

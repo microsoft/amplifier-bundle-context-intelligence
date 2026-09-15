@@ -103,8 +103,7 @@ def count_session_nodes(server: str, token: str, workspace: str, session_id: str
     rows = cypher(
         server,
         token,
-        "MATCH (n) WHERE n.workspace = $ws AND n.node_id STARTS WITH $prefix "
-        "RETURN count(n) AS c",
+        "MATCH (n) WHERE n.workspace = $ws AND n.node_id STARTS WITH $prefix RETURN count(n) AS c",
         {"ws": workspace, "prefix": f"{session_id}__"},
     )
     return int(rows[0]["c"]) if rows else 0
