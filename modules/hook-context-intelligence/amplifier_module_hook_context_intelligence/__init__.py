@@ -252,6 +252,28 @@ def _describe_sweep(report: Any, *, suppress_stranded: bool = False) -> None:
     )
 
 
+class _SweepHandle:
+    """A running catch-up sweep, plus whether it is mid-pass right now.
+
+    The distinction is the whole point. The sweep task is an infinite loop, so it
+    NEVER completes -- waiting on the task itself at teardown burns the entire
+    grace budget every single time, including the overwhelmingly common case
+    where there is nothing to sweep and the task is simply asleep between
+    passes. Measured: a flat 2.003s added to every exit.
+
+    So teardown waits for the sweep to be IDLE (its current pass finished), not
+    for the task to end. Idle costs nothing; only a pass genuinely in flight can
+    spend the budget.
+    """
+
+    def __init__(self, task: Any, idle: Any) -> None:
+        self.task = task
+        self.idle = idle
+
+    def cancel(self) -> None:
+        self.task.cancel()
+
+
 def schedule_backlog_sweeps(resolver: Any, dispatchers: list[Any]) -> list[Any]:
     """Start one CONTINUOUS catch-up sweep per active destination.
 
@@ -297,12 +319,19 @@ def schedule_backlog_sweeps(resolver: Any, dispatchers: list[Any]) -> list[Any]:
             timeout=resolver.dispatch_timeout,
         )
 
-        async def _run(s: Any = sweeper, interval: float = resolver.sweep_interval_seconds) -> None:
+        idle = asyncio.Event()
+
+        async def _run(
+            s: Any = sweeper,
+            interval: float = resolver.sweep_interval_seconds,
+            idle: Any = idle,
+        ) -> None:
             # Stranded-session warnings are a property of the BACKLOG, not of a
             # pass, so they would repeat verbatim every interval. Report once per
             # session and let the durable forwarding record carry the rest.
             reported_stranded = False
             while True:
+                idle.clear()
                 try:
                     report = await s.run()
                     _describe_sweep(report, suppress_stranded=reported_stranded)
@@ -311,14 +340,40 @@ def schedule_backlog_sweeps(resolver: Any, dispatchers: list[Any]) -> list[Any]:
                     raise
                 except Exception:
                     log.debug("context-intelligence backlog sweep failed", exc_info=True)
+                finally:
+                    idle.set()
                 if interval <= 0:
                     return
                 await asyncio.sleep(interval)
 
         task = asyncio.create_task(_run())
         task.add_done_callback(_retrieve_sweep_exception)
-        tasks.append(task)
+        tasks.append(_SweepHandle(task, idle))
     return tasks
+
+
+async def await_sweeps_idle(handles: list[Any], grace: float) -> None:
+    """Wait, bounded by *grace*, for every sweep to finish its current pass.
+
+    Returns IMMEDIATELY when nothing is mid-pass, which is the normal case. Only
+    a sweep actually delivering can spend any of the budget, and no sweep can
+    spend more than *grace* seconds of it.
+    """
+    if grace <= 0:
+        return
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + grace
+    for handle in handles:
+        remaining = deadline - loop.time()
+        if remaining <= 0:
+            return
+        try:
+            await asyncio.wait_for(handle.idle.wait(), timeout=remaining)
+        except (TimeoutError, asyncio.TimeoutError):
+            return
+        except Exception:
+            log.debug("sweep idle wait failed", exc_info=True)
+            return
 
 
 def _retrieve_sweep_exception(task: Any) -> None:
@@ -637,14 +692,12 @@ async def mount(
         # is bounded, configurable and testable, where an absolute was neither.
         sweep_tasks = list(_hook_state.get("sweep_tasks") or [])
         if sweep_tasks:
-            grace = resolver.sweep_close_grace_seconds
-            if grace > 0:
-                try:
-                    await asyncio.wait(sweep_tasks, timeout=grace)
-                except Exception:
-                    log.debug("sweep grace wait failed", exc_info=True)
-            for task in sweep_tasks:
-                task.cancel()
+            try:
+                await await_sweeps_idle(sweep_tasks, resolver.sweep_close_grace_seconds)
+            except Exception:
+                log.debug("sweep grace wait failed", exc_info=True)
+            for handle in sweep_tasks:
+                handle.cancel()
         try:
             await logging_handler.close()
         except Exception:

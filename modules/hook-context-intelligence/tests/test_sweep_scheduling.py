@@ -21,6 +21,7 @@ import pytest
 
 from amplifier_module_hook_context_intelligence import (
     _describe_sweep,
+    await_sweeps_idle,
     schedule_backlog_sweeps,
 )
 from amplifier_module_hook_context_intelligence.config_resolver import HookConfigResolver
@@ -73,8 +74,9 @@ class TestConfigDefaults:
 @pytest.mark.asyncio
 class TestSchedulingLoop:
     async def test_disabled_sweep_schedules_nothing(self, tmp_path: Any) -> None:
-        tasks = schedule_backlog_sweeps(_Resolver(tmp_path, sweep_enabled=False), [_Dispatcher()])
-        assert tasks == []
+        assert (
+            schedule_backlog_sweeps(_Resolver(tmp_path, sweep_enabled=False), [_Dispatcher()]) == []
+        )
 
     async def test_single_pass_when_interval_is_zero(
         self, tmp_path: Any, monkeypatch: pytest.MonkeyPatch
@@ -90,10 +92,10 @@ class TestSchedulingLoop:
             "amplifier_module_hook_context_intelligence.handlers.backlog_sweep.BacklogSweeper.run",
             fake_run,
         )
-        tasks = schedule_backlog_sweeps(
+        handles = schedule_backlog_sweeps(
             _Resolver(tmp_path, sweep_interval_seconds=0.0), [_Dispatcher()]
         )
-        await asyncio.gather(*tasks)
+        await asyncio.gather(*(h.task for h in handles))
         assert runs == 1
 
     async def test_repeats_on_the_interval(
@@ -111,13 +113,13 @@ class TestSchedulingLoop:
             "amplifier_module_hook_context_intelligence.handlers.backlog_sweep.BacklogSweeper.run",
             fake_run,
         )
-        tasks = schedule_backlog_sweeps(
+        handles = schedule_backlog_sweeps(
             _Resolver(tmp_path, sweep_interval_seconds=0.01), [_Dispatcher()]
         )
         await asyncio.sleep(0.08)
-        for task in tasks:
-            task.cancel()
-        await asyncio.gather(*tasks, return_exceptions=True)
+        for handle in handles:
+            handle.cancel()
+        await asyncio.gather(*(h.task for h in handles), return_exceptions=True)
         assert runs >= 3, f"continuous catch-up ran only {runs} time(s)"
 
     async def test_a_failing_pass_does_not_kill_the_loop(
@@ -136,13 +138,13 @@ class TestSchedulingLoop:
             "amplifier_module_hook_context_intelligence.handlers.backlog_sweep.BacklogSweeper.run",
             fake_run,
         )
-        tasks = schedule_backlog_sweeps(
+        handles = schedule_backlog_sweeps(
             _Resolver(tmp_path, sweep_interval_seconds=0.01), [_Dispatcher()]
         )
         await asyncio.sleep(0.06)
-        for task in tasks:
-            task.cancel()
-        await asyncio.gather(*tasks, return_exceptions=True)
+        for handle in handles:
+            handle.cancel()
+        await asyncio.gather(*(h.task for h in handles), return_exceptions=True)
         assert runs >= 2, "the loop died on the first failure"
 
     async def test_cancellation_is_honoured(
@@ -156,14 +158,14 @@ class TestSchedulingLoop:
             "amplifier_module_hook_context_intelligence.handlers.backlog_sweep.BacklogSweeper.run",
             fake_run,
         )
-        tasks = schedule_backlog_sweeps(
+        handles = schedule_backlog_sweeps(
             _Resolver(tmp_path, sweep_interval_seconds=1.0), [_Dispatcher()]
         )
         await asyncio.sleep(0)
-        for task in tasks:
-            task.cancel()
-        await asyncio.gather(*tasks, return_exceptions=True)
-        assert all(task.cancelled() or task.done() for task in tasks)
+        for handle in handles:
+            handle.cancel()
+        await asyncio.gather(*(h.task for h in handles), return_exceptions=True)
+        assert all(h.task.cancelled() or h.task.done() for h in handles)
 
 
 @pytest.mark.asyncio
@@ -236,3 +238,99 @@ class TestLoudnessGate:
                 suppress_stranded=True,
             )
         assert not [r for r in caplog.records if r.levelname == "WARNING"]
+
+
+@pytest.mark.asyncio
+class TestExitIsNotSlowedWhenIdle:
+    """The grace must be spent ONLY on a sweep that is actually delivering.
+
+    REGRESSION. The sweep task is an infinite loop, so it never completes --
+    waiting on the TASK at teardown burned the entire budget on every exit,
+    including the overwhelmingly common case of nothing to sweep. Measured at a
+    flat 2.003s added to every session exit, which is precisely the cost the
+    original "never slows exit" rule existed to prevent. Teardown now waits for
+    the sweep to be IDLE, not for the task to end.
+    """
+
+    async def _cost(self, handles: list[Any], grace: float) -> float:
+        loop = asyncio.get_running_loop()
+        started = loop.time()
+        await await_sweeps_idle(handles, grace)
+        for handle in handles:
+            handle.cancel()
+        await asyncio.gather(*(h.task for h in handles), return_exceptions=True)
+        return loop.time() - started
+
+    async def test_idle_sweep_costs_nothing_at_exit(
+        self, tmp_path: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        async def instant(self: Any) -> SweepReport:
+            return SweepReport(destination="main")
+
+        monkeypatch.setattr(
+            "amplifier_module_hook_context_intelligence.handlers.backlog_sweep.BacklogSweeper.run",
+            instant,
+        )
+        handles = schedule_backlog_sweeps(
+            _Resolver(tmp_path, sweep_interval_seconds=60.0), [_Dispatcher()]
+        )
+        await asyncio.sleep(0.05)  # first pass done; task now idle between passes
+        assert await self._cost(handles, grace=2.0) < 0.2, (
+            "an idle sweep spent the teardown budget -- every exit pays for nothing"
+        )
+
+    async def test_in_flight_sweep_may_use_the_budget_but_not_exceed_it(
+        self, tmp_path: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        async def slow(self: Any) -> SweepReport:
+            await asyncio.sleep(10)
+            return SweepReport(destination="main")
+
+        monkeypatch.setattr(
+            "amplifier_module_hook_context_intelligence.handlers.backlog_sweep.BacklogSweeper.run",
+            slow,
+        )
+        handles = schedule_backlog_sweeps(
+            _Resolver(tmp_path, sweep_interval_seconds=60.0), [_Dispatcher()]
+        )
+        await asyncio.sleep(0.05)
+        cost = await self._cost(handles, grace=0.3)
+        assert 0.2 < cost < 1.0, f"budget not honoured: {cost:.3f}s"
+
+    async def test_zero_grace_never_waits(
+        self, tmp_path: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        async def slow(self: Any) -> SweepReport:
+            await asyncio.sleep(10)
+            return SweepReport(destination="main")
+
+        monkeypatch.setattr(
+            "amplifier_module_hook_context_intelligence.handlers.backlog_sweep.BacklogSweeper.run",
+            slow,
+        )
+        handles = schedule_backlog_sweeps(
+            _Resolver(tmp_path, sweep_interval_seconds=60.0), [_Dispatcher()]
+        )
+        await asyncio.sleep(0.05)
+        assert await self._cost(handles, grace=0.0) < 0.2
+
+    async def test_budget_is_shared_across_destinations_not_per_destination(
+        self, tmp_path: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Three slow destinations must not cost three graces."""
+
+        async def slow(self: Any) -> SweepReport:
+            await asyncio.sleep(10)
+            return SweepReport(destination="main")
+
+        monkeypatch.setattr(
+            "amplifier_module_hook_context_intelligence.handlers.backlog_sweep.BacklogSweeper.run",
+            slow,
+        )
+        handles = schedule_backlog_sweeps(
+            _Resolver(tmp_path, sweep_interval_seconds=60.0),
+            [_Dispatcher(), _Dispatcher(), _Dispatcher()],
+        )
+        await asyncio.sleep(0.05)
+        cost = await self._cost(handles, grace=0.3)
+        assert cost < 1.0, f"budget multiplied by destination count: {cost:.3f}s"
