@@ -26,6 +26,7 @@ import time
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
+from amplifier_module_hook_context_intelligence.config_resolver import HookConfigResolver
 from amplifier_module_hook_context_intelligence.handlers.logging_handler import (
     _TRANSIENT,
     _DestinationDispatcher,
@@ -378,6 +379,48 @@ class TestDrainBounded:
         # Should complete well under the 5s timeout (events deliver in milliseconds)
         assert elapsed < 2.0, (
             f"close() took {elapsed:.3f}s for 2 successful deliveries; expected < 2.0s"
+        )
+
+    async def test_shipped_default_is_a_ceiling_not_a_fixed_wait(self) -> None:
+        """The SHIPPED default drain window costs a healthy shutdown nothing.
+
+        Load-bearing for the default's sizing: ``close()`` awaits ``queue.join()``
+        and returns the instant the queue empties, so raising the default (0.5 ->
+        10.0 -> 20.0, for remote Azure/APIM+Entra round trips) does NOT lengthen a
+        healthy localhost shutdown by even one second. Without this property,
+        every bump of the default would be a regression for local users.
+
+        Reads the default from the resolver rather than hardcoding it, so this
+        keeps holding if the default moves again.
+        """
+        resolver_coordinator = MagicMock()
+        resolver_coordinator.config = {}
+        default_drain = HookConfigResolver(
+            config={}, coordinator=resolver_coordinator
+        ).close_drain_timeout
+        assert default_drain >= 10.0, (
+            f"expected a remote-generous shipped default, got {default_drain}"
+        )
+
+        d = _dispatcher(close_drain_timeout=default_drain)
+        mock_client = AsyncMock()
+        mock_client.is_closed = False
+        ok_response = MagicMock()
+        ok_response.status_code = 200
+        mock_client.post.return_value = ok_response
+        d._client = mock_client
+
+        for i in range(5):
+            d.enqueue(f"e{i}", {"session_id": "s1"})
+
+        with patch(LOGGER_PATH):
+            t0 = time.monotonic()
+            await d.close()
+            elapsed = time.monotonic() - t0
+
+        assert elapsed < 2.0, (
+            f"close() took {elapsed:.3f}s with the shipped {default_drain}s default;"
+            " a healthy drain must return immediately, not spend the window"
         )
 
 

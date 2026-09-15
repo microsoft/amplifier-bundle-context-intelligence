@@ -66,6 +66,8 @@ class CIClientError(Exception):
         url: str,
         status_code: int | None = None,
         retry_after: int | None = None,
+        error_body: dict[str, Any] | None = None,
+        error_code: str | None = None,
     ) -> None:
         super().__init__(message)
         #: One of "connection_error" | "timeout" | "http_status" | "decode_error"
@@ -80,6 +82,47 @@ class CIClientError(Exception):
         #: refused because the session graph is still draining). ``None`` when
         #: the server sent no such hint -- the failure is not retryable.
         self.retry_after = retry_after
+        #: The parsed JSON error body, when the response carried one. ``None``
+        #: for a non-JSON body (a proxy's HTML error page, an empty response).
+        self.error_body = error_body
+        #: The server's machine-readable error code, lifted from
+        #: ``{"detail": {"code": ...}}``. ``None`` when the response did not
+        #: carry one -- which includes every proxy/router 404, since those
+        #: answer with a plain-string ``detail``.
+        #:
+        #: This is the ONLY sound basis for deciding what a 404 means. The
+        #: status code alone cannot distinguish "this server looked and it is
+        #: not here" from "something between you and the server said 404",
+        #: and a request that never reached the handler looks identical to one
+        #: that did. Callers that attest absence MUST require the specific
+        #: code and treat every other 404 as unverified.
+        self.error_code = error_code
+
+
+def _error_detail(response: Any) -> tuple[dict[str, Any] | None, str | None]:
+    """Lift the parsed JSON body and the server's error ``code`` off a response.
+
+    Returns ``(body, code)``. ``code`` comes from ``{"detail": {"code": ...}}``
+    and is ``None`` whenever the body is absent, not JSON, or carries a
+    plain-string ``detail`` -- which is exactly what a router or proxy 404 looks
+    like. That asymmetry is the point: only a handler that deliberately emitted
+    a structured code can produce one, so a caller can require it before
+    treating a 404 as proof of anything.
+    """
+    body: Any
+    try:
+        body = response.json()
+    except Exception:  # noqa: BLE001 - not a requests/httpx response, or not JSON
+        # urllib's HTTPError has no .json(); it is a readable file object.
+        try:
+            body = json.loads(response.read().decode("utf-8"))
+        except Exception:  # noqa: BLE001 - non-JSON error body is normal (proxy HTML, empty)
+            return None, None
+    if not isinstance(body, dict):
+        return None, None
+    detail = body.get("detail")
+    code = detail.get("code") if isinstance(detail, dict) else None
+    return body, (code if isinstance(code, str) else None)
 
 
 # ---------------------------------------------------------------------------
@@ -200,6 +243,8 @@ def _http_get_strict(url: str, headers: dict[str, str]) -> Any:
                 url=url,
                 status_code=status,
                 retry_after=_retry_after_seconds(getattr(_resp, "headers", None)),
+                error_body=_error_detail(_resp)[0],
+                error_code=_error_detail(_resp)[1],
             ) from exc
         except (ValueError, json.JSONDecodeError) as exc:  # resp.json() failed
             raise CIClientError(
@@ -225,6 +270,8 @@ def _http_get_strict(url: str, headers: dict[str, str]) -> Any:
                 url=url,
                 status_code=exc.response.status_code,
                 retry_after=_retry_after_seconds(exc.response.headers),
+                error_body=_error_detail(exc.response)[0],
+                error_code=_error_detail(exc.response)[1],
             ) from exc
         except (ValueError, json.JSONDecodeError) as exc:  # resp.json() failed
             raise CIClientError(
@@ -247,6 +294,8 @@ def _http_get_strict(url: str, headers: dict[str, str]) -> Any:
             url=url,
             status_code=exc.code,
             retry_after=_retry_after_seconds(getattr(exc, "headers", None)),
+            error_body=_error_detail(exc)[0],
+            error_code=_error_detail(exc)[1],
         ) from exc
     except (TimeoutError, socket.timeout) as exc:  # read timeout
         raise CIClientError(f"timeout listing {url}", error_type="timeout", url=url) from exc
@@ -321,6 +370,8 @@ def _http_delete_strict(url: str, headers: dict[str, str]) -> Any:
                 url=url,
                 status_code=status,
                 retry_after=_retry_after_seconds(getattr(_resp, "headers", None)),
+                error_body=_error_detail(_resp)[0],
+                error_code=_error_detail(_resp)[1],
             ) from exc
         except (ValueError, json.JSONDecodeError) as exc:  # resp.json() failed
             raise CIClientError(
@@ -346,6 +397,8 @@ def _http_delete_strict(url: str, headers: dict[str, str]) -> Any:
                 url=url,
                 status_code=exc.response.status_code,
                 retry_after=_retry_after_seconds(exc.response.headers),
+                error_body=_error_detail(exc.response)[0],
+                error_code=_error_detail(exc.response)[1],
             ) from exc
         except (ValueError, json.JSONDecodeError) as exc:  # resp.json() failed
             raise CIClientError(
@@ -368,6 +421,8 @@ def _http_delete_strict(url: str, headers: dict[str, str]) -> Any:
             url=url,
             status_code=exc.code,
             retry_after=_retry_after_seconds(getattr(exc, "headers", None)),
+            error_body=_error_detail(exc)[0],
+            error_code=_error_detail(exc)[1],
         ) from exc
     except (TimeoutError, socket.timeout) as exc:  # read timeout
         raise CIClientError(f"timeout deleting {url}", error_type="timeout", url=url) from exc
@@ -911,11 +966,14 @@ class AsyncCIClient:
         except httpx.TimeoutException as exc:  # type: ignore[union-attr]
             raise CIClientError(f"timeout querying {url}", error_type="timeout", url=url) from exc
         except httpx.HTTPStatusError as exc:  # type: ignore[union-attr]
+            _body, _code = _error_detail(exc.response)
             raise CIClientError(
                 f"HTTP {exc.response.status_code} from {url}",
                 error_type="http_status",
                 url=url,
                 status_code=exc.response.status_code,
+                error_body=_body,
+                error_code=_code,
             ) from exc
         except (ValueError, json.JSONDecodeError) as exc:  # resp.json() failed
             raise CIClientError(
@@ -973,11 +1031,14 @@ class AsyncCIClient:
         except httpx.TimeoutException as exc:  # type: ignore[union-attr]
             raise CIClientError(f"timeout fetching {url}", error_type="timeout", url=url) from exc
         except httpx.HTTPStatusError as exc:  # type: ignore[union-attr]
+            _body, _code = _error_detail(exc.response)
             raise CIClientError(
                 f"HTTP {exc.response.status_code} from {url}",
                 error_type="http_status",
                 url=url,
                 status_code=exc.response.status_code,
+                error_body=_body,
+                error_code=_code,
             ) from exc
         except (ValueError, json.JSONDecodeError) as exc:  # resp.json() failed
             raise CIClientError(
@@ -1031,11 +1092,14 @@ class AsyncCIClient:
         except httpx.TimeoutException as exc:  # type: ignore[union-attr]
             raise CIClientError(f"timeout listing {url}", error_type="timeout", url=url) from exc
         except httpx.HTTPStatusError as exc:  # type: ignore[union-attr]
+            _body, _code = _error_detail(exc.response)
             raise CIClientError(
                 f"HTTP {exc.response.status_code} from {url}",
                 error_type="http_status",
                 url=url,
                 status_code=exc.response.status_code,
+                error_body=_body,
+                error_code=_code,
             ) from exc
         except (ValueError, json.JSONDecodeError) as exc:  # resp.json() failed
             raise CIClientError(
@@ -1086,11 +1150,14 @@ class AsyncCIClient:
         except httpx.TimeoutException as exc:  # type: ignore[union-attr]
             raise CIClientError(f"timeout fetching {url}", error_type="timeout", url=url) from exc
         except httpx.HTTPStatusError as exc:  # type: ignore[union-attr]
+            _body, _code = _error_detail(exc.response)
             raise CIClientError(
                 f"HTTP {exc.response.status_code} from {url}",
                 error_type="http_status",
                 url=url,
                 status_code=exc.response.status_code,
+                error_body=_body,
+                error_code=_code,
             ) from exc
         except (ValueError, json.JSONDecodeError) as exc:  # resp.json() failed
             raise CIClientError(
@@ -1139,11 +1206,19 @@ class AsyncCIClient:
         except httpx.TimeoutException as exc:  # type: ignore[union-attr]
             raise CIClientError(f"timeout deleting {url}", error_type="timeout", url=url) from exc
         except httpx.HTTPStatusError as exc:  # type: ignore[union-attr]
+            _body, _code = _error_detail(exc.response)
             raise CIClientError(
                 f"HTTP {exc.response.status_code} from {url}",
                 error_type="http_status",
                 url=url,
                 status_code=exc.response.status_code,
+                # The server answers a still-draining delete with 409 + Retry-After.
+                # Dropping it here silently disables the tool's automatic retry
+                # loop -- the transient "wait for the drain" case then gets
+                # reported as the NON-retryable ambiguous-id case instead.
+                retry_after=_retry_after_seconds(exc.response.headers),
+                error_body=_body,
+                error_code=_code,
             ) from exc
         except (ValueError, json.JSONDecodeError) as exc:  # resp.json() failed
             raise CIClientError(
@@ -1185,11 +1260,14 @@ class AsyncCIClient:
         except httpx.TimeoutException as exc:  # type: ignore[union-attr]
             raise CIClientError(f"timeout fetching {url}", error_type="timeout", url=url) from exc
         except httpx.HTTPStatusError as exc:  # type: ignore[union-attr]
+            _body, _code = _error_detail(exc.response)
             raise CIClientError(
                 f"HTTP {exc.response.status_code} from {url}",
                 error_type="http_status",
                 url=url,
                 status_code=exc.response.status_code,
+                error_body=_body,
+                error_code=_code,
             ) from exc
         except (ValueError, json.JSONDecodeError) as exc:  # resp.json() failed
             raise CIClientError(

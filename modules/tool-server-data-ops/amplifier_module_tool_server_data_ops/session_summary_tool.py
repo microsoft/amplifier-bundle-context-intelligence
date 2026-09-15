@@ -23,6 +23,18 @@ from context_intelligence.tool_resolver import (
 )
 
 
+#: The server's machine-readable code for "this server looked, and the session
+#: is not here" (context_intelligence_server.routers.deletion).
+#:
+#: This is the ONLY thing that licenses reporting absence. A 404 on its own
+#: cannot: an unmatched route answers ``{"detail": "Not Found"}``, and any proxy
+#: or gateway can answer 404 without the request ever reaching the handler.
+#: Those are indistinguishable from a real "not here" by status code alone, so
+#: every 404 WITHOUT this code is unverified -- never "clean", never "already
+#: deleted", never "absent".
+SESSION_NOT_FOUND_CODE = "session_not_found"
+
+
 class SessionSummaryTool:
     """Fetch the preview facts for a session from the context-intelligence server.
 
@@ -169,8 +181,24 @@ class SessionSummaryTool:
             # also set output= here or that back-fill is suppressed.
             origin_name = conn.origin.name if conn.origin and conn.origin.name else conn.url
             message = f"session lookup failed against {origin_name}: {exc}"
+            extra: dict[str, Any] = {}
             if exc.status_code == 404:
-                message = f"unknown session {session_id!r} on {origin_name}"
+                # A 404 is only proof of absence when the SERVER said so.
+                if getattr(exc, "error_code", None) == SESSION_NOT_FOUND_CODE:
+                    message = f"unknown session {session_id!r} on {origin_name}"
+                else:
+                    message = (
+                        f"CANNOT VERIFY whether session {session_id!r} is on "
+                        f"{origin_name}: the 404 carries no {SESSION_NOT_FOUND_CODE!r} "
+                        "code, so it may have come from a proxy, a gateway, or a "
+                        "server without the deletion routes -- the request may never "
+                        f"have reached the handler. Do NOT report {origin_name} as "
+                        "clean; report it as unverified."
+                    )
+                    extra = {
+                        "verifiable": False,
+                        "server_error_code": getattr(exc, "error_code", None),
+                    }
             elif exc.status_code == 409:
                 message = (
                     f"session {session_id!r} on {origin_name} is still receiving data, "
@@ -183,6 +211,7 @@ class SessionSummaryTool:
                     "type": exc.error_type,  # connection_error|timeout|http_status|decode_error
                     "source": _origin_dict(conn.origin),
                     **({"status_code": exc.status_code} if exc.status_code is not None else {}),
+                    **extra,
                 },
             )
         return ToolResult(

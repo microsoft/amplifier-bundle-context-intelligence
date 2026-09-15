@@ -363,3 +363,253 @@ class TestPatchInheritedHookConfigUnit:
         new_raw = {"d1": {"url": "http://d1"}}
         assert _patch_inherited_hook_config(coordinator, new_raw) is True
         assert hooks_list[0]["config"]["destinations"] == new_raw
+
+
+# ---------------------------------------------------------------------------
+# F. Regression: the disk cross-check must not destroy the report, and must not
+#    fault a filter that is correct but declared across settings scopes.
+#    (ci_delete_fixes-zbx, ci_delete_fixes-1j2)
+# ---------------------------------------------------------------------------
+class TestDiskCheckIsReportedNotRaised:
+    """The swap happens BEFORE the cross-check. Raising past it threw away the
+    only record of what went live, leaving callers unable to tell "nothing was
+    applied" from "applied but unattested" -- and destroying the
+    inherited_snapshot_patched / active fields needed to diagnose ingestion."""
+
+    async def test_mismatch_returns_report_instead_of_raising(self, tmp_path: Path) -> None:
+        working_dir = str(tmp_path)
+        settings_path = tmp_path / "settings.yaml"
+        # Disk declares d1 with NO exclude...
+        settings_path.write_text(
+            yaml.safe_dump(
+                {
+                    "overrides": {
+                        "hook-context-intelligence": {
+                            "config": {
+                                "destinations": {
+                                    "d1": {
+                                        "url": "http://d1",
+                                        "api_key": "k1",
+                                        "include": ["**"],
+                                        "exclude": [],
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            )
+        )
+        config = {
+            "destinations": {
+                "d1": {"url": "http://d1", "api_key": "k1", "include": ["**"], "exclude": []},
+            }
+        }
+        coordinator = make_lifecycle_coordinator(working_dir=working_dir)
+        cleanup = await mount_and_ready(coordinator, config)
+        try:
+            set_filters = coordinator.get_capability("context_intelligence.set_ingestion_filters")
+            # ...but we apply a live-only exclude, so live and disk genuinely differ.
+            live_only = {
+                "d1": {"url": "http://d1", "api_key": "k1", "include": ["**"], "exclude": ["**"]},
+            }
+            report = await set_filters(
+                raw_destinations=live_only,
+                settings_path=str(settings_path),
+                verify_disk=True,
+            )
+
+            # Did NOT raise, and the report survived.
+            assert report["disk_consistent"] is False
+            assert report["disk_check"]["mismatched"]["d1"] == {"live": ["**"], "disk": []}
+            # The fields needed to diagnose what actually went live are present.
+            assert "active" in report
+            assert "match_key" in report
+            assert "inherited_snapshot_patched" in report
+            assert report["destinations"]["d1"]["exclude"] == ["**"]
+        finally:
+            await cleanup()
+
+    async def test_destination_from_another_settings_scope_is_unverified_not_a_fault(
+        self, tmp_path: Path
+    ) -> None:
+        """Live config is the kernel's MERGED settings; the cross-check reads ONE
+        file. A destination declared in another scope must be reported as
+        unverified, never as an inconsistency."""
+        working_dir = str(tmp_path)
+        settings_path = tmp_path / "settings.yaml"
+        # The file knows about d1 only.
+        settings_path.write_text(
+            yaml.safe_dump(
+                {
+                    "overrides": {
+                        "hook-context-intelligence": {
+                            "config": {
+                                "destinations": {
+                                    "d1": {
+                                        "url": "http://d1",
+                                        "api_key": "k1",
+                                        "include": ["**"],
+                                        "exclude": ["**"],
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            )
+        )
+        config = {
+            "destinations": {
+                "d1": {"url": "http://d1", "api_key": "k1", "include": ["**"], "exclude": []},
+            }
+        }
+        coordinator = make_lifecycle_coordinator(working_dir=working_dir)
+        cleanup = await mount_and_ready(coordinator, config)
+        try:
+            set_filters = coordinator.get_capability("context_intelligence.set_ingestion_filters")
+            # Live carries d1 (matching the file) PLUS d2 from a different scope.
+            merged = {
+                "d1": {"url": "http://d1", "api_key": "k1", "include": ["**"], "exclude": ["**"]},
+                "d2": {"url": "http://d2", "api_key": "k2", "include": ["**"], "exclude": ["**"]},
+            }
+            report = await set_filters(
+                raw_destinations=merged,
+                settings_path=str(settings_path),
+                verify_disk=True,
+            )
+
+            assert report["disk_consistent"] is True
+            assert report["disk_check"]["unverified"] == ["d2"]
+            assert report["disk_check"]["mismatched"] == {}
+        finally:
+            await cleanup()
+
+    async def test_verify_only_does_not_fault_on_other_scope_destinations(
+        self, tmp_path: Path
+    ) -> None:
+        working_dir = str(tmp_path)
+        settings_path = tmp_path / "settings.yaml"
+        settings_path.write_text(
+            yaml.safe_dump(
+                {
+                    "overrides": {
+                        "hook-context-intelligence": {
+                            "config": {
+                                "destinations": {
+                                    "d1": {
+                                        "url": "http://d1",
+                                        "api_key": "k1",
+                                        "include": ["**"],
+                                        "exclude": [],
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            )
+        )
+        config = {
+            "destinations": {
+                "d1": {"url": "http://d1", "api_key": "k1", "include": ["**"], "exclude": []},
+                "d2": {"url": "http://d2", "api_key": "k2", "include": ["**"], "exclude": []},
+            }
+        }
+        coordinator = make_lifecycle_coordinator(working_dir=working_dir)
+        cleanup = await mount_and_ready(coordinator, config)
+        try:
+            verify = coordinator.get_capability("context_intelligence.verify_ingestion_consistency")
+            result = verify(str(settings_path))
+            assert result["consistent"] is True
+            assert result["unverified"] == ["d2"]
+        finally:
+            await cleanup()
+
+
+# ---------------------------------------------------------------------------
+# G. Regression: a destination validation DROPPED as misconfigured is not a
+#    filter inconsistency.  (ci_delete_fixes-9fw)
+#
+#    Measured in a real session: mismatched={} yet consistent=false, purely
+#    because two misconfigured destinations ("missing url; api_key is unusable")
+#    were absent from the live filter. That is a destination-config problem, not
+#    a stale exclude -- and one unexpanded ${VAR} is enough to trigger it.
+# ---------------------------------------------------------------------------
+class TestDroppedDestinationIsNotAFilterFault:
+    async def test_misconfigured_destination_does_not_make_the_filter_inconsistent(
+        self, tmp_path: Path
+    ) -> None:
+        working_dir = str(tmp_path)
+        settings_path = tmp_path / "settings.yaml"
+        # The file declares a good destination AND a broken one (no url).
+        settings_path.write_text(
+            yaml.safe_dump(
+                {
+                    "overrides": {
+                        "hook-context-intelligence": {
+                            "config": {
+                                "destinations": {
+                                    "good": {
+                                        "url": "http://good",
+                                        "api_key": "k",
+                                        "include": ["**"],
+                                        "exclude": ["**"],
+                                    },
+                                    "broken": {"api_key": "k", "include": ["**"], "exclude": []},
+                                }
+                            }
+                        }
+                    }
+                }
+            )
+        )
+        config = {
+            "destinations": {
+                "good": {"url": "http://good", "api_key": "k", "include": ["**"], "exclude": []},
+            }
+        }
+        coordinator = make_lifecycle_coordinator(working_dir=working_dir)
+        cleanup = await mount_and_ready(coordinator, config)
+        try:
+            set_filters = coordinator.get_capability("context_intelligence.set_ingestion_filters")
+            new_raw = {
+                "good": {
+                    "url": "http://good",
+                    "api_key": "k",
+                    "include": ["**"],
+                    "exclude": ["**"],
+                },
+                "broken": {"api_key": "k", "include": ["**"], "exclude": []},  # no url -> dropped
+            }
+            report = await set_filters(
+                raw_destinations=new_raw,
+                settings_path=str(settings_path),
+                verify_disk=True,
+            )
+
+            check = report["disk_check"]
+            assert check["mismatched"] == {}
+            # 'broken' is absent from live because validation rejected it --
+            # reported under its own key, and NOT a consistency fault.
+            assert check["dropped_by_validation"] == ["broken"]
+            assert check["missing_live"] == []
+            assert report["disk_consistent"] is True
+        finally:
+            await cleanup()
+
+    async def test_genuinely_absent_destination_still_reports_inconsistent(
+        self, tmp_path: Path
+    ) -> None:
+        """The fix must not blunt the real case: declared on disk, valid, but
+        simply not in the live filter."""
+        from amplifier_module_hook_context_intelligence import _compare_exclude_maps
+
+        check = _compare_exclude_maps(
+            live={"good": []},
+            disk={"good": [], "absent": ["**"]},
+            dropped=set(),  # nothing was dropped by validation
+        )
+        assert check["missing_live"] == ["absent"]
+        assert check["dropped_by_validation"] == []
+        assert check["consistent"] is False

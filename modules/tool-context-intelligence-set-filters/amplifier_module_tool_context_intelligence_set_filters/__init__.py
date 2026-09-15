@@ -45,8 +45,13 @@ class SetIngestionFiltersTool:
             "Call this AFTER the exclude edit has been written to settings.yaml. Re-reads "
             "the destinations block from settings.yaml, re-evaluates routing for this "
             "session's working directory, and swaps the live per-destination dispatchers "
-            "(drain-safe). Returns the new active destinations and their include/exclude, "
-            "and fails loud if the live filter does not match what is on disk."
+            "(drain-safe). Returns the new active destinations and their include/exclude. "
+            "Fails (filters_applied=false) only when the swap itself fails. If the swap "
+            "succeeded but the on-disk cross-check disagreed, it SUCCEEDS with "
+            "disk_consistent=false plus a disk_check breakdown -- the filter is live, "
+            "only the file agreement is unverified. The cross-check covers just the "
+            "destinations that settings file declares; destinations declared in another "
+            "settings scope are listed under disk_check.unverified."
         )
 
     @property
@@ -105,7 +110,24 @@ class SetIngestionFiltersTool:
         try:
             report = await set_filters(settings_path=settings_path, verify_disk=True)
         except Exception as exc:  # noqa: BLE001 - surface the fail-loud reason to the agent
-            return ToolResult(success=False, output={"error": str(exc)})
+            # Reaching here means the swap itself failed: the filter did NOT go
+            # live. A disk-verification mismatch no longer raises -- it comes
+            # back in the report as disk_consistent=False.
+            return ToolResult(
+                success=False,
+                output={"error": str(exc), "filters_applied": False},
+            )
+        # The swap succeeded. If the on-disk cross-check disagreed, the filter is
+        # STILL LIVE -- report that explicitly rather than collapsing it into a
+        # failure, so the caller can tell "nothing applied" from "applied but
+        # unattested" and can see what actually went live.
+        if report.get("disk_consistent") is False:
+            report["warning"] = (
+                "Filters ARE live (dispatchers swapped), but the on-disk cross-check "
+                f"against {settings_path} disagreed. See disk_check for the specific "
+                "destinations. The exclude IS in effect for this session; what is "
+                "unverified is whether the file matches it."
+            )
         return ToolResult(success=True, output=report)
 
 

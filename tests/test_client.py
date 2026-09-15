@@ -2130,3 +2130,105 @@ class TestRetryAfterParsing:
 
         exc = CIClientError("boom", error_type="timeout", url="http://x")
         assert exc.retry_after is None
+
+
+class TestAsyncDeleteSessionPropagatesRetryAfter:
+    """The 409 + Retry-After contract, driven through a REAL httpx response.
+
+    The server answers a still-draining delete with 409 and a Retry-After
+    header (routers/deletion.py). The tool's automatic retry loop only engages
+    when CIClientError.retry_after is populated, so if the async client drops
+    the header the transient "wait for the drain" case is silently reported as
+    the NON-retryable ambiguous-id case and never retried.
+
+    Constructing CIClientError(retry_after=...) directly proves the retry loop
+    but NOT that a real HTTP response can reach it. These tests use
+    httpx.MockTransport so raise_for_status() raises a genuine HTTPStatusError
+    carrying genuine headers, exercising the actual except branch.
+    """
+
+    @staticmethod
+    def _client_with(handler):
+        import httpx
+
+        from context_intelligence.client import AsyncCIClient
+
+        real_async_client = httpx.AsyncClient
+
+        def factory(*args, **kwargs):
+            kwargs["transport"] = httpx.MockTransport(handler)
+            return real_async_client(*args, **kwargs)
+
+        return AsyncCIClient("http://ci-server:9000", "k"), factory
+
+    async def test_409_with_retry_after_reaches_the_caller(self):
+        import httpx
+
+        from context_intelligence.client import CIClientError
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            assert request.method == "DELETE"
+            return httpx.Response(
+                409,
+                headers={"Retry-After": "7"},
+                json={
+                    "detail": {
+                        "reason": "sessions_pending",
+                        "message": "still draining",
+                        "pending_sessions": ["s1"],
+                        "retry_after_seconds": 7,
+                    }
+                },
+            )
+
+        client, factory = self._client_with(handler)
+        with (
+            patch("context_intelligence.client.httpx.AsyncClient", factory),
+            pytest.raises(CIClientError) as ei,
+        ):
+            await client.delete_session("s1")
+
+        exc = ei.value
+        assert exc.status_code == 409
+        assert exc.retry_after == 7  # the header actually survived the round trip
+
+    async def test_409_without_retry_after_stays_none(self):
+        """The ambiguous-id 409 carries no Retry-After and must remain non-retryable."""
+        import httpx
+
+        from context_intelligence.client import CIClientError
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(409, json={"detail": "ambiguous session id"})
+
+        client, factory = self._client_with(handler)
+        with (
+            patch("context_intelligence.client.httpx.AsyncClient", factory),
+            pytest.raises(CIClientError) as ei,
+        ):
+            await client.delete_session("s1")
+
+        assert ei.value.status_code == 409
+        assert ei.value.retry_after is None
+
+    async def test_404_semantic_code_still_carried_alongside(self):
+        """Retry-After propagation must not disturb the error_code contract."""
+        import httpx
+
+        from context_intelligence.client import CIClientError
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                404, json={"detail": {"code": "session_not_found", "message": "nope"}}
+            )
+
+        client, factory = self._client_with(handler)
+        with (
+            patch("context_intelligence.client.httpx.AsyncClient", factory),
+            pytest.raises(CIClientError) as ei,
+        ):
+            await client.delete_session("s1")
+
+        assert ei.value.status_code == 404
+        assert ei.value.error_code == "session_not_found"
+        assert ei.value.retry_after is None

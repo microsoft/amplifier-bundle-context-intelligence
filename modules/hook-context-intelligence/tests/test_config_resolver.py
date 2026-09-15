@@ -659,12 +659,19 @@ class TestDispatchQueueCapacity:
 
 
 class TestCloseDrainTimeout:
-    def test_defaults_to_10_seconds(self) -> None:
-        """close_drain_timeout returns 10.0 when not configured (generous for remote drains)."""
+    def test_defaults_to_20_seconds(self) -> None:
+        """close_drain_timeout returns 20.0 when not configured (generous for remote drains).
+
+        20.0 s is a CEILING, not a fixed wait: close() returns as soon as the
+        queue empties, so a healthy localhost drain never spends it. It covers a
+        SHORT tail (a few dozen events) at the several-hundred-ms-per-POST round
+        trip an Azure/APIM+Entra destination actually costs. It deliberately does
+        NOT attempt to drain a deep backlog -- that is a throughput problem.
+        """
         coordinator = _make_coordinator(config={})
         resolver = ConfigResolver(config={}, coordinator=coordinator)
 
-        assert resolver.close_drain_timeout == 10.0
+        assert resolver.close_drain_timeout == 20.0
 
     def test_reads_from_config(self) -> None:
         """close_drain_timeout returns the configured value as a float."""
@@ -695,18 +702,18 @@ class TestCloseDrainTimeout:
         assert resolver.close_drain_timeout == pytest.approx(0.1)
 
     def test_garbage_string_falls_back_to_default(self) -> None:
-        """close_drain_timeout: unparseable string 'abc' falls back to 10.0 (no ValueError crash)."""
+        """close_drain_timeout: unparseable string 'abc' falls back to 20.0 (no ValueError crash)."""
         coordinator = _make_coordinator(config={})
         resolver = ConfigResolver(config={"close_drain_timeout": "abc"}, coordinator=coordinator)
 
-        assert resolver.close_drain_timeout == 10.0
+        assert resolver.close_drain_timeout == 20.0
 
     def test_none_falls_back_to_default(self) -> None:
-        """close_drain_timeout: explicit None falls back to 10.0 (no TypeError)."""
+        """close_drain_timeout: explicit None falls back to 20.0 (no TypeError)."""
         coordinator = _make_coordinator(config={})
         resolver = ConfigResolver(config={"close_drain_timeout": None}, coordinator=coordinator)
 
-        assert resolver.close_drain_timeout == 10.0
+        assert resolver.close_drain_timeout == 20.0
 
 
 class TestAdditionalEvents:

@@ -248,6 +248,63 @@ def _disk_exclude_map(raw: dict[str, Any]) -> dict[str, list[str]]:
     return out
 
 
+def _compare_exclude_maps(
+    live: dict[str, list[str]],
+    disk: dict[str, list[str]],
+    dropped: set[str] | None = None,
+) -> dict[str, Any]:
+    """Compare live vs on-disk excludes over the destinations the FILE declares.
+
+    Why not set equality: the live filter comes from the kernel's *merged*
+    settings (global -> project -> local -> session, deep-merged), while
+    ``_read_destinations_from_settings`` reads exactly ONE file. A workspace
+    that declares or overrides destinations at project/local scope therefore
+    legitimately has live destinations the file has never heard of. Requiring
+    ``live == disk`` reports those as a fault and fails a filter that is in fact
+    correct.
+
+    So the comparison is scoped to the destinations actually present in the file
+    that was read: for each of those, the live exclude must match. Live-only
+    destinations are not evidence of inconsistency -- but they are not silently
+    ignored either: they are returned in ``unverified`` so the caller can see
+    exactly which destinations this file could not speak for.
+
+    ``dropped`` is the set of destinations that validation REJECTED as
+    misconfigured (missing url, unusable api_key, ...). Those are absent from
+    the live filter for a reason that has nothing to do with the exclude
+    filter, so counting them as a filter inconsistency is a false alarm --
+    and an easy one to trigger, since a single unexpanded ``${VAR}`` is
+    enough. They are reported under ``dropped_by_validation`` and excluded
+    from the consistent/inconsistent decision.
+
+    Returns {consistent, mismatched, missing_live, dropped_by_validation,
+    unverified, live, disk}.
+    """
+    dropped = dropped or set()
+    mismatched = {
+        name: {"live": live.get(name), "disk": patterns}
+        for name, patterns in disk.items()
+        if name in live and live[name] != patterns
+    }
+    # Declared on disk, absent from the live filter, and NOT explained by
+    # validation dropping it -- this is the case where the filter may be stale.
+    missing_live = sorted(name for name in disk if name not in live and name not in dropped)
+    # Declared on disk but rejected by validation: a destination-config problem,
+    # not a filter problem. Surfaced, but never a consistency fault.
+    dropped_by_validation = sorted(name for name in disk if name not in live and name in dropped)
+    # Live destinations this file cannot speak for (declared in another scope).
+    unverified = sorted(name for name in live if name not in disk)
+    return {
+        "consistent": not mismatched and not missing_live,
+        "mismatched": mismatched,
+        "missing_live": missing_live,
+        "dropped_by_validation": dropped_by_validation,
+        "unverified": unverified,
+        "live": live,
+        "disk": disk,
+    }
+
+
 async def mount(
     coordinator: Any, config: dict[str, Any]
 ) -> Callable[[], Coroutine[Any, Any, None]]:
@@ -315,9 +372,16 @@ async def mount(
         active destinations and their include/exclude.
 
         When ``verify_disk`` and ``settings_path`` are both given, the resulting
-        live filter is cross-checked against the on-disk block and a mismatch
-        raises (fail-loud: the running session must never believe an exclude is
-        applied when the file disagrees).
+        live filter is cross-checked against the on-disk block. A mismatch is
+        REPORTED (``disk_consistent=False`` plus ``disk_check``), never raised:
+        by the time the check runs the dispatcher swap has already happened, so
+        raising would throw away the only record of what actually went live and
+        leave the caller unable to tell "nothing was applied" from "everything
+        was applied but I cannot attest it". The caller decides what an
+        unattested-but-applied filter is worth.
+
+        Failures BEFORE/DURING the swap still raise -- those mean the filter did
+        not go live, which is a different and genuinely loud condition.
         """
         disk_raw = _read_destinations_from_settings(settings_path) if settings_path else None
         new_raw = raw_destinations if raw_destinations is not None else disk_raw
@@ -346,34 +410,55 @@ async def mount(
             "disk_consistent": None,
         }
         if verify_disk and settings_path is not None:
-            live = _exclude_map(new_dests)
-            disk = _disk_exclude_map(_read_destinations_from_settings(settings_path))
-            if live != disk:
-                raise RuntimeError(
-                    "set_ingestion_filters: live filter disagrees with on-disk settings "
-                    f"(live_exclude={live!r} disk_exclude={disk!r}); refusing to leave "
-                    "the running session believing an exclude is applied when the file "
-                    "disagrees."
+            check = _compare_exclude_maps(
+                _exclude_map(new_dests),
+                _disk_exclude_map(_read_destinations_from_settings(settings_path)),
+                dropped=set(new_raw) - set(new_dests),
+            )
+            report["disk_consistent"] = check["consistent"]
+            report["disk_check"] = check
+            if not check["consistent"]:
+                # Applied-but-unattested. Reported, not raised -- see docstring.
+                log.warning(
+                    "set_ingestion_filters: filters ARE live but disagree with %s "
+                    "(mismatched=%r missing_live=%r); reporting disk_consistent=False.",
+                    settings_path,
+                    check["mismatched"],
+                    check["missing_live"],
                 )
-            report["disk_consistent"] = True
         return report
 
     def verify_ingestion_consistency(settings_path: str) -> dict[str, Any]:
         """Fail-loud compare of the session's LIVE exclude filter vs on-disk.
 
-        Pure check — mutates nothing. Raises when the running session's live
-        per-destination exclude set does not match the settings.yaml on disk, in
-        EITHER direction (live patched but file not written; file written but
-        session not reapplied). Returns the two maps on agreement.
+        Pure check — mutates nothing. Raises when, for a destination the file
+        DECLARES, the running session's live exclude disagrees (live patched but
+        file not written; file written but session not reapplied).
+
+        Scoped to the destinations present in the file that was read: the live
+        filter is built from the kernel's merged settings (global -> project ->
+        local -> session), so a single file cannot speak for destinations
+        declared in another scope. Those are returned in ``unverified`` rather
+        than treated as a fault -- see ``_compare_exclude_maps``.
         """
-        live = _exclude_map(resolver.validate_destinations())
-        disk = _disk_exclude_map(_read_destinations_from_settings(settings_path))
-        if live != disk:
+        _validated = resolver.validate_destinations()
+        check = _compare_exclude_maps(
+            _exclude_map(_validated),
+            _disk_exclude_map(_read_destinations_from_settings(settings_path)),
+            dropped=resolver.raw_destination_names - set(_validated),
+        )
+        if not check["consistent"]:
             raise RuntimeError(
                 "context-intelligence: live ingestion filter disagrees with on-disk "
-                f"settings (live_exclude={live!r} disk_exclude={disk!r})."
+                f"settings {settings_path!r} (mismatched={check['mismatched']!r} "
+                f"declared_on_disk_but_not_live={check['missing_live']!r})."
             )
-        return {"live_exclude": live, "disk_exclude": disk, "consistent": True}
+        return {
+            "live_exclude": check["live"],
+            "disk_exclude": check["disk"],
+            "unverified": check["unverified"],
+            "consistent": True,
+        }
 
     coordinator.register_capability(
         "context_intelligence.set_ingestion_filters", set_ingestion_filters

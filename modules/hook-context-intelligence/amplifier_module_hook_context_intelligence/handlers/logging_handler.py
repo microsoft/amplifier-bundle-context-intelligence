@@ -32,7 +32,10 @@ logger = logging.getLogger(__name__)
 
 _OPTIONAL_METADATA_FIELDS = ("agent_name", "parallel_group_id", "recipe_name", "recipe_step")
 _DEFAULT_DISPATCH_QUEUE_CAPACITY = 256
-_DEFAULT_CLOSE_DRAIN_TIMEOUT = 10.0
+#: Mirrors ConfigResolver.close_drain_timeout's default. The RESOLVER is the
+#: single source of truth for configured runs; this constant exists only so a
+#: reader of this module does not see a stale number.
+_DEFAULT_CLOSE_DRAIN_TIMEOUT = 20.0
 _DEFAULT_BACKOFF_INITIAL = 1.0
 _DEFAULT_BACKOFF_MAX = 30.0
 _DEFAULT_BACKOFF_JITTER = True

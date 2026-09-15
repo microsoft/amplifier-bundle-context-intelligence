@@ -479,21 +479,39 @@ class HookConfigResolver:
     def close_drain_timeout(self) -> float:
         """Max seconds to wait for queued HTTP dispatches during cleanup.
 
-        Reads directly from config['close_drain_timeout'], defaults to 10.0.
+        Reads directly from config['close_drain_timeout'], defaults to 20.0.
         No coordinator fallback. Bad/unparseable input falls back to the
         default; values are clamped to a 0.1 s floor (see _coerce_positive_float)
         — matching the other dispatch_* timeout knobs.
 
-        The default is 10.0 s so that remote deployments (e.g. Azure behind APIM
+        The default is 20.0 s so that remote deployments (e.g. Azure behind APIM
         with a per-request Entra token) — whose round-trip is far longer than a
         sub-second budget allows — drain their queued tail events cleanly at
         shutdown out of the box. Undelivered events are always durable in
         events.jsonl (recoverable via context-intelligence-upload) regardless.
         Local/low-latency setups may lower this — e.g. ``close_drain_timeout: 0.5``
         — for a snappier shutdown.
+
+        THIS IS A CEILING, NOT A FIXED WAIT. ``close()`` awaits ``queue.join()``
+        and returns the instant the queue empties, so a healthy localhost drain
+        (sub-millisecond POSTs) is unaffected by the value. The window is only
+        actually spent when events are still in flight at shutdown.
+
+        Sizing rationale (10.0 -> 20.0): the previous 10.0 s default was chosen
+        for remote round-trips but measured against a real Azure/APIM+Entra
+        destination it still cut short SHORT tails. 20.0 s covers a tail of a
+        few dozen events at the several-hundred-ms-per-POST round trip that
+        path actually costs.
+
+        SCOPE — what this does NOT fix: a queue that is DEEP at shutdown
+        (hundreds of events) is a throughput problem, not a drain-window
+        problem. The dispatcher posts serially (one in-flight event at a time),
+        so against a slow remote destination a busy session can enqueue faster
+        than it drains all session long; no drain window empties that backlog.
+        That needs self-healing replay, tracked separately.
         """
         return _coerce_positive_float(
-            self._config.get("close_drain_timeout"), default=10.0, minimum=0.1
+            self._config.get("close_drain_timeout"), default=20.0, minimum=0.1
         )
 
     @property
@@ -590,6 +608,19 @@ class HookConfigResolver:
         """
         self._config = {**self._config, "destinations": raw_destinations}
         self._destinations = None
+
+    @property
+    def raw_destination_names(self) -> set[str]:
+        """Names in the RAW destinations block, before validation drops any.
+
+        ``validate_destinations()`` silently omits a destination it rejects as
+        misconfigured (missing url, unusable api_key, ...). Comparing this set
+        against the validated one is how a caller distinguishes "dropped as
+        misconfigured" from "absent for some other reason" -- without that,
+        a single unexpanded ``${VAR}`` looks like a stale ingestion filter.
+        """
+        raw = self._config.get("destinations")
+        return set(raw) if isinstance(raw, dict) else set()
 
     @property
     def destinations(self) -> dict[str, Destination]:

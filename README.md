@@ -244,7 +244,7 @@ config = {
     "exclude_events": ["context:compaction"],
     "dispatch_timeout": 30,          # HTTP write-phase budget (s), default 10.0
     "dispatch_read_timeout": 20,     # HTTP read-phase budget (s), default 10.0 — raise for slow/remote servers
-    "close_drain_timeout": 15,       # shutdown flush window (s), default 10.0 — raise for remote (Azure/APIM) drains
+    "close_drain_timeout": 30,       # shutdown flush window (s), default 20.0 — ceiling, not a fixed wait
     "dispatch_failure_threshold": 3,
 }
 ```
@@ -421,7 +421,7 @@ AMPLIFIER_CONTEXT_INTELLIGENCE_TOKEN_REFRESH_MARGIN_S=600
 | `dispatch_backoff_initial` | `${...}` placeholder | `1.0` | Initial backoff sleep (seconds) for the first DEGRADED retry. |
 | `dispatch_backoff_max` | `${...}` placeholder | `30.0` | Maximum backoff sleep (seconds); the cap for capped full-jitter backoff. |
 | `dispatch_backoff_jitter` | `${...}` placeholder | `true` | Enable full-jitter backoff. Set `false` to use a fixed `dispatch_backoff_initial` sleep per retry. String-aware: `"false"`, `"0"`, `"no"`, `"off"` (any case) are treated as `false`. |
-| `close_drain_timeout` | direct value | `0.5` | Shutdown grace period (seconds) for draining queued HTTP dispatches. |
+| `close_drain_timeout` | direct value | `20.0` | Shutdown grace period (seconds) for draining queued HTTP dispatches. A **ceiling, not a fixed wait** — `close()` returns as soon as the queue empties, so a healthy localhost drain never spends it. Sized for a SHORT tail on a remote (Azure/APIM+Entra) round trip; it does **not** drain a deep backlog. |
 
 > The **Source** column shows how a value reaches the config: a `${VAR}` placeholder in the YAML (expanded by app-cli from `keys.env`/environment), or a direct literal value. There is **no** automatic `AMPLIFIER_*` env-var → config mapping; only `${VAR}` placeholders present in the active config are read.
 
@@ -590,7 +590,7 @@ The worker uses lazy creation: it creates an `httpx.AsyncClient` on the first di
 
 **Overflow.** When the in-memory queue is full, the newest event is dropped using the drop-newest strategy (oldest events in the queue are preserved in delivery order). The dropped event remains durable in `events.jsonl`. A rate-limited WARNING names the real storage path and the recovery command: `context-intelligence-upload --path <storage path>`.
 
-**Shutdown.** When `close()` is called the worker is given a bounded drain window (`close_drain_timeout`, default 0.5 s) to finish in-flight work. Cancellation-safe: a sleeping backoff is cancelled cleanly. If any events remain undelivered an honest WARNING is emitted with a precise count (`queued + in-flight + overflow-dropped`) and the real storage path.
+**Shutdown.** When `close()` is called the worker is given a bounded drain window (`close_drain_timeout`, default 20.0 s — a ceiling, not a fixed wait: `close()` returns the moment the queue empties) to finish in-flight work. Cancellation-safe: a sleeping backoff is cancelled cleanly. If any events remain undelivered an honest WARNING is emitted with a precise count (`queued + in-flight + overflow-dropped`) and the real storage path.
 
 **Timeouts (all phases).** Connect: `dispatch_connect_timeout` (configurable, default 3.0 s; previously hardcoded 0.5 s — raised to prevent spurious connect-timeout failures on cross-region/VPN/proxy paths). Pool: 0.5 s (fixed). Write: `dispatch_timeout` (configurable, default 30 s). Read: `dispatch_read_timeout` (configurable, default 10.0 s; previously hardcoded 3.0 s — raised to prevent spurious read-timeout failures on slow server responses).
 

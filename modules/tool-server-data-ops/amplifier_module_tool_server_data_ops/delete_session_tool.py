@@ -25,6 +25,18 @@ from context_intelligence.tool_resolver import (
 )
 
 
+#: The server's machine-readable code for "this server looked, and the session
+#: is not here" (context_intelligence_server.routers.deletion).
+#:
+#: This is the ONLY thing that licenses reporting absence. A 404 on its own
+#: cannot: an unmatched route answers ``{"detail": "Not Found"}``, and any proxy
+#: or gateway can answer 404 without the request ever reaching the handler.
+#: Those are indistinguishable from a real "not here" by status code alone, so
+#: every 404 WITHOUT this code is unverified -- never "clean", never "already
+#: deleted", never "absent".
+SESSION_NOT_FOUND_CODE = "session_not_found"
+
+
 class DeleteSessionTool:
     """Permanently delete one session's whole graph from the context-intelligence server.
 
@@ -180,9 +192,12 @@ class DeleteSessionTool:
                 result = await async_client.delete_session(session_id)
                 break
             except CIClientError as exc:
-                if exc.status_code == 409 and exc.retry_after is not None and attempt < max_retries:
+                # Read ONCE, defensively: a client older than the retry_after
+                # attribute must degrade, not raise AttributeError mid-delete.
+                _retry_after = getattr(exc, "retry_after", None)
+                if exc.status_code == 409 and _retry_after is not None and attempt < max_retries:
                     attempt += 1
-                    await asyncio.sleep(exc.retry_after)
+                    await asyncio.sleep(_retry_after)
                     continue
                 # success=False + output unset is safe: ToolResult.model_post_init
                 # back-fills output from error["message"] when output is None. Do NOT
@@ -190,12 +205,23 @@ class DeleteSessionTool:
                 origin_name = conn.origin.name if conn.origin and conn.origin.name else conn.url
                 message = f"delete failed against {origin_name}: {exc}"
                 if exc.status_code == 404:
-                    message = f"unknown session {session_id!r} on {origin_name}"
-                elif exc.status_code == 409 and exc.retry_after is not None:
+                    # Only the server's own code licenses "already gone".
+                    if getattr(exc, "error_code", None) == SESSION_NOT_FOUND_CODE:
+                        message = f"unknown session {session_id!r} on {origin_name}"
+                    else:
+                        message = (
+                            f"CANNOT DELETE from {origin_name} and CANNOT VERIFY "
+                            f"whether session {session_id!r} is there: the 404 carries "
+                            f"no {SESSION_NOT_FOUND_CODE!r} code, so it may have come "
+                            "from a proxy, a gateway, or a server without the deletion "
+                            "routes. Do NOT report this source as clean, as already "
+                            "deleted, or as not holding the session."
+                        )
+                elif exc.status_code == 409 and _retry_after is not None:
                     message = (
                         f"session {session_id!r} on {origin_name} is still receiving "
                         f"data (still draining after {attempt} automatic retr"
-                        f"{'y' if attempt == 1 else 'ies'}); wait ~{exc.retry_after}s "
+                        f"{'y' if attempt == 1 else 'ies'}); wait ~{_retry_after}s "
                         "and try again"
                     )
                 elif exc.status_code == 409:
@@ -216,7 +242,7 @@ class DeleteSessionTool:
                         "type": exc.error_type,  # connection_error|timeout|http_status|decode_error
                         "source": _origin_dict(conn.origin),
                         **({"status_code": exc.status_code} if exc.status_code is not None else {}),
-                        **({"retry_after": exc.retry_after} if exc.retry_after is not None else {}),
+                        **({"retry_after": _retry_after} if _retry_after is not None else {}),
                     },
                 )
         return ToolResult(

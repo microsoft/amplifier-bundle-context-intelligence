@@ -521,3 +521,137 @@ class TestDeleteSessionServerErrors:
         assert result.success is True
         assert result.output["result"] == {"root_id": "live", "nodes_deleted": 3}
         assert mock_instance.delete_session.await_count == 2
+
+
+# ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+
+
+# ---------------------------------------------------------------------------
+# Delete-side 404 semantics + real old-client compatibility.
+#
+# Deletion may be reported successful ONLY from a successful delete response.
+# Any 404 without the server's session_not_found code must yield CANNOT DELETE
+# / CANNOT VERIFY -- never "clean", never "already deleted", never "absent".
+# ---------------------------------------------------------------------------
+from amplifier_module_tool_server_data_ops.delete_session_tool import (  # noqa: E402
+    SESSION_NOT_FOUND_CODE,
+)
+
+
+def _delete_raising(err: Exception):
+    inst = AsyncMock()
+    inst.delete_session = AsyncMock(side_effect=err)
+    return MagicMock(return_value=inst)
+
+
+def _del_error(status: int, *, code: str | None = None, retry_after: int | None = None):
+    """A real CIClientError, built the way the client builds one."""
+    from context_intelligence.client import CIClientError
+
+    detail = {"code": code, "message": "x"} if code else "Not Found"
+    return CIClientError(
+        f"HTTP {status} from http://ci-server:9000/sessions/s1",
+        error_type="http_status",
+        url="http://ci-server:9000/sessions/s1",
+        status_code=status,
+        retry_after=retry_after,
+        error_body={"detail": detail},
+        error_code=code,
+    )
+
+
+class TestDelete404Semantics:
+    async def test_semantic_not_found_reports_unknown_session(self) -> None:
+        from amplifier_module_tool_server_data_ops.delete_session_tool import DeleteSessionTool
+
+        tool = DeleteSessionTool(_make_coordinator(resolver=_make_hook_resolver()))
+        with patch(
+            "amplifier_module_tool_server_data_ops.delete_session_tool.AsyncCIClient",
+            _delete_raising(_del_error(404, code=SESSION_NOT_FOUND_CODE)),
+        ):
+            result = await tool.execute({"session_id": "s1", "confirm": True})
+        assert result.success is False
+        assert "unknown session" in result.error["message"]
+
+    async def test_generic_404_never_claims_clean_or_already_deleted(self) -> None:
+        from amplifier_module_tool_server_data_ops.delete_session_tool import DeleteSessionTool
+
+        tool = DeleteSessionTool(_make_coordinator(resolver=_make_hook_resolver()))
+        with patch(
+            "amplifier_module_tool_server_data_ops.delete_session_tool.AsyncCIClient",
+            _delete_raising(_del_error(404, code=None)),
+        ):
+            result = await tool.execute({"session_id": "s1", "confirm": True})
+        assert result.success is False
+        msg = result.error["message"]
+        assert "CANNOT DELETE" in msg and "CANNOT VERIFY" in msg
+        # It must not ASSERT absence. (The message names "clean" / "already
+        # deleted" only inside an explicit prohibition, so assert on the
+        # affirmative claim instead of naive substring absence.)
+        assert "unknown session" not in msg
+        assert "Do NOT report this source as clean" in msg
+
+    async def test_old_client_error_without_retry_after_does_not_crash(self) -> None:
+        """Salil's point 5, done honestly.
+
+        This is a genuinely OLD exception object -- it simply has no
+        `retry_after` attribute, exactly as a client predating that field would
+        raise. Nothing is assigned onto it to paper over the gap; if the tool
+        read `exc.retry_after` directly this test would raise AttributeError.
+        """
+        from amplifier_module_tool_server_data_ops.delete_session_tool import DeleteSessionTool
+
+        class OldCIClientError(Exception):
+            def __init__(self) -> None:
+                super().__init__("HTTP 409 from http://ci-server:9000/sessions/s1")
+                self.error_type = "http_status"
+                self.url = "http://ci-server:9000/sessions/s1"
+                self.status_code = 409
+
+        assert not hasattr(OldCIClientError(), "retry_after")
+
+        with (
+            patch(
+                "amplifier_module_tool_server_data_ops.delete_session_tool.CIClientError",
+                OldCIClientError,
+            ),
+            patch(
+                "amplifier_module_tool_server_data_ops.delete_session_tool.AsyncCIClient",
+                _delete_raising(OldCIClientError()),
+            ),
+        ):
+            tool = DeleteSessionTool(_make_coordinator(resolver=_make_hook_resolver()))
+            result = await tool.execute({"session_id": "s1", "confirm": True})
+
+        assert result.success is False  # fail-closed, no AttributeError
+
+    async def test_409_draining_still_retries_and_reports_unchanged(self) -> None:
+        """Existing 409 behaviour must be untouched by the 404 rework."""
+        from amplifier_module_tool_server_data_ops.delete_session_tool import DeleteSessionTool
+
+        tool = DeleteSessionTool(_make_coordinator(resolver=_make_hook_resolver()))
+        with (
+            patch(
+                "amplifier_module_tool_server_data_ops.delete_session_tool.AsyncCIClient",
+                _delete_raising(_del_error(409, retry_after=1)),
+            ),
+            patch("asyncio.sleep", new=AsyncMock()),
+        ):
+            result = await tool.execute({"session_id": "s1", "confirm": True})
+        assert result.success is False
+        assert "still receiving" in result.error["message"]
+        assert result.error["retry_after"] == 1
+
+    async def test_409_ambiguous_id_unchanged(self) -> None:
+        from amplifier_module_tool_server_data_ops.delete_session_tool import DeleteSessionTool
+
+        tool = DeleteSessionTool(_make_coordinator(resolver=_make_hook_resolver()))
+        with patch(
+            "amplifier_module_tool_server_data_ops.delete_session_tool.AsyncCIClient",
+            _delete_raising(_del_error(409, retry_after=None)),
+        ):
+            result = await tool.execute({"session_id": "s1", "confirm": True})
+        assert result.success is False
+        assert result.error["status_code"] == 409

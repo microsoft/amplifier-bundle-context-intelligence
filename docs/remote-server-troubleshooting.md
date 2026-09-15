@@ -34,7 +34,7 @@ startup).
 
 | Key | Default | What it bounds | Bump it for remote/Azure when… |
 |-----|---------|----------------|-------------------------------|
-| `close_drain_timeout` | `10.0` s | The **shutdown flush window** — how long `close()` waits for still-queued events to finish before the worker is cancelled. | You see `… shutdown: N undelivered event(s)`. |
+| `close_drain_timeout` | `20.0` s | The **shutdown flush window** — how long `close()` waits for still-queued events to finish before the worker is cancelled. A **ceiling, not a fixed wait**: `close()` returns the moment the queue empties. | You see `… shutdown: N undelivered event(s)` with a **small** `queued=` count. |
 | `dispatch_read_timeout` | `10.0` s | The HTTP **read** phase — waiting for the server's response after the request is sent. | You see `… unreachable, retrying with backoff`; APIM + graph-write latency is high. |
 | `dispatch_timeout` | `10.0` s | The HTTP **write** phase — sending the request body. | Large event bodies over a slow uplink. |
 | `dispatch_failure_threshold` | `3` | Consecutive failures before the escalation warning fires. | Rarely — raise only to quiet a flaky-but-recovering link. |
@@ -51,7 +51,7 @@ Example — a generous profile for an Azure/APIM destination:
 overrides:
   hook-context-intelligence:
     config:
-      close_drain_timeout: 15      # let the tail flush at shutdown
+      close_drain_timeout: 30      # let the tail flush at shutdown (default 20.0)
       dispatch_read_timeout: 20    # APIM + Entra + graph write can be slow
       destinations:
         azure-team:
@@ -64,15 +64,66 @@ overrides:
 
 ## Symptom → cause → fix
 
-### `<dest> shutdown: N undelivered event(s)`
+### `<dest> shutdown: N undelivered event(s) (queued=Q in-flight=F overflow-dropped=D)`
 
-- **Cause:** at session end the drain window (`close_drain_timeout`) elapsed before the
-  last few queued events finished their remote round-trip. This is the single most common
-  remote symptom. (The default is now `10.0 s`; older configs that pinned it to `0.5 s`
-  will see this constantly against a remote server.)
-- **Not data loss:** the `N` events remain durable in `events.jsonl`.
-- **Fix:** raise `close_drain_timeout` (e.g. `15`–`20`) so the tail flushes; or accept the
-  warning and replay the tail with `context-intelligence-upload`.
+**Read the breakdown before you reach for a knob — it names two different problems.**
+
+- **Not data loss, in either case:** all `N` events remain durable in `events.jsonl` and
+  replay with `context-intelligence-upload`.
+
+**Case 1 — SHORT tail (`queued=` single digits, `overflow-dropped=0`).**
+
+- **Cause:** the drain window (`close_drain_timeout`) elapsed before the last few queued
+  events finished their remote round-trip.
+- **Fix:** raise `close_drain_timeout` (default `20.0`; try `30`). The value is a
+  **ceiling, not a fixed wait** — `close()` returns the instant the queue empties, so
+  raising it costs nothing on a healthy drain.
+
+**Case 2 — DEEP queue (`queued=` in the dozens/hundreds, and/or `overflow-dropped>0`).**
+
+- **Cause:** this is a **throughput** problem, not a drain-window problem. The dispatcher
+  posts **serially** — one in-flight event at a time — so its ceiling is roughly one event
+  per round-trip. Against a remote destination costing several hundred ms per POST, a busy
+  session enqueues faster than it drains, all session long. The queue is already deep long
+  before shutdown; `overflow-dropped>0` means it also hit `dispatch_queue_capacity` (256)
+  and shed the newest events.
+- **Tell-tale:** `breaker_open=False` and `degraded_seconds=0` in the matching
+  `shutdown_undelivered` record in `forwarding-YYYY-MM-DD.jsonl` — the destination is
+  **healthy**, just slower than you produce.
+- **Do NOT** just raise `close_drain_timeout`: no drain window empties a 150-deep queue,
+  and you will only lengthen shutdown.
+- **Fix today:** replay with `context-intelligence-upload` (the `idempotency_key` on every
+  payload makes replay duplicate-free). Raising `dispatch_queue_capacity` converts
+  *overflow drops* into *queued* events — it does not make them deliver.
+
+To see which case you are in across all sessions, aggregate the durable records:
+
+```bash
+python3 - <<'EOF'
+import json, glob, os, re, statistics
+pat = re.compile(r"queued=(\d+) in_flight=(\d+) overflow_dropped=(\d+)")
+rows = []
+for f in glob.glob(os.path.expanduser("~/.amplifier/context-intelligence-logs/forwarding-*.jsonl")):
+    for line in open(f):
+        try: r = json.loads(line)
+        except Exception: continue
+        if r.get("kind") != "shutdown_undelivered": continue
+        m = pat.search(r.get("detail", ""))
+        if m: rows.append(tuple(int(x) for x in m.groups()))
+if rows:
+    q = [r[0] for r in rows]
+    print(f"{len(rows)} shutdowns | median queued={statistics.median(q)} max={max(q)} "
+          f"| with overflow drops: {sum(1 for r in rows if r[2])}")
+EOF
+```
+
+Real output from a workstation forwarding to an Azure/APIM destination — a textbook Case 2:
+
+```
+215 shutdowns | median queued=157 max=256 | with overflow drops: 77
+```
+
+A median `queued` in the dozens or higher is Case 2.
 
 ### `<dest> unreachable, retrying with backoff — events still captured locally`
 
@@ -210,7 +261,7 @@ you want to backfill a destination that was down.
 
 | You see… | Do this |
 |----------|---------|
-| `shutdown: N undelivered event(s)` | Raise `close_drain_timeout`; tail is safe in `events.jsonl`. |
+| `shutdown: N undelivered event(s)` | Read `queued=`. Small → raise `close_drain_timeout`. Deep / `overflow-dropped>0` → throughput, not the drain window; replay with `context-intelligence-upload`. Safe in `events.jsonl` either way. |
 | `unreachable, retrying with backoff` | One-off → ignore. Sustained → raise `dispatch_read_timeout`, check the path. |
 | `still rejecting auth (HTTP 401)` | Probe the key (`422` = OK); check `auth_mode`; if key was rotated, **restart** the session. |
 | A key was rotated mid-session | Restart the session — the old key is cached until then. |
