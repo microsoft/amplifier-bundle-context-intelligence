@@ -114,12 +114,23 @@ class _FakeClient:
         return None
 
 
+class _Spec:
+    """Stand-in with the two fields fanout reads. Mirrors config_resolver.Destination."""
+
+    def __init__(self, include: tuple[str, ...] = ("**",), exclude: tuple[str, ...] = ()) -> None:
+        self.include = include
+        self.exclude = exclude
+
+
 def _sweeper(project: Path, **overrides: Any) -> BacklogSweeper:
     kwargs: dict[str, Any] = {
         "destination": DEST,
         "url": URL,
         "auth": _Auth(),
         "project_dir": project,
+        # Default to "everything allowed" so the existing delivery tests keep
+        # testing DELIVERY. Routing is exercised explicitly below.
+        "spec": _Spec(include=("**",)),
         "bounds": SweepBounds(),
     }
     kwargs.update(overrides)
@@ -423,3 +434,137 @@ class TestCancellationSafety:
         watermark, _ = DeliveryWatermark.load(session_dir, DEST, destination_url=URL)
         assert watermark.offset == 0
         assert watermark.last_outcome == "no_progress"
+
+
+@pytest.mark.asyncio
+class TestRoutingIsEnforced:
+    """The sweep MUST obey each session's own include/exclude.
+
+    A project directory can hold sessions from several working directories --
+    `project_slug` falls back to "default" when the capability is unavailable, so
+    unrelated trees collide there routinely. Forwarding every session it finds to
+    whatever the CURRENT session matched would reroute one session's events using
+    another session's permissions. An event delivered where it was excluded cannot
+    be recalled, so this is a leak, not an inefficiency.
+
+    Routing therefore INVERTS this module's usual failure bias: everything else
+    fails toward re-sending, this fails toward NOT sending.
+    """
+
+    async def test_excluded_session_is_never_posted(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _make_session(tmp_path, "secret", events=5)
+        client = _FakeClient()
+        monkeypatch.setattr(
+            "amplifier_module_hook_context_intelligence.handlers.backlog_sweep.httpx.AsyncClient",
+            lambda *a, **k: client,
+        )
+        report = await _sweeper(tmp_path, spec=_Spec(include=("**",), exclude=("/work/**",))).run()
+
+        assert client.posted == [], "events were sent to an EXCLUDED destination"
+        assert report.events_delivered == 0
+        assert report.sessions_skipped_filtered == 1
+
+    async def test_included_session_is_swept(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _make_session(tmp_path, "ok", events=5)
+        client = _FakeClient()
+        monkeypatch.setattr(
+            "amplifier_module_hook_context_intelligence.handlers.backlog_sweep.httpx.AsyncClient",
+            lambda *a, **k: client,
+        )
+        report = await _sweeper(tmp_path, spec=_Spec(include=("/work/**",))).run()
+        assert report.events_delivered == 5
+        assert report.sessions_skipped_filtered == 0
+
+    async def test_empty_include_matches_nothing(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """An empty include is 'nowhere', never 'everywhere'."""
+        _make_session(tmp_path, "s1", events=5)
+        client = _FakeClient()
+        monkeypatch.setattr(
+            "amplifier_module_hook_context_intelligence.handlers.backlog_sweep.httpx.AsyncClient",
+            lambda *a, **k: client,
+        )
+        report = await _sweeper(tmp_path, spec=_Spec(include=())).run()
+        assert client.posted == []
+        assert report.sessions_skipped_filtered == 1
+
+    async def test_exclude_wins_over_include(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _make_session(tmp_path, "s1", events=5)
+        client = _FakeClient()
+        monkeypatch.setattr(
+            "amplifier_module_hook_context_intelligence.handlers.backlog_sweep.httpx.AsyncClient",
+            lambda *a, **k: client,
+        )
+        report = await _sweeper(
+            tmp_path, spec=_Spec(include=("/work/**",), exclude=("/work/x/**",))
+        ).run()
+        assert client.posted == []
+        assert report.sessions_skipped_filtered == 1
+
+    async def test_mixed_project_dir_routes_each_session_by_its_own_working_dir(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """THE leak scenario: two working dirs colliding in one project dir."""
+        allowed = _make_session(tmp_path, "public", events=4)
+        secret = _make_session(tmp_path, "client-x", events=4)
+        for session_dir, wd in ((allowed, "/work/public"), (secret, "/work/client-x")):
+            meta = json.loads((session_dir / "metadata.json").read_text())
+            meta["working_dir"] = wd
+            (session_dir / "metadata.json").write_text(json.dumps(meta))
+
+        client = _FakeClient()
+        monkeypatch.setattr(
+            "amplifier_module_hook_context_intelligence.handlers.backlog_sweep.httpx.AsyncClient",
+            lambda *a, **k: client,
+        )
+        report = await _sweeper(
+            tmp_path, spec=_Spec(include=("**",), exclude=("/work/client-x/**",))
+        ).run()
+
+        assert report.events_delivered == 4, "the permitted session should still heal"
+        assert report.sessions_skipped_filtered == 1
+        secret_wm = secret / "delivery" / f"{DEST}.json"
+        assert not secret_wm.exists(), "the excluded session was touched at all"
+
+    async def test_missing_working_dir_is_blocked_not_assumed(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Fail CLOSED: unprovable routing is refused, and said out loud."""
+        session_dir = _make_session(tmp_path, "s1", events=5)
+        meta = json.loads((session_dir / "metadata.json").read_text())
+        del meta["working_dir"]
+        (session_dir / "metadata.json").write_text(json.dumps(meta))
+
+        client = _FakeClient()
+        monkeypatch.setattr(
+            "amplifier_module_hook_context_intelligence.handlers.backlog_sweep.httpx.AsyncClient",
+            lambda *a, **k: client,
+        )
+        report = await _sweeper(tmp_path, spec=_Spec(include=("**",))).run()
+
+        assert client.posted == [], "swept a session whose routing could not be proven"
+        assert report.sessions_blocked_unprovable == 1
+        assert any("BLOCKED" in n for n in report.notes)
+
+    async def test_blank_working_dir_is_blocked(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        session_dir = _make_session(tmp_path, "s1", events=5)
+        meta = json.loads((session_dir / "metadata.json").read_text())
+        meta["working_dir"] = "   "
+        (session_dir / "metadata.json").write_text(json.dumps(meta))
+        client = _FakeClient()
+        monkeypatch.setattr(
+            "amplifier_module_hook_context_intelligence.handlers.backlog_sweep.httpx.AsyncClient",
+            lambda *a, **k: client,
+        )
+        report = await _sweeper(tmp_path, spec=_Spec(include=("**",))).run()
+        assert client.posted == []
+        assert report.sessions_blocked_unprovable == 1

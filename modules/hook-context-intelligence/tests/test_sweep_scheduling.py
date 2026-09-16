@@ -46,7 +46,21 @@ class _Resolver:
             setattr(self, key, value)
 
 
+class _Spec:
+    """Minimal destination spec. The scheduler now REQUIRES one per destination:
+    a sweeper that cannot evaluate include/exclude is not started at all."""
+
+    include = ("**",)
+    exclude = ()
+
+
+#: Keyed by dispatcher name, as apply_active_dispatchers passes them.
+SPECS = {"main": _Spec()}
+
+
 class _Dispatcher:
+    """Mutable name so a spec-less destination can be simulated."""
+
     def __init__(self) -> None:
         self.name = "main"
         self.url = "https://ci.example.com"
@@ -75,7 +89,10 @@ class TestConfigDefaults:
 class TestSchedulingLoop:
     async def test_disabled_sweep_schedules_nothing(self, tmp_path: Any) -> None:
         assert (
-            schedule_backlog_sweeps(_Resolver(tmp_path, sweep_enabled=False), [_Dispatcher()]) == []
+            schedule_backlog_sweeps(
+                _Resolver(tmp_path, sweep_enabled=False), [_Dispatcher()], SPECS
+            )
+            == []
         )
 
     async def test_single_pass_when_interval_is_zero(
@@ -93,7 +110,7 @@ class TestSchedulingLoop:
             fake_run,
         )
         handles = schedule_backlog_sweeps(
-            _Resolver(tmp_path, sweep_interval_seconds=0.0), [_Dispatcher()]
+            _Resolver(tmp_path, sweep_interval_seconds=0.0), [_Dispatcher()], SPECS
         )
         await asyncio.gather(*(h.task for h in handles))
         assert runs == 1
@@ -114,7 +131,7 @@ class TestSchedulingLoop:
             fake_run,
         )
         handles = schedule_backlog_sweeps(
-            _Resolver(tmp_path, sweep_interval_seconds=0.01), [_Dispatcher()]
+            _Resolver(tmp_path, sweep_interval_seconds=0.01), [_Dispatcher()], SPECS
         )
         await asyncio.sleep(0.08)
         for handle in handles:
@@ -139,7 +156,7 @@ class TestSchedulingLoop:
             fake_run,
         )
         handles = schedule_backlog_sweeps(
-            _Resolver(tmp_path, sweep_interval_seconds=0.01), [_Dispatcher()]
+            _Resolver(tmp_path, sweep_interval_seconds=0.01), [_Dispatcher()], SPECS
         )
         await asyncio.sleep(0.06)
         for handle in handles:
@@ -159,7 +176,7 @@ class TestSchedulingLoop:
             fake_run,
         )
         handles = schedule_backlog_sweeps(
-            _Resolver(tmp_path, sweep_interval_seconds=1.0), [_Dispatcher()]
+            _Resolver(tmp_path, sweep_interval_seconds=1.0), [_Dispatcher()], SPECS
         )
         await asyncio.sleep(0)
         for handle in handles:
@@ -272,7 +289,7 @@ class TestExitIsNotSlowedWhenIdle:
             instant,
         )
         handles = schedule_backlog_sweeps(
-            _Resolver(tmp_path, sweep_interval_seconds=60.0), [_Dispatcher()]
+            _Resolver(tmp_path, sweep_interval_seconds=60.0), [_Dispatcher()], SPECS
         )
         await asyncio.sleep(0.05)  # first pass done; task now idle between passes
         assert await self._cost(handles, grace=2.0) < 0.2, (
@@ -291,7 +308,7 @@ class TestExitIsNotSlowedWhenIdle:
             slow,
         )
         handles = schedule_backlog_sweeps(
-            _Resolver(tmp_path, sweep_interval_seconds=60.0), [_Dispatcher()]
+            _Resolver(tmp_path, sweep_interval_seconds=60.0), [_Dispatcher()], SPECS
         )
         await asyncio.sleep(0.05)
         cost = await self._cost(handles, grace=0.3)
@@ -309,7 +326,7 @@ class TestExitIsNotSlowedWhenIdle:
             slow,
         )
         handles = schedule_backlog_sweeps(
-            _Resolver(tmp_path, sweep_interval_seconds=60.0), [_Dispatcher()]
+            _Resolver(tmp_path, sweep_interval_seconds=60.0), [_Dispatcher()], SPECS
         )
         await asyncio.sleep(0.05)
         assert await self._cost(handles, grace=0.0) < 0.2
@@ -334,3 +351,23 @@ class TestExitIsNotSlowedWhenIdle:
         await asyncio.sleep(0.05)
         cost = await self._cost(handles, grace=0.3)
         assert cost < 1.0, f"budget multiplied by destination count: {cost:.3f}s"
+
+
+@pytest.mark.asyncio
+class TestSweeperRequiresARoutingSpec:
+    """No include/exclude, no sweeper. Refusing is recoverable; leaking is not."""
+
+    async def test_destination_without_a_spec_gets_no_sweeper(self, tmp_path: Any) -> None:
+        handles = schedule_backlog_sweeps(_Resolver(tmp_path), [_Dispatcher()], {})
+        assert handles == []
+
+    async def test_only_specced_destinations_are_swept(self, tmp_path: Any) -> None:
+        other = _Dispatcher()
+        other.name = "no-spec"
+        handles = schedule_backlog_sweeps(
+            _Resolver(tmp_path, sweep_interval_seconds=0.0), [_Dispatcher(), other], SPECS
+        )
+        assert len(handles) == 1
+        for handle in handles:
+            handle.cancel()
+        await asyncio.gather(*(h.task for h in handles), return_exceptions=True)

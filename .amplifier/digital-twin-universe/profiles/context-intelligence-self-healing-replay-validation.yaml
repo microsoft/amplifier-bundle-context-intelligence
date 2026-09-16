@@ -335,6 +335,70 @@ provision:
       PY
       S5EOF
 
+    - |
+      cat > /root/s6_routing.sh << 'S6EOF'
+      . /root/_common.sh
+      echo "=== S6: the sweep MUST obey each session's own include/exclude ==="
+      # Two sessions, two working dirs, ONE project dir -- the collision that makes this
+      # a leak rather than an inefficiency. project_slug falls back to "default" when the
+      # capability is unavailable, so unrelated trees share a directory routinely.
+      P=/root/.amplifier/projects/-mixed
+      mkdir -p $P/sessions/s-allowed/context-intelligence $P/sessions/s-secret/context-intelligence
+      python3 - "$P" "$WORKSPACE" <<'PY'
+      import json, sys, pathlib, datetime
+      root, ws = pathlib.Path(sys.argv[1]), sys.argv[2]
+      now = datetime.datetime.now(datetime.timezone.utc).isoformat()
+      for sid, wd, suffix in (("s-allowed", "/work/public", "-allowed"),
+                              ("s-secret",  "/work/client-x", "-secret")):
+          d = root / "sessions" / sid / "context-intelligence"
+          with (d / "events.jsonl").open("w") as fh:
+              for i in range(15):
+                  fh.write(json.dumps({"event": f"probe:{i}", "workspace": ws + suffix,
+                      "timestamp": "2026-09-16T00:00:00Z",
+                      "data": {"session_id": sid, "timestamp": "2026-09-16T00:00:00Z"}}) + "\n")
+          (d / "metadata.json").write_text(json.dumps({"session_id": sid, "workspace": ws + suffix,
+              "working_dir": wd, "started_at": now, "last_event_at": now, "status": "completed"}))
+      print("planted /work/public (allowed) and /work/client-x (EXCLUDED)")
+      PY
+      $CI_PY - "$WORKSPACE" <<'PY'
+      import asyncio, pathlib, sys
+      from amplifier_module_hook_context_intelligence.config_resolver import Destination
+      from amplifier_module_hook_context_intelligence.handlers.backlog_sweep import (
+          BacklogSweeper, SweepBounds)
+      ws = sys.argv[1]
+      class A:
+          def headers(self): return {"Authorization": "Bearer heal-token-xyz"}
+      spec = Destination(name="main", url="http://127.0.0.1:8100", api_key="x",
+                         include=("**",), exclude=("/work/client-x/**",))
+      r = asyncio.run(BacklogSweeper(destination="main", url="http://127.0.0.1:8100",
+          auth=A(), project_dir=pathlib.Path("/root/.amplifier/projects/-mixed"),
+          spec=spec, bounds=SweepBounds()).run())
+      print(f"delivered={r.events_delivered} filtered={r.sessions_skipped_filtered} "
+            f"blocked={r.sessions_blocked_unprovable}")
+      assert r.sessions_skipped_filtered == 1, r.sessions_skipped_filtered
+      assert r.events_delivered == 15, r.events_delivered
+      PY
+      sleep 12
+      echo "--- server truth: the EXCLUDED workspace must be empty ---"
+      python3 $V nodes --server "$SERVER_URL" --token "$SERVER_TOKEN" --workspace "${WORKSPACE}-secret"
+      python3 $V nodes --server "$SERVER_URL" --token "$SERVER_TOKEN" --workspace "${WORKSPACE}-allowed"
+      python3 - <<PY
+      import json, subprocess
+      def n(ws):
+          out = subprocess.run(["python3", "$V", "nodes", "--server", "$SERVER_URL",
+              "--token", "$SERVER_TOKEN", "--workspace", ws], capture_output=True, text=True).stdout
+          return json.loads(out)["nodes"]
+      secret, allowed = n("${WORKSPACE}-secret"), n("${WORKSPACE}-allowed")
+      assert secret == 0, f"LEAK: {secret} nodes reached the server for an EXCLUDED working_dir"
+      assert allowed > 0, f"the permitted session did not heal ({allowed} nodes)"
+      print(f"PASS: excluded workspace has {secret} nodes; permitted has {allowed}")
+      PY
+      # And the excluded session must not even have been TOUCHED.
+      test ! -e $P/sessions/s-secret/context-intelligence/delivery/main.json \
+        && echo "PASS: no watermark written for the excluded session -- never opened" \
+        || { echo "FAIL: the excluded session was processed"; exit 1; }
+      S6EOF
+
     - amplifier --version
 
 readiness:
@@ -437,6 +501,15 @@ manual_validation_steps:
       PASS: against a dead destination the watermark stays at 0, last_outcome is
       no_progress, a real error is recorded, and the no-progress counter
       increments. Self-healing must never mask a genuine outage.
+
+  - name: S6-the-sweep-obeys-include-exclude
+    command: bash /root/s6_routing.sh
+    expect: >
+      PASS: a session whose working_dir is EXCLUDED is never swept -- zero nodes reach
+      the server for it, and no watermark is even written for it -- while a permitted
+      session in the SAME project directory heals normally. Self-healing that ignored
+      include/exclude would be a leak, not an optimisation: an event delivered where it
+      was excluded cannot be recalled.
 
   - name: S5-the-age-bound-is-audible
     command: bash /root/s5_age_bound.sh

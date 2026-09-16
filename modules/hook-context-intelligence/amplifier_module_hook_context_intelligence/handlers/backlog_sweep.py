@@ -47,11 +47,14 @@ from typing import TYPE_CHECKING, Any
 
 import httpx
 
+from ..fanout import destination_is_active, normalize_match_key
 from ..upload import build_payload
 from .delivery_watermark import DeliveryWatermark, SweepLock
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from context_intelligence.auth import AuthStrategy
+
+    from ..config_resolver import Destination
 
 logger = logging.getLogger(__name__)
 
@@ -92,6 +95,13 @@ class SweepReport:
     sessions_skipped_age: int = 0
     sessions_skipped_caught_up: int = 0
     sessions_skipped_locked: int = 0
+    #: In-window sessions this destination is NOT allowed to receive. Routine and
+    #: expected -- one project directory can hold sessions from several working
+    #: directories, and each one's own include/exclude decides where it may go.
+    sessions_skipped_filtered: int = 0
+    #: In-window sessions whose working_dir could not be established, so their
+    #: routing could not be PROVEN. Never swept. Surfaced, never silent.
+    sessions_blocked_unprovable: int = 0
     events_delivered: int = 0
     events_failed: int = 0
     bytes_advanced: int = 0
@@ -219,10 +229,15 @@ class BacklogSweeper:
         url: str,
         auth: AuthStrategy,
         project_dir: Path,
+        spec: Destination,
         bounds: SweepBounds | None = None,
         timeout: float = 10.0,
     ) -> None:
         self._destination = destination
+        #: The destination's OWN include/exclude. Required, not optional: without
+        #: it this class cannot answer "may this session's events go here?", and
+        #: a sweeper that cannot answer that must not run.
+        self._spec = spec
         self._url = url.rstrip("/")
         self._endpoint = f"{self._url}/events"
         self._auth = auth
@@ -261,6 +276,42 @@ class BacklogSweeper:
         if response.status_code in (200, 201, 202):
             return True, ""
         return False, f"HTTP {response.status_code}: {response.text[:200]}"
+
+    # -- routing: may this session's events go to this destination? -------
+
+    def _routing_verdict(self, session_dir: Path, metadata: dict[str, Any]) -> tuple[bool, str]:
+        """Re-evaluate THIS session's include/exclude for THIS destination.
+
+        Load-bearing, and the reason it exists is worth stating plainly: the
+        sweep walks a PROJECT directory, but a project directory can hold
+        sessions from several different working directories -- ``project_slug``
+        falls back to ``"default"`` when the capability is unavailable, so
+        unrelated trees collide there routinely. Without this check the sweep
+        would forward every session it finds to whatever destinations the
+        CURRENT session happens to match, which silently reroutes one session's
+        events using another session's permissions. That is a leak, not an
+        inefficiency: an event delivered somewhere it was excluded from cannot be
+        recalled.
+
+        So routing INVERTS this module's usual failure bias. Every delivery guard
+        elsewhere fails toward re-sending, because a duplicate is absorbed by the
+        server's MERGE while a skip loses data. Here the opposite holds: a
+        wrongly-sent event is unrecoverable, a wrongly-skipped one is picked up
+        by the next sweep. **When routing cannot be proven, it is refused.**
+
+        The matcher is the live path's own (``fanout``), never a second
+        implementation of the rules.
+        """
+        working_dir = metadata.get("working_dir")
+        if not isinstance(working_dir, str) or not working_dir.strip():
+            return False, "working_dir missing from metadata.json -- routing unprovable"
+        try:
+            match_key = normalize_match_key(working_dir)
+        except ValueError as exc:
+            return False, f"working_dir unusable ({exc}) -- routing unprovable"
+        if not destination_is_active(self._spec, match_key):
+            return False, f"excluded by this destination's include/exclude for {working_dir}"
+        return True, ""
 
     # -- one session ----------------------------------------------------
 
@@ -406,6 +457,27 @@ class BacklogSweeper:
                 for session_dir, metadata in sessions:
                     if budget <= 0:
                         break
+                    # ROUTING GATE -- before the watermark is read, before a lock
+                    # is taken, before a single byte is sent. A session this
+                    # destination may not receive is not "skipped later", it is
+                    # never touched.
+                    allowed, why = self._routing_verdict(session_dir, metadata)
+                    if not allowed:
+                        if "unprovable" in why:
+                            report.sessions_blocked_unprovable += 1
+                            report.notes.append(f"BLOCKED {session_dir}: {why}")
+                            logger.warning(
+                                "%s: refusing to sweep %s -- %s",
+                                self._destination,
+                                session_dir,
+                                why,
+                            )
+                        else:
+                            report.sessions_skipped_filtered += 1
+                            logger.debug(
+                                "%s: not routed this session -- %s", self._destination, why
+                            )
+                        continue
                     watermark, _ = DeliveryWatermark.load(
                         session_dir, self._destination, destination_url=self._url
                     )

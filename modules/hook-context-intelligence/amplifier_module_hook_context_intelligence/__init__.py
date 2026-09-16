@@ -161,6 +161,26 @@ async def apply_active_dispatchers(
                 d.name,
                 exc_info=True,
             )
+    # Stop the PREVIOUS round's sweeps BEFORE the new dispatcher set goes live.
+    # Order and awaiting both matter: asyncio's cancel() only REQUESTS
+    # cancellation, so a fire-and-forget cancel leaves the old sweeps running
+    # against the old destination set. If this swap just EXCLUDED a destination,
+    # those sweeps own their own HTTP client and auth -- closing the dispatcher
+    # does not stop them -- and they would keep delivering to a destination the
+    # user just switched off. Teardown already does this correctly; this path
+    # must match it.
+    get_cap_state = getattr(coordinator, "get_capability", None)
+    state = get_cap_state("context_intelligence._hook_state") if get_cap_state else None
+    previous = list(state.get("sweep_tasks") or []) if isinstance(state, dict) else []
+    if previous:
+        await await_sweeps_idle(previous, resolver.sweep_close_grace_seconds)
+        for handle in previous:
+            handle.cancel()
+        # Await the cancellations: "cancelled" must mean "actually stopped".
+        await asyncio.gather(*(h.task for h in previous), return_exceptions=True)
+        if isinstance(state, dict):
+            state["sweep_tasks"] = []
+
     await logging_handler.set_dispatchers(dispatchers)
 
     # Self-healing catch-up for anything a PREVIOUS session left undelivered.
@@ -171,14 +191,10 @@ async def apply_active_dispatchers(
     # which set_ingestion_filters also depends on -- stays unchanged. Re-running
     # this function (a mid-session filter swap) cancels the previous round's
     # sweeps first: the destination set may have just changed underneath them.
-    get_cap_state = getattr(coordinator, "get_capability", None)
-    state = get_cap_state("context_intelligence._hook_state") if get_cap_state else None
     if isinstance(state, dict):
-        for previous in state.get("sweep_tasks") or []:
-            previous.cancel()
-        state["sweep_tasks"] = schedule_backlog_sweeps(resolver, dispatchers)
+        state["sweep_tasks"] = schedule_backlog_sweeps(resolver, dispatchers, active)
     else:
-        schedule_backlog_sweeps(resolver, dispatchers)
+        schedule_backlog_sweeps(resolver, dispatchers, active)
 
     if not destinations:
         log.info("context-intelligence fan-out: no destinations configured — local JSONL only")
@@ -274,7 +290,9 @@ class _SweepHandle:
         self.task.cancel()
 
 
-def schedule_backlog_sweeps(resolver: Any, dispatchers: list[Any]) -> list[Any]:
+def schedule_backlog_sweeps(
+    resolver: Any, dispatchers: list[Any], destinations: dict[str, Any] | None = None
+) -> list[Any]:
     """Start one CONTINUOUS catch-up sweep per active destination.
 
     Runs an immediate pass at session start, then repeats every
@@ -306,8 +324,20 @@ def schedule_backlog_sweeps(resolver: Any, dispatchers: list[Any]) -> list[Any]:
     )
     project_dir = resolver.base_path / resolver.project_slug
 
+    specs = destinations or {}
     tasks: list[Any] = []
     for dispatcher in dispatchers:
+        spec = specs.get(dispatcher.name)
+        if spec is None:
+            # No include/exclude for this destination means its routing cannot be
+            # evaluated. A sweeper that cannot prove where events may go does not
+            # run -- refusing is recoverable, leaking is not.
+            log.warning(
+                "context-intelligence: no destination spec for %s; backlog sweep"
+                " disabled for it (routing cannot be verified)",
+                dispatcher.name,
+            )
+            continue
         sweeper: Any = BacklogSweeper(
             destination=dispatcher.name,
             url=dispatcher.url,
@@ -315,6 +345,7 @@ def schedule_backlog_sweeps(resolver: Any, dispatchers: list[Any]) -> list[Any]:
             # second Entra token or diverge from live-path auth.
             auth=dispatcher.auth_strategy,
             project_dir=project_dir,
+            spec=spec,
             bounds=bounds,
             timeout=resolver.dispatch_timeout,
         )
