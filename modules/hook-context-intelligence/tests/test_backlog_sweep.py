@@ -157,11 +157,18 @@ class TestSelectCandidates:
         assert stranded == 1
         assert oldest > 48, "the stranded age must be reported so the bound is audible"
 
-    def test_max_sessions_caps_the_pass(self, tmp_path: Path) -> None:
+    def test_returns_every_in_window_candidate_and_does_not_cap(self, tmp_path: Path) -> None:
+        """The cap is the SWEEPER's job, deliberately.
+
+        Capping here, before routing eligibility is known, starves the sweep: the
+        oldest N sessions may all be ineligible for this destination, and since
+        selection is deterministic the same N are picked every pass. See
+        TestRoutingDoesNotStarveTheBudget.
+        """
         for i in range(5):
             _make_session(tmp_path, f"s{i}", age_hours=1.0)
         selected, _, _ = select_candidates(tmp_path, SweepBounds(max_sessions=2))
-        assert len(selected) == 2
+        assert len(selected) == 5
 
     def test_oldest_first(self, tmp_path: Path) -> None:
         """A backlog drains in the order it accumulated."""
@@ -568,3 +575,88 @@ class TestRoutingIsEnforced:
         report = await _sweeper(tmp_path, spec=_Spec(include=("**",))).run()
         assert client.posted == []
         assert report.sessions_blocked_unprovable == 1
+
+
+@pytest.mark.asyncio
+class TestRoutingDoesNotStarveTheBudget:
+    """`max_sessions` must be spent on ELIGIBLE sessions, never on excluded ones.
+
+    Regression for the review finding: `select_candidates` used to slice to
+    `max_sessions` BEFORE routing eligibility was known. Because selection is
+    deterministic (oldest first), the same excluded sessions were chosen on every
+    pass, so a permitted session behind them was never reached -- and eventually
+    aged out of the window, at which point it was permanently excluded from
+    automatic recovery too. Reported symptom:
+
+        {'sessions_considered': 20, 'filtered': 20, 'delivered': 0}
+    """
+
+    async def test_twenty_excluded_plus_one_allowed_still_delivers_the_allowed_one(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        now = datetime.now(UTC)
+        # 20 OLDER excluded sessions -- they sort first, so they used to consume
+        # the entire session budget before the permitted one was even looked at.
+        for i in range(20):
+            session_dir = _make_session(tmp_path, f"blocked-{i:02d}", events=2, age_hours=10 + i)
+            meta = json.loads((session_dir / "metadata.json").read_text())
+            meta["working_dir"] = "/work/client-x"
+            (session_dir / "metadata.json").write_text(json.dumps(meta))
+        allowed = _make_session(tmp_path, "allowed", events=4, age_hours=1.0)
+        meta = json.loads((allowed / "metadata.json").read_text())
+        meta["working_dir"] = "/work/public"
+        (allowed / "metadata.json").write_text(json.dumps(meta))
+        assert now  # keeps the import honest
+
+        client = _FakeClient()
+        monkeypatch.setattr(
+            "amplifier_module_hook_context_intelligence.handlers.backlog_sweep.httpx.AsyncClient",
+            lambda *a, **k: client,
+        )
+        report = await _sweeper(
+            tmp_path,
+            spec=_Spec(include=("**",), exclude=("/work/client-x/**",)),
+            bounds=SweepBounds(max_sessions=20),
+        ).run()
+
+        assert report.sessions_skipped_filtered == 20
+        assert report.events_delivered == 4, (
+            "the permitted session was starved: 20 excluded sessions consumed the "
+            "session budget before routing eligibility was evaluated"
+        )
+        assert len(client.posted) == 4
+
+    async def test_max_sessions_still_bounds_eligible_work(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The bound must still bound -- the fix must not make it unlimited."""
+        for i in range(6):
+            _make_session(tmp_path, f"s{i}", events=3, age_hours=1 + i)
+        client = _FakeClient()
+        monkeypatch.setattr(
+            "amplifier_module_hook_context_intelligence.handlers.backlog_sweep.httpx.AsyncClient",
+            lambda *a, **k: client,
+        )
+        report = await _sweeper(tmp_path, bounds=SweepBounds(max_sessions=2)).run()
+        assert report.sessions_swept == 2
+        assert report.events_delivered == 6
+
+    async def test_blocked_sessions_do_not_consume_the_budget_either(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Unprovable routing is not this destination's work to skip."""
+        for i in range(3):
+            session_dir = _make_session(tmp_path, f"nowd-{i}", events=2, age_hours=10 + i)
+            meta = json.loads((session_dir / "metadata.json").read_text())
+            del meta["working_dir"]
+            (session_dir / "metadata.json").write_text(json.dumps(meta))
+        _make_session(tmp_path, "good", events=5, age_hours=1.0)
+
+        client = _FakeClient()
+        monkeypatch.setattr(
+            "amplifier_module_hook_context_intelligence.handlers.backlog_sweep.httpx.AsyncClient",
+            lambda *a, **k: client,
+        )
+        report = await _sweeper(tmp_path, bounds=SweepBounds(max_sessions=3)).run()
+        assert report.sessions_blocked_unprovable == 3
+        assert report.events_delivered == 5

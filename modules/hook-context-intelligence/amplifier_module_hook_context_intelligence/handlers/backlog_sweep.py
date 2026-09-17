@@ -164,6 +164,16 @@ def select_candidates(
     the sweep can never wander into another project's sessions. Oldest-first so a
     backlog drains in the order it accumulated.
     """
+    """(continued) The ``max_sessions`` bound is applied by the CALLER, not here.
+
+    Slicing to ``max_sessions`` before routing eligibility is known starves the
+    sweep: the oldest N sessions may all be ones this destination may not
+    receive, and because selection is deterministic (oldest first) the same N
+    are chosen on every pass. A permitted session behind them is never reached,
+    and eventually ages out of the window -- at which point it is permanently
+    excluded from automatic recovery too. So this returns every in-window
+    candidate and lets the caller spend its budget only on eligible ones.
+    """
     now = now or datetime.now(UTC)
     cutoff = now - timedelta(hours=bounds.max_age_hours)
     sessions_root = project_dir / "sessions"
@@ -196,8 +206,7 @@ def select_candidates(
         in_window.append((last, session_dir, metadata))
 
     in_window.sort(key=lambda item: item[0])
-    selected = [(sd, md) for _, sd, md in in_window[: bounds.max_sessions]]
-    return selected, stranded, oldest_age
+    return [(sd, md) for _, sd, md in in_window], stranded, oldest_age
 
 
 def iter_records_from(events_path: Path, offset: int):
@@ -389,7 +398,7 @@ class BacklogSweeper:
         first_error: str | None = None
         stop = False
 
-        def _persist(outcome: str) -> None:
+        def _persist(outcome: str) -> int:
             advanced_now = prefix_end - watermark.offset
             watermark.offset = prefix_end
             watermark.delivered_lines += delivered_count
@@ -452,10 +461,14 @@ class BacklogSweeper:
         report.oldest_stranded_age_hours = oldest_age
 
         budget = self._bounds.max_events
+        #: Session budget. Decremented ONLY for sessions this destination is
+        #: actually allowed to receive -- see select_candidates' docstring for
+        #: the starvation this avoids.
+        session_budget = self._bounds.max_sessions
         try:
             async with httpx.AsyncClient() as client:
                 for session_dir, metadata in sessions:
-                    if budget <= 0:
+                    if budget <= 0 or session_budget <= 0:
                         break
                     # ROUTING GATE -- before the watermark is read, before a lock
                     # is taken, before a single byte is sent. A session this
@@ -477,7 +490,11 @@ class BacklogSweeper:
                             logger.debug(
                                 "%s: not routed this session -- %s", self._destination, why
                             )
+                        # Deliberately NOT charged against session_budget: an
+                        # ineligible session is not work this destination chose
+                        # to skip, it is work that was never its to do.
                         continue
+                    session_budget -= 1
                     watermark, _ = DeliveryWatermark.load(
                         session_dir, self._destination, destination_url=self._url
                     )

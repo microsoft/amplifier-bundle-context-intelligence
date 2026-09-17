@@ -73,8 +73,15 @@ Run these before calling anything done:
 uv run pytest          # in modules/tool-context-intelligence-query   (module suite)
 uv run pytest          # in the repo root                             (tests/, top-level suite)
 uv run ruff check . && uv run ruff format --check . && uv run pyright
+uv run pyright          # ALSO in modules/<the module you changed>   (see note below)
 scripts/validate-full.sh   # then inspect env_check, build_check, quality_classification, and final_report
 ```
+
+**Run `pyright` from the MODULE directory too, not only the repo root.** The root
+invocation does not reproduce a module's own Pyright configuration, so module-local type
+errors pass the root gate and surface later in review. Real instance: a helper missing a
+`-> int` return annotation was inferred as `None` and its result rejected at the call
+site — **2 errors** from `modules/hook-context-intelligence`, **0** from the repo root.
 
 **Green unit tests are the FLOOR, not proof of done.** This bundle wires **skills, modes,
 networking, tools, and auth** — capabilities whose real behaviour lives at **seams** (see
