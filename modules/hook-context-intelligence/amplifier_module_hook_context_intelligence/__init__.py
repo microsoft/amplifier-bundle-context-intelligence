@@ -45,6 +45,7 @@ additional_events : list[str], optional
 
 from __future__ import annotations
 
+import asyncio
 import fnmatch
 import logging
 from collections.abc import Callable, Coroutine
@@ -160,7 +161,40 @@ async def apply_active_dispatchers(
                 d.name,
                 exc_info=True,
             )
+    # Stop the PREVIOUS round's sweeps BEFORE the new dispatcher set goes live.
+    # Order and awaiting both matter: asyncio's cancel() only REQUESTS
+    # cancellation, so a fire-and-forget cancel leaves the old sweeps running
+    # against the old destination set. If this swap just EXCLUDED a destination,
+    # those sweeps own their own HTTP client and auth -- closing the dispatcher
+    # does not stop them -- and they would keep delivering to a destination the
+    # user just switched off. Teardown already does this correctly; this path
+    # must match it.
+    get_cap_state = getattr(coordinator, "get_capability", None)
+    state = get_cap_state("context_intelligence._hook_state") if get_cap_state else None
+    previous = list(state.get("sweep_tasks") or []) if isinstance(state, dict) else []
+    if previous:
+        await await_sweeps_idle(previous, resolver.sweep_close_grace_seconds)
+        for handle in previous:
+            handle.cancel()
+        # Await the cancellations: "cancelled" must mean "actually stopped".
+        await asyncio.gather(*(h.task for h in previous), return_exceptions=True)
+        if isinstance(state, dict):
+            state["sweep_tasks"] = []
+
     await logging_handler.set_dispatchers(dispatchers)
+
+    # Self-healing catch-up for anything a PREVIOUS session left undelivered.
+    # Started after the dispatchers are installed so the live path owns this
+    # session's own events and the sweep only ever chases what is already behind.
+    #
+    # Stashed on the hook state rather than returned, so this function's arity --
+    # which set_ingestion_filters also depends on -- stays unchanged. Re-running
+    # this function (a mid-session filter swap) cancels the previous round's
+    # sweeps first: the destination set may have just changed underneath them.
+    if isinstance(state, dict):
+        state["sweep_tasks"] = schedule_backlog_sweeps(resolver, dispatchers, active)
+    else:
+        schedule_backlog_sweeps(resolver, dispatchers, active)
 
     if not destinations:
         log.info("context-intelligence fan-out: no destinations configured — local JSONL only")
@@ -173,6 +207,213 @@ async def apply_active_dispatchers(
         )
 
     return match_key, sorted(active)
+
+
+def _describe_sweep(report: Any, *, suppress_stranded: bool = False) -> None:
+    """Console policy for one sweep result -- the loudness gate.
+
+    The question this asks is deliberately NOT "is there a backlog?" (which is
+    what the shutdown warning asks today, and why a perfectly healthy
+    destination warned on 215 of 215 measured shutdowns). It asks **"is the
+    backlog being retired?"** -- a question about progress over time, which only
+    became answerable once a watermark existed.
+
+    Quiet means the sweep delivered something and nothing is stuck. It never
+    means "we hid a failure": the durable forwarding-*.jsonl record is written
+    by the dispatcher regardless of anything decided here.
+    """
+    # LOUD 4 -- outside the age bound. These will NEVER be delivered
+    # automatically, so the bound must be audible or it becomes a silent drop.
+    if report.stranded_sessions and not suppress_stranded:
+        log.warning(
+            "context-intelligence %s: %d session(s) hold events older than the sweep"
+            " window (oldest %.0fh) and will NOT be delivered automatically."
+            " Run: context-intelligence-upload",
+            report.destination,
+            report.stranded_sessions,
+            report.oldest_stranded_age_hours,
+        )
+
+    if not report.had_work:
+        return
+
+    # LOUD 2 -- work exists and nothing moved. This is the real "delivery is
+    # broken" signal; the auth-only circuit breaker cannot produce it.
+    if not report.made_progress:
+        log.warning(
+            "context-intelligence %s: %d byte(s) of backlog and NOT shrinking"
+            " -- sweep delivered 0 event(s).%s",
+            report.destination,
+            report.backlog_bytes_remaining,
+            f" Last error: {report.last_error}" if report.last_error else "",
+        )
+        return
+
+    # Progress, but still behind: proportional, and INFO rather than WARNING --
+    # catching up is not a problem the user can act on.
+    if report.backlog_bytes_remaining:
+        log.info(
+            "context-intelligence %s: delivered %d backlogged event(s);"
+            " %d byte(s) remain -- catching up, no action needed.",
+            report.destination,
+            report.events_delivered,
+            report.backlog_bytes_remaining,
+        )
+        return
+
+    log.info(
+        "context-intelligence %s: delivered %d backlogged event(s) -- backlog clear.",
+        report.destination,
+        report.events_delivered,
+    )
+
+
+class _SweepHandle:
+    """A running catch-up sweep, plus whether it is mid-pass right now.
+
+    The distinction is the whole point. The sweep task is an infinite loop, so it
+    NEVER completes -- waiting on the task itself at teardown burns the entire
+    grace budget every single time, including the overwhelmingly common case
+    where there is nothing to sweep and the task is simply asleep between
+    passes. Measured: a flat 2.003s added to every exit.
+
+    So teardown waits for the sweep to be IDLE (its current pass finished), not
+    for the task to end. Idle costs nothing; only a pass genuinely in flight can
+    spend the budget.
+    """
+
+    def __init__(self, task: Any, idle: Any) -> None:
+        self.task = task
+        self.idle = idle
+
+    def cancel(self) -> None:
+        self.task.cancel()
+
+
+def schedule_backlog_sweeps(
+    resolver: Any, dispatchers: list[Any], destinations: dict[str, Any] | None = None
+) -> list[Any]:
+    """Start one CONTINUOUS catch-up sweep per active destination.
+
+    Runs an immediate pass at session start, then repeats every
+    ``sweep_interval_seconds``. Continuous rather than one-shot for two reasons,
+    both measured rather than assumed:
+
+    * A one-shot start-of-session sweep is hostage to how long the session
+      happens to last. In a DTU against a real server it delivered ZERO events,
+      because teardown cancelled it before the first round-trip completed.
+    * Repeating during the session is what actually stops a busy session's
+      backlog growing all day -- the live dispatcher's ceiling is one event per
+      round-trip, and nothing else reduces the queue while events keep arriving.
+
+    Still best-effort: the tasks are cancelled at teardown after a bounded grace
+    (``sweep_close_grace_seconds``), and the watermark on disk is where the next
+    session resumes from.
+    """
+    from .handlers.backlog_sweep import BacklogSweeper, SweepBounds
+
+    if not resolver.sweep_enabled:
+        log.debug("context-intelligence: backlog sweep disabled by config")
+        return []
+
+    bounds = SweepBounds(
+        max_events=resolver.sweep_max_events,
+        max_age_hours=resolver.sweep_max_age_hours,
+        max_sessions=resolver.sweep_max_sessions,
+        concurrency=resolver.sweep_concurrency,
+    )
+    project_dir = resolver.base_path / resolver.project_slug
+
+    specs = destinations or {}
+    tasks: list[Any] = []
+    for dispatcher in dispatchers:
+        spec = specs.get(dispatcher.name)
+        if spec is None:
+            # No include/exclude for this destination means its routing cannot be
+            # evaluated. A sweeper that cannot prove where events may go does not
+            # run -- refusing is recoverable, leaking is not.
+            log.warning(
+                "context-intelligence: no destination spec for %s; backlog sweep"
+                " disabled for it (routing cannot be verified)",
+                dispatcher.name,
+            )
+            continue
+        sweeper: Any = BacklogSweeper(
+            destination=dispatcher.name,
+            url=dispatcher.url,
+            # Reuse the dispatcher's own strategy so a sweep cannot acquire a
+            # second Entra token or diverge from live-path auth.
+            auth=dispatcher.auth_strategy,
+            project_dir=project_dir,
+            spec=spec,
+            bounds=bounds,
+            timeout=resolver.dispatch_timeout,
+        )
+
+        idle = asyncio.Event()
+
+        async def _run(
+            s: Any = sweeper,
+            interval: float = resolver.sweep_interval_seconds,
+            idle: Any = idle,
+        ) -> None:
+            # Stranded-session warnings are a property of the BACKLOG, not of a
+            # pass, so they would repeat verbatim every interval. Report once per
+            # session and let the durable forwarding record carry the rest.
+            reported_stranded = False
+            while True:
+                idle.clear()
+                try:
+                    report = await s.run()
+                    _describe_sweep(report, suppress_stranded=reported_stranded)
+                    reported_stranded = reported_stranded or bool(report.stranded_sessions)
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    log.debug("context-intelligence backlog sweep failed", exc_info=True)
+                finally:
+                    idle.set()
+                if interval <= 0:
+                    return
+                await asyncio.sleep(interval)
+
+        task = asyncio.create_task(_run())
+        task.add_done_callback(_retrieve_sweep_exception)
+        tasks.append(_SweepHandle(task, idle))
+    return tasks
+
+
+async def await_sweeps_idle(handles: list[Any], grace: float) -> None:
+    """Wait, bounded by *grace*, for every sweep to finish its current pass.
+
+    Returns IMMEDIATELY when nothing is mid-pass, which is the normal case. Only
+    a sweep actually delivering can spend any of the budget, and no sweep can
+    spend more than *grace* seconds of it.
+    """
+    if grace <= 0:
+        return
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + grace
+    for handle in handles:
+        remaining = deadline - loop.time()
+        if remaining <= 0:
+            return
+        try:
+            await asyncio.wait_for(handle.idle.wait(), timeout=remaining)
+        except (TimeoutError, asyncio.TimeoutError):
+            return
+        except Exception:
+            log.debug("sweep idle wait failed", exc_info=True)
+            return
+
+
+def _retrieve_sweep_exception(task: Any) -> None:
+    """Retrieve a finished sweep's exception so asyncio never warns about it."""
+    if task.cancelled():
+        return
+    exc = task.exception()
+    if exc is not None:
+        log.debug("context-intelligence backlog sweep raised", exc_info=exc)
 
 
 def _read_destinations_from_settings(settings_path: str) -> dict[str, Any]:
@@ -350,6 +591,8 @@ async def mount(
         "logging_handler": logging_handler,
         "resolver": resolver,
         "destinations": all_destinations,
+        # Background catch-up sweeps, owned here so cleanup() can cancel them.
+        "sweep_tasks": [],
     }
     coordinator.register_capability("context_intelligence._hook_state", _hook_state)
 
@@ -468,6 +711,24 @@ async def mount(
     )
 
     async def cleanup() -> None:
+        # Give a catch-up sweep a BOUNDED grace to land, then cancel it.
+        #
+        # The original contract was "never slows process exit". It kept that
+        # promise so literally that the sweep never ran at all: a short session
+        # ends before the first several-hundred-millisecond POST completes, so a
+        # DTU run measured ZERO events delivered while the same sweep, given
+        # wall-clock, cleared the backlog in seconds. The constraint is now an
+        # explicit budget -- "never slows exit by more than
+        # sweep_close_grace_seconds" (default 2.0, set 0.0 to disable) -- which
+        # is bounded, configurable and testable, where an absolute was neither.
+        sweep_tasks = list(_hook_state.get("sweep_tasks") or [])
+        if sweep_tasks:
+            try:
+                await await_sweeps_idle(sweep_tasks, resolver.sweep_close_grace_seconds)
+            except Exception:
+                log.debug("sweep grace wait failed", exc_info=True)
+            for handle in sweep_tasks:
+                handle.cancel()
         try:
             await logging_handler.close()
         except Exception:

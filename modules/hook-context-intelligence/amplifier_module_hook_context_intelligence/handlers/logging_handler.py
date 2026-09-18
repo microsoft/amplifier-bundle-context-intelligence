@@ -14,6 +14,7 @@ import os
 import random
 import time
 from collections import deque
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from functools import partial
 from pathlib import Path
@@ -22,6 +23,7 @@ from typing import Any
 import httpx
 from amplifier_core.models import HookResult
 
+from .delivery_watermark import DeliveryWatermark
 from amplifier_module_hook_context_intelligence.upload import (
     _canonical_json,
     _compute_idempotency_key,  # noqa: F401 — re-exported for test imports
@@ -73,6 +75,14 @@ _READ_TIMEOUT = 3.0
 _POOL_TIMEOUT = 0.5
 #: Minimum seconds between repeated overflow or permanent-skip log warnings.
 _LOG_RATE_LIMIT_SECONDS = 60.0
+
+#: Delivery-watermark persistence debounce. The watermark is an optimisation for
+#: the NEXT session, never a correctness requirement for this one, so it is
+#: written lazily: an un-flushed advance costs bounded re-delivery, which the
+#: server's MERGE absorbs. Flushing on every event would put an fsync on a path
+#: whose entire design goal is to stay off the hot path.
+_WM_PERSIST_EVERY = 50
+_WM_PERSIST_INTERVAL_SECONDS = 5.0
 
 # ---------------------------------------------------------------------------
 # Circuit breaker constants (v2 minimal breaker)
@@ -280,6 +290,32 @@ def _write_forwarding_record(log_dir: Path | None, record: dict[str, Any]) -> bo
 # ---------------------------------------------------------------------------
 # _DestinationDispatcher
 # ---------------------------------------------------------------------------
+@dataclass
+class _WatermarkKey:
+    """Where one enqueued event sits in its session's durable log."""
+
+    session_dir: str
+    end_offset: int
+
+
+@dataclass
+class _SessionWatermarkState:
+    """Contiguous-prefix accounting for one session dir.
+
+    ``frozen`` is the load-bearing field. The live path's delivered set is NOT a
+    contiguous prefix: drops happen at enqueue time when the queue is full, so a
+    dropped record at byte X can sit between delivered records either side of it.
+    The moment ANY record goes undelivered, the prefix can never legitimately
+    advance past it -- so we freeze, and the backlog sweep owns everything from
+    there. That also bounds this bookkeeping to the queue depth instead of the
+    session length.
+    """
+
+    committed: int = 0
+    frozen: bool = False
+    dirty: bool = False
+
+
 class _DestinationDispatcher:
     """One context-intelligence destination: own client, queue, breaker, worker.
 
@@ -339,10 +375,15 @@ class _DestinationDispatcher:
         )
         self._client: httpx.AsyncClient | None = None
         self._queue_capacity = max(1, queue_capacity)
-        self._queue: asyncio.Queue[tuple[str, dict[str, Any]]] = asyncio.Queue(
-            maxsize=self._queue_capacity
+        self._queue: asyncio.Queue[tuple[str, dict[str, Any], _WatermarkKey | None]] = (
+            asyncio.Queue(maxsize=self._queue_capacity)
         )
         self._worker_task: asyncio.Task[None] | None = None
+        # Delivery-watermark accounting, per session dir this dispatcher has
+        # seen. One dispatcher carries events for a session AND its sub-sessions,
+        # so this cannot be a single cursor.
+        self._wm_state: dict[str, _SessionWatermarkState] = {}
+        self._wm_last_flush = time.monotonic()
         self._consecutive_failures = 0  # backoff driver only — never disables
         self._degraded_warned = False
         # Wall-clock start (time.monotonic()) of the CURRENT sustained-degraded
@@ -458,6 +499,22 @@ class _DestinationDispatcher:
         self._heartbeat_emitted = True
         self._record_forwarding_issue("delivery_ok", "first successful delivery this session")
 
+    # -- read-only identity, for collaborators that must not reach into
+    # privates (the backlog sweep reuses this destination's auth strategy so a
+    # sweep can never acquire a second token or diverge from live-path auth).
+
+    @property
+    def name(self) -> str:
+        return self._name
+
+    @property
+    def url(self) -> str:
+        return self._url
+
+    @property
+    def auth_strategy(self) -> Any:
+        return self._strategy
+
     def _ensure_worker(self) -> None:
         if self._worker_task is None or self._worker_task.done():
             self._worker_task = asyncio.create_task(self._worker())
@@ -469,7 +526,13 @@ class _DestinationDispatcher:
                 partial(_retrieve_task_exception, context=f"{self._name} dispatch worker")
             )
 
-    def enqueue(self, event: str, data: dict[str, Any]) -> bool:
+    def enqueue(
+        self,
+        event: str,
+        data: dict[str, Any],
+        *,
+        wm_key: _WatermarkKey | None = None,
+    ) -> bool:
         """Enqueue an event for dispatch. HOT PATH — zero awaits, zero I/O.
 
         Returns ``True`` if the event was queued for delivery, ``False`` if it
@@ -490,9 +553,12 @@ class _DestinationDispatcher:
         """
         self._ensure_worker()
         try:
-            self._queue.put_nowait((event, data))
+            self._queue.put_nowait((event, data, wm_key))
             return True
         except asyncio.QueueFull:
+            # A dropped record freezes this session's prefix: the watermark can
+            # never honestly advance past a record that was never delivered.
+            self._wm_freeze(wm_key)
             self._overflow_dropped += 1
             now = time.monotonic()
             if now - self._last_overflow_log >= _LOG_RATE_LIMIT_SECONDS:
@@ -508,6 +574,64 @@ class _DestinationDispatcher:
                     self._storage_path,
                 )
             return False
+
+    # -- delivery watermark (Increment 0) -----------------------------------
+    #
+    # Written here, read by the backlog sweep on a LATER session. Nothing in the
+    # live delivery path consults it, so a wrong value can only ever cost
+    # re-delivery -- never a skipped event.
+
+    def _wm_freeze(self, key: _WatermarkKey | None) -> None:
+        """Record that an event went UNDELIVERED; the prefix stops here."""
+        if key is None:
+            return
+        state = self._wm_state.setdefault(key.session_dir, _SessionWatermarkState())
+        state.frozen = True
+
+    def _wm_commit(self, key: _WatermarkKey | None) -> None:
+        """Record a delivered event, advancing the contiguous prefix."""
+        if key is None:
+            return
+        state = self._wm_state.setdefault(key.session_dir, _SessionWatermarkState())
+        if state.frozen:
+            # Something earlier in this session was never delivered, so the
+            # sweep must re-read from there regardless of what lands after it.
+            return
+        if key.end_offset > state.committed:
+            state.committed = key.end_offset
+            state.dirty = True
+
+    def _wm_flush(self, *, force: bool = False) -> None:
+        """Persist dirty watermarks. Best-effort: NEVER raises, never blocks.
+
+        Called from the worker (debounced) and once from ``close()``. A failure
+        here is invisible to delivery by design -- the cost of not writing is a
+        re-send next session.
+        """
+        if not self._wm_state:
+            return
+        now = time.monotonic()
+        if not force and (now - self._wm_last_flush) < _WM_PERSIST_INTERVAL_SECONDS:
+            pending = sum(1 for st in self._wm_state.values() if st.dirty)
+            if pending < _WM_PERSIST_EVERY:
+                return
+        self._wm_last_flush = now
+        for session_dir, state in self._wm_state.items():
+            if not state.dirty:
+                continue
+            try:
+                path = Path(session_dir)
+                watermark, _notes = DeliveryWatermark.load(
+                    path, self._name, destination_url=self._url
+                )
+                if state.committed > watermark.offset:
+                    watermark.offset = state.committed
+                    watermark.last_delivered_at = datetime.now(timezone.utc).isoformat()
+                    watermark.last_outcome = "delivered"
+                    watermark.save(path)
+                state.dirty = False
+            except OSError:
+                logger.debug("watermark flush failed dest=%s session=%s", self._name, session_dir)
 
     def _record_forwarding_issue(self, kind: str, detail: str) -> None:
         """Write a durable forwarding-diagnostics record for this destination.
@@ -767,8 +891,10 @@ class _DestinationDispatcher:
         ``close()`` never hangs.
         """
         while True:
-            event, payload_data = await self._queue.get()
+            event, payload_data, wm_key = await self._queue.get()
             self._current = (event, payload_data)
+            # Debounced; a no-op on the vast majority of iterations.
+            self._wm_flush()
             try:
                 # --- circuit breaker gate -------------------------------
                 # OWNERSHIP: only this worker task reads/mutates breaker
@@ -779,6 +905,7 @@ class _DestinationDispatcher:
                         # Already durable in events.jsonl (LoggingHandler
                         # wrote it before fan-out) -- do not dispatch while
                         # OPEN and not yet due for a probe.
+                        self._wm_freeze(wm_key)
                         self._queue.task_done()
                         self._current = None
                         continue
@@ -788,10 +915,14 @@ class _DestinationDispatcher:
                     if outcome == _DELIVERED:
                         self._breaker_record_delivered()
                         self._emit_delivery_heartbeat()
+                        self._wm_commit(wm_key)
                         self._degraded_warned = False
                         self._degraded_since = None
                     elif outcome == _TRANSIENT and self._is_hard_outcome():
                         self._breaker_record_hard()
+                        self._wm_freeze(wm_key)
+                    else:
+                        self._wm_freeze(wm_key)
                     # Genuinely transient/permanent while probing is
                     # inconclusive -- leave the breaker OPEN and advance;
                     # the event stays durable regardless.
@@ -911,6 +1042,7 @@ class _DestinationDispatcher:
                             # across many different events. It resets only on
                             # an actual DELIVERED/PERMANENT advance (bottom of
                             # the loop below), matching a real recovery.
+                            self._wm_freeze(wm_key)
                             self._consecutive_failures = 0
                             self._queue.task_done()
                             self._current = None
@@ -923,6 +1055,7 @@ class _DestinationDispatcher:
                     if outcome == _DELIVERED:
                         self._breaker_record_delivered()
                         self._emit_delivery_heartbeat()
+                        self._wm_commit(wm_key)
                         if self._degraded_warned:
                             logger.info(
                                 "Reconnected to %s — resuming delivery.",
@@ -931,6 +1064,7 @@ class _DestinationDispatcher:
                             self._degraded_warned = False
                             self._degraded_since = None
                     elif outcome == _PERMANENT:
+                        self._wm_freeze(wm_key)
                         now = time.monotonic()
                         if now - self._last_permanent_log >= _LOG_RATE_LIMIT_SECONDS:
                             self._last_permanent_log = now
@@ -1027,6 +1161,7 @@ class _DestinationDispatcher:
                 # backoff must not inherit this event's failure count, and the
                 # 401 auth-escalation gate must not carry over. Mirrors the reset
                 # on the normal DELIVERED/PERMANENT advance path.
+                self._wm_freeze(wm_key)
                 self._consecutive_failures = 0
                 self._auth_failures = 0
                 self._queue.task_done()
@@ -1296,6 +1431,11 @@ class _DestinationDispatcher:
             except asyncio.TimeoutError:
                 pass  # worker will be cancelled below; undelivered count computed first
 
+            # Land the delivery watermark before anything else in teardown: it
+            # is what the NEXT session resumes from, and an unflushed advance
+            # here is exactly the re-delivery this increment exists to avoid.
+            self._wm_flush(force=True)
+
             # Compute honest undelivered count BEFORE cancelling the worker.
             # Cancellation sets self._current = None in the CancelledError handler,
             # so we must read it here to get an accurate in-flight count.
@@ -1467,7 +1607,7 @@ class LoggingHandler:
         # network fan-out below runs regardless of disk state so that events
         # keep flowing to the server even when the disk is full. The two
         # destinations are independent on purpose.
-        disk_state = self._persist_to_disk(event, session_id, sanitized_data)
+        disk_state, wm_key = self._persist_to_disk(event, session_id, sanitized_data)
 
         # Fan-out to all active dispatchers — each enqueue is isolated so that
         # one dispatcher's failure does not starve the others. Independent of
@@ -1478,7 +1618,7 @@ class LoggingHandler:
         delivered_to_server = False
         for dispatcher in self._dispatchers:
             try:
-                if dispatcher.enqueue(event, sanitized_data):
+                if dispatcher.enqueue(event, sanitized_data, wm_key=wm_key):
                     delivered_to_server = True
             except Exception:
                 logger.warning(
@@ -1557,10 +1697,17 @@ class LoggingHandler:
             raise
 
     # -- disk-write path with ENOSPC circuit breaker ------------------------
-    def _persist_to_disk(self, event: str, session_id: str, data: dict[str, Any]) -> str:
+    def _persist_to_disk(
+        self, event: str, session_id: str, data: dict[str, Any]
+    ) -> tuple[str, _WatermarkKey | None]:
         """Write this event's session files, guarded by the disk-pressure breaker.
 
-        Returns a disk-state token the caller combines with the network-dispatch
+        Returns ``(disk_state, wm_key)``. ``wm_key`` locates this event's record
+        in its session's durable log -- the unit the delivery watermark counts in
+        -- or ``None`` when nothing was written (disk pressure) or the write path
+        was stubbed out.
+
+        The disk-state token is what the caller combines with the network-dispatch
         outcome to phrase the right user alert:
 
         * ``"ok"``        — written to disk (or nothing to report).
@@ -1578,10 +1725,12 @@ class LoggingHandler:
         # rather than hammer a full filesystem on every event.
         if self._disk_backoff_seconds > 0.0 and now < self._disk_retry_at:
             self._disk_events_skipped += 1
-            return "degraded"
+            return "degraded", None
 
+        wm_key: _WatermarkKey | None = None
         try:
-            self._write_session_to_disk(event, session_id, data)
+            written = self._write_session_to_disk(event, session_id, data)
+            wm_key = written if isinstance(written, _WatermarkKey) else None
         except OSError as exc:
             if exc.errno in _DISK_PRESSURE_ERRNOS:
                 if self._disk_backoff_seconds <= 0.0:
@@ -1598,14 +1747,14 @@ class LoggingHandler:
                     "LoggingHandler disk write failed (errno %s): session data not written",
                     exc.errno,
                 )
-                return "degraded"
+                return "degraded", None
             # Non-pressure OSError (e.g. a single bad path): best-effort log,
             # do NOT open the global breaker.
             logger.warning("LoggingHandler disk write error processing %s", event, exc_info=True)
-            return "ok"
+            return "ok", None
         except Exception:
             logger.warning("LoggingHandler disk write error processing %s", event, exc_info=True)
-            return "ok"
+            return "ok", None
 
         # Success. If the breaker had been open, this was a recovery probe:
         # write the durable episode record (the disk is writable again, so this
@@ -1625,10 +1774,12 @@ class LoggingHandler:
             self._disk_degraded_since = 0.0
             self._disk_events_skipped = 0
             self._disk_episode_delivered = False
-            return "recovered"
-        return "ok"
+            return "recovered", wm_key
+        return "ok", wm_key
 
-    def _write_session_to_disk(self, event: str, session_id: str, data: dict[str, Any]) -> None:
+    def _write_session_to_disk(
+        self, event: str, session_id: str, data: dict[str, Any]
+    ) -> _WatermarkKey | None:
         """The actual per-event disk writes. Lets OSError propagate for classification.
 
         The metadata helpers (``_ensure_metadata`` / ``_enrich`` / ``_finalize`` /
@@ -1652,8 +1803,12 @@ class LoggingHandler:
         elif event in ("session:end", "execution:end"):
             self._finalize_metadata(session_dir, data)
 
-        self._append_event(session_dir, event, data, self._workspace)
+        end_offset = self._append_event(session_dir, event, data, self._workspace)
         self._touch_last_event_at(session_dir, data.get("timestamp", ""))
+        # Built HERE because this is the only place that holds both the session
+        # dir and the record's end offset; building it later would mean looking
+        # the session dir up a second time on the hot path.
+        return _WatermarkKey(session_dir=str(session_dir), end_offset=end_offset)
 
     def _open_disk_breaker(self, now: float) -> None:
         """Open or widen the disk-pressure breaker with capped exponential backoff."""
@@ -1897,7 +2052,14 @@ class LoggingHandler:
     @staticmethod
     def _append_event(
         session_dir: Path, event: str, data: dict[str, Any], workspace: str | None
-    ) -> None:
+    ) -> int:
+        """Append one record and return the byte offset just past it.
+
+        That offset is the delivery watermark's unit of account: a record is
+        "delivered" once the destination has accepted everything up to its end
+        offset. Returned rather than recomputed because ``stat()`` after the
+        fact would see any concurrent appender's bytes too.
+        """
         record = {
             "event": event,
             "workspace": workspace or "",
@@ -1906,3 +2068,5 @@ class LoggingHandler:
         }
         with (session_dir / "events.jsonl").open("a") as f:
             f.write(_canonical_json(record) + "\n")
+            f.flush()
+            return f.tell()

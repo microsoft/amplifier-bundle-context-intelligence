@@ -422,6 +422,13 @@ AMPLIFIER_CONTEXT_INTELLIGENCE_TOKEN_REFRESH_MARGIN_S=600
 | `dispatch_backoff_max` | `${...}` placeholder | `30.0` | Maximum backoff sleep (seconds); the cap for capped full-jitter backoff. |
 | `dispatch_backoff_jitter` | `${...}` placeholder | `true` | Enable full-jitter backoff. Set `false` to use a fixed `dispatch_backoff_initial` sleep per retry. String-aware: `"false"`, `"0"`, `"no"`, `"off"` (any case) are treated as `false`. |
 | `close_drain_timeout` | direct value | `20.0` | Shutdown grace period (seconds) for draining queued HTTP dispatches. A **ceiling, not a fixed wait** — `close()` returns as soon as the queue empties, so a healthy localhost drain never spends it. Sized for a SHORT tail on a remote (Azure/APIM+Entra) round trip; it does **not** drain a deep backlog. |
+| `sweep_enabled` | direct value | `true` | Enables the background backlog sweep that runs at session start, repeats every `sweep_interval_seconds`, and replays any events an earlier session left undelivered. Set `false` to disable. |
+| `sweep_max_events` | direct value | `5000` | Hard ceiling on events POSTed by a single sweep pass, across all sessions it visits. |
+| `sweep_max_age_hours` | direct value | `48.0` | Only sweeps sessions whose last event is within this many hours old. Sessions older than the window are reported as stranded, never swept automatically. |
+| `sweep_max_sessions` | direct value | `20` | Ceiling on the number of session directories a single sweep pass visits. |
+| `sweep_concurrency` | direct value | `1` | Concurrent in-flight POSTs the sweep uses while replaying backlog. Safe above `1` because server-side ingest is order-independent. |
+| `sweep_close_grace_seconds` | direct value | `2.0` | Seconds a catch-up sweep may keep running at session teardown before it is cancelled. Shared across **all** destinations, not per-destination. Exit is unaffected unless a sweep is mid-delivery. Set `0.0` to cancel immediately. |
+| `sweep_interval_seconds` | direct value | `60.0` | How often the catch-up sweep repeats **during** a session. Set `0.0` for a single pass at session start only. |
 
 > The **Source** column shows how a value reaches the config: a `${VAR}` placeholder in the YAML (expanded by app-cli from `keys.env`/environment), or a direct literal value. There is **no** automatic `AMPLIFIER_*` env-var → config mapping; only `${VAR}` placeholders present in the active config are read.
 
@@ -606,6 +613,20 @@ The worker uses lazy creation: it creates an `httpx.AsyncClient` on the first di
 > Recovering an older **legacy `hooks-logging`** archive instead of a native one? It can be imported non-destructively with `--format logging-hook` — see [Legacy hooks-logging import](modules/tool-context-intelligence-upload/README.md#legacy-hooks-logging-import---format-logging-hook) in the upload tool README.
 
 See [`docs/dispatch-circuit-breaker.dot`](docs/dispatch-circuit-breaker.dot) for the updated dispatch flow and [`docs/dispatch-auto-recovery-lifecycle.dot`](docs/dispatch-auto-recovery-lifecycle.dot) for the consolidated auto-recovery lifecycle (HEALTHY → DEGRADED → RECOVERY → OVERFLOW → SHUTDOWN).
+
+### Self-healing backlog sweep
+
+Events left undelivered by a shutdown drain or a queue overflow are no longer permanently dependent on a manual `context-intelligence-upload` run. On `on_session_ready`, each destination starts a background **backlog sweep** that reads recent sessions' `events.jsonl` forward from a persisted **delivery watermark** — a byte offset into that session's log, one file per destination at `<session_dir>/delivery/<destination>.json` — rebuilds each event's payload with the same `build_payload` the live dispatcher uses, and POSTs it. The watermark only advances over the **contiguous prefix** that was actually delivered, so a mid-window failure is re-sent next pass rather than silently skipped.
+
+**Continuous, not one-shot.** The sweep runs a pass at session start and then repeats every `sweep_interval_seconds` (default `60.0`; set `0.0` for a single pass at session start only) for as long as the session runs. This is what keeps a busy session's backlog from growing all day: the live dispatcher's ceiling is one event per network round-trip, so a session that outpaces it needs the sweep to keep catching up, not just to catch up once at the start.
+
+**Exit cost.** A normal session exit is unaffected — measured at `0.000s` added when no sweep is mid-delivery, which includes the common case of nothing left to sweep. Only when a catch-up sweep is still delivering backlog at the moment of teardown does exit take longer, bounded by `sweep_close_grace_seconds` (default `2.0`; measured `2.002s` in that case). That budget is shared across all destinations — three slow destinations cost one grace period, not three. Set `sweep_close_grace_seconds: 0.0` to restore immediate cancellation. Either way, whatever the sweep delivered before being cancelled is kept: progress commits in chunks, so cancellation loses at most one in-flight chunk, never the whole pass.
+
+**Bounded, not exhaustive.** `sweep_max_sessions`, `sweep_max_events`, and `sweep_concurrency` (see the config table above) keep a single pass cheap; `sweep_max_age_hours` (default `48.0`) excludes sessions whose last event is older than the window — those are reported as stranded, never swept automatically, and need a manual `context-intelligence-upload` run (see [remote-server-troubleshooting.md](docs/remote-server-troubleshooting.md)). Set `sweep_enabled: false` to disable the sweep entirely.
+
+**Duplicate-free by construction, not by `idempotency_key`.** The server writes with `MERGE` on a deterministic `node_id` under a `(node_id, workspace)` uniqueness constraint, so re-sending an already-delivered event is a no-op graph-side. The sweep deliberately omits `?replay=true` — unlike the manual `context-intelligence-upload` CLI, whose default enables it — so a recently-delivered duplicate can still hit the server's own `idempotency_key` short-circuit instead of paying for a full append + drain + MERGE.
+
+**A real outage still surfaces loudly.** Self-healing changes what a *transient* shortfall looks like, not what a *sustained* one looks like. It does not suppress or replace the sustained-outage visibility described above; it adds a way to confirm the backlog is actually being retired rather than just present.
 
 ### Client queue vs. server spool — two different backlogs
 
