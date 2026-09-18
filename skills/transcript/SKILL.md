@@ -11,6 +11,13 @@ compatibility: Amplifier with the session_transcript tool mounted
 
 Use `session_transcript`; never read `events.jsonl` directly.
 
+Invoking this skill is a request to retrieve the transcript, not to explain how
+to retrieve it. Call `session_transcript` in this turn using the arguments below.
+Do not stop after loading the skill, present a proposed tool call, or ask "shall
+I retrieve it?" The user's request already authorizes this read. Only ask for
+ID clarification after the tool reports ambiguity; honor any actual tool
+permission gate or explicit user restriction.
+
 > **Sensitive content:** stored captures are replayed verbatim and can contain
 > sensitive content. The logging hook's JSON sanitization is not redaction.
 
