@@ -1,12 +1,12 @@
 [project]
 name = "amplifier-module-tool-context-intelligence-transcript"
-version = "0.1.0"
+version = "0.1.1"
 description = "Bounded native Context Intelligence transcript retrieval"
 requires-python = ">=3.11"
 license = "MIT"
 
 dependencies = [
-    "amplifier-bundle-context-intelligence @ git+https://github.com/microsoft/amplifier-bundle-context-intelligence@3e4887fdc58ac2299986f08afdd140865e9aa063",
+    "amplifier-bundle-context-intelligence @ git+https://github.com/microsoft/amplifier-bundle-context-intelligence@2818e0519f1c59c71d6a5b53eee50592853f8d7e",
 ]
 
 [project.entry-points."amplifier.modules"]

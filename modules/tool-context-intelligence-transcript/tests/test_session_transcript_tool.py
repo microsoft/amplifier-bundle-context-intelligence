@@ -234,3 +234,144 @@ async def test_tool_rejects_content_limit_above_total_limit(tmp_path) -> None:
     assert result.success is False
     assert isinstance(result.error, dict)
     assert result.error["type"] == "invalid_request"
+
+
+def _local_tool(base_path: Path) -> SessionTranscriptTool:
+    resolver = SimpleNamespace(
+        base_path=base_path,
+        session_dir=lambda sid: (
+            base_path / "current-project" / "sessions" / sid / "context-intelligence"
+        ),
+    )
+    coordinator = SimpleNamespace(
+        session_id="current-session",
+        get_capability=lambda name: (
+            resolver if name == "context_intelligence.hook_config_resolver" else None
+        ),
+    )
+    return SessionTranscriptTool(coordinator)
+
+
+async def test_unique_prefix_in_another_workspace_returns_full_id_and_can_page(tmp_path):
+    sid = "abcdef12-1234-5678-9abc-123456789abc"
+    capture = _capture(tmp_path / "other-project" / "sessions", sid)
+    with (capture / "events.jsonl").open("a") as stream:
+        stream.write(
+            json.dumps(
+                {
+                    "event": "prompt:complete",
+                    "timestamp": "2026-09-15T10:00:01Z",
+                    "data": {"response": "Second message"},
+                }
+            )
+            + "\n"
+        )
+    tool = _local_tool(tmp_path)
+    first = await tool.execute({"session_ids": ["abcdef12"], "max_messages": 1})
+    assert first.success
+    assert isinstance(first.output, dict)
+    page = first.output["sessions"][0]
+    assert page["session_id"] == sid
+    assert page["has_more"]
+    second = await tool.execute(
+        {
+            "session_ids": [page["session_id"]],
+            "after_event_lines": {page["session_id"]: page["next_after_event_line"]},
+        }
+    )
+    assert second.success
+    assert isinstance(second.output, dict)
+    assert second.output["sessions"][0]["messages"][0]["content"] == "Second message"
+
+
+async def test_ambiguous_prefix_across_workspaces_never_prefers_current_workspace(tmp_path):
+    first_id, second_id = "abcdef12-first", "abcdef12-second"
+    _capture(tmp_path / "current-project" / "sessions", first_id)
+    _capture(tmp_path / "other-project" / "sessions", second_id)
+    result = await _local_tool(tmp_path).execute({"session_ids": ["abcdef12"]})
+    assert not result.success
+    assert isinstance(result.error, dict)
+    assert result.error["type"] == "ambiguous_session"
+    assert first_id in result.error["message"]
+    assert second_id in result.error["message"]
+    assert "Hello" not in str(result.output)
+
+
+async def test_missing_prefix_is_not_current_session_fallback(tmp_path):
+    _capture(tmp_path / "current-project" / "sessions", "current-session")
+    result = await _local_tool(tmp_path).execute({"session_ids": ["absent12"]})
+    assert not result.success
+    assert isinstance(result.error, dict)
+    assert result.error["type"] == "session_not_found"
+
+
+@pytest.mark.parametrize("reference", ["abcdef12", "abcdef12-full"])
+async def test_duplicate_capture_locations_are_ambiguous_even_with_same_full_id(
+    tmp_path, reference
+):
+    for project in ("current-project", "other-project"):
+        _capture(tmp_path / project / "sessions", "abcdef12-full")
+    result = await _local_tool(tmp_path).execute({"session_ids": [reference]})
+    assert not result.success
+    assert isinstance(result.error, dict)
+    assert result.error["type"] == "ambiguous_session"
+    assert "multiple capture roots" in result.error["message"]
+
+
+async def test_two_prefixes_page_using_returned_full_ids(tmp_path):
+    ids = ["abcdef12-full", "abcdef34-full"]
+    for sid in ids:
+        _capture(tmp_path / "one" / "sessions", sid)
+    tool = _local_tool(tmp_path)
+    first = await tool.execute({"session_ids": ["abcdef12", "abcdef34"]})
+    assert first.success
+    assert isinstance(first.output, dict)
+    full_ids = [page["session_id"] for page in first.output["sessions"]]
+    second = await tool.execute(
+        {
+            "session_ids": full_ids,
+            "after_event_lines": dict.fromkeys(full_ids, 1),
+        }
+    )
+    assert second.success
+    assert isinstance(second.output, dict)
+    assert all(page["messages"] == [] for page in second.output["sessions"])
+
+
+async def test_custom_host_resolver_receives_prefix_unchanged(tmp_path):
+    capture = _capture(tmp_path, "abcdef12-full")
+    resolver = MagicMock(
+        return_value={
+            "events_path": str(capture / "events.jsonl"),
+            "metadata_path": str(capture / "metadata.json"),
+        }
+    )
+    coordinator = SimpleNamespace(
+        get_capability=lambda name: (
+            SimpleNamespace(resolve_capture=resolver)
+            if name == "context_intelligence.capture_resolver"
+            else None
+        )
+    )
+    result = await SessionTranscriptTool(coordinator).execute({"session_ids": ["abcdef12"]})
+    assert result.success
+    resolver.assert_called_once_with("abcdef12")
+
+
+def test_prefix_lookup_reads_directory_names_not_capture_contents(tmp_path, monkeypatch):
+    capture = _capture(tmp_path / "one" / "sessions", "abcdef12-full")
+    monkeypatch.setattr(Path, "read_text", lambda *args, **kwargs: pytest.fail("content read"))
+    assert SessionTranscriptTool._find_capture_metadata(tmp_path, "abcdef12") == [
+        capture / "metadata.json"
+    ]
+
+
+async def test_unreadable_capture_store_returns_error_not_an_empty_success(tmp_path, monkeypatch):
+    def denied(*args):
+        raise PermissionError("cannot enumerate")
+
+    monkeypatch.setattr(Path, "iterdir", denied)
+    result = await _local_tool(tmp_path).execute({"session_ids": ["abcdef12"]})
+    assert not result.success
+    assert isinstance(result.error, dict)
+    assert result.error["type"] == "capture_unavailable"

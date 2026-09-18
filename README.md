@@ -24,8 +24,16 @@ Two agents are included for querying session data:
 The `context-intelligence-navigation` behavior and the standalone
 `context-intelligence-transcript` behavior mount a user-invocable `/transcript` skill
 and the `session_transcript` tool. With no arguments, `/transcript` replays the current
-session's native user/assistant capture. Pass an intent to use that transcript as source
-material, or pass `--session ID[,ID...]` to target other session captures. The reader
+session's native user/assistant capture. Use `/transcript abcdef12` for a unique
+short ID (at least eight characters), or `/transcript FULL-ID` for an exact ID.
+Pass an intent to use the current transcript as source material, or pass
+`--session ID[,ID...]` to target multiple captures. Prefixes are resolved across
+the mounted hook's local capture store; ambiguous matches ask for a longer ID,
+never guess. Exact IDs take precedence. Use the returned full ID when paging.
+Embedding hosts with a custom capture resolver own resolution in their storage.
+The shared library exports `resolve_session_id(reference, candidates)` so hosts
+and other tools can reuse the same exact-first, unique-prefix lookup without
+reading transcripts or contacting a graph server. The reader
 preserves stored message strings, paginates only between messages, and does not call the
 graph or parse provider-raw payloads. Other hosts can provide their own capture resolver;
 the reusable library itself takes explicit event and metadata paths. Stored captures are
