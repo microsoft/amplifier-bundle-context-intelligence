@@ -62,8 +62,11 @@ Before opening a PR that touches bundle structure, run the repo's **full** valid
 scripts/validate-full.sh
 ```
 
-It builds a throwaway `uv` venv with `hatchling` + `amplifier-foundation` +
-`amplifier-core` so the validator runs at `validation_mode: full`. The lone
+It runs a pinned public CLI from a fresh `uv` venv with Foundation, a prebuilt
+Core wheel, `hatchling`, `pyyaml`, and `pip`, so the validator runs at
+`validation_mode: full` without compiling Core. The venv is removed on exit.
+If multiple Foundation recipes are cached, select one with `CI_VALIDATE_RECIPE`.
+The lone
 mode-advertising **ERROR** it reports is a **documented FALSE POSITIVE** (a name
 collision — see `AGENTS.md`); **do not "fix" it** by advertising the internal mode or
 deleting path/skill references.

@@ -39,13 +39,15 @@ scripts/validate-full.sh           # validates this repo
 scripts/validate-full.sh <path>    # or another bundle repo
 ```
 
-It builds a throwaway `uv` venv with `hatchling` + `amplifier-foundation` + `amplifier-core` +
-`pyyaml`, puts it first on `PATH`, and runs `validate-bundle-repo` so its `python3` resolves to an
-interpreter that has the deps → `validation_mode: full`.
+It builds a fresh `uv` venv containing the pinned public CLI/Foundation, a prebuilt Core wheel,
+`hatchling`, `pyyaml`, and `pip`, then runs **that venv's CLI**. PATH alone is insufficient:
+the CLI supplies its own interpreter to recipe shell steps. The venv is removed on exit.
+Set `CI_VALIDATE_RECIPE` to an explicit recipe path if multiple Foundation caches exist;
+`CI_VALIDATE_VENV`, if supplied, must be a new directory. No validator findings are suppressed.
 
-**Last full run: ✅ PASS** — 10/10 bundles clean, all hygiene/structure/placement/freshness gates
-green, the lone mode "error" confirmed a false positive (name collision). Only the build *dry-run*
-is skipped (no `pip wheel` in the venv); the wheels build cleanly under `uv build`.
+Full mode includes the actual `pip wheel` build check. Record each run's mode, build result,
+and findings; a successful recipe exit is not itself a validation PASS. Review the documented
+mode-name false positive above without suppressing other findings.
 
 ## Testing & what "done" looks like
 

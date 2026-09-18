@@ -11,15 +11,9 @@
 # for a behaviour split: BundleRegistry resolution of the layered includes, and the
 # package build check.
 #
-# This script builds a throwaway uv venv that HAS those deps, puts its `bin` first
-# on PATH, and runs the recipe — so the recipe's `python3` resolves to an
-# interpreter that can `import amplifier_foundation` and `import hatchling`, which
-# flips the run to `validation_mode: full`.
-#
-# (This is the uv-based equivalent of the recipe's own documented
-#  `uvx --with hatchling --with amplifier-foundation amplifier tool invoke ...`
-#  one-liner; the venv form is used because the recipe shells out to `python3`,
-#  so the deps must live on the PATH `python3`, not just in a uvx tool env.)
+# The CLI sets AMPLIFIER_PYTHON for recipe shell steps. PATH alone cannot move
+# those steps into another venv: the CLI itself must run from the prepared venv.
+# Use a public Core wheel, not a Rust source build, for this bundle's validation.
 #
 # USAGE
 # -----
@@ -27,36 +21,59 @@
 #       REPO_PATH defaults to this bundle's repo root.
 #
 # ENV
-#   CI_VALIDATE_VENV   override the venv location (default: $TMPDIR/ci-validate-venv)
+#   CI_VALIDATE_VENV    optional NEW venv directory; never overwrite an existing one
+#   CI_VALIDATE_RECIPE  explicit recipe path if more than one Foundation is cached
 #
-# Requires: uv, and the `amplifier` CLI on PATH, with the amplifier-foundation
-# bundle present in ~/.amplifier/cache (it ships the recipe).
+# Requires: uv and a cached Foundation recipe (or CI_VALIDATE_RECIPE).
+# A fresh venv is removed on exit. The recipe's report, including failures and
+# known false positives, is returned unchanged; exit 0 alone is not a PASS.
 #
 set -euo pipefail
 
 REPO_PATH="${1:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
-VENV="${CI_VALIDATE_VENV:-${TMPDIR:-/tmp}/ci-validate-venv}"
-
-echo ">> building deps venv: $VENV"
-uv venv --python 3.11 "$VENV" >/dev/null
-uv pip install --python "$VENV/bin/python" --quiet \
-  hatchling pyyaml \
-  "amplifier-core @ git+https://github.com/microsoft/amplifier-core@main" \
-  "amplifier-foundation @ git+https://github.com/microsoft/amplifier-foundation@main"
+REPO_PATH="$(cd "$REPO_PATH" && pwd)"
 
 # Locate the foundation validate-bundle-repo recipe in the Amplifier cache.
 # (The bare `amplifier tool invoke` CLI does not resolve the `foundation:` recipe
 #  namespace, so we pass the cached recipe by absolute path.)
-RECIPE="$(ls -1 "${HOME}/.amplifier/cache/"amplifier-foundation-*/recipes/validate-bundle-repo.yaml 2>/dev/null | head -1 || true)"
+RECIPE="${CI_VALIDATE_RECIPE:-}"
 if [[ -z "$RECIPE" ]]; then
-  echo "!! validate-bundle-repo.yaml not found under ~/.amplifier/cache/amplifier-foundation-*/recipes/" >&2
-  echo "   Ensure the amplifier-foundation bundle is installed/cached, then retry." >&2
+  shopt -s nullglob
+  recipes=("${HOME}/.amplifier/cache/"amplifier-foundation-*/recipes/validate-bundle-repo.yaml)
+  if [[ ${#recipes[@]} -ne 1 ]]; then
+    echo "!! Expected one cached validation recipe; found ${#recipes[@]}. Set CI_VALIDATE_RECIPE." >&2
+    exit 1
+  fi
+  RECIPE="${recipes[0]}"
+fi
+if [[ ! -f "$RECIPE" || ! -r "$RECIPE" ]]; then
+  echo "!! Validation recipe is not a readable file: $RECIPE" >&2
   exit 1
 fi
+
+if [[ -n "${CI_VALIDATE_VENV:-}" ]]; then
+  VENV="$CI_VALIDATE_VENV"
+  # mkdir refuses existing directories and symlinks before uv can touch them.
+  mkdir -- "$VENV"
+else
+  VENV="$(mktemp -d "${TMPDIR:-/tmp}/ci-validate-venv.XXXXXXXX")"
+fi
+trap 'rm -rf -- "$VENV"' EXIT
+export PYTHONNOUSERSITE=1
+
+echo ">> building isolated validation runtime: $VENV"
+uv venv --python 3.11 "$VENV" >/dev/null
+uv pip install --python "$VENV/bin/python" --only-binary amplifier-core --quiet \
+  pip hatchling pyyaml "amplifier-core==1.6.1" \
+  "amplifier-foundation @ git+https://github.com/microsoft/amplifier-foundation@7ad00b359fd5c2ac3ee98436b1b3bccabe6e909d" \
+  "amplifier-app-cli @ git+https://github.com/microsoft/amplifier-app-cli@14dc68eba05bf65b8c6dea28c3a2db93daa12d38"
+"$VENV/bin/python" -c 'import pip, hatchling, yaml, amplifier_core, amplifier_foundation'
+# JSON encoding preserves spaces, quotes, and backslashes in the target path.
+CONTEXT="$("$VENV/bin/python" -c 'import json,sys; print(json.dumps({"repo_path": sys.argv[1], "enhance_diagrams": "false"}))' "$REPO_PATH")"
 
 echo ">> recipe: $RECIPE"
 echo ">> repo:   $REPO_PATH"
 echo ">> running validate-bundle-repo in FULL mode ..."
-PATH="$VENV/bin:$PATH" amplifier tool invoke recipes operation=execute \
+PATH="$VENV/bin:$PATH" "$VENV/bin/amplifier" tool invoke recipes operation=execute \
   recipe_path="$RECIPE" \
-  context="{\"repo_path\":\"$REPO_PATH\"}"
+  context="$CONTEXT"
