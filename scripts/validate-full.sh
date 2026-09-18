@@ -63,9 +63,14 @@ export PYTHONNOUSERSITE=1
 
 echo ">> building isolated validation runtime: $VENV"
 uv venv --python 3.11 "$VENV" >/dev/null
-uv pip install --python "$VENV/bin/python" --only-binary amplifier-core --quiet \
-  pip hatchling pyyaml "amplifier-core==1.6.1" \
+# The public CLI declares Foundation@main; override that URL rather than
+# supplying a second, conflicting direct requirement.
+printf '%s\n' \
   "amplifier-foundation @ git+https://github.com/microsoft/amplifier-foundation@7ad00b359fd5c2ac3ee98436b1b3bccabe6e909d" \
+  > "$VENV/overrides.txt"
+uv pip install --python "$VENV/bin/python" --only-binary amplifier-core \
+  --overrides "$VENV/overrides.txt" --quiet \
+  pip hatchling pyyaml "amplifier-core==1.6.1" \
   "amplifier-app-cli @ git+https://github.com/microsoft/amplifier-app-cli@14dc68eba05bf65b8c6dea28c3a2db93daa12d38"
 "$VENV/bin/python" -c 'import pip, hatchling, yaml, amplifier_core, amplifier_foundation'
 # JSON encoding preserves spaces, quotes, and backslashes in the target path.

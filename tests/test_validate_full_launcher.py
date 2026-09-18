@@ -41,6 +41,8 @@ def launcher(tmp_path):
         f"exec {sys.executable} \"'+os.environ['CLI_SPY']+'\" \"$@\"\\n')\n"
         " (b/'amplifier').chmod(0o755)\n"
         "else:\n"
+        " p=pathlib.Path(sys.argv[sys.argv.index('--overrides')+1])\n"
+        " pathlib.Path(os.environ['OVERRIDE_COPY']).write_text(p.read_text())\n"
         " sys.exit(int(os.environ.get('INSTALL_STATUS','0')))\n"
     )
     uv.chmod(0o755)
@@ -62,6 +64,7 @@ def launcher(tmp_path):
         "CALL_LOG": str(log),
         "CLI_SPY": str(spy),
         "CLI_RESULT": str(tmp_path / "cli-result.json"),
+        "OVERRIDE_COPY": str(tmp_path / "override-copy.txt"),
     }
     env.pop("CI_VALIDATE_VENV", None)
     env.pop("CI_VALIDATE_RECIPE", None)
@@ -88,6 +91,11 @@ def test_runs_venv_cli_and_preserves_status_and_json_paths(launcher, status):
     assert result.returncode == int(status), result.stderr
     calls = [json.loads(line) for line in Path(env["CALL_LOG"]).read_text().splitlines()]
     assert "--only-binary" in calls[1]
+    assert "--overrides" in calls[1]
+    assert (
+        "amplifier-foundation@7ad00b359fd5c2ac3ee98436b1b3bccabe6e909d"
+        in Path(env["OVERRIDE_COPY"]).read_text()
+    )
     assert "amplifier-core==1.6.1" in calls[1]
     assert not any("amplifier-core@" in arg for arg in calls[1])
     response = json.loads(Path(env["CLI_RESULT"]).read_text())
