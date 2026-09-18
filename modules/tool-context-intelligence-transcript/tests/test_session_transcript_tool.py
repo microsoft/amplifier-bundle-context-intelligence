@@ -236,7 +236,7 @@ async def test_tool_rejects_content_limit_above_total_limit(tmp_path) -> None:
     assert result.error["type"] == "invalid_request"
 
 
-def _local_tool(base_path: Path) -> SessionTranscriptTool:
+def _local_tool(base_path: Path, current_session_id: str = "current-session"):
     resolver = SimpleNamespace(
         base_path=base_path,
         session_dir=lambda sid: (
@@ -244,7 +244,7 @@ def _local_tool(base_path: Path) -> SessionTranscriptTool:
         ),
     )
     coordinator = SimpleNamespace(
-        session_id="current-session",
+        session_id=current_session_id,
         get_capability=lambda name: (
             resolver if name == "context_intelligence.hook_config_resolver" else None
         ),
@@ -375,3 +375,75 @@ async def test_unreadable_capture_store_returns_error_not_an_empty_success(tmp_p
     assert not result.success
     assert isinstance(result.error, dict)
     assert result.error["type"] == "capture_unavailable"
+
+
+def _capture_without_metadata(sessions_root: Path, session_id: str) -> Path:
+    """A capture whose metadata.json has not been written yet.
+
+    The logging handler creates metadata.json lazily, on the first event, so
+    this is the real state of a session that has just started.
+    """
+    capture_dir = sessions_root / session_id / "context-intelligence"
+    capture_dir.mkdir(parents=True)
+    (capture_dir / "events.jsonl").write_text("", encoding="utf-8")
+    return capture_dir
+
+
+async def test_initialising_capture_never_replaced_by_derived_sub_agent(tmp_path):
+    """A session ID prefixes every `{id}_{agent}` sub-agent capture it spawned."""
+    parent = "abcdef12-1234-5678-9abc-123456789abc"
+    _capture_without_metadata(tmp_path / "current-project" / "sessions", parent)
+    _capture(tmp_path / "current-project" / "sessions", f"{parent}_foundation-explorer")
+    result = await _local_tool(tmp_path).execute({"session_ids": [parent]})
+    assert not result.success
+    assert isinstance(result.error, dict)
+    assert result.error["type"] == "capture_unavailable"
+    assert "Hello" not in str(result.output)
+
+
+async def test_current_session_never_replaced_by_its_own_sub_agent(tmp_path):
+    """The no-argument `/transcript` path resolves the same way."""
+    current = "current-session"
+    _capture_without_metadata(tmp_path / "current-project" / "sessions", current)
+    _capture(tmp_path / "current-project" / "sessions", f"{current}_foundation-explorer")
+    result = await _local_tool(tmp_path, current_session_id=current).execute({})
+    assert not result.success
+    assert isinstance(result.error, dict)
+    assert result.error["type"] == "capture_unavailable"
+    assert "Hello" not in str(result.output)
+
+
+async def test_initialising_capture_is_not_ambiguous_between_its_sub_agents(tmp_path):
+    """Two sub-agents must not turn an exact, valid ID into an ambiguity error."""
+    parent = "abcdef12-1234-5678-9abc-123456789abc"
+    sessions = tmp_path / "current-project" / "sessions"
+    _capture_without_metadata(sessions, parent)
+    _capture(sessions, f"{parent}_foundation-explorer")
+    _capture(sessions, f"{parent}_foundation-git-ops")
+    result = await _local_tool(tmp_path).execute({"session_ids": [parent]})
+    assert not result.success
+    assert isinstance(result.error, dict)
+    assert result.error["type"] == "capture_unavailable"
+
+
+async def test_id_with_only_derived_captures_is_reported_not_substituted(tmp_path):
+    """No capture of its own: name the derived sessions instead of replaying one."""
+    parent = "abcdef12-1234-5678-9abc-123456789abc"
+    child = f"{parent}_foundation-explorer"
+    _capture(tmp_path / "current-project" / "sessions", child)
+    result = await _local_tool(tmp_path).execute({"session_ids": [parent]})
+    assert not result.success
+    assert isinstance(result.error, dict)
+    assert result.error["type"] == "session_not_found"
+    assert child in result.error["message"]
+    assert "Hello" not in str(result.output)
+
+
+async def test_prefix_stopping_short_of_the_derivation_mark_still_resolves(tmp_path):
+    """A genuine prefix is not mistaken for a parent ID with derived captures."""
+    child = "abcdef12-1234-5678-9abc-123456789abc_foundation-explorer"
+    _capture(tmp_path / "current-project" / "sessions", child)
+    result = await _local_tool(tmp_path).execute({"session_ids": ["abcdef12-1234"]})
+    assert result.success, result.error
+    assert isinstance(result.output, dict)
+    assert result.output["sessions"][0]["session_id"] == child
