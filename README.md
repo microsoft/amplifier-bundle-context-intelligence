@@ -28,8 +28,12 @@ session's native user/assistant capture. Use `/transcript abcdef12` for a unique
 short ID (at least eight characters), or `/transcript FULL-ID` for an exact ID.
 Pass an intent to use the current transcript as source material, or pass
 `--session ID[,ID...]` to target multiple captures. Prefixes are resolved across
-the mounted hook's local capture store; ambiguous matches ask for a longer ID,
-never guess. Exact IDs take precedence. Use the returned full ID when paging.
+the mounted hook's local capture store; ambiguous matches name the character
+position where the candidates diverge and ask for at least that many, never
+guess. Exact IDs take precedence, including over the derived `<id>_<agent>`
+sub-agent captures that every session ID prefixes: a session whose capture is
+still initialising is reported, never answered with one of its own sub-agents.
+Use the returned full ID when paging.
 Embedding hosts with a custom capture resolver own resolution in their storage.
 The shared library exports `resolve_session_id(reference, candidates)` so hosts
 and other tools can reuse the same exact-first, unique-prefix lookup without
