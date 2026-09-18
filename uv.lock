@@ -10,6 +10,11 @@ dependencies = [
     { name = "azure-identity" },
 ]
 
+[package.optional-dependencies]
+client = [
+    { name = "httpx" },
+]
+
 [package.dev-dependencies]
 dev = [
     { name = "amplifier-core" },
@@ -23,7 +28,11 @@ dev = [
 ]
 
 [package.metadata]
-requires-dist = [{ name = "azure-identity", specifier = ">=1.19" }]
+requires-dist = [
+    { name = "azure-identity", specifier = ">=1.19" },
+    { name = "httpx", marker = "extra == 'client'", specifier = ">=0.25" },
+]
+provides-extras = ["client"]
 
 [package.metadata.requires-dev]
 dev = [

@@ -12,6 +12,9 @@ dependencies = [
     "azure-identity>=1.19",
 ]
 
+[project.optional-dependencies]
+client = ["httpx>=0.25"]
+
 [build-system]
 requires = [
     "hatchling",

@@ -1,0 +1,55 @@
+{
+  "executed_at": "2026-09-18T23:03:43.033266+00:00",
+  "server_url": "http://127.0.0.1:18081",
+  "server_revision": "43973967ff4bc9a02422814a8c00dfce7624a76d",
+  "client_source_sha256": {
+    "context_intelligence/client.py": "72505c28ffea3085d440440fc66db90b2a574629f759c5270f2fa4b6d1d61bf9",
+    "context_intelligence/upload/__init__.py": "268a8e142ad21016aa4315f3e7ee662a7470baa49d60960dcfd70298ec6f0358"
+  },
+  "request": {
+    "data": {
+      "event_id": "a18fca3d77604d078d702c084961051f",
+      "message": "synthetic public ingestion seam",
+      "session_id": "public-ingest-6efdab99d88e4d368e1b16c8ca2da7b0",
+      "timestamp": "2026-09-18T23:03:42.511988+00:00"
+    },
+    "event": "host:diagnostic",
+    "workspace": "ci-public-api-fixture",
+    "idempotency_key": "aci-event-v1:7b9cbd6c8d6af24acc4a0181cb1abad92c13b7e593dd38fd8ae712ea0cc0ef17"
+  },
+  "receipts": [
+    {
+      "status": "queued",
+      "session_id": "public-ingest-6efdab99d88e4d368e1b16c8ca2da7b0"
+    },
+    {
+      "status": "duplicate",
+      "session_id": "public-ingest-6efdab99d88e4d368e1b16c8ca2da7b0"
+    }
+  ],
+  "graph_query": "MATCH (n:Event) WHERE n.session_id = $sid RETURN n.event_name AS event_name, count(n) AS count",
+  "graph_rows": [
+    {
+      "event_name": "host:diagnostic",
+      "count": 1
+    }
+  ],
+  "failures": {
+    "bad_auth": {
+      "error_type": "http_status",
+      "status_code": 401
+    },
+    "connection_refused": {
+      "error_type": "connection_error",
+      "status_code": null
+    }
+  },
+  "checks": {
+    "first_acceptance": true,
+    "duplicate_receipt": true,
+    "one_graph_event": true,
+    "auth_fails_loudly": true,
+    "network_fails_loudly": true
+  },
+  "passed": true
+}

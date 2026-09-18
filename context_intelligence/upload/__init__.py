@@ -1,13 +1,43 @@
-"""context_intelligence.upload — placeholder for session upload utilities.
+"""Public single-event ingestion envelopes.
 
-NOTE: The upload implementation currently lives in the standalone module at:
-
-    modules/tool-context-intelligence-upload/
-
-That module contains the full upload pipeline including the CLI entry point,
-progress tracking, session graph construction, and the uploader client.
-
-This subpackage is a placeholder that will re-export the public upload API
-once the code is migrated from the tool module into this library package.
-Imports are deferred until that migration is complete (planned for a future task).
+Full session upload remains in ``tool-context-intelligence-upload``. Hosts can
+persist these envelopes in an outbox and submit them with ``AsyncCIClient.ingest``.
 """
+
+from __future__ import annotations
+
+import hashlib
+import json
+from typing import Any
+
+
+def build_event_payload(
+    event: str, workspace: str, data: dict[str, Any], working_dir: str | None = None
+) -> dict[str, Any]:
+    """Build a detached, JSON-safe envelope with the hook's v1 idempotency key.
+
+    Callers must sanitize content before calling this function. Include a stable
+    event identity in ``data`` when otherwise-identical occurrences are distinct.
+    Persist the returned envelope unchanged for retries. ``working_dir`` is
+    envelope metadata and intentionally excluded from the existing v1 key.
+    An unknown working directory is omitted, never encoded as a blank string.
+    """
+    if not isinstance(event, str) or not event.strip():
+        raise ValueError("event must be a nonblank string")
+    if not isinstance(workspace, str) or not workspace.strip():
+        raise ValueError("workspace must be a nonblank string")
+    if not isinstance(data, dict):
+        raise ValueError("data must be an object")
+    if working_dir is not None and (not isinstance(working_dir, str) or not working_dir.strip()):
+        raise ValueError("working_dir must be nonblank when supplied")
+    canonical = json.dumps(
+        {"event": event, "workspace": workspace, "data": data},
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    )
+    payload = json.loads(canonical)
+    payload["idempotency_key"] = "aci-event-v1:" + hashlib.sha256(canonical.encode()).hexdigest()
+    if working_dir is not None:
+        payload["working_dir"] = working_dir
+    return payload

@@ -862,7 +862,7 @@ class AsyncCIClient:
         When ``None``, an ``ApiKeyAuth(api_key)`` is built implicitly (backward compat).
     timeout:
         Per-request HTTP timeout (seconds) applied to every ``httpx.AsyncClient``
-        constructed by this instance (cypher, fetch_blob, list_blob_keys). Defaults
+        constructed by this instance (including ingest). Defaults
         to 30.0, matching the sync helpers' existing ``timeout=30``. See
         ``ToolConfigResolver.request_timeout`` for how callers resolve this value
         from config/env.
@@ -916,6 +916,70 @@ class AsyncCIClient:
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
+
+    async def ingest(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """Submit an event envelope once, returning the server's acceptance receipt.
+
+        ``build_event_payload`` supplies an optional deterministic v1 envelope;
+        callers may also supply their own server-compatible envelope and key.
+        The envelope is detached before resolving auth so concurrent caller edits
+        cannot change the request while a credential is refreshed.
+
+        HTTP 202 / ``queued`` means durable server acceptance, not graph indexing.
+        HTTP 202 / ``duplicate`` means the server recognized the idempotency key;
+        it does not append another event or establish graph completion. The server
+        owns deduplication scope and retention. This method never retries or follows
+        redirects. Persist and reuse the same envelope for an explicit retry after
+        an ambiguous failure. Routing, redaction and retry policy belong to callers.
+        """
+        import asyncio
+
+        if not isinstance(payload, dict):
+            raise ValueError("event payload must be an object")
+        # JSON encoding is also a strict preflight: no NaN or Infinity on the wire.
+        body = json.loads(json.dumps(payload, allow_nan=False))
+        url = f"{self._server_url}/events"
+        headers = await asyncio.to_thread(self._auth_headers, url)
+        try:
+            async with httpx.AsyncClient(timeout=self._timeout, follow_redirects=False) as client:  # type: ignore[union-attr]
+                resp = await client.post(url, json=body, headers=headers)
+                resp.raise_for_status()
+                result = resp.json()
+                if (
+                    resp.status_code != 202
+                    or not isinstance(result, dict)
+                    or not isinstance(result.get("status"), str)
+                    or result["status"] not in {"queued", "duplicate"}
+                    or (
+                        result.get("session_id") is not None
+                        and not isinstance(result["session_id"], str)
+                    )
+                ):
+                    raise ValueError("invalid event acceptance receipt")
+                return result
+        except httpx.TimeoutException as exc:  # type: ignore[union-attr]
+            raise CIClientError(
+                "event acceptance timed out", error_type="timeout", url=url
+            ) from exc
+        except httpx.HTTPStatusError as exc:  # type: ignore[union-attr]
+            body, code = _error_detail(exc.response)
+            raise CIClientError(
+                "event acceptance rejected",
+                error_type="http_status",
+                url=url,
+                status_code=exc.response.status_code,
+                retry_after=_retry_after_seconds(exc.response.headers),
+                error_body=body,
+                error_code=code,
+            ) from exc
+        except ValueError as exc:
+            raise CIClientError(
+                "invalid event receipt", error_type="decode_error", url=url
+            ) from exc
+        except httpx.HTTPError as exc:  # type: ignore[union-attr]
+            raise CIClientError(
+                "event connection failed", error_type="connection_error", url=url
+            ) from exc
 
     async def cypher(
         self,
