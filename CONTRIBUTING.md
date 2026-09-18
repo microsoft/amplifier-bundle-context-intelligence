@@ -4,7 +4,7 @@ Thanks for contributing to **amplifier-bundle-context-intelligence**. This repo 
 a few specific conventions — read them before you change the furniture.
 
 **Read [`AGENTS.md`](AGENTS.md) first.** It is the authoritative, always-loaded
-guidance: the known validator false positive, the full-validation command, and the
+guidance: validator version requirements, the full-validation command, and the
 **seam-awareness** rules that govern how changes to tool/skill/config wiring must be
 tested. Everything below is the short version.
 
@@ -62,11 +62,14 @@ Before opening a PR that touches bundle structure, run the repo's **full** valid
 scripts/validate-full.sh
 ```
 
-It builds a throwaway `uv` venv with `hatchling` + `amplifier-foundation` +
-`amplifier-core` so the validator runs at `validation_mode: full`. The lone
-mode-advertising **ERROR** it reports is a **documented FALSE POSITIVE** (a name
-collision — see `AGENTS.md`); **do not "fix" it** by advertising the internal mode or
-deleting path/skill references.
+It builds a throwaway `uv` venv with a pinned CLI and its normal dependency
+closure, plus the build dependencies needed to attempt `validation_mode: full`.
+Use Foundation's validator v3.16.1 or later for correct mode/path detection
+(see `AGENTS.md`). Inspect `env_check.validation_mode`, `build_check`, and
+`quality_classification.quality_level`; the final Markdown report must agree
+with those machine results. Require full mode, a successful tested build, and
+no ERROR findings. Process exit `0` alone is not PASS. No ERROR is waived.
+The wrapper disables optional LLM diagram-label enhancement, not diagram checks.
 
 If your change altered bundle structure, regenerate the diagram and commit it
 (the validator flags `BUNDLE_DOT_STALE` otherwise):

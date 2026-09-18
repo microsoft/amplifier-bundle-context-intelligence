@@ -6,6 +6,7 @@ import json
 import os
 import stat
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -126,6 +127,7 @@ exit 97
     )
     environment.pop("AMPLIFIER_HOME", None)
     environment.pop("CI_VALIDATE_RECIPE", None)
+    environment.pop("CI_VALIDATE_VENV", None)
     if caller_amplifier_home is not None:
         environment["AMPLIFIER_HOME"] = caller_amplifier_home
     if omit_private_cli:
@@ -142,7 +144,8 @@ def test_launches_pinned_private_cli_and_preserves_paths_with_spaces(tmp_path: P
     environment = _environment(tmp_path, caller_amplifier_home=caller_amplifier_home)
     repo_path = tmp_path / 'bundle "quoted" \\ path'
     venv_path = tmp_path / "private venv with spaces"
-    environment["FAKE_JSON_CONTEXT"] = json.dumps({"repo_path": str(repo_path)})
+    expected_context = {"repo_path": str(repo_path), "enhance_diagrams": "false"}
+    environment["FAKE_JSON_CONTEXT"] = json.dumps(expected_context)
 
     result = subprocess.run(
         [str(SCRIPT_PATH), str(repo_path)],
@@ -186,9 +189,17 @@ def test_launches_pinned_private_cli_and_preserves_paths_with_spaces(tmp_path: P
     )
     assert f"recipe_path={expected_recipe}" in cli_args
     context = next(argument for argument in cli_args if argument.startswith("context="))
-    assert json.loads(context.removeprefix("context=")) == {"repo_path": str(repo_path)}
+    assert json.loads(context.removeprefix("context=")) == expected_context
     assert Path(environment["FAKE_JSON_INPUT"]).read_text().strip() == str(repo_path)
-    assert "json.dumps" in Path(environment["FAKE_JSON_CODE"]).read_text()
+    # Exercise the wrapper's actual expression too: fake CLI output alone cannot
+    # prove that diagram enhancement is disabled or quoted paths survive.
+    json_result = subprocess.run(
+        [sys.executable, "-c", Path(environment["FAKE_JSON_CODE"]).read_text(), str(repo_path)],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert json.loads(json_result.stdout) == expected_context
     assert Path(environment["FAKE_CLI_ENV_PATH"]).read_text().splitlines()[0] == (
         f"{venv_path}/bin:{environment['PATH']}"
     )
@@ -214,6 +225,37 @@ def test_propagates_private_cli_failure_status(tmp_path: Path) -> None:
     assert Path(environment["FAKE_CLI_PATH"]).read_text().strip() == str(
         venv_path / "bin" / "amplifier"
     )
+
+
+@pytest.mark.parametrize("cli_exit", [0, 7])
+def test_default_venv_stays_outside_target_and_is_cleaned(tmp_path: Path, cli_exit: int) -> None:
+    """Installed validator skills must never become default validation inputs."""
+    environment = _environment(tmp_path, private_cli_exit=cli_exit)
+    repo_path = tmp_path / "target repo"
+    repo_path.mkdir()
+    temp_root = tmp_path / "private temp"
+    temp_root.mkdir()
+    environment["TMPDIR"] = str(temp_root)
+    environment["FAKE_JSON_CONTEXT"] = json.dumps(
+        {"repo_path": str(repo_path), "enhance_diagrams": "false"}
+    )
+
+    result = subprocess.run(
+        [str(SCRIPT_PATH), str(repo_path)],
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == cli_exit, result.stderr
+    venv = Path(environment["FAKE_CLI_PATH"]).read_text().strip()
+    venv_path = Path(venv).parent.parent
+    assert venv_path.parent == temp_root
+    assert venv_path.name.startswith("ci-validate.")
+    assert not venv_path.exists()
+    assert not (repo_path / ".amplifier").exists()
+    assert not Path(environment["FAKE_HOST_CLI_SENTINEL"]).exists()
 
 
 def test_preserves_an_unset_amplifier_home(tmp_path: Path) -> None:

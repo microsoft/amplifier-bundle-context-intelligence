@@ -19,8 +19,13 @@
 # This is a launch/dependency helper, not a verdict gate. It propagates the
 # `amplifier tool invoke` exit status unchanged; a zero process exit is not a
 # validation PASS. User/CI must inspect the recipe's published structured
-# `validation_mode`, `overall_verdict`, and `build_tested` fields. Result parsing
+# `env_check.validation_mode`, `quality_classification.quality_level`, and
+# `build_check` fields. Full PASS requires full mode, a successful tested build,
+# no ERROR findings, and a final report consistent with those machine results.
+# Use Foundation validator v3.16.1+ for corrected mode/path detection. Result parsing
 # and any remaining recipe/full-gate behavior are outside this interpreter repair.
+# Diagram checks and generation remain enabled; optional LLM label enhancement
+# is disabled so repeated validation does not rewrite labels nondeterministically.
 #
 # (This is the uv-based equivalent of the recipe's own documented
 #  `uvx --with hatchling --with amplifier-foundation amplifier tool invoke ...`
@@ -35,7 +40,8 @@
 # ENV
 #   CI_VALIDATE_VENV   set a new venv location. The path must not already exist.
 #                      By default, a unique throwaway venv is created beneath
-#                      <REPO_PATH>/.amplifier/validation/ and removed on exit.
+#                      TMPDIR (or /tmp) and removed on exit. Keep it outside the
+#                      target repo so dependency skills are not scanned as source.
 #   CI_VALIDATE_RECIPE explicit readable recipe file; otherwise exactly one
 #                      cached Foundation validator must exist. Ambiguity fails
 #                      before environment creation or dependency installation.
@@ -81,9 +87,7 @@ if [[ -n "${CI_VALIDATE_VENV:-}" ]]; then
   fi
   VENV_OWNED=false
 else
-  VENV_ROOT="$REPO_PATH/.amplifier/validation"
-  mkdir -p "$VENV_ROOT"
-  VENV="$(mktemp -d "$VENV_ROOT/full.XXXXXX")"
+  VENV="$(mktemp -d "${TMPDIR:-/tmp}/ci-validate.XXXXXX")"
   VENV_OWNED=true
 fi
 
@@ -109,8 +113,8 @@ fi
 echo ">> recipe: $RECIPE"
 echo ">> repo:   $REPO_PATH"
 echo ">> launching validate-bundle-repo with full-mode-capable private dependencies ..."
-echo ">> inspect the published recipe validation_mode, overall_verdict, and build_tested; exit 0 is not PASS"
-CONTEXT="$("$VENV/bin/python" -c 'import json, sys; print(json.dumps({"repo_path": sys.argv[1]}))' "$REPO_PATH")"
+echo ">> require full mode, a successful tested build, no ERROR findings, and a consistent final report; exit 0 is not PASS"
+CONTEXT="$("$VENV/bin/python" -c 'import json, sys; print(json.dumps({"repo_path": sys.argv[1], "enhance_diagrams": "false"}))' "$REPO_PATH")"
 PYTHONNOUSERSITE=1 \
 PATH="$VENV/bin:$PATH" "$VENV/bin/amplifier" tool invoke recipes operation=execute \
   recipe_path="$RECIPE" \

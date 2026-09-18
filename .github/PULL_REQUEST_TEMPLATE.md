@@ -23,7 +23,8 @@ say which and how you proved the real crossing. -->
 - [ ] **`ruff check` + `ruff format --check`** clean
 - [ ] **`pyright`** clean (0 errors)
 - [ ] **Full bundle validation** PASS — `scripts/validate-full.sh` → `validation_mode: full`
-      (the lone mode-advertising ERROR is a documented FALSE POSITIVE — see AGENTS.md — do NOT "fix" it)
+      (paste `build_check`, `quality_classification.quality_level`, and the selected recipe version;
+      the final report must agree with machine findings, with no ERROR waivers)
 
 ## Real evidence on seams (not mock-only)
 
