@@ -53,8 +53,35 @@ def resolve_session_id(reference: str, candidates: Iterable[str]) -> str:
         shown = tuple(sorted(matches)[:5])
         raise SessionResolutionError(
             "ambiguous_session",
-            f"{reference!r} matches {len(matches)} sessions; use a longer prefix or full ID. "
+            f"{reference!r} matches {len(matches)} sessions; {_disambiguation_hint(matches)} "
             f"Candidates (up to 5): {', '.join(shown)}",
             shown,
         )
     return matches.pop()
+
+
+def _shared_prefix_length(matches: set[str]) -> int:
+    """Count the leading characters every match has in common."""
+    shortest = min(matches, key=len)
+    for index, character in enumerate(shortest):
+        if any(match[index] != character for match in matches):
+            return index
+    return len(shortest)
+
+
+def _disambiguation_hint(matches: set[str]) -> str:
+    """Say how much more is needed, not merely that more is needed.
+
+    A flat "use a longer prefix" is unactionable when the matches share a long
+    run of leading characters -- a spawned sub-agent ID begins with a
+    zero-padded parent block, so the separating character can sit well past the
+    eight-character minimum. Report where the matches actually diverge.
+    """
+    shared = _shared_prefix_length(matches)
+    if shared == len(min(matches, key=len)):
+        # One match is a prefix of another, so no longer prefix can separate them.
+        return "one is a prefix of another, so only an exact full ID can select it."
+    return (
+        f"all of them share their first {shared} characters, "
+        f"so supply at least {shared + 1} characters or an exact full ID."
+    )
