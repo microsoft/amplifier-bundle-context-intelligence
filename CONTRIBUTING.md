@@ -62,14 +62,24 @@ Before opening a PR that touches bundle structure, run the repo's **full** valid
 scripts/validate-full.sh
 ```
 
-It builds a throwaway `uv` venv with a pinned CLI and its normal dependency
-closure, plus the build dependencies needed to attempt `validation_mode: full`.
+It runs a pinned public CLI from a fresh `uv` venv with a prebuilt Core 1.6.1
+wheel, `hatchling`, `pyyaml`, and `pip`, so the validator runs at
+`validation_mode: full` without compiling Core. The CLI's normal Foundation
+dependency is overridden in that private venv to
+`f13d08168e14b5bc4720fbb06c40936eb1a7a7d1`; it is not added as a conflicting
+direct requirement. The venv is removed on exit, including a newly supplied
+`CI_VALIDATE_VENV` path. If zero or multiple Foundation recipes are cached,
+selection fails before installation; select a readable one explicitly with
+`CI_VALIDATE_RECIPE`. The wrapper disables optional LLM diagram-label
+enhancement, not diagram checks.
+
 Use Foundation's validator v3.16.1 or later for correct mode/path detection
-(see `AGENTS.md`). Inspect `env_check.validation_mode`, `build_check`, and
-`quality_classification.quality_level`; the final Markdown report must agree
+(see `AGENTS.md`). Inspect `env_check.validation_mode`,
+`build_check.build_tested`, `build_check.build_success`, and
+`quality_classification.quality_level`; `final_report` must agree
 with those machine results. Require full mode, a successful tested build, and
-no ERROR findings. Process exit `0` alone is not PASS. No ERROR is waived.
-The wrapper disables optional LLM diagram-label enhancement, not diagram checks.
+no ERROR findings. Process exit `0` alone is not PASS. No ERROR is waived; keep
+the internal mode unadvertised and do not delete valid path references.
 
 If your change altered bundle structure, regenerate the diagram and commit it
 (the validator flags `BUNDLE_DOT_STALE` otherwise):

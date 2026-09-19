@@ -27,22 +27,25 @@ scripts/validate-full.sh           # validates this repo
 scripts/validate-full.sh <path>    # or another bundle repo
 ```
 
-It creates a private throwaway `uv` venv with `pip`, `hatchling`, `pyyaml`, and a pinned
-`amplifier-app-cli`. Core and Foundation come from that CLI's dependency closure rather
-than duplicate direct Git requirements. It then invokes that venv's
-`amplifier` executable explicitly. Its `python3` and the CLI's fixed shebang therefore resolve to
-the private interpreter, giving the recipe the dependencies needed to attempt `validation_mode: full`.
-It preserves the caller's Amplifier settings identity, including `AMPLIFIER_HOME` when set.
-The default location is a unique, removed-on-exit directory under `TMPDIR`
-(or `/tmp`), outside the validation target. Keep `TMPDIR` and any explicit
-`CI_VALIDATE_VENV` outside that target: installed dependency skills would
-otherwise be scanned as repository source. Set `CI_VALIDATE_VENV` only to a
-**new** path; an existing path is refused rather than modified.
-Recipe selection is also explicit: one cached Foundation validator is selected
-automatically; zero or multiple matches stop before any installation. Set
-`CI_VALIDATE_RECIPE` to a readable recipe file to choose deliberately, including
-when the desired recipe is outside the default `~/.amplifier/cache/` location.
-The selected path is printed; this choice does not update settings or caches.
+It creates a private throwaway `uv` venv with `pip`, `hatchling`, `pyyaml`, a
+prebuilt public Core 1.6.1 wheel, and the pinned public `amplifier-app-cli`.
+Foundation is overridden in that venv through `uv pip --overrides` to
+`f13d08168e14b5bc4720fbb06c40936eb1a7a7d1`; it is not supplied as a second
+direct requirement. It then invokes that venv's `amplifier` executable explicitly.
+PATH alone is insufficient because the CLI supplies its own interpreter to recipe
+shell steps. It preserves the caller's Amplifier settings identity, including
+`AMPLIFIER_HOME` when set.
+
+The default location is a unique, removed-on-exit directory under `TMPDIR` (or
+`/tmp`), outside the validation target. Keep `TMPDIR` and any explicit
+`CI_VALIDATE_VENV` outside that target: installed dependency skills would otherwise
+be scanned as repository source. Set `CI_VALIDATE_VENV` only to a **new** path; an
+existing path is refused rather than modified, and a newly claimed explicit path is
+also removed on exit. Recipe selection is explicit: one cached Foundation validator
+is selected automatically; zero or multiple matches stop before target normalization,
+environment creation, or installation. Set `CI_VALIDATE_RECIPE` to a readable recipe
+file to choose deliberately, including outside the default `~/.amplifier/cache/`
+location. The selected path is printed; this choice does not update settings or caches.
 
 The wrapper sets `enhance_diagrams: "false"`: diagram validation and deterministic
 generation still run, but optional LLM label rewriting does not. Regenerate and
@@ -52,7 +55,7 @@ The wrapper is a launch/dependency helper, not the full-validator verdict gate. 
 `amplifier tool invoke` exit status unchanged; process exit `0` does **not** mean validation PASS.
 User/CI must inspect `env_check.validation_mode`, `build_check.build_tested`,
 `build_check.build_success`, and `quality_classification.quality_level` in the
-recipe results, plus the final Markdown report. Full PASS requires full mode,
+recipe results, plus `final_report`. Full PASS requires full mode,
 a successful tested build, and no ERROR findings; a report cannot override
 machine findings. The recipe has no structured `overall_verdict` field.
 Result parsing remains outside this launch helper. A stale

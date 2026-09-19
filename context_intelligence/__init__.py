@@ -44,6 +44,11 @@ from context_intelligence.reconstruct import (
     sessions_dir_for_project,
     workspace_slug,
 )
+from context_intelligence.session_ids import (
+    SessionResolutionError,
+    is_safe_session_id,
+    resolve_session_id,
+)
 
 __all__ = [
     "AsyncCIClient",
@@ -68,4 +73,7 @@ __all__ = [
     "discover_sessions",
     "workspace_slug",
     "sessions_dir_for_project",
+    "SessionResolutionError",
+    "is_safe_session_id",
+    "resolve_session_id",
 ]

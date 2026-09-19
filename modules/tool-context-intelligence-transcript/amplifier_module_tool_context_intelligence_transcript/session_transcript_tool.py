@@ -13,12 +13,20 @@ from context_intelligence.native_transcript import (
     read_native_transcript,
     render_native_transcript,
 )
+from context_intelligence.session_ids import (
+    SessionResolutionError,
+    is_safe_session_id,
+    resolve_session_id,
+)
 
 _CAPTURE_RESOLVER_CAPABILITY = "context_intelligence.capture_resolver"
 _HOOK_RESOLVER_CAPABILITY = "context_intelligence.hook_config_resolver"
 _MAX_SESSIONS_PER_REQUEST = 3
 _MAX_TOTAL_CONTENT_CHARS = 100_000
-_GLOB_METACHARACTERS = frozenset("*?[]")
+# A spawned sub-agent's capture directory is named `{parent_session_id}_{agent}`,
+# so every session ID is a strict prefix of every capture it spawned. Prefix
+# lookup must never let a derived capture stand in for the session that names it.
+_DERIVED_CAPTURE_MARK = "_"
 
 
 class SessionTranscriptTool:
@@ -52,7 +60,10 @@ class SessionTranscriptTool:
                     "type": "array",
                     "items": {"type": "string"},
                     "maxItems": _MAX_SESSIONS_PER_REQUEST,
-                    "description": "Optional session IDs. Omit to retrieve the calling session.",
+                    "description": (
+                        "Optional full session IDs or unique prefixes (at least 8 characters). "
+                        "Omit to retrieve the calling session. Use returned full IDs for pagination."
+                    ),
                 },
                 "after_event_line": {"type": "integer", "minimum": 0, "default": 0},
                 "after_event_lines": {
@@ -97,19 +108,43 @@ class SessionTranscriptTool:
 
     @staticmethod
     def _find_capture_metadata(base_path: Path, session_id: str) -> list[Path]:
-        """Find literal session-directory matches without treating the ID as a glob."""
-        matches: list[Path] = []
+        """Match directory names only; do not open every capture to resolve a prefix."""
+        candidates: dict[str, list[Path]] = {}
+        matched_names: set[str] = set()
         for project_dir in base_path.iterdir():
             sessions_dir = project_dir / "sessions"
             if not sessions_dir.is_dir():
                 continue
             for session_dir in sessions_dir.iterdir():
-                if session_dir.name != session_id:
+                if not session_dir.name.startswith(session_id):
                     continue
+                matched_names.add(session_dir.name)
                 metadata_path = session_dir / "context-intelligence" / "metadata.json"
                 if metadata_path.is_file():
-                    matches.append(metadata_path)
-        return matches
+                    candidates.setdefault(session_dir.name, []).append(metadata_path)
+
+        # An exactly-named capture directory IS the requested session, even before
+        # its metadata.json exists -- the logging handler writes that file lazily,
+        # on the first event. Reporting the gap keeps a session whose capture is
+        # still initialising from being answered with one of its own sub-agents.
+        if session_id in matched_names and session_id not in candidates:
+            raise NativeTranscriptError(
+                "capture_unavailable",
+                f"session {session_id!r} has a capture directory but no readable "
+                "metadata.json; its capture is incomplete or still initialising",
+            )
+        derived = sorted(
+            name for name in candidates if name.startswith(session_id + _DERIVED_CAPTURE_MARK)
+        )
+        if derived and len(derived) == len(candidates):
+            raise NativeTranscriptError(
+                "session_not_found",
+                f"session {session_id!r} has no capture of its own; only sub-agent "
+                f"sessions derived from it were captured. Candidates (up to 5): "
+                f"{', '.join(derived[:5])}",
+            )
+        canonical_id = resolve_session_id(session_id, candidates)
+        return candidates[canonical_id]
 
     def _resolve_locator(self, session_id: str) -> CaptureLocator:
         """Resolve through an embedding host first, then the mounted CI hook."""
@@ -127,11 +162,16 @@ class SessionTranscriptTool:
             directory = session_dir(session_id)
             if isinstance(directory, (Path, str)):
                 locator = CaptureLocator.from_session_dir(directory)
-                if locator.metadata_path.is_file() and locator.events_path.is_file():
-                    return locator
                 base_path = getattr(self._hook_resolver, "base_path", None)
-                if isinstance(base_path, Path):
-                    matches = self._find_capture_metadata(base_path, session_id)
+                if isinstance(base_path, (Path, str)):
+                    try:
+                        matches = self._find_capture_metadata(Path(base_path), session_id)
+                    except SessionResolutionError as exc:
+                        raise NativeTranscriptError(exc.code, str(exc)) from exc
+                    except OSError as exc:
+                        raise NativeTranscriptError(
+                            "capture_unavailable", f"cannot search local captures: {exc}"
+                        ) from exc
                     if len(matches) == 1:
                         return CaptureLocator(
                             events_path=matches[0].with_name("events.jsonl"),
@@ -156,16 +196,7 @@ class SessionTranscriptTool:
 
     @staticmethod
     def _is_safe_session_id(value: object) -> bool:
-        """Accept opaque IDs but never path components or glob expressions."""
-        return (
-            isinstance(value, str)
-            and bool(value)
-            and value not in {".", ".."}
-            and "/" not in value
-            and "\\" not in value
-            and "\0" not in value
-            and not _GLOB_METACHARACTERS.intersection(value)
-        )
+        return is_safe_session_id(value)
 
     def _requested_sessions(self, input_data: dict[str, Any]) -> list[tuple[str, int]]:
         raw_ids = input_data.get("session_ids")

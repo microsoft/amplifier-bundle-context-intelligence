@@ -13,7 +13,8 @@ import pytest
 
 REPO_ROOT = Path(__file__).parent.parent
 SCRIPT_PATH = REPO_ROOT / "scripts" / "validate-full.sh"
-CLI_REF = "4d168ed822314dced895c8cf7fdbb24233cbe31b"
+CLI_REF = "14dc68eba05bf65b8c6dea28c3a2db93daa12d38"
+FOUNDATION_REF = "f13d08168e14b5bc4720fbb06c40936eb1a7a7d1"
 
 
 def _write_executable(path: Path, content: str) -> None:
@@ -43,7 +44,7 @@ if [[ "${1:-}" == */bin/amplifier ]]; then
   printf '%s\\n' "$PYTHONNOUSERSITE" > "$FAKE_CLI_PYTHONNOUSERSITE"
   exit "${FAKE_PRIVATE_CLI_EXIT:-0}"
 fi
-if [[ "$*" == *"import pip, hatchling, amplifier_foundation"* ]]; then
+if [[ "$*" == *"import pip, hatchling, yaml, amplifier_core, amplifier_foundation"* ]]; then
   [[ "${FAKE_FAIL_PRIVATE_IMPORTS:-}" != "1" ]]
   exit
 fi
@@ -57,6 +58,13 @@ exit 64
 PYTHON
   chmod +x "$venv/bin/python"
 elif [[ "$1" == "pip" && "${FAKE_OMIT_PRIVATE_CLI:-}" != "1" ]]; then
+  for ((index = 1; index <= $#; index++)); do
+    if [[ "${!index}" == "--overrides" ]]; then
+      next=$((index + 1))
+      cat "${!next}" > "$FAKE_OVERRIDE_CONTENTS"
+      break
+    fi
+  done
   python=""
   for ((index = 1; index <= $#; index++)); do
     if [[ "${!index}" == "--python" ]]; then
@@ -123,6 +131,7 @@ exit 97
             "FAKE_HOST_CLI_SENTINEL": str(tmp_path / "host-cli-called"),
             "FAKE_JSON_CODE": str(tmp_path / "json-code"),
             "FAKE_JSON_INPUT": str(tmp_path / "json-input"),
+            "FAKE_OVERRIDE_CONTENTS": str(tmp_path / "override-contents"),
         }
     )
     environment.pop("AMPLIFIER_HOME", None)
@@ -144,6 +153,7 @@ def test_launches_pinned_private_cli_and_preserves_paths_with_spaces(tmp_path: P
     environment = _environment(tmp_path, caller_amplifier_home=caller_amplifier_home)
     repo_path = tmp_path / 'bundle "quoted" \\ path'
     venv_path = tmp_path / "private venv with spaces"
+    repo_path.mkdir()
     expected_context = {"repo_path": str(repo_path), "enhance_diagrams": "false"}
     environment["FAKE_JSON_CONTEXT"] = json.dumps(expected_context)
 
@@ -166,17 +176,20 @@ def test_launches_pinned_private_cli_and_preserves_paths_with_spaces(tmp_path: P
 
     uv_args = Path(environment["FAKE_UV_ARGS"]).read_text().splitlines()
     assert "--allow-existing" in uv_args
+    assert "--only-binary" in uv_args
     python_targets = [
         uv_args[index + 1] for index, argument in enumerate(uv_args[:-1]) if argument == "--python"
     ]
     assert str(venv_path / "bin" / "python") in python_targets
     assert "pip" in uv_args
     assert "hatchling" in uv_args
+    assert "amplifier-core==1.6.1" in uv_args
     # The CLI supplies Core/Foundation through its own dependency closure.
     # Repeating Foundation as a direct Git requirement conflicts with its
     # tool.uv.sources mapping during a real install.
     assert not any(arg.startswith("amplifier-foundation @") for arg in uv_args)
     assert not any(arg.startswith("amplifier-core @") for arg in uv_args)
+    assert FOUNDATION_REF in Path(environment["FAKE_OVERRIDE_CONTENTS"]).read_text()
     assert (
         f"amplifier-app-cli @ git+https://github.com/microsoft/amplifier-app-cli@{CLI_REF}"
         in uv_args
@@ -205,6 +218,7 @@ def test_launches_pinned_private_cli_and_preserves_paths_with_spaces(tmp_path: P
     )
     assert Path(environment["FAKE_CLI_AMPLIFIER_HOME"]).read_text().strip() == caller_amplifier_home
     assert Path(environment["FAKE_CLI_PYTHONNOUSERSITE"]).read_text().strip() == "1"
+    assert not venv_path.exists()
 
 
 def test_propagates_private_cli_failure_status(tmp_path: Path) -> None:
@@ -225,6 +239,7 @@ def test_propagates_private_cli_failure_status(tmp_path: Path) -> None:
     assert Path(environment["FAKE_CLI_PATH"]).read_text().strip() == str(
         venv_path / "bin" / "amplifier"
     )
+    assert not venv_path.exists()
 
 
 @pytest.mark.parametrize("cli_exit", [0, 7])
