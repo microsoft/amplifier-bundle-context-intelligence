@@ -204,6 +204,66 @@ The actual `destinations` configuration — its sub-keys, routing rules, pattern
 
 ## Embedding in an Amplifier application
 
+### Sending application events without mounting a hook
+
+Install `amplifier-bundle-context-intelligence[client]` to use the public async
+client. Applications can build a single-event envelope and submit it through the
+same server/auth contract used by the bundle:
+
+```python
+import os
+from datetime import datetime, timezone
+from uuid import uuid4
+
+from context_intelligence import AsyncCIClient
+from context_intelligence import build_event_payload
+
+payload = build_event_payload(
+    event="application:diagnostic",
+    workspace="my-project",
+    data={
+        "session_id": "application-session-123",  # stable across this session
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "event_id": str(uuid4()),                # generated once per occurrence
+        "phase": "completed",
+    },
+)
+# Persist this exact envelope in your outbox before dispatching, if needed.
+client = AsyncCIClient(os.environ["CI_SERVER_URL"], os.environ["CI_API_KEY"])
+receipt = await client.ingest(payload)
+```
+
+`build_event_payload` is a pure, detached JSON transform. Its deterministic
+`aci-event-v1` key matches the telemetry hook. The caller supplies event/session
+identity, timestamps and sanitized data. The current server requires a timestamp;
+session-scoped authorization and graph storage also require `data.session_id`.
+Include a stable occurrence ID in `data` when two otherwise identical events are
+distinct. An optional `working_dir` is metadata outside the v1 key; omit it when
+unknown. Neither the helper nor client reads application state or chooses a
+destination, privacy policy, local spool, fan-out or retry schedule.
+
+`ingest` makes one request, using the existing static-key or `auth_strategy`
+credential resolution. It does not follow redirects or retry. Failures use
+`CIClientError`, including `invalid_payload` for a non-object or non-JSON caller
+envelope (before auth/network), and HTTP status/retry-after metadata when supplied. A
+timeout or connection loss can have an unknown acceptance outcome: an explicit
+retry should reuse the persisted envelope, including its original key. Custom
+server-compatible envelopes and idempotency keys are also accepted.
+
+The returned receipt retains the server's exact status: HTTP 202 `queued` reports
+durable queue acceptance, while `duplicate` reports recognition of an existing
+key, not a new append. At the currently tested server revision, a duplicate alone
+cannot prove durable acceptance after an earlier append failure. Neither proves
+graph indexing has finished. Deduplication
+scope, retention and crash behavior belong to the server; this API does not
+promise exactly-once delivery. See the [live validation and server
+limitations](docs/lanes/public-event-ingestion/README.md).
+
+Synchronous applications can call `asyncio.run(client.ingest(payload))` when they
+do not already have a running event loop. There is no synchronous ingestion API.
+
+### Mounting the telemetry hook
+
 When integrating this hook from Python rather than through the bundle CLI, call `mount()` directly.
 
 ```python
