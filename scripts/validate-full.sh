@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# validate-full.sh — run `validate-bundle-repo` against THIS bundle in FULL mode.
+# validate-full.sh — launch `validate-bundle-repo` with full-mode-capable private dependencies.
 #
 # WHY THIS EXISTS
 # --------------
@@ -13,7 +13,19 @@
 #
 # The CLI sets AMPLIFIER_PYTHON for recipe shell steps. PATH alone cannot move
 # those steps into another venv: the CLI itself must run from the prepared venv.
-# Use a public Core wheel, not a Rust source build, for this bundle's validation.
+# This script invokes that venv's CLI explicitly, so both its fixed shebang and
+# the recipe's `python3` resolve to private dependencies. It uses a public Core
+# wheel, not a Rust source build, for this bundle's validation.
+#
+# This is a launch/dependency helper, not a verdict gate. It propagates the
+# `amplifier tool invoke` exit status unchanged; a zero process exit is not a
+# validation PASS. User/CI must inspect `env_check.validation_mode`,
+# `build_check.build_tested`, `build_check.build_success`, and
+# `quality_classification.quality_level`, plus `final_report`. Full PASS
+# requires full mode, a successful tested build, no ERROR findings, and a report
+# consistent with those machine results. The recipe has no structured
+# `overall_verdict` field. Diagram checks and deterministic generation remain
+# enabled; optional LLM label enhancement is disabled.
 #
 # USAGE
 # -----
@@ -21,64 +33,94 @@
 #       REPO_PATH defaults to this bundle's repo root.
 #
 # ENV
-#   CI_VALIDATE_VENV    optional NEW venv directory; never overwrite an existing one
-#   CI_VALIDATE_RECIPE  explicit recipe path if more than one Foundation is cached
+#   CI_VALIDATE_VENV    optional NEW venv directory; never overwrite an existing one.
+#                       The directory is removed on exit.
+#   CI_VALIDATE_RECIPE  explicit readable recipe file; otherwise exactly one cached
+#                       Foundation validator must exist. Ambiguity fails before
+#                       environment creation or dependency installation.
 #
 # Requires: uv and a cached Foundation recipe (or CI_VALIDATE_RECIPE).
-# A fresh venv is removed on exit. The recipe's report, including failures and
-# known false positives, is returned unchanged; exit 0 alone is not a PASS.
+# Keep TMPDIR and CI_VALIDATE_VENV outside the target repository so installed
+# dependency skills are not scanned as source.
 #
 set -euo pipefail
 
 REPO_PATH="${1:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
-REPO_PATH="$(cd "$REPO_PATH" && pwd)"
+CLI_REF="14dc68eba05bf65b8c6dea28c3a2db93daa12d38"
+FOUNDATION_REF="f13d08168e14b5bc4720fbb06c40936eb1a7a7d1"
 
-# Locate the foundation validate-bundle-repo recipe in the Amplifier cache.
-# (The bare `amplifier tool invoke` CLI does not resolve the `foundation:` recipe
-#  namespace, so we pass the cached recipe by absolute path.)
-RECIPE="${CI_VALIDATE_RECIPE:-}"
-if [[ -z "$RECIPE" ]]; then
+# Select before installing: never guess between cached recipe revisions.
+# The caller may choose a file explicitly without changing settings or caches.
+if [[ -n "${CI_VALIDATE_RECIPE:-}" ]]; then
+  RECIPE="$CI_VALIDATE_RECIPE"
+else
   shopt -s nullglob
   recipes=("${HOME}/.amplifier/cache/"amplifier-foundation-*/recipes/validate-bundle-repo.yaml)
+  shopt -u nullglob
+  if [[ ${#recipes[@]} -eq 0 ]]; then
+    echo "!! no cached Foundation validator; set CI_VALIDATE_RECIPE to its recipe file" >&2
+    exit 1
+  fi
   if [[ ${#recipes[@]} -ne 1 ]]; then
-    echo "!! Expected one cached validation recipe; found ${#recipes[@]}. Set CI_VALIDATE_RECIPE." >&2
+    echo "!! multiple cached Foundation validators; select one with CI_VALIDATE_RECIPE" >&2
+    printf '   %s\n' "${recipes[@]}" >&2
     exit 1
   fi
   RECIPE="${recipes[0]}"
 fi
 if [[ ! -f "$RECIPE" || ! -r "$RECIPE" ]]; then
-  echo "!! Validation recipe is not a readable file: $RECIPE" >&2
+  echo "!! validation recipe is not a readable file: $RECIPE" >&2
   exit 1
 fi
 
+# Normalize only after recipe selection, so cache-selection errors remain clear
+# even when the target path does not exist.
+REPO_PATH="$(cd "$REPO_PATH" && pwd)"
+
 if [[ -n "${CI_VALIDATE_VENV:-}" ]]; then
   VENV="$CI_VALIDATE_VENV"
-  # mkdir refuses existing directories and symlinks before uv can touch them.
-  mkdir -- "$VENV"
+  # mkdir refuses existing paths and symlinks before uv can touch them.
+  if ! mkdir -- "$VENV"; then
+    echo "!! CI_VALIDATE_VENV already exists; refusing to modify it: $VENV" >&2
+    exit 1
+  fi
 else
-  VENV="$(mktemp -d "${TMPDIR:-/tmp}/ci-validate-venv.XXXXXXXX")"
+  VENV="$(mktemp -d "${TMPDIR:-/tmp}/ci-validate.XXXXXX")"
 fi
+
+# Every directory is newly claimed by this invocation and is removed on exit.
 trap 'rm -rf -- "$VENV"' EXIT
 export PYTHONNOUSERSITE=1
 
 echo ">> building isolated validation runtime: $VENV"
-uv venv --python 3.11 "$VENV" >/dev/null
-# The public CLI declares Foundation@main; override that URL rather than
+uv venv --python 3.11 --allow-existing "$VENV" >/dev/null
+# The public CLI declares Foundation@main; override that dependency rather than
 # supplying a second, conflicting direct requirement.
 printf '%s\n' \
-  "amplifier-foundation @ git+https://github.com/microsoft/amplifier-foundation@7ad00b359fd5c2ac3ee98436b1b3bccabe6e909d" \
+  "amplifier-foundation @ git+https://github.com/microsoft/amplifier-foundation@$FOUNDATION_REF" \
   > "$VENV/overrides.txt"
-uv pip install --python "$VENV/bin/python" --only-binary amplifier-core \
-  --overrides "$VENV/overrides.txt" --quiet \
+uv pip install --python "$VENV/bin/python" --quiet \
+  --only-binary amplifier-core \
+  --overrides "$VENV/overrides.txt" \
   pip hatchling pyyaml "amplifier-core==1.6.1" \
-  "amplifier-app-cli @ git+https://github.com/microsoft/amplifier-app-cli@14dc68eba05bf65b8c6dea28c3a2db93daa12d38"
-"$VENV/bin/python" -c 'import pip, hatchling, yaml, amplifier_core, amplifier_foundation'
+  "amplifier-app-cli @ git+https://github.com/microsoft/amplifier-app-cli@$CLI_REF"
+
+if ! "$VENV/bin/python" -c 'import pip, hatchling, yaml, amplifier_core, amplifier_foundation'; then
+  echo "!! private validation Python is missing required imports" >&2
+  exit 1
+fi
+if [[ ! -x "$VENV/bin/amplifier" ]]; then
+  echo "!! private validation venv did not install an executable amplifier CLI" >&2
+  exit 1
+fi
+
 # JSON encoding preserves spaces, quotes, and backslashes in the target path.
 CONTEXT="$("$VENV/bin/python" -c 'import json,sys; print(json.dumps({"repo_path": sys.argv[1], "enhance_diagrams": "false"}))' "$REPO_PATH")"
 
 echo ">> recipe: $RECIPE"
 echo ">> repo:   $REPO_PATH"
-echo ">> running validate-bundle-repo in FULL mode ..."
+echo ">> launching validate-bundle-repo with full-mode-capable private dependencies ..."
+echo ">> require full mode, a successful tested build, no ERROR findings, and a consistent final report; exit 0 is not PASS"
 PATH="$VENV/bin:$PATH" "$VENV/bin/amplifier" tool invoke recipes operation=execute \
   recipe_path="$RECIPE" \
   context="$CONTEXT"

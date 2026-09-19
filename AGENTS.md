@@ -2,30 +2,18 @@
 
 Guidance for AI agents and developers working in **this** bundle repository.
 
-## Known validator false positive — do NOT "fix" it
+## Mode-reference checks: fix the checker, never waive an ERROR
 
-`validate-bundle-repo` (v3.6.0) reports a mode-advertising **ERROR**:
+Use Foundation `validate-bundle-repo` v3.16.1 or later. Earlier validators can
+mistake glob/template storage paths ending in `*/context-intelligence` or
+`{id}/context-intelligence` for an invocation of the internal mode. The fix
+belongs in Foundation's mode-reference matcher, not this bundle's storage
+paths or mode visibility.
 
-> `unadvertised_but_referenced`: mode `context-intelligence` (`modes/context-intelligence.md`,
-> `advertised: false`) is referenced by name in `context/safe-extraction-patterns.md`
-> and `context/agents/session-storage-knowledge.md`.
-
-**This is a FALSE POSITIVE. Do not act on it.** The flagged occurrences are **not** mode
-invocations — they are:
-
-- **disk paths** — `~/.amplifier/projects/{slug}/sessions/{id}/context-intelligence/`
-  (the CI storage subdirectory; the `/` before the name is a path separator, not a slash-command),
-- **`@mention` prefixes** — `@context-intelligence:context/...`, and
-- **skill names** — `context-intelligence-graph-query`, `context-intelligence-session-navigation`.
-
-The bundle, its on-disk storage subdirectory, its skills, **and** the internal design mode all
-share the name `context-intelligence`. The validator's `/<mode>` + `name="<mode>"` regex cannot
-disambiguate them. The **full-mode** validator (see below) re-reads the source files and itself
-**confirms this as a false positive — overall verdict PASS**.
-
-**Therefore:** leave `modes/context-intelligence.md` at `advertised: false` (the mode is correctly
-internal), and do **not** remove the path/skill references. The only proper fix, if any, is an
-upstream tightening of the validator regex — never a change to this repo.
+Keep `modes/context-intelligence.md` at `advertised: false`. Do not delete valid
+path references, advertise the internal mode, or treat the resulting ERROR as
+a PASS. Select the corrected recipe with `CI_VALIDATE_RECIPE` and rerun the
+full validator. Real mode-command references remain errors.
 
 ## Running the bundle validator in FULL mode
 
@@ -39,15 +27,40 @@ scripts/validate-full.sh           # validates this repo
 scripts/validate-full.sh <path>    # or another bundle repo
 ```
 
-It builds a fresh `uv` venv containing the pinned public CLI/Foundation, a prebuilt Core wheel,
-`hatchling`, `pyyaml`, and `pip`, then runs **that venv's CLI**. PATH alone is insufficient:
-the CLI supplies its own interpreter to recipe shell steps. The venv is removed on exit.
-Set `CI_VALIDATE_RECIPE` to an explicit recipe path if multiple Foundation caches exist;
-`CI_VALIDATE_VENV`, if supplied, must be a new directory. No validator findings are suppressed.
+It creates a private throwaway `uv` venv with `pip`, `hatchling`, `pyyaml`, a
+prebuilt public Core 1.6.1 wheel, and the pinned public `amplifier-app-cli`.
+Foundation is overridden in that venv through `uv pip --overrides` to
+`f13d08168e14b5bc4720fbb06c40936eb1a7a7d1`; it is not supplied as a second
+direct requirement. It then invokes that venv's `amplifier` executable explicitly.
+PATH alone is insufficient because the CLI supplies its own interpreter to recipe
+shell steps. It preserves the caller's Amplifier settings identity, including
+`AMPLIFIER_HOME` when set.
 
-Full mode includes the actual `pip wheel` build check. Record each run's mode, build result,
-and findings; a successful recipe exit is not itself a validation PASS. Review the documented
-mode-name false positive above without suppressing other findings.
+The default location is a unique, removed-on-exit directory under `TMPDIR` (or
+`/tmp`), outside the validation target. Keep `TMPDIR` and any explicit
+`CI_VALIDATE_VENV` outside that target: installed dependency skills would otherwise
+be scanned as repository source. Set `CI_VALIDATE_VENV` only to a **new** path; an
+existing path is refused rather than modified, and a newly claimed explicit path is
+also removed on exit. Recipe selection is explicit: one cached Foundation validator
+is selected automatically; zero or multiple matches stop before target normalization,
+environment creation, or installation. Set `CI_VALIDATE_RECIPE` to a readable recipe
+file to choose deliberately, including outside the default `~/.amplifier/cache/`
+location. The selected path is printed; this choice does not update settings or caches.
+
+The wrapper sets `enhance_diagrams: "false"`: diagram validation and deterministic
+generation still run, but optional LLM label rewriting does not. Regenerate and
+commit stale `bundle.dot` / `bundle.png`; do not suppress the freshness finding.
+
+The wrapper is a launch/dependency helper, not the full-validator verdict gate. It propagates the
+`amplifier tool invoke` exit status unchanged; process exit `0` does **not** mean validation PASS.
+User/CI must inspect `env_check.validation_mode`, `build_check.build_tested`,
+`build_check.build_success`, and `quality_classification.quality_level` in the
+recipe results, plus `final_report`. Full PASS requires full mode,
+a successful tested build, and no ERROR findings; a report cannot override
+machine findings. The recipe has no structured `overall_verdict` field.
+Result parsing remains outside this launch helper. A stale
+diagram or validator ERROR must be resolved and the full check rerun; neither
+is waived by a successful wrapper exit.
 
 ## Testing & what "done" looks like
 
@@ -57,7 +70,7 @@ Run these before calling anything done:
 uv run pytest          # in modules/tool-context-intelligence-query   (module suite)
 uv run pytest          # in the repo root                             (tests/, top-level suite)
 uv run ruff check . && uv run ruff format --check . && uv run pyright
-scripts/validate-full.sh   # → validation_mode: full, overall PASS
+scripts/validate-full.sh   # then inspect env_check, build_check, quality_classification, and final_report
 ```
 
 **Green unit tests are the FLOOR, not proof of done.** This bundle wires **skills, modes,

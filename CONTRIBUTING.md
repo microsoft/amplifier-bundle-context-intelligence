@@ -4,7 +4,7 @@ Thanks for contributing to **amplifier-bundle-context-intelligence**. This repo 
 a few specific conventions — read them before you change the furniture.
 
 **Read [`AGENTS.md`](AGENTS.md) first.** It is the authoritative, always-loaded
-guidance: the known validator false positive, the full-validation command, and the
+guidance: validator version requirements, the full-validation command, and the
 **seam-awareness** rules that govern how changes to tool/skill/config wiring must be
 tested. Everything below is the short version.
 
@@ -62,14 +62,24 @@ Before opening a PR that touches bundle structure, run the repo's **full** valid
 scripts/validate-full.sh
 ```
 
-It runs a pinned public CLI from a fresh `uv` venv with Foundation, a prebuilt
-Core wheel, `hatchling`, `pyyaml`, and `pip`, so the validator runs at
-`validation_mode: full` without compiling Core. The venv is removed on exit.
-If multiple Foundation recipes are cached, select one with `CI_VALIDATE_RECIPE`.
-The lone
-mode-advertising **ERROR** it reports is a **documented FALSE POSITIVE** (a name
-collision — see `AGENTS.md`); **do not "fix" it** by advertising the internal mode or
-deleting path/skill references.
+It runs a pinned public CLI from a fresh `uv` venv with a prebuilt Core 1.6.1
+wheel, `hatchling`, `pyyaml`, and `pip`, so the validator runs at
+`validation_mode: full` without compiling Core. The CLI's normal Foundation
+dependency is overridden in that private venv to
+`f13d08168e14b5bc4720fbb06c40936eb1a7a7d1`; it is not added as a conflicting
+direct requirement. The venv is removed on exit, including a newly supplied
+`CI_VALIDATE_VENV` path. If zero or multiple Foundation recipes are cached,
+selection fails before installation; select a readable one explicitly with
+`CI_VALIDATE_RECIPE`. The wrapper disables optional LLM diagram-label
+enhancement, not diagram checks.
+
+Use Foundation's validator v3.16.1 or later for correct mode/path detection
+(see `AGENTS.md`). Inspect `env_check.validation_mode`,
+`build_check.build_tested`, `build_check.build_success`, and
+`quality_classification.quality_level`; `final_report` must agree
+with those machine results. Require full mode, a successful tested build, and
+no ERROR findings. Process exit `0` alone is not PASS. No ERROR is waived; keep
+the internal mode unadvertised and do not delete valid path references.
 
 If your change altered bundle structure, regenerate the diagram and commit it
 (the validator flags `BUNDLE_DOT_STALE` otherwise):

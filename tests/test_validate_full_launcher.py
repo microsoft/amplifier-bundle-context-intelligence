@@ -93,7 +93,7 @@ def test_runs_venv_cli_and_preserves_status_and_json_paths(launcher, status):
     assert "--only-binary" in calls[1]
     assert "--overrides" in calls[1]
     assert (
-        "amplifier-foundation@7ad00b359fd5c2ac3ee98436b1b3bccabe6e909d"
+        "amplifier-foundation@f13d08168e14b5bc4720fbb06c40936eb1a7a7d1"
         in Path(env["OVERRIDE_COPY"]).read_text()
     )
     assert "amplifier-core==1.6.1" in calls[1]
@@ -101,6 +101,7 @@ def test_runs_venv_cli_and_preserves_status_and_json_paths(launcher, status):
     response = json.loads(Path(env["CLI_RESULT"]).read_text())
     context = json.loads(next(arg[8:] for arg in response["args"] if arg.startswith("context=")))
     assert context["repo_path"] == str(tmp_path / 'repo with "quotes"')
+    assert context["enhance_diagrams"] == "false"
     assert response["no_user_site"] == "1"
     assert not Path(calls[0][-1]).exists()
 
