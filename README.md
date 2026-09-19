@@ -216,7 +216,7 @@ from datetime import datetime, timezone
 from uuid import uuid4
 
 from context_intelligence import AsyncCIClient
-from context_intelligence.upload import build_event_payload
+from context_intelligence import build_event_payload
 
 payload = build_event_payload(
     event="application:diagnostic",
@@ -244,17 +244,23 @@ destination, privacy policy, local spool, fan-out or retry schedule.
 
 `ingest` makes one request, using the existing static-key or `auth_strategy`
 credential resolution. It does not follow redirects or retry. Failures use
-`CIClientError`, including HTTP status/retry-after metadata when supplied. A
+`CIClientError`, including `invalid_payload` for a non-object or non-JSON caller
+envelope (before auth/network), and HTTP status/retry-after metadata when supplied. A
 timeout or connection loss can have an unknown acceptance outcome: an explicit
 retry should reuse the persisted envelope, including its original key. Custom
 server-compatible envelopes and idempotency keys are also accepted.
 
 The returned receipt retains the server's exact status: HTTP 202 `queued` reports
 durable queue acceptance, while `duplicate` reports recognition of an existing
-key, not a new append. Neither proves graph indexing has finished. Deduplication
+key, not a new append. At the currently tested server revision, a duplicate alone
+cannot prove durable acceptance after an earlier append failure. Neither proves
+graph indexing has finished. Deduplication
 scope, retention and crash behavior belong to the server; this API does not
 promise exactly-once delivery. See the [live validation and server
 limitations](docs/lanes/public-event-ingestion/README.md).
+
+Synchronous applications can call `asyncio.run(client.ingest(payload))` when they
+do not already have a running event loop. There is no synchronous ingestion API.
 
 ### Mounting the telemetry hook
 

@@ -14,7 +14,8 @@ retention, fan-out and retry scheduling. No bundle, agent, skill or mode changes
   omitted; a supplied directory is outside the v1 hash, as in the hook.
 - The client snapshots the supplied envelope before refreshing auth, posts once,
   does not follow redirects, and returns the server's HTTP 202 receipt. Custom
-  compatible envelopes and keys are allowed. Existing auth strategies and
+  compatible envelopes and keys are allowed. Invalid non-object/non-JSON payloads
+  raise `CIClientError(error_type="invalid_payload")` before authentication or HTTP. Existing auth strategies and
   `CIClientError` classifications are reused; blocking token refresh runs outside
   the event loop.
 - `queued` means the server accepted a durable queue append. `duplicate` means
@@ -39,7 +40,7 @@ Provenance:
 - Library starting commit: `87894048f8b68519f61aea52306d907b04f4bdfb` plus this
   change; exact client/helper source SHA-256 values are in the evidence.
 - Server: `microsoft/amplifier-context-intelligence` commit
-  `43973967ff4bc9a02422814a8c00dfce7624a76d`, clean checkout, single uvicorn
+  `43973967ff4bc9a02422814a8c00dfce7624a76d`, clean checkout, single authenticated `create_asgi_app` uvicorn factory
   process at `http://127.0.0.1:18081`, explicit isolated storage/config.
 - Neo4j: official `neo4j:5.26.22-community` image with bundled APOC,
   image ID `sha256:24b071534c7cfe9718689041ab9aafea2cd0d88af9ea58b768cb5eed381ab2d0`.
@@ -77,14 +78,14 @@ server-side correction and fault-injection test.
 
 ## Validation
 
-- `uv run --frozen pytest tests -q`: 880 passed.
+- `uv run --frozen pytest tests -q`: 891 passed.
 - Query module, `PYTHONPATH=../.. uv run --frozen pytest -q`: 195 passed.
 - `uv run --frozen ruff check .`, `ruff format --check .`, `pyright`: clean.
 - `uv build --no-sources`: sdist and wheel built. The wheel's `[client]` extra
   installed in a fresh environment; an isolated `python -I` imported both APIs.
 - Five real seam scenarios passed, as captured above.
 - `scripts/validate-full.sh`: exit 0, `validation_mode: full`, adjudicated
-  **PASS WITH WARNINGS**. Its mechanical FAIL is the known mode-advertising
+  **PASS WITH SUGGESTIONS**. Its mechanical FAIL is the known mode-advertising
   false positive; the review also confirmed the standalone README install
   convention is intentional. The existing `server-data-ops` agent description
   exceeds the cosmetic length recommendation. Those unrelated files are
@@ -109,3 +110,8 @@ into `/tmp/amplifier-ci-validator-extra` with `uv pip install --target`, and
 `PYTHONPATH` pointed there for this command only. No installed CLI environment
 was changed. Recipe version: 3.15.0; recipe SHA-256:
 `dd1f7b7e87cd384bc8f49d9545cd641a52287f2b9f7860985e99493a9cd6cb5d`.
+
+Review revision: the Level 1 builder lives in `context_intelligence.events` and
+is re-exported from the package root; the reserved uploader namespace is unchanged.
+The additive public API increments the package version to 0.2.0. Hash parity
+covers Unicode, nested values, nulls, and arrays in addition to the original fixture.

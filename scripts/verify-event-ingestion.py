@@ -18,7 +18,7 @@ from uuid import uuid4
 
 from context_intelligence import AsyncCIClient
 from context_intelligence.client import CIClientError
-from context_intelligence.upload import build_event_payload
+from context_intelligence import build_event_payload
 
 
 def server_url(value: str) -> str:
@@ -93,7 +93,7 @@ async def score(args: argparse.Namespace) -> dict:
             str(path.relative_to(source)): hashlib.sha256(path.read_bytes()).hexdigest()
             for path in (
                 source / "context_intelligence/client.py",
-                source / "context_intelligence/upload/__init__.py",
+                source / "context_intelligence/events.py",
             )
         },
         "request": payload,

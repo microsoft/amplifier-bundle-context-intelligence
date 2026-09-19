@@ -71,7 +71,7 @@ class CIClientError(Exception):
     ) -> None:
         super().__init__(message)
         #: One of "connection_error" | "timeout" | "http_status" | "decode_error"
-        #: | "auth_error". "auth_error" -- an unusable credential -- is raised
+        #: | "auth_error" | "invalid_payload". "auth_error" -- an unusable credential -- is raised
         #: BEFORE the request is attempted, so it is never confused with
         #: "decode_error" (a bad response body from a server actually reached).
         self.error_type = error_type
@@ -934,11 +934,19 @@ class AsyncCIClient:
         """
         import asyncio
 
-        if not isinstance(payload, dict):
-            raise ValueError("event payload must be an object")
-        # JSON encoding is also a strict preflight: no NaN or Infinity on the wire.
-        body = json.loads(json.dumps(payload, allow_nan=False))
         url = f"{self._server_url}/events"
+        # A caller's invalid envelope is distinct from an invalid server receipt.
+        # Snapshot before auth without allowing NaN or Infinity on the wire.
+        try:
+            if not isinstance(payload, dict):
+                raise TypeError("event payload must be an object")
+            body = json.loads(json.dumps(payload, allow_nan=False))
+        except (TypeError, ValueError) as exc:
+            raise CIClientError(
+                "event payload is not a JSON-encodable object",
+                error_type="invalid_payload",
+                url=url,
+            ) from exc
         headers = await asyncio.to_thread(self._auth_headers, url)
         try:
             async with httpx.AsyncClient(timeout=self._timeout, follow_redirects=False) as client:  # type: ignore[union-attr]

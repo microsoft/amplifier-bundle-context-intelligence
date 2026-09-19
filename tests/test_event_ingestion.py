@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime, timezone
 import importlib.util
 import json
 from pathlib import Path
@@ -13,7 +14,7 @@ import httpx
 import pytest
 
 from context_intelligence.client import AsyncCIClient, CIClientError
-from context_intelligence.upload import build_event_payload
+from context_intelligence import build_event_payload
 
 
 def envelope():
@@ -75,6 +76,60 @@ def transport(handler):
     return patch(
         "context_intelligence.client.httpx.AsyncClient",
         side_effect=lambda **kw: original(transport=httpx.MockTransport(handler), **kw),
+    )
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        [],
+        "not-an-envelope",
+        {"data": {"unserializable": {1, 2}}},
+        {"data": {"value": float("nan")}},
+        {"data": {"value": float("inf")}},
+        {"data": {"timestamp": datetime(2026, 9, 18, tzinfo=timezone.utc)}},
+    ],
+)
+async def test_unusable_caller_envelope_has_classified_error_before_auth_or_network(payload):
+    class Strategy:
+        def headers(self):
+            pytest.fail("Invalid payload must not request credentials")
+
+    def handle(request):
+        pytest.fail("Invalid payload must not reach the network")
+
+    with transport(handle), pytest.raises(CIClientError) as caught:
+        await AsyncCIClient("http://server.invalid", auth_strategy=Strategy()).ingest(payload)
+    assert caught.value.error_type == "invalid_payload"
+    assert caught.value.url == "http://server.invalid/events"
+
+
+@pytest.mark.parametrize(
+    "data",
+    [
+        {},
+        {"value": None},
+        {"value": [True, False, 1, 1.25]},
+        {"nested": {"z": "☀ Résumé", "a": {"value": -5}}},
+        {
+            "event_id": "distinct-occurrence",
+            "session_id": "root",
+            "timestamp": "2026-09-18T00:00:00Z",
+        },
+    ],
+)
+def test_hook_v1_keys_match_across_supported_json_shapes(data):
+    path = (
+        Path(__file__).parents[1]
+        / "modules/hook-context-intelligence/amplifier_module_hook_context_intelligence/upload.py"
+    )
+    spec = importlib.util.spec_from_file_location("hook_upload_shapes", path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    assert (
+        build_event_payload("host:diagnostic", "fixture", data)["idempotency_key"]
+        == module.build_payload("host:diagnostic", "fixture", data, "/hookdir")["idempotency_key"]
     )
 
 
