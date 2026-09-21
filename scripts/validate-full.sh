@@ -46,8 +46,8 @@
 set -euo pipefail
 
 REPO_PATH="${1:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
-CLI_REF="14dc68eba05bf65b8c6dea28c3a2db93daa12d38"
-FOUNDATION_REF="f13d08168e14b5bc4720fbb06c40936eb1a7a7d1"
+CLI_REF="main"
+FOUNDATION_REF="main"
 
 # Select before installing: never guess between cached recipe revisions.
 # The caller may choose a file explicitly without changing settings or caches.
@@ -94,15 +94,16 @@ export PYTHONNOUSERSITE=1
 
 echo ">> building isolated validation runtime: $VENV"
 uv venv --python 3.11 --allow-existing "$VENV" >/dev/null
-# The public CLI declares Foundation@main; override that dependency rather than
-# supplying a second, conflicting direct requirement.
+# Refresh canonical Git main sources and the latest compatible published Core
+# wheel for each new validation runtime. The CLI declares Foundation through
+# tool.uv.sources; align it via an override rather than a conflicting direct URL.
 printf '%s\n' \
   "amplifier-foundation @ git+https://github.com/microsoft/amplifier-foundation@$FOUNDATION_REF" \
   > "$VENV/overrides.txt"
-uv pip install --python "$VENV/bin/python" --quiet \
+uv pip install --python "$VENV/bin/python" --quiet --upgrade \
   --only-binary amplifier-core \
   --overrides "$VENV/overrides.txt" \
-  pip hatchling pyyaml "amplifier-core==1.6.1" \
+  pip hatchling pyyaml amplifier-core \
   "amplifier-app-cli @ git+https://github.com/microsoft/amplifier-app-cli@$CLI_REF"
 
 if ! "$VENV/bin/python" -c 'import pip, hatchling, yaml, amplifier_core, amplifier_foundation'; then
@@ -113,6 +114,17 @@ if [[ ! -x "$VENV/bin/amplifier" ]]; then
   echo "!! private validation venv did not install an executable amplifier CLI" >&2
   exit 1
 fi
+
+# Emit only package versions and resolved Git revisions, never credentials or
+# environment values. The temporary runtime is removed; retain this output with
+# the validation results. Core uses the published wheel channel, not Git main.
+"$VENV/bin/python" -c 'import importlib.metadata as metadata,json
+packages={}
+for name in ("amplifier-core", "amplifier-app-cli", "amplifier-foundation"):
+    dist=metadata.distribution(name)
+    direct=json.loads(dist.read_text("direct_url.json") or "{}")
+    packages[name]={"version":dist.version,"vcs":direct.get("vcs_info")}
+print("CI_VALIDATE_RUNTIME="+json.dumps({"core_channel":"latest-published-wheel","packages":packages},sort_keys=True))'
 
 # JSON encoding preserves spaces, quotes, and backslashes in the target path.
 CONTEXT="$("$VENV/bin/python" -c 'import json,sys; print(json.dumps({"repo_path": sys.argv[1], "enhance_diagrams": "false"}))' "$REPO_PATH")"

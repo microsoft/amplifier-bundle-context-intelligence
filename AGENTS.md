@@ -28,10 +28,13 @@ scripts/validate-full.sh <path>    # or another bundle repo
 ```
 
 It creates a private throwaway `uv` venv with `pip`, `hatchling`, `pyyaml`, a
-prebuilt public Core 1.6.1 wheel, and the pinned public `amplifier-app-cli`.
-Foundation is overridden in that venv through `uv pip --overrides` to
-`f13d08168e14b5bc4720fbb06c40936eb1a7a7d1`; it is not supplied as a second
-direct requirement. It then invokes that venv's `amplifier` executable explicitly.
+latest compatible public Core wheel and canonical `amplifier-app-cli@main`.
+Foundation follows canonical `main` through `uv pip --overrides`; it is not
+supplied as a second direct requirement. `--upgrade` refreshes cached resolution
+for each new runtime. The script emits `CI_VALIDATE_RUNTIME` with actual package
+versions and resolved Git revisions; retain that output with the validation
+results. Core uses the published-wheel channel, not Git main. The script then
+invokes that venv's `amplifier` executable explicitly.
 PATH alone is insufficient because the CLI supplies its own interpreter to recipe
 shell steps. It preserves the caller's Amplifier settings identity, including
 `AMPLIFIER_HOME` when set.

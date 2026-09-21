@@ -13,8 +13,8 @@ import pytest
 
 REPO_ROOT = Path(__file__).parent.parent
 SCRIPT_PATH = REPO_ROOT / "scripts" / "validate-full.sh"
-CLI_REF = "14dc68eba05bf65b8c6dea28c3a2db93daa12d38"
-FOUNDATION_REF = "f13d08168e14b5bc4720fbb06c40936eb1a7a7d1"
+CLI_REF = "main"
+FOUNDATION_REF = "main"
 
 
 def _write_executable(path: Path, content: str) -> None:
@@ -48,6 +48,10 @@ if [[ "$*" == *"import pip, hatchling, yaml, amplifier_core, amplifier_foundatio
   [[ "${FAKE_FAIL_PRIVATE_IMPORTS:-}" != "1" ]]
   exit
 fi
+if [[ "$*" == *"CI_VALIDATE_RUNTIME="* ]]; then
+  printf '%s\\n' 'CI_VALIDATE_RUNTIME={"core_channel":"latest-published-wheel","packages":{}}'
+  exit
+fi
 if [[ "$*" == *"json.dumps"* ]]; then
   printf '%s\\n' "$2" > "$FAKE_JSON_CODE"
   printf '%s\\n' "$3" > "$FAKE_JSON_INPUT"
@@ -78,7 +82,8 @@ elif [[ "$1" == "pip" && "${FAKE_OMIT_PRIVATE_CLI:-}" != "1" ]]; then
 #!/usr/bin/env bash
 exec "VENV_PYTHON" "$0" "$@"
 AMPLIFIER
-  sed -i "s|VENV_PYTHON|$venv/bin/python|" "$venv/bin/amplifier"
+  sed "s|VENV_PYTHON|$venv/bin/python|" "$venv/bin/amplifier" > "$venv/bin/amplifier.tmp"
+  mv "$venv/bin/amplifier.tmp" "$venv/bin/amplifier"
   chmod +x "$venv/bin/amplifier"
 fi
 """,
@@ -147,7 +152,7 @@ exit 97
     return environment
 
 
-def test_launches_pinned_private_cli_and_preserves_paths_with_spaces(tmp_path: Path) -> None:
+def test_launches_latest_private_cli_and_preserves_paths_with_spaces(tmp_path: Path) -> None:
     """The wrapper launches private tools without relocating caller settings identity."""
     caller_amplifier_home = str(tmp_path / "caller amplifier home")
     environment = _environment(tmp_path, caller_amplifier_home=caller_amplifier_home)
@@ -183,7 +188,9 @@ def test_launches_pinned_private_cli_and_preserves_paths_with_spaces(tmp_path: P
     assert str(venv_path / "bin" / "python") in python_targets
     assert "pip" in uv_args
     assert "hatchling" in uv_args
-    assert "amplifier-core==1.6.1" in uv_args
+    assert "amplifier-core" in uv_args
+    assert "--upgrade" in uv_args
+    assert "CI_VALIDATE_RUNTIME=" in result.stdout
     # The CLI supplies Core/Foundation through its own dependency closure.
     # Repeating Foundation as a direct Git requirement conflicts with its
     # tool.uv.sources mapping during a real install.

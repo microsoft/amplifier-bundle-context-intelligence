@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import json
 import os
-from pathlib import Path
 import subprocess
 import sys
+from pathlib import Path
 
 import pytest
 
@@ -35,7 +35,9 @@ def launcher(tmp_path):
         " b=pathlib.Path(sys.argv[-1])/'bin'; b.mkdir()\n"
         " (b/'python').write_text('#!/bin/sh\\n"
         'if [ "$2" = "import pip, hatchling, yaml, amplifier_core, amplifier_foundation" ]; '
-        f'then exit 0; fi\\nexec {sys.executable} "$@"\\n\')\n'
+        f"then exit 0; fi\\n"
+        'case "$2" in *CI_VALIDATE_RUNTIME=*) echo CI_VALIDATE_RUNTIME=\\"fake-resolved-receipt\\"; exit 0;; esac\\n'
+        f'exec {sys.executable} "$@"\\n\')\n'
         " (b/'python').chmod(0o755)\n"
         " (b/'amplifier').write_text('#!/bin/sh\\n"
         f"exec {sys.executable} \"'+os.environ['CLI_SPY']+'\" \"$@\"\\n')\n"
@@ -81,6 +83,7 @@ def _run(launcher, **overrides):
         capture_output=True,
         text=True,
         timeout=15,
+        check=False,
     )
 
 
@@ -92,11 +95,10 @@ def test_runs_venv_cli_and_preserves_status_and_json_paths(launcher, status):
     calls = [json.loads(line) for line in Path(env["CALL_LOG"]).read_text().splitlines()]
     assert "--only-binary" in calls[1]
     assert "--overrides" in calls[1]
-    assert (
-        "amplifier-foundation@f13d08168e14b5bc4720fbb06c40936eb1a7a7d1"
-        in Path(env["OVERRIDE_COPY"]).read_text()
-    )
-    assert "amplifier-core==1.6.1" in calls[1]
+    assert "amplifier-foundation@main" in Path(env["OVERRIDE_COPY"]).read_text()
+    assert "amplifier-core" in calls[1]
+    assert "--upgrade" in calls[1]
+    assert "CI_VALIDATE_RUNTIME=" in result.stdout
     assert not any("amplifier-core@" in arg for arg in calls[1])
     response = json.loads(Path(env["CLI_RESULT"]).read_text())
     context = json.loads(next(arg[8:] for arg in response["args"] if arg.startswith("context=")))
