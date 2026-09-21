@@ -223,7 +223,7 @@ provision:
       . /root/_common.sh
       echo "=== S2: a LATER session must sweep S1's backlog, with no user action ==="
       SD=$(cat /root/.s1_session)
-      run_session "Say OK." 
+      run_session "Say OK."
       sleep 20
       python3 $V healed --session-dir "$SD" --server "$SERVER_URL" \
         --token "$SERVER_TOKEN" --workspace "$WORKSPACE" --destination main \
