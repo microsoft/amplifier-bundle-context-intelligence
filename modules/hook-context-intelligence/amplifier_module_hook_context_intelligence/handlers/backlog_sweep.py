@@ -50,6 +50,13 @@ import httpx
 from ..fanout import destination_is_active, normalize_match_key
 from ..upload import build_payload
 from .delivery_watermark import DeliveryWatermark, SweepLock
+from .logging_handler import (
+    _DELIVERED,
+    _PERMANENT,
+    _TRANSIENT,
+    _classify_http_outcome,
+    _write_forwarding_record,
+)
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from context_intelligence.auth import AuthStrategy
@@ -104,6 +111,18 @@ class SweepReport:
     sessions_blocked_unprovable: int = 0
     events_delivered: int = 0
     events_failed: int = 0
+    #: Records the server will NEVER accept (the live path's ``_PERMANENT``
+    #: class: 3xx, 400, 403, 404, 410, 413, 422, any other non-408/429 4xx).
+    #: Stepped over LOUDLY, exactly as the live dispatcher steps over them --
+    #: stopping instead would wedge the whole remaining backlog behind one
+    #: record until the session ages out of the window and is lost for good.
+    events_skipped_permanent: int = 0
+    #: Sessions that had a backlog and retired NONE of it this pass. Counted
+    #: PER SESSION on purpose: ``made_progress`` is an aggregate over the whole
+    #: pass, so one wedged session hides behind any other session that
+    #: delivered -- which is the 215-of-215 \"healthy\" failure rebuilt one
+    #: layer up. This is the per-unit signal that aggregate cannot mask.
+    sessions_no_progress: int = 0
     bytes_advanced: int = 0
     backlog_bytes_remaining: int = 0
     stranded_sessions: int = 0
@@ -241,6 +260,7 @@ class BacklogSweeper:
         spec: Destination,
         bounds: SweepBounds | None = None,
         timeout: float = 10.0,
+        forwarding_log_dir: Path | None = None,
     ) -> None:
         self._destination = destination
         #: The destination's OWN include/exclude. Required, not optional: without
@@ -253,11 +273,40 @@ class BacklogSweeper:
         self._project_dir = project_dir
         self._bounds = bounds or SweepBounds()
         self._timeout = timeout
+        #: The SAME durable sink the dispatcher writes to. Console logs are
+        #: nowhere in a non-interactive session; forwarding-*.jsonl is the file
+        #: the troubleshooting doc teaches operators to aggregate. A sweep
+        #: failure that never reaches it is a failure nobody can find.
+        self._forwarding_log_dir = forwarding_log_dir
 
     # -- one event ------------------------------------------------------
 
-    async def _post(self, client: httpx.AsyncClient, payload: dict[str, Any]) -> tuple[bool, str]:
-        """POST one event. Returns ``(delivered, detail)``. Never raises.
+    def _record_forwarding(self, kind: str, detail: str, session_dir: Path) -> None:
+        """Append one durable forwarding-diagnostics record. Best-effort, never raises."""
+        _write_forwarding_record(
+            self._forwarding_log_dir,
+            {
+                "ts": datetime.now(UTC).isoformat(),
+                "destination": self._destination,
+                "url": self._url,
+                "kind": kind,
+                "detail": detail[:500],
+                "session_dir": str(session_dir),
+                "source": "backlog_sweep",
+            },
+        )
+
+    async def _post(self, client: httpx.AsyncClient, payload: dict[str, Any]) -> tuple[str, str]:
+        """POST one event. Returns ``(outcome, detail)``. Never raises.
+
+        ``outcome`` is the live dispatcher's own three-way classification --
+        ``_DELIVERED`` / ``_TRANSIENT`` / ``_PERMANENT`` -- produced by the SAME
+        ``_classify_http_outcome`` table, deliberately imported rather than
+        re-derived. A second delivery path with its own opinion about which
+        statuses are retryable is a drift waiting to happen, and this one drifted
+        the moment it existed: treating every non-2xx as \"stop\" wedged a
+        session\'s entire remaining backlog behind one record the server will
+        never accept.
 
         Deliberately does NOT set ``?replay=true``. The manual upload CLI does,
         because it re-imports cold archives that the server's dedup cache has
@@ -272,7 +321,9 @@ class BacklogSweeper:
         except Exception as exc:  # noqa: BLE001 - a token fault must not kill the sweep
             # Mirrors the dispatcher: a local token-production failure is a
             # deterministic HARD auth fault, reported, never retried blindly.
-            return False, f"auth failure: {type(exc).__name__}: {exc}"
+            # TRANSIENT, not permanent: a token that cannot be minted now may
+            # well mint next pass, and skipping events over it would lose them.
+            return _TRANSIENT, f"auth failure: {type(exc).__name__}: {exc}"
         headers.setdefault("Content-Type", "application/json")
         try:
             response = await client.post(
@@ -281,10 +332,11 @@ class BacklogSweeper:
         except asyncio.CancelledError:
             raise
         except Exception as exc:  # noqa: BLE001 - network faults are expected here
-            return False, f"{type(exc).__name__}: {exc}"
-        if response.status_code in (200, 201, 202):
-            return True, ""
-        return False, f"HTTP {response.status_code}: {response.text[:200]}"
+            return _TRANSIENT, f"{type(exc).__name__}: {exc}"
+        outcome = _classify_http_outcome(response.status_code)
+        if outcome == _DELIVERED:
+            return _DELIVERED, ""
+        return outcome, f"HTTP {response.status_code}: {response.text[:200]}"
 
     # -- routing: may this session's events go to this destination? -------
 
@@ -394,6 +446,7 @@ class BacklogSweeper:
         chunk = max(1, self._bounds.concurrency)
         prefix_end = watermark.offset
         delivered_count = 0
+        skipped_permanent = 0
         failed = 0
         first_error: str | None = None
         stop = False
@@ -422,19 +475,49 @@ class BacklogSweeper:
                 results = await asyncio.gather(
                     *(self._post(client, payload) for _s, _e, payload in batch)
                 )
-                for (_start, end, _payload), (delivered, detail) in zip(batch, results):
-                    if not delivered:
+                for (start, end, _payload), (outcome, detail) in zip(batch, results):
+                    if outcome == _TRANSIENT:
                         failed += 1
                         first_error = first_error or detail
                         stop = True
                         break
+                    if outcome == _PERMANENT:
+                        # LOUD SKIP -- exactly what the live dispatcher does with
+                        # this class. Stopping instead wedges every later event in
+                        # this session behind one record the server will never
+                        # accept, for the whole max_age_hours window, after which
+                        # the session ages out and is lost for good. A 403 is
+                        # routine ("authorization, often per-workspace"), so this
+                        # is not a corner case.
+                        skipped_permanent += 1
+                        first_error = first_error or detail
+                        report.notes.append(
+                            f"permanently rejected record at byte {start}: {detail}"
+                        )
+                        logger.warning(
+                            "%s: skipping permanently rejected event at byte %d in %s -- %s",
+                            self._destination,
+                            start,
+                            session_dir,
+                            detail,
+                        )
+                        self._record_forwarding("sweep_permanent_reject", detail, session_dir)
+                        prefix_end = end
+                        continue
                     # CONTIGUOUS PREFIX ONLY: the cursor may only pass a record
-                    # once every record before it has been accepted.
+                    # once every record before it has been RESOLVED -- accepted,
+                    # or permanently rejected and recorded above.
                     prefix_end = end
                     delivered_count += 1
                 if stop:
                     break
-            advanced = _persist("delivered" if delivered_count else "no_progress")
+            if delivered_count:
+                outcome_label = "delivered"
+            elif skipped_permanent:
+                outcome_label = "skipped_permanent"
+            else:
+                outcome_label = "no_progress"
+            advanced = _persist(outcome_label)
         except asyncio.CancelledError:
             # Teardown. Keep what we actually achieved rather than redoing it.
             _persist("cancelled" if delivered_count else "no_progress")
@@ -442,6 +525,20 @@ class BacklogSweeper:
 
         report.events_delivered += delivered_count
         report.events_failed += failed
+        report.events_skipped_permanent += skipped_permanent
+        if not delivered_count and not skipped_permanent:
+            # PER-SESSION, not aggregate. report.made_progress sums the whole
+            # pass, so a wedged session is invisible behind any sibling that
+            # delivered. This is the counter that cannot be masked.
+            report.sessions_no_progress += 1
+            report.notes.append(
+                f"NO PROGRESS {session_dir}: "
+                f"{watermark.consecutive_sweeps_without_progress} consecutive sweep(s)"
+                f" without delivery -- {first_error or 'no error recorded'}"
+            )
+            self._record_forwarding(
+                "sweep_no_progress", first_error or "no error recorded", session_dir
+            )
         report.bytes_advanced += advanced
         report.backlog_bytes_remaining += watermark.backlog_bytes(session_dir)
         if first_error and not report.last_error:

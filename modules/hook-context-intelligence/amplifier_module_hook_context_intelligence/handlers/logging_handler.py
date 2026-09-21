@@ -515,6 +515,17 @@ class _DestinationDispatcher:
     def auth_strategy(self) -> Any:
         return self._strategy
 
+    @property
+    def forwarding_log_dir(self) -> Path | None:
+        """The durable diagnostics sink this destination writes to.
+
+        Exposed so the backlog sweep can write to the SAME file rather than a
+        second one: forwarding-*.jsonl is what operators are taught to
+        aggregate, and a sweep failure that only reaches the console is a
+        failure nobody can find in a non-interactive session.
+        """
+        return self._forwarding_log_dir
+
     def _ensure_worker(self) -> None:
         if self._worker_task is None or self._worker_task.done():
             self._worker_task = asyncio.create_task(self._worker())

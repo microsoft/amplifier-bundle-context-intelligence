@@ -212,6 +212,21 @@ replay it: `context-intelligence-upload --path <events.jsonl dir>` (see
 > `forwarding_log_dir` (default `~/.amplifier/context-intelligence-logs`), a **separate sink
 > from `events.jsonl`**. Grep it once the noisy session has ended:
 > `jq 'select(.kind=="auth_failure")' ~/.amplifier/context-intelligence-logs/forwarding-*.jsonl`.
+>
+> **The backlog sweep writes to the same sink**, with `"source": "backlog_sweep"` and two
+> kinds of its own — so a catch-up failure is diagnosable after the fact, not only from a
+> console line nobody was watching:
+>
+> - `sweep_permanent_reject` — one record the server will never accept (403/400/404/410/413/422
+>   or a 3xx). The sweep steps **over** it, exactly as the live dispatcher does; stopping there
+>   would wedge everything behind it until the session ages out of the window.
+> - `sweep_no_progress` — one session retired **none** of its backlog this pass. Per session on
+>   purpose: the console’s "NOT shrinking" warning asks whether the *pass* moved, so a single
+>   wedged session can hide behind a healthy sibling. This is the record that cannot be masked.
+>
+> `jq 'select(.source=="backlog_sweep") | select(.kind=="sweep_no_progress") | .session_dir'
+> ~/.amplifier/context-intelligence-logs/forwarding-*.jsonl | sort | uniq -c` lists the sessions
+> that are stuck, and how often.
 
 ### `<dest> auth token unavailable (run \`az login\` to refresh) — retrying with backoff; events remain durable in events.jsonl.`
 

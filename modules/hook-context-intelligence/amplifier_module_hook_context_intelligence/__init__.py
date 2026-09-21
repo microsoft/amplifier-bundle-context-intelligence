@@ -219,8 +219,10 @@ def _describe_sweep(report: Any, *, suppress_stranded: bool = False) -> None:
     became answerable once a watermark existed.
 
     Quiet means the sweep delivered something and nothing is stuck. It never
-    means "we hid a failure": the durable forwarding-*.jsonl record is written
-    by the dispatcher regardless of anything decided here.
+    means "we hid a failure": a durable forwarding-*.jsonl record is written for
+    every sweep no-progress and every permanent rejection, by the sweeper itself
+    and into the same sink the dispatcher uses, regardless of anything decided
+    here.
     """
     # LOUD 4 -- outside the age bound. These will NEVER be delivered
     # automatically, so the bound must be audible or it becomes a silent drop.
@@ -248,6 +250,21 @@ def _describe_sweep(report: Any, *, suppress_stranded: bool = False) -> None:
             f" Last error: {report.last_error}" if report.last_error else "",
         )
         return
+
+    # LOUD 3 -- SOME session retired nothing, even though the pass as a whole
+    # moved. Deliberately placed AFTER the made_progress return above so it can
+    # still fire: made_progress is an aggregate, and one wedged session hiding
+    # behind two healthy ones is exactly the shape of the bug this whole change
+    # exists to kill (breaker_open=False on 232 of 232 lossy shutdowns).
+    if report.sessions_no_progress:
+        log.warning(
+            "context-intelligence %s: %d session(s) retired NO backlog this pass"
+            " (%d event(s) permanently rejected and stepped over).%s",
+            report.destination,
+            report.sessions_no_progress,
+            report.events_skipped_permanent,
+            f" Last error: {report.last_error}" if report.last_error else "",
+        )
 
     # Progress, but still behind: proportional, and INFO rather than WARNING --
     # catching up is not a problem the user can act on.
@@ -348,6 +365,8 @@ def schedule_backlog_sweeps(
             spec=spec,
             bounds=bounds,
             timeout=resolver.dispatch_timeout,
+            # Same durable diagnostics sink as the live path, not a second one.
+            forwarding_log_dir=getattr(dispatcher, "forwarding_log_dir", None),
         )
 
         idle = asyncio.Event()

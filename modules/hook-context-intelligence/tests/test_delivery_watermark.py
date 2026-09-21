@@ -375,3 +375,53 @@ class TestThroughTheDispatcher:
 def test_session_watermark_state_defaults() -> None:
     state = _SessionWatermarkState()
     assert (state.committed, state.frozen, state.dirty) == (0, False, False)
+
+
+class TestSanitizedNameCollisionsDoNotShareACursor:
+    """Two destination names that sanitize to one filename must not share state.
+
+    `path_for` maps a destination name to a filename, and that map is MANY-TO-ONE:
+    `prod/a` and `prod:a` both become `prod_a.json`. The raw name is stored in the
+    file specifically so the collision is detectable -- but it was stored and never
+    compared, so the second destination inherited the first one's cursor. When both
+    point at the same URL the existing URL guard cannot fire, and the second
+    destination reads itself as caught up and delivers nothing, forever.
+    """
+
+    def _session(self, tmp_path: Path) -> Path:
+        (tmp_path / "events.jsonl").write_bytes(b'{"event":"a"}\n{"event":"b"}\n')
+        return tmp_path
+
+    def test_colliding_names_on_the_same_url_rewind_instead_of_inheriting(
+        self, tmp_path: Path
+    ) -> None:
+        session_dir = self._session(tmp_path)
+        size = (session_dir / "events.jsonl").stat().st_size
+        assert sanitize_destination("prod/a") == sanitize_destination("prod:a")
+
+        first, _ = DeliveryWatermark.load(session_dir, "prod/a", destination_url="http://s")
+        first.offset = size
+        first.save(session_dir)
+
+        second, notes = DeliveryWatermark.load(session_dir, "prod:a", destination_url="http://s")
+        assert second.offset == 0, (
+            "'prod:a' inherited 'prod/a' cursor at EOF and would deliver nothing"
+        )
+        assert second.destination == "prod:a"
+        assert second.reset_by_guard
+        assert any("prod/a" in note and "prod:a" in note for note in notes), (
+            "a collision must be SAID, not silently corrected"
+        )
+
+    def test_the_owning_destination_still_loads_its_own_cursor(self, tmp_path: Path) -> None:
+        """The guard must not rewind the destination the watermark belongs to."""
+        session_dir = self._session(tmp_path)
+        size = (session_dir / "events.jsonl").stat().st_size
+        first, _ = DeliveryWatermark.load(session_dir, "prod/a", destination_url="http://s")
+        first.offset = size
+        first.save(session_dir)
+
+        again, notes = DeliveryWatermark.load(session_dir, "prod/a", destination_url="http://s")
+        assert again.offset == size
+        assert not again.reset_by_guard
+        assert notes == []

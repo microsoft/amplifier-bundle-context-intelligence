@@ -660,3 +660,103 @@ class TestRoutingDoesNotStarveTheBudget:
         report = await _sweeper(tmp_path, bounds=SweepBounds(max_sessions=3)).run()
         assert report.sessions_blocked_unprovable == 3
         assert report.events_delivered == 5
+
+
+@pytest.mark.asyncio
+class TestPermanentRejectionDoesNotWedgeTheBacklog:
+    """A record the server will NEVER accept must be stepped over, not camped on.
+
+    Regression for the review finding: the sweep classified every non-2xx as
+    "stop", while the live dispatcher has a three-way classifier in which
+    `_PERMANENT` (403, 400, 404, 410, 413, 422, 3xx) means *loud skip, keep
+    going*. Stopping instead parked the cursor in front of that record, so every
+    later pass re-read it, failed again, and advanced nothing -- for the whole
+    `max_age_hours` window, after which the session aged out and its remaining
+    events were lost for good. A 403 is routine, not a corner case.
+    """
+
+    async def test_permanent_rejection_is_skipped_and_the_rest_still_delivers(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        session_dir = _make_session(tmp_path, "wedged", events=5)
+        # 2nd event is permanently rejected; the other four are fine.
+        client = _FakeClient(outcomes=[202, 403, 202, 202, 202])
+        monkeypatch.setattr(
+            "amplifier_module_hook_context_intelligence.handlers.backlog_sweep.httpx.AsyncClient",
+            lambda *a, **k: client,
+        )
+        forwarding = tmp_path / "forwarding"
+        report = await _sweeper(tmp_path, forwarding_log_dir=forwarding).run()
+
+        assert len(client.posted) == 5, "the sweep stopped at the rejected record"
+        assert report.events_delivered == 4
+        assert report.events_skipped_permanent == 1
+        wm, _ = DeliveryWatermark.load(session_dir, DEST, destination_url=URL)
+        assert wm.offset == (session_dir / "events.jsonl").stat().st_size, (
+            "the cursor is parked in front of a record the server will never accept;"
+            " this session's whole remaining backlog is wedged until it ages out"
+        )
+        # The refusal to deliver reached the DURABLE channel, not just the console.
+        records = [
+            json.loads(line)
+            for f in forwarding.glob("*.jsonl")
+            for line in f.read_text().splitlines()
+        ]
+        assert any(r["kind"] == "sweep_permanent_reject" for r in records)
+
+    async def test_a_transient_failure_still_stops_the_pass(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The other half of the contract: 5xx/429/408/401 must NOT be skipped."""
+        session_dir = _make_session(tmp_path, "slow", events=5)
+        client = _FakeClient(outcomes=[202, 500, 202, 202, 202])
+        monkeypatch.setattr(
+            "amplifier_module_hook_context_intelligence.handlers.backlog_sweep.httpx.AsyncClient",
+            lambda *a, **k: client,
+        )
+        report = await _sweeper(tmp_path).run()
+
+        assert report.events_delivered == 1
+        assert report.events_skipped_permanent == 0
+        wm, _ = DeliveryWatermark.load(session_dir, DEST, destination_url=URL)
+        assert 0 < wm.offset < (session_dir / "events.jsonl").stat().st_size, (
+            "a retryable failure must leave the cursor BEFORE the failed record"
+        )
+
+
+@pytest.mark.asyncio
+class TestPerSessionNoProgressSurvivesAggregation:
+    """One wedged session must stay visible behind a sibling that delivered.
+
+    `made_progress` sums the whole pass. Gating the loud warning on it alone
+    rebuilds the original failure one layer up: the destination reports itself
+    healthy while a session quietly retires nothing, pass after pass.
+    """
+
+    async def test_a_stuck_session_is_counted_even_when_the_pass_made_progress(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _make_session(tmp_path, "aaa-stuck", events=3, age_hours=5)
+        _make_session(tmp_path, "bbb-healthy", events=3, age_hours=1)
+        # Oldest-first: the stuck session is swept first and fails transiently;
+        # the healthy one then delivers, so the AGGREGATE says progress.
+        client = _FakeClient(outcomes=[500, 202, 202, 202])
+        monkeypatch.setattr(
+            "amplifier_module_hook_context_intelligence.handlers.backlog_sweep.httpx.AsyncClient",
+            lambda *a, **k: client,
+        )
+        forwarding = tmp_path / "forwarding"
+        report = await _sweeper(tmp_path, forwarding_log_dir=forwarding).run()
+
+        assert report.made_progress, "precondition: the pass as a whole delivered"
+        assert report.sessions_no_progress == 1, (
+            "the wedged session hid behind its healthy sibling -- this is the"
+            " aggregate-masks-the-unit failure this counter exists to prevent"
+        )
+        assert any("NO PROGRESS" in note for note in report.notes)
+        records = [
+            json.loads(line)
+            for f in forwarding.glob("*.jsonl")
+            for line in f.read_text().splitlines()
+        ]
+        assert any(r["kind"] == "sweep_no_progress" for r in records)

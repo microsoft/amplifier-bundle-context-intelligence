@@ -39,7 +39,8 @@ WATERMARK_VERSION = "1.0.0"
 
 #: Destination names are operator-chosen ``settings.yaml`` dict keys, so they can
 #: contain anything. Sanitize for use as a filename; the RAW name is kept inside
-#: the file so a post-sanitization collision is detectable rather than silent.
+#: the file and CHECKED on load (GUARD 3) so a post-sanitization collision
+#: rewinds that destination rather than silently inheriting another's cursor.
 _UNSAFE_NAME = re.compile(r"[^A-Za-z0-9._-]")
 
 #: A sweep lock older than this is assumed to belong to a dead process. Generous
@@ -134,7 +135,23 @@ class DeliveryWatermark:
             wm.delivered_lines = 0
             wm.reset_by_guard = True
 
-        # GUARD 3 — destination identity. Same name, different URL means a
+        # GUARD 3 — destination NAME identity. `path_for` sanitizes the name into
+        # a filename, and that map is MANY-TO-ONE: `prod/a` and `prod:a` both
+        # become `prod_a.json`. The raw name is stored precisely so the collision
+        # is detectable -- storing it and never comparing it is a guard that was
+        # designed, documented, and never wired. Without this check the second
+        # destination inherits the first one's cursor and delivers nothing.
+        if wm.destination and wm.destination != destination:
+            notes.append(
+                f"watermark belongs to destination {wm.destination!r}, not {destination!r}"
+                f" (both sanitize to {path.name}) — resetting to 0"
+            )
+            wm.offset = 0
+            wm.delivered_lines = 0
+            wm.reset_by_guard = True
+            wm.destination = destination
+
+        # GUARD 4 — destination URL identity. Same name, different URL means a
         # different sink. Claiming "already delivered" against a server that
         # never saw these events is the one genuinely lossy mistake available.
         if destination_url and wm.destination_url and wm.destination_url != destination_url:
