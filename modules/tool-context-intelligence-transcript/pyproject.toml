@@ -6,7 +6,7 @@ requires-python = ">=3.11"
 license = "MIT"
 
 dependencies = [
-    "amplifier-bundle-context-intelligence @ git+https://github.com/microsoft/amplifier-bundle-context-intelligence@2818e0519f1c59c71d6a5b53eee50592853f8d7e",
+    "amplifier-bundle-context-intelligence @ git+https://github.com/microsoft/amplifier-bundle-context-intelligence@main",
 ]
 
 [project.entry-points."amplifier.modules"]
