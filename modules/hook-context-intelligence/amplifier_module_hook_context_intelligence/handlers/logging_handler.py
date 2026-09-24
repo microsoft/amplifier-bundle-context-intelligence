@@ -395,6 +395,17 @@ class _DestinationDispatcher:
         self._degraded_since: float | None = None
         self._current: tuple[str, dict[str, Any]] | None = None  # in-flight held event
         self._overflow_dropped = 0
+        # Snapshot of _overflow_dropped as of the last overflow WARNING, so that
+        # warning can report a true "since last warning" delta.
+        #
+        # Why a second counter instead of resetting _overflow_dropped: that
+        # counter is the session-lifetime total, and three other readers depend
+        # on it staying cumulative -- the sustained-failure escalation ("dropped
+        # from a full queue so far"), its forwarding record, and the shutdown
+        # summary's undelivered total (queued + in-flight + overflow-dropped).
+        # Resetting it here would silently UNDER-report undelivered events at
+        # shutdown, which is the opposite of what this warning exists to do.
+        self._overflow_dropped_at_last_log = 0
         self._auth_failures = 0
         self._last_status: int | None = None
         # Sentinel "never logged yet" value. MUST be -inf, not 0.0: these are
@@ -574,13 +585,21 @@ class _DestinationDispatcher:
             now = time.monotonic()
             if now - self._last_overflow_log >= _LOG_RATE_LIMIT_SECONDS:
                 self._last_overflow_log = now
+                dropped_since_last = self._overflow_dropped - self._overflow_dropped_at_last_log
+                self._overflow_dropped_at_last_log = self._overflow_dropped
                 logger.warning(
-                    "%s buffer full — %d events dropped since last warning;"
-                    " events are durable in events.jsonl UNLESS the disk is also full"
-                    " (see any DISK FULL alert)."
-                    " To manually upload run: context-intelligence-upload --path %s"
+                    "%s buffer full — %d event(s) dropped since the last warning"
+                    " (%d this session); they stay durable in events.jsonl UNLESS the"
+                    " disk is also full (see any DISK FULL alert)."
+                    " These drops are replayed automatically: the backlog sweep re-reads"
+                    " from the delivery watermark, which a drop freezes in place."
+                    " Manual replay is required ONLY if the sweep is turned off"
+                    " (sweep_enabled: false) or this session ages past"
+                    " sweep_max_age_hours (default 48h) — then run:"
+                    " context-intelligence-upload --path %s"
                     " (--server-url/--api-key come from flags or env/config; see --help)",
                     self._name,
+                    dropped_since_last,
                     self._overflow_dropped,
                     self._storage_path,
                 )
@@ -729,9 +748,12 @@ class _DestinationDispatcher:
         self._last_degraded_escalation_log = now
         logger.error(
             "%s (%s) has been failing to deliver for %.0fs \u2014 %d event(s)"
-            " dropped from a full queue so far, circuit breaker open=%s."
-            " Events remain durable in events.jsonl; once %s recovers, replay"
-            " any dropped backlog with: context-intelligence-upload --path %s"
+            " dropped from a full queue so far (session total), circuit breaker open=%s."
+            " Events remain durable in events.jsonl; once %s recovers, the backlog"
+            " sweep replays the dropped events automatically from the delivery"
+            " watermark. Manual replay is required ONLY if the sweep is turned off"
+            " (sweep_enabled: false) or the session ages past sweep_max_age_hours"
+            " (default 48h) — then run: context-intelligence-upload --path %s"
             " (--server-url/--api-key come from flags or env/config; see --help).",
             self._name,
             self._url,
@@ -864,9 +886,12 @@ class _DestinationDispatcher:
         self._last_probe_ts = time.monotonic()
         logger.warning(
             "%s (%s) forwarding paused after sustained auth failures (HTTP %s) \u2014 fix the"
-            " credential/URL; delivery auto-resumes when it recovers (no restart needed)."
-            " Events are safe in events.jsonl; replay the backlog with"
-            " context-intelligence-upload.",
+            " credential/URL. Once it recovers, NEW events resume automatically (no"
+            " restart needed) AND the backlog sweep replays what was missed, re-reading"
+            " from the delivery watermark. Events stay durable in events.jsonl meanwhile."
+            " Manual replay (context-intelligence-upload) is required ONLY if the sweep"
+            " is turned off (sweep_enabled: false) or the session ages past"
+            " sweep_max_age_hours (default 48h).",
             self._name,
             self._url,
             self._last_status,
@@ -1459,8 +1484,12 @@ class _DestinationDispatcher:
                 logger.warning(
                     "%s shutdown: %d undelivered event(s)"
                     " (queued=%d in-flight=%d overflow-dropped=%d)."
-                    " Events are durable in events.jsonl."
-                    " To manually upload run: context-intelligence-upload --path %s"
+                    " Events are durable in events.jsonl, and the next session's"
+                    " backlog sweep replays them automatically from the delivery"
+                    " watermark. Manual replay is required ONLY if the sweep is turned"
+                    " off (sweep_enabled: false) or this session ages past"
+                    " sweep_max_age_hours (default 48h) — then run:"
+                    " context-intelligence-upload --path %s"
                     " (--server-url/--api-key come from flags or env/config; see --help)",
                     self._name,
                     total,
