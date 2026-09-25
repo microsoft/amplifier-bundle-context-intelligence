@@ -71,11 +71,29 @@ Run these before calling anything done:
 
 ```bash
 uv run pytest          # in modules/tool-context-intelligence-query   (module suite)
-uv run pytest          # in the repo root                             (tests/, top-level suite)
-uv run ruff check . && uv run ruff format --check . && uv run pyright
+uv run pytest tests/   # in the repo root                             (top-level suite; see note)
+uv run ruff check --no-cache . && uv run ruff format --check --no-cache . && uv run pyright
 uv run pyright          # ALSO in modules/<the module you changed>   (see note below)
 scripts/validate-full.sh   # then inspect env_check, build_check, quality_classification, and final_report
 ```
+
+**Scope the root suite to `tests/` — a bare `uv run pytest` at the root does NOT work.**
+Every module under `modules/` is its own uv project with its own lockfile and its own
+`tests/conftest.py`, so an unscoped root collection fails twice over: module dependencies
+are absent from the root venv (`ModuleNotFoundError: pathspec`), and several
+`tests/conftest.py` files collide on the same `tests.conftest` module name
+(`ImportPathMismatchError`). That is the per-module project layout working as designed,
+not a defect to fix — CI matches it, running `pytest tests/ --ignore=tests/dtu` at the
+root plus one job per module. Run each module's suite from that module's own directory.
+
+**Pass `--no-cache` to the ruff gates.** Ruff's cache can report a file as already
+formatted when it is not, and the root `ruff format --check .` is a CI gate. Real
+instance: two files edited in-session were reported clean by a cached local `ruff format
+--check .` ("190 files already formatted"), were committed in that state, and CI's Lint
+job then failed on the exact same command — a later `git stash`/`stash pop` invalidated
+the cache and the same tree reported "2 files would be reformatted". A cached green
+format check is not evidence; re-verify with `--no-cache`, or against a clean checkout
+(`git archive <sha> | tar -x -C "$(mktemp -d)"`), before trusting it.
 
 **Run `pyright` from the MODULE directory too, not only the repo root.** The root
 invocation does not reproduce a module's own Pyright configuration, so module-local type
