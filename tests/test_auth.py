@@ -351,3 +351,23 @@ class TestNonInteractiveCredentialSeam:
         self._install_fake_azure_identity(monkeypatch, "AzureCliCredential")
         with pytest.raises(ImportError):
             _make_cli_credential()
+
+    def test_seam_quiets_chained_credential_warning(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The per-retry multi-line chain-failure WARNING is suppressed; errors still show."""
+        import logging
+
+        from context_intelligence.auth import _make_cli_credential
+
+        chained = logging.getLogger("azure.identity._credentials.chained")
+        previous = chained.level
+        chained.setLevel(logging.NOTSET)
+        try:
+            self._install_fake_azure_identity(monkeypatch, "DefaultAzureCredential")
+            _make_cli_credential()
+            assert not chained.isEnabledFor(logging.WARNING)
+            assert chained.isEnabledFor(logging.ERROR)
+            assert logging.getLogger("azure.identity").level == logging.NOTSET
+        finally:
+            chained.setLevel(previous)
