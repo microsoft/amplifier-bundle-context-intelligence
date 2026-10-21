@@ -19,9 +19,9 @@ import random
 import socket
 import ssl
 import time
-from contextlib import ExitStack
+from contextlib import ExitStack, closing
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Iterator
 
 import httpx
 from amplifier_module_hook_context_intelligence.upload import build_payload
@@ -221,20 +221,14 @@ def run_upload(
     timeout_s: float | None = None,
     parse_fn: ParseFn | None = None,
 ) -> UploadResult:
-    """Hold shared capture locks through replay; fail before HTTP for marked sources.
+    """Hold one capture's shared guard through its count/read/HTTP/retries.
 
-    The session list is already materialized by discovery. Lock all selected
-    sources in sorted order before invoking the existing replay engine. No lock
-    waits or source reads occur before the marker check.
+    A sweep uses bounded file descriptors, not one lock per selected session.
+    Explicitly close the iterator on early return so its current guard is released.
     """
-    with ExitStack() as stack:
-        try:
-            for path in sorted({directory / "events.jsonl" for directory, _ in sessions}):
-                stack.enter_context(replay_guard(path))
-        except (PruneError, OSError) as exc:
-            return UploadResult(False, 0, 0, error=str(exc))
+    with closing(_guarded_sessions(sessions)) as guarded:
         return _run_upload(
-            sessions,
+            guarded,
             server_url,
             api_key,
             tracker,
@@ -247,8 +241,22 @@ def run_upload(
         )
 
 
-def _run_upload(
+def _guarded_sessions(
     sessions: list[tuple[Path, dict[str, Any]]],
+) -> Iterator[tuple[Path, dict[str, Any], str | None]]:
+    for directory, metadata in sessions:
+        with ExitStack() as stack:
+            try:
+                stack.enter_context(replay_guard(directory / "events.jsonl"))
+            except (PruneError, OSError) as exc:
+                yield directory, metadata, str(exc)
+                return
+            # The consumer completes this session before requesting the next.
+            yield directory, metadata, None
+
+
+def _run_upload(
+    sessions: Iterator[tuple[Path, dict[str, Any], str | None]],
     server_url: str,
     api_key: str,
     tracker: ProgressTracker,
@@ -329,8 +337,24 @@ def _run_upload(
     # (not baked into the client here), so a long run that crosses the Entra
     # token-expiry boundary transparently picks up a refreshed bearer token.
     with httpx.Client(timeout=timeout) as client:
-        for session_dir, metadata in sessions:
+        for session_dir, metadata, guard_error in sessions:
             session_id: str = metadata["session_id"]
+            if guard_error is not None:
+                tracker.mark_failed(
+                    session_id=session_id, event_index=0, http_status=0, error=guard_error
+                )
+                return UploadResult(
+                    success=False,
+                    sessions_uploaded=total_sessions_uploaded,
+                    events_uploaded=total_events_uploaded,
+                    events_skipped=total_events_malformed + total_events_unreadable,
+                    events_unmapped=total_events_unmapped,
+                    events_malformed=total_events_malformed,
+                    events_unreadable=total_events_unreadable,
+                    retries=total_retries,
+                    error=guard_error,
+                    failed_at={"session_id": session_id, "event_index": 0, "http_status": 0},
+                )
             # working_dir is session-invariant (unlike workspace, which is read
             # per-event from the parsed record) -- read it once per session from
             # the same metadata dict that carries session_id. Both --format
