@@ -318,3 +318,45 @@ def test_python_response_selection_rejects_truthy_non_boolean() -> None:
     invalid: Any = "false"
     with pytest.raises(ValueError, match="must be a boolean"):
         Policy(include_responses=invalid)
+
+
+def test_recovery_registration_immediately_before_capture_fence_is_skipped(tmp_path: Path) -> None:
+    from contextlib import contextmanager
+    from context_intelligence.prune import operations
+
+    path = tmp_path / "events.jsonl"
+    original = line(raw="synthetic")
+    path.write_bytes(original)
+    registered = []
+    real_lock = capture_lock
+
+    @contextmanager
+    def register_then_lock(source: Path, *, exclusive: bool = False):
+        # Reproduce registration just before pruning acquires the capture fence.
+        # The old ledger-before-capture ordering would already have missed this job.
+        db, _ = make_ledger(tmp_path / "recovery", source)
+        registered.append((db, db.read_bytes()))
+        with real_lock(source, exclusive=exclusive):
+            yield
+
+    with patch.object(operations, "capture_lock", register_then_lock):
+        result = prune_file(path, request(tmp_path), now=NOW)
+    assert result.status == "skipped" and "skipped-ledger:" in (result.reason or "")
+    assert path.read_bytes() == original and not receipt_path(path).exists()
+    assert registered[0][0].read_bytes() == registered[0][1]
+
+
+def test_capture_is_exclusively_fenced_during_first_recovery_inventory(tmp_path: Path) -> None:
+    from context_intelligence.prune import recovery
+
+    path = tmp_path / "events.jsonl"
+    path.write_bytes(line(raw="synthetic"))
+
+    def observe_root() -> Path:
+        with pytest.raises(CaptureBusy):
+            with replay_guard(path):
+                pytest.fail("new recovery scan must not register during inventory")
+        return tmp_path / "recovery"
+
+    with patch.object(recovery, "default_recovery_root", observe_root):
+        assert prune_file(path, request(tmp_path), now=NOW).status == "pruned"

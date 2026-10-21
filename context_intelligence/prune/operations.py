@@ -108,7 +108,9 @@ def prune_file(path: Path, request: PruneRequest, *, now: datetime | None = None
     path = path.expanduser().absolute()
     now = now or datetime.now(timezone.utc)
     try:
-        with recovery_guard(path, request.recovery_roots), capture_lock(path, exclusive=True):
+        # Fence source registration before inventorying ledgers. A newly started
+        # runner cannot scan/register this capture while the exclusive lock is held.
+        with capture_lock(path, exclusive=True), recovery_guard(path, request.recovery_roots):
             assert_replayable(path)
             if request.inactive_only:
                 inventory = InactiveInventory.load(request.state_root)

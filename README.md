@@ -790,14 +790,21 @@ default one-hour mtime guard is only an additional filter, and `--min-idle 0s`
 disables that filter, not the stopped-writer requirement.
 
 Prune, upload, and recovery share stable, nonblocking `.maintenance.lock` sidecars.
-Contention skips/refuses rather than waits. Lock order is recovery job, capture,
-then Foundation execution. Every source registered in a standard recovery V2 ledger
+Contention skips/refuses rather than waits. Pruning fences the capture before
+inventorying recovery jobs, then takes existing job locks and Foundation execution.
+Recovery takes its job lock before a shared capture lock. All acquisitions are
+nonblocking, so contention releases/refuses rather than deadlocking. Upload holds
+one capture at a time through its count/read/delivery, not all selected captures.
+Every source registered in a standard recovery V2 ledger
 is skipped, regardless of delivery state; no byte-offset/cursor is reset.
 Supply every custom state root with repeated `--recovery-state-dir PATH`.
 Unknown, busy, or unreadable state refuses pruning; absent standard state does not
 prove delivery. Stop independent uncoordinated readers/recovery processes too.
 Files/ancestors must not be symlinks; this is a cooperative trusted-directory
 protocol, not protection against a hostile directory owner.
+This POSIX protocol requires capture directories writable by the current user
+and current-user-owned maintenance sidecars, even for readers. Read-only mounts
+and foreign-owned locks fail closed; there is no uncoordinated read fallback.
 
 Transactions are per-file, not per-tree. Rewrites need temporary space up to the
 rewritten file size, and memory scales with the largest event, not the whole log.

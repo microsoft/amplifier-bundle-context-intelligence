@@ -2,7 +2,9 @@
 
 All flock acquisitions are nonblocking. Never unlink a lock; its inode must
 remain stable. This protocol is independent of the live session writer fence.
-Lock order: recovery runner -> capture maintenance -> Foundation execution.
+Pruning takes capture maintenance -> recovery runner -> Foundation execution.
+Recovery takes its runner lock before a shared capture lock. Every acquisition
+is nonblocking: either contender refuses/releases rather than waiting in a cycle.
 """
 
 from __future__ import annotations
