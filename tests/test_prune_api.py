@@ -294,6 +294,20 @@ def test_conflicting_nested_age_is_retained_without_receipt(tmp_path: Path) -> N
     assert path.read_bytes() == original and not receipt_path(path).exists()
 
 
+def test_conflicting_nanosecond_times_preserve_file_without_receipt(tmp_path: Path) -> None:
+    path = tmp_path / "events.jsonl"
+    record = {
+        "event": "llm:request",
+        "timestamp": "2026-01-01T00:00:00.123456789Z",
+        "data": {"timestamp": "2026-01-01T00:00:00.123456790Z", "raw": "synthetic"},
+    }
+    original = json.dumps(record).encode() + b"\n"
+    path.write_bytes(original)
+    result = prune_file(path, request(tmp_path), now=NOW)
+    assert result.status == "unchanged" and result.missing_timestamps == 1
+    assert path.read_bytes() == original and not receipt_path(path).exists()
+
+
 def test_dangling_standard_recovery_root_fails_closed(tmp_path: Path) -> None:
     path = tmp_path / "events.jsonl"
     original = line(raw="synthetic")

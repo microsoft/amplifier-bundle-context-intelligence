@@ -758,6 +758,9 @@ context-intelligence-prune ~/.amplifier/projects --older-than 14d --inactive-onl
 without either option, all selected records qualify regardless of timestamp.
 With an age filter, missing, invalid, or conflicting timestamps are retained and
 reported, with a nonzero exit code.
+Timestamp agreement retains all fractional digits, including nanoseconds.
+Calendar ISO8601 timestamps with seconds and whole-minute UTC offsets are
+recognized; other spellings are retained rather than guessing their precision.
 The default removes **only direct `data.raw` on `llm:request`**, retaining every
 event, usage/cost fields, nested extension fields, raw responses, and `$blob_ref`
 objects. Native CI 1.0.0 and hooks-logging `amplifier.log` 1.0.0 are supported;

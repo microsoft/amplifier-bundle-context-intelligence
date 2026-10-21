@@ -33,14 +33,34 @@ def parse_timestamp(value: Any) -> datetime | None:
         return None
 
 
+def _timestamp_identity(value: Any) -> tuple[datetime, str] | None:
+    """Compare submicrosecond digits without datetime's silent truncation.
+
+    Calendar timestamps with seconds and whole-minute UTC offsets cover both
+    supported logger formats. Retain other spellings rather than guess precision.
+    The datetime floor is conservative for comparison with a datetime cutoff.
+    """
+    parsed = parse_timestamp(value)
+    if parsed is None:
+        return None
+    match = re.fullmatch(
+        r"\d{4}-\d{2}-\d{2}[Tt ]\d{2}:\d{2}:\d{2}(?:[.,](\d+))?(?:Z|[+-]\d{2}:?\d{2})",
+        value,
+    )
+    if match is None:
+        return None
+    return parsed, (match[1] or "")[6:].rstrip("0")
+
+
 def event_timestamp(record: dict[str, Any]) -> datetime | None:
     values = [record[key] for key in ("timestamp", "ts") if key in record]
     if isinstance(record.get("data"), dict) and "timestamp" in record["data"]:
         values.append(record["data"]["timestamp"])
-    parsed = [parse_timestamp(value) for value in values]
-    if not parsed or any(value is None or value != parsed[0] for value in parsed):
+    parsed = [_timestamp_identity(value) for value in values]
+    first = parsed[0] if parsed else None
+    if first is None or any(value is None or value != first for value in parsed):
         return None
-    return parsed[0]
+    return first[0]
 
 
 @dataclass(frozen=True)
