@@ -8,6 +8,12 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 
+_TIMESTAMP = re.compile(
+    r"[0-9]{4}-[0-9]{2}-[0-9]{2}[Tt ](?:[01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9]"
+    r"(?:[.,]([0-9]+))?(?:Z|[+-](?:[01][0-9]|2[0-3]):?[0-5][0-9])"
+)
+
+
 def parse_duration(value: str) -> timedelta:
     match = re.fullmatch(r"(\d+(?:\.\d+)?)(s|m|h|d|w)", value)
     if not match:
@@ -22,7 +28,9 @@ def parse_duration(value: str) -> timedelta:
 
 
 def parse_timestamp(value: Any) -> datetime | None:
-    if not isinstance(value, str):
+    # fromisoformat normalizes invalid offset minutes (e.g. +00:60).
+    # Validate the accepted spelling before letting it construct the instant.
+    if not isinstance(value, str) or _TIMESTAMP.fullmatch(value) is None:
         return None
     try:
         result = datetime.fromisoformat(value.replace("Z", "+00:00"))
@@ -43,10 +51,7 @@ def _timestamp_identity(value: Any) -> tuple[datetime, str] | None:
     parsed = parse_timestamp(value)
     if parsed is None:
         return None
-    match = re.fullmatch(
-        r"\d{4}-\d{2}-\d{2}[Tt ]\d{2}:\d{2}:\d{2}(?:[.,](\d+))?(?:Z|[+-]\d{2}:?\d{2})",
-        value,
-    )
+    match = _TIMESTAMP.fullmatch(value)
     if match is None:
         return None
     return parsed, (match[1] or "")[6:].rstrip("0")
