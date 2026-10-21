@@ -937,10 +937,12 @@ def test_later_guard_refusal_keeps_prior_delivery_counts_and_releases_locks(tmp_
 
 def test_unwritable_capture_lock_fails_closed_without_network(tmp_path: Path) -> None:
     import errno
-    from context_intelligence.prune import coordination
 
     directory, metadata = _write_session(tmp_path, "unwritable", _make_events(1))
-    with patch.object(coordination.os, "open", side_effect=OSError(errno.EROFS, "read-only")):
+    with patch(
+        "context_intelligence.prune.coordination.os.open",
+        side_effect=OSError(errno.EROFS, "read-only"),
+    ):
         with patch("httpx.Client") as client:
             result = run_upload([(directory, metadata)], "http://unused", "synthetic", MagicMock())
     assert not result.success and "read-only" in (result.error or "")

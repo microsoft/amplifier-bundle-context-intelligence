@@ -4,7 +4,7 @@ import json
 import os
 import tempfile
 import unittest
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from unittest.mock import patch
 
@@ -12,8 +12,7 @@ from click.testing import CliRunner
 
 from amplifier_module_tool_context_intelligence_prune.cli import main
 
-
-NOW = datetime(2026, 7, 20, 12, tzinfo=timezone.utc)
+NOW = datetime(2026, 7, 20, 12, tzinfo=UTC)
 CUTOFF = NOW - timedelta(days=14)
 OLD = "2026-07-01T12:00:00.123456789Z"
 
