@@ -957,7 +957,8 @@ def test_busy_scan_preserves_existing_identity_routes_and_acknowledged_offsets(
 def test_prune_refuses_registered_real_v2_checkpoint_without_changing_cursors(
     tmp_path: Path, configured_roots: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from datetime import datetime, timedelta, timezone
+    from datetime import UTC, datetime, timedelta
+
     from context_intelligence.prune import PruneRequest, prune_file
 
     path = _capture(tmp_path)
@@ -973,7 +974,7 @@ def test_prune_refuses_registered_real_v2_checkpoint_without_changing_cursors(
     monkeypatch.setattr("context_intelligence.prune.recovery.default_recovery_root", lambda: state)
     before = path.read_bytes()
     req = PruneRequest(tmp_path, apply=True, writers_stopped=True, min_idle=timedelta(0))
-    result = prune_file(path, req, now=datetime.now(timezone.utc))
+    result = prune_file(path, req, now=datetime.now(UTC))
     assert result.status == "skipped" and "skipped-ledger:" in (result.reason or "")
     runner = RecoveryRunner(state_dir=state, job_id="registered", client=_server([]))
     try:
