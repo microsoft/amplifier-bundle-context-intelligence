@@ -21,7 +21,7 @@ import ssl
 import time
 from contextlib import ExitStack, closing
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Iterator
+from typing import TYPE_CHECKING, Any, Generator, Iterator
 
 import httpx
 from amplifier_module_hook_context_intelligence.upload import build_payload
@@ -243,7 +243,7 @@ def run_upload(
 
 def _guarded_sessions(
     sessions: list[tuple[Path, dict[str, Any]]],
-) -> Iterator[tuple[Path, dict[str, Any], str | None]]:
+) -> Generator[tuple[Path, dict[str, Any], str | None], None, None]:
     for directory, metadata in sessions:
         with ExitStack() as stack:
             try:
