@@ -35,8 +35,8 @@ def parse_timestamp(value: Any) -> datetime | None:
 
 def event_timestamp(record: dict[str, Any]) -> datetime | None:
     values = [record[key] for key in ("timestamp", "ts") if key in record]
-    if not values and isinstance(record.get("data"), dict) and "timestamp" in record["data"]:
-        values = [record["data"]["timestamp"]]
+    if isinstance(record.get("data"), dict) and "timestamp" in record["data"]:
+        values.append(record["data"]["timestamp"])
     parsed = [parse_timestamp(value) for value in values]
     if not parsed or any(value is None or value != parsed[0] for value in parsed):
         return None
@@ -49,6 +49,8 @@ class Policy:
     include_responses: bool = False
 
     def __post_init__(self) -> None:
+        if type(self.include_responses) is not bool:
+            raise ValueError("include_responses must be a boolean")
         if self.cutoff is not None and self.cutoff.utcoffset() is None:
             raise ValueError("cutoff must be timezone-aware")
 

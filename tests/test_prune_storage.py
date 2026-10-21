@@ -116,6 +116,18 @@ class RecordTests(unittest.TestCase):
         self.assertNotIn("raw", changed["data"])
         self.assertFalse(missing)
 
+    def test_nested_timestamp_must_agree_with_each_envelope_field(self):
+        for field in ("timestamp", "ts"):
+            for nested in (NOW.isoformat(), "invalid", None):
+                record = event(field=field)
+                record["data"]["timestamp"] = nested
+                replacement, undated = prune_record(record, Policy(CUTOFF))
+                self.assertIs(replacement, record)
+                self.assertTrue(undated)
+            agreed = event(field=field)
+            agreed["data"]["timestamp"] = OLD
+            self.assertNotIn("raw", prune_record(agreed, Policy(CUTOFF))[0]["data"])
+
     def test_response_opt_in(self):
         record = event("llm:response")
         self.assertIs(prune_record(record, Policy(CUTOFF))[0], record)
