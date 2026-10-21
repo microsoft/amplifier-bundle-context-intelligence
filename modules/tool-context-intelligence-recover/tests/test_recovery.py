@@ -899,3 +899,87 @@ def test_scan_roots_deduplicate_and_reject_other_home(
     expected = [home / ".amplifier" / "projects", home / "captures"]
     explicit_paths = [home / ".amplifier" / "projects", home.parent, home / "captures"]
     assert resolve_scan_roots(config, explicit_paths) == expected
+
+
+def test_prune_receipt_blocks_new_job_before_any_network(
+    tmp_path: Path, configured_roots: None
+) -> None:
+    from context_intelligence.prune.coordination import receipt_path
+
+    path = _capture(tmp_path)
+    original = path.read_bytes()
+    receipt_path(path).write_bytes(b"prepared or invalid")
+    requests: list[httpx.Request] = []
+    runner = RecoveryRunner(state_dir=tmp_path / "state", job_id="pruned", client=_server(requests))
+    try:
+        summary = runner.run([tmp_path])
+        row = runner.checkpoint.connection.execute("SELECT * FROM artifact").fetchone()
+        assert row["state"] == "quarantined"
+        assert "pruned-capture:" in row["reason"]
+        assert summary.delivered == 0
+        assert list(runner.checkpoint.connection.execute("SELECT * FROM cursor")) == []
+    finally:
+        runner.close()
+    assert requests == [] and path.read_bytes() == original
+
+
+def test_busy_scan_preserves_existing_identity_routes_and_acknowledged_offsets(
+    tmp_path: Path, configured_roots: None
+) -> None:
+    from context_intelligence.prune.coordination import capture_lock
+
+    path = _capture(tmp_path, body=_event("session-1") + _event("session-1"))
+    requests: list[httpx.Request] = []
+    runner = RecoveryRunner(state_dir=tmp_path / "state", job_id="busy", client=_server(requests))
+    try:
+        runner.run([tmp_path])
+        artifact = dict(runner.checkpoint.connection.execute("SELECT * FROM artifact").fetchone())
+        cursor = dict(runner.checkpoint.connection.execute("SELECT * FROM cursor").fetchone())
+        assert cursor["ordinal"] == 1 and cursor["byte_offset"] > 0
+        with capture_lock(path, exclusive=True):
+            summary = runner.run([tmp_path], dry_run=True)
+            assert summary.pending and summary.retry_after_s == 1
+            assert (
+                dict(runner.checkpoint.connection.execute("SELECT * FROM artifact").fetchone())
+                == artifact
+            )
+            assert (
+                dict(runner.checkpoint.connection.execute("SELECT * FROM cursor").fetchone())
+                == cursor
+            )
+        runner.run([tmp_path])
+        after = runner.checkpoint.connection.execute("SELECT * FROM cursor").fetchone()
+        assert after["ordinal"] == 2 and after["byte_offset"] > cursor["byte_offset"]
+    finally:
+        runner.close()
+
+
+def test_prune_refuses_registered_real_v2_checkpoint_without_changing_cursors(
+    tmp_path: Path, configured_roots: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from datetime import datetime, timedelta, timezone
+    from context_intelligence.prune import PruneRequest, prune_file
+
+    path = _capture(tmp_path)
+    state = tmp_path / "state"
+    runner = RecoveryRunner(state_dir=state, job_id="registered", client=_server([]))
+    try:
+        runner.run([tmp_path], dry_run=True)
+        cursor_before = [
+            dict(row) for row in runner.checkpoint.connection.execute("SELECT * FROM cursor")
+        ]
+    finally:
+        runner.close()
+    monkeypatch.setattr("context_intelligence.prune.recovery.default_recovery_root", lambda: state)
+    before = path.read_bytes()
+    req = PruneRequest(tmp_path, apply=True, writers_stopped=True, min_idle=timedelta(0))
+    result = prune_file(path, req, now=datetime.now(timezone.utc))
+    assert result.status == "skipped" and "skipped-ledger:" in (result.reason or "")
+    runner = RecoveryRunner(state_dir=state, job_id="registered", client=_server([]))
+    try:
+        assert [
+            dict(row) for row in runner.checkpoint.connection.execute("SELECT * FROM cursor")
+        ] == cursor_before
+    finally:
+        runner.close()
+    assert path.read_bytes() == before
