@@ -738,6 +738,98 @@ working_dir string
 
 Optional fields (present only when set): `agent_name`, `parallel_group_id`, `recipe_name`, `recipe_step`.
 
+### Explicit local raw-payload pruning
+
+`context_intelligence.prune` is an offline Python library. The optional Click CLI
+is a separately installed wrapper, not a mounted agent tool or automatic hook policy:
+
+```bash
+uv tool install "git+https://github.com/microsoft/amplifier-bundle-context-intelligence@main#subdirectory=modules/tool-context-intelligence-prune"
+
+# Preview requests whose event timestamp is strictly older than two weeks:
+context-intelligence-prune ~/.amplifier/projects --older-than 14d
+
+# Apply only to old, released root sessions with matching existing execution locks:
+context-intelligence-prune ~/.amplifier/projects --older-than 14d --inactive-only --apply
+```
+
+`amplifier-event-prune` is an alias. No backups are made unless `--backup` is supplied.
+`--before` accepts an exclusive timezone-aware ISO8601 cutoff instead of `--older-than`;
+without either option, all selected records qualify regardless of timestamp.
+With an age filter, missing, invalid, or conflicting timestamps are retained and
+reported, with a nonzero exit code.
+Timestamp agreement retains all fractional digits, including nanoseconds.
+Calendar ISO8601 timestamps with seconds and whole-minute UTC offsets are
+recognized; other spellings are retained rather than guessing their precision.
+The default removes **only direct `data.raw` on `llm:request`**, retaining every
+event, usage/cost fields, nested extension fields, raw responses, and `$blob_ref`
+objects. Native CI 1.0.0 and hooks-logging `amplifier.log` 1.0.0 are supported;
+explicit unknown formats/versions and malformed files fail closed. Unchanged
+lines retain their original bytes; rewritten lines preserve exact JSON number
+tokens. `transcript.jsonl` and prompt transcript events are not changed.
+`--include-responses` is separately destructive: raw responses can be required
+for later graph-based assistant-content reconstruction.
+
+**Pruning may discard the only raw copy. No recovery ledger entry does not mean
+uploaded.** This utility neither contacts nor verifies a destination. The durable
+`events.jsonl.prune-receipt.json` fence is published and directory-synced *before*
+source replacement. Its `prepared` state is not proof of a completed replacement:
+compare the retained expected hash with the source after interruption.
+Every present receipt, even invalid or interrupted, makes this revision's upload
+and recovery tools refuse the **entire** capture before reading/delivery. Removing
+`data.raw` changes upload identity; no deduplication or partial replay is promised.
+Do not delete the receipt to bypass refusal or copy bare pruned logs into upload.
+Older/uncoordinated consumers cannot enforce this protocol; stop them first.
+
+Apply requires `--inactive-only` or a truthful `--writers-stopped` assertion.
+Inactive-only holds an existing matching Foundation root execution lock for the
+entire transaction and skips live, recent, child, legacy, foreign, and ambiguous
+sessions. It protects cooperating current hosts, **not arbitrary appenders**.
+Age, a terminal status, or an empty open-file snapshot alone cannot exclude a writer;
+an ignored advisory lock plus atomic rename can still lose concurrent appends.
+The minimum inactivity interval is `max(--min-idle, 14d, event cutoff age)`.
+For other logs, stop **all** writers before asserting `--writers-stopped`; the
+default one-hour mtime guard is only an additional filter, and `--min-idle 0s`
+disables that filter, not the stopped-writer requirement.
+
+Prune, upload, and recovery share stable, nonblocking `.maintenance.lock` sidecars.
+Contention skips/refuses rather than waits. Pruning fences the capture before
+inventorying recovery jobs, then takes existing job locks and Foundation execution.
+Recovery takes its job lock before a shared capture lock. All acquisitions are
+nonblocking, so contention releases/refuses rather than deadlocking. Upload holds
+one capture at a time through its count/read/delivery, not all selected captures.
+Every source registered in a standard recovery V2 ledger
+is skipped, regardless of delivery state; no byte-offset/cursor is reset.
+Supply every custom state root with repeated `--recovery-state-dir PATH`.
+Unknown, busy, or unreadable state refuses pruning; absent standard state does not
+prove delivery. Stop independent uncoordinated readers/recovery processes too.
+Files/ancestors must not be symlinks; this is a cooperative trusted-directory
+protocol, not protection against a hostile directory owner.
+This POSIX protocol requires capture directories writable by the current user
+and current-user-owned maintenance sidecars, even for readers. Read-only mounts
+and foreign-owned locks fail closed; there is no uncoordinated read fallback.
+
+Transactions are per-file, not per-tree. Rewrites need temporary space up to the
+rewritten file size, and memory scales with the largest event, not the whole log.
+Preview leaves event content unchanged but can create stable lock sidecars.
+Receipts consume a small amount of space; reported bytes are source logical-byte
+reductions, not measured filesystem reclamation. Backups retain original raw data
+and defeat net space recovery. Remote graphs/blobs and their retention are unchanged.
+
+Python callers use the same safety/orchestration path without importing Click:
+
+```python
+from pathlib import Path
+from context_intelligence.prune import PruneRequest, PruneSummary, iter_prune_tree
+
+request = PruneRequest.from_options(Path("/captures"), older_than="14d")
+summary = PruneSummary()
+for result in iter_prune_tree(request):
+    summary.add(result)
+    print(result.status, result.path, result.bytes_saved)
+print(summary.to_dict())
+```
+
 ### Server-side graph (when server configured)
 
 All graph building, Neo4j writes, and blob management happen in the CI server.
