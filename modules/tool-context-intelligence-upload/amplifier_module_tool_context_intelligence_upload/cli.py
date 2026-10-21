@@ -778,6 +778,16 @@ def _count_total_events(sessions: list[tuple[Path, dict]]) -> int:
 
 def main() -> None:
     """CLI entry point — synchronous, exits with an appropriate code."""
+    from context_intelligence.prune.coordination import PruneError
+
+    try:
+        _main()
+    except PruneError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        sys.exit(1)
+
+
+def _main() -> None:
     parser = _build_parser()
     args = parser.parse_args()
 
@@ -1057,7 +1067,7 @@ def main() -> None:
     # not a data-integrity signal -- and the failure block below already
     # reports what was sent before the failure. Printing the mismatch
     # warning too would stack two alarming messages on top of one problem.
-    read_total = _count_total_events(sessions)
+    read_total = _count_total_events(sessions) if upload_result.success else 0
     if upload_result.success and read_total != upload_result.events_uploaded:
         print(
             "warning: reconciliation mismatch -- "

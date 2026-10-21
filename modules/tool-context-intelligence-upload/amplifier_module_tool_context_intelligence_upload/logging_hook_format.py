@@ -106,7 +106,13 @@ def _iter_records(path: Path) -> Iterator[tuple[int, dict[str, Any] | None]]:
     yields ``(line_no, None)`` instead of raising -- callers can keep scanning
     past a corrupt line rather than aborting on it.
     """
-    text = path.read_text(encoding="utf-8", errors="replace")
+    from context_intelligence.prune.coordination import open_capture
+
+    with open_capture(path, errors="replace") as source:
+        yield from _parse_records(source.read())
+
+
+def _parse_records(text: str) -> Iterator[tuple[int, dict[str, Any] | None]]:
     for line_no, raw in enumerate(text.splitlines(), start=1):
         line = raw.strip()
         if not line:

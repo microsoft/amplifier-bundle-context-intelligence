@@ -19,11 +19,13 @@ import random
 import socket
 import ssl
 import time
+from contextlib import ExitStack
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import httpx
 from amplifier_module_hook_context_intelligence.upload import build_payload
+from context_intelligence.prune.coordination import PruneError, open_capture, replay_guard
 
 from .logging_hook_format import SkipLine
 
@@ -116,7 +118,7 @@ def _workspace_from_path(session_dir: Path) -> str:
 def _count_lines(file_path: Path) -> int:
     """Count the number of non-blank lines in *file_path*."""
     count = 0
-    with file_path.open(encoding="utf-8") as fh:
+    with open_capture(file_path) as fh:
         for raw_line in fh:
             if raw_line.strip():
                 count += 1
@@ -207,6 +209,45 @@ def _retry_after_or_backoff(response: httpx.Response, retry_index: int) -> float
 
 
 def run_upload(
+    sessions: list[tuple[Path, dict[str, Any]]],
+    server_url: str,
+    api_key: str,
+    tracker: ProgressTracker,
+    event_delay_s: float = 0.0,
+    *,
+    auth_strategy: AuthStrategy | None = None,
+    replay: bool = True,
+    max_retries: int = _DEFAULT_MAX_RETRIES,
+    timeout_s: float | None = None,
+    parse_fn: ParseFn | None = None,
+) -> UploadResult:
+    """Hold shared capture locks through replay; fail before HTTP for marked sources.
+
+    The session list is already materialized by discovery. Lock all selected
+    sources in sorted order before invoking the existing replay engine. No lock
+    waits or source reads occur before the marker check.
+    """
+    with ExitStack() as stack:
+        try:
+            for path in sorted({directory / "events.jsonl" for directory, _ in sessions}):
+                stack.enter_context(replay_guard(path))
+        except (PruneError, OSError) as exc:
+            return UploadResult(False, 0, 0, error=str(exc))
+        return _run_upload(
+            sessions,
+            server_url,
+            api_key,
+            tracker,
+            event_delay_s,
+            auth_strategy=auth_strategy,
+            replay=replay,
+            max_retries=max_retries,
+            timeout_s=timeout_s,
+            parse_fn=parse_fn,
+        )
+
+
+def _run_upload(
     sessions: list[tuple[Path, dict[str, Any]]],
     server_url: str,
     api_key: str,
@@ -311,7 +352,7 @@ def run_upload(
 
             event_index = 0
 
-            with events_file.open(encoding="utf-8") as fh:
+            with open_capture(events_file) as fh:
                 for raw_line in fh:
                     line = raw_line.strip()
                     if not line:
