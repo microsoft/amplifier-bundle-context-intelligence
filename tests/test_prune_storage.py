@@ -95,6 +95,36 @@ class RecordTests(unittest.TestCase):
         b = parse_timestamp(OLD)
         self.assertEqual(a, b)
 
+    def test_submicrosecond_timestamp_conflicts_are_not_rounded_away(self):
+        for field in ("timestamp", "ts"):
+            record = event(field=field)
+            record["data"]["timestamp"] = "2026-07-01T12:00:00.123456790Z"
+            changed, undated = prune_record(record, Policy(CUTOFF))
+            self.assertIs(changed, record)
+            self.assertTrue(undated)
+
+    def test_submicrosecond_equivalence_accepts_offsets_and_trailing_zeroes(self):
+        for nested in (
+            "2026-07-01T05:00:00.123456789-07:00",
+            "2026-07-01T12:00:00.123456789000+00:00",
+            "2026-07-01T12:00:00,123456789+0000",
+        ):
+            record = event()
+            record["data"]["timestamp"] = nested
+            changed, undated = prune_record(record, Policy(CUTOFF))
+            self.assertNotIn("raw", changed["data"])
+            self.assertFalse(undated)
+
+    def test_unrecognized_precision_spelling_is_retained(self):
+        record = event(stamp="2026-07-01T12:00:00+00:00:00.000000001")
+        self.assertEqual(prune_record(record, Policy(CUTOFF)), (record, True))
+
+    def test_nanosecond_cutoff_ties_conservatively_retain(self):
+        cutoff = datetime(2026, 7, 1, 12, 0, 0, 123456, tzinfo=timezone.utc)
+        for fraction in ("123456000", "123456001", "123456999"):
+            record = event(stamp=f"2026-07-01T12:00:00.{fraction}Z")
+            self.assertIs(prune_record(record, Policy(cutoff))[0], record)
+
     def test_before_is_strict(self):
         for stamp in (CUTOFF.isoformat(), NOW.isoformat(), (NOW + timedelta(days=1)).isoformat()):
             record = event(stamp=stamp)
