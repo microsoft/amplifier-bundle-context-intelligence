@@ -32,11 +32,13 @@ def recovery_guard(source: Path, additional_roots: tuple[Path, ...] = ()) -> Ite
 
         for index, root in enumerate((default_recovery_root(), *additional_roots)):
             root = root.expanduser().absolute()
+            if any(parent.is_symlink() for parent in (root, *root.parents)):
+                raise PruneError("recovery-state-unsafe: linked state directory")
             if not root.exists():
                 if index:
                     raise PruneError("recovery-state-missing: explicit root does not exist")
                 continue
-            if any(parent.is_symlink() for parent in (root, *root.parents)) or not root.is_dir():
+            if not root.is_dir():
                 raise PruneError("recovery-state-unsafe: cannot establish exclusion")
             for directory, dirs, files in os.walk(root, followlinks=False, onerror=walk_error):
                 if any((Path(directory) / name).is_symlink() for name in dirs):

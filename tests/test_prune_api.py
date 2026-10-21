@@ -283,3 +283,38 @@ def test_missing_source_marker_is_still_checked(tmp_path: Path) -> None:
     with pytest.raises(PrunedCapture):
         with replay_guard(path):
             pytest.fail("dangling receipt must deny even when source is missing")
+
+
+def test_conflicting_nested_age_is_retained_without_receipt(tmp_path: Path) -> None:
+    path = tmp_path / "events.jsonl"
+    original = line(raw="synthetic", timestamp=NOW.isoformat())
+    path.write_bytes(original)
+    result = prune_file(path, request(tmp_path), now=NOW)
+    assert result.status == "unchanged" and result.missing_timestamps == 1
+    assert path.read_bytes() == original and not receipt_path(path).exists()
+
+
+def test_dangling_standard_recovery_root_fails_closed(tmp_path: Path) -> None:
+    path = tmp_path / "events.jsonl"
+    original = line(raw="synthetic")
+    path.write_bytes(original)
+    (tmp_path / "recovery").symlink_to(tmp_path / "absent")
+    result = prune_file(path, request(tmp_path), now=NOW)
+    assert result.status == "error" and "recovery-state-unsafe:" in (result.reason or "")
+    assert path.read_bytes() == original and not receipt_path(path).exists()
+
+
+@pytest.mark.parametrize("name", ["apply", "writers_stopped", "inactive_only", "backup"])
+def test_python_safety_flags_reject_truthy_non_booleans(tmp_path: Path, name: str) -> None:
+    options: dict[str, Any] = {name: "false"}
+    with pytest.raises(ValueError, match="must be a boolean"):
+        PruneRequest(tmp_path, **options)
+    with pytest.raises(ValueError, match="must be a boolean"):
+        PruneRequest.from_options(tmp_path, **options)
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_python_response_selection_rejects_truthy_non_boolean() -> None:
+    invalid: Any = "false"
+    with pytest.raises(ValueError, match="must be a boolean"):
+        Policy(include_responses=invalid)

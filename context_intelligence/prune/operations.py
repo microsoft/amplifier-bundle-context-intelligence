@@ -27,6 +27,9 @@ class PruneRequest:
     state_root: Path | None = None
 
     def __post_init__(self) -> None:
+        for name in ("apply", "writers_stopped", "inactive_only", "backup"):
+            if type(getattr(self, name)) is not bool:
+                raise ValueError(f"{name} must be a boolean")
         if self.apply and not (self.writers_stopped or self.inactive_only):
             raise ValueError("apply requires writers_stopped or inactive_only")
         if self.backup and not self.apply:
