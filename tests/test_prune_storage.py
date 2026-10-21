@@ -119,6 +119,13 @@ class RecordTests(unittest.TestCase):
         record = event(stamp="2026-07-01T12:00:00+00:00:00.000000001")
         self.assertEqual(prune_record(record, Policy(CUTOFF)), (record, True))
 
+    def test_invalid_offset_fields_are_not_normalized_into_valid_times(self):
+        for offset in ("+00:60", "-00:60", "+01:99", "+0060", "+24:00"):
+            stamp = f"2026-07-01T12:00:00{offset}"
+            record = event(stamp=stamp)
+            self.assertIsNone(parse_timestamp(stamp))
+            self.assertEqual(prune_record(record, Policy(CUTOFF)), (record, True))
+
     def test_nanosecond_cutoff_ties_conservatively_retain(self):
         cutoff = datetime(2026, 7, 1, 12, 0, 0, 123456, tzinfo=timezone.utc)
         for fraction in ("123456000", "123456001", "123456999"):
