@@ -20,6 +20,7 @@ from context_intelligence.prune.scheduled import ScheduleConfig, ScheduleError, 
 @pytest.fixture
 def installation(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
     config = ScheduleConfig(root=tmp_path / "projects", state_root=tmp_path / "state")
     path = tmp_path / "prune/config.json"
     state = {"enabled": False, "active": False, "calls": []}
@@ -174,3 +175,64 @@ def test_systemctl_timeout_is_sanitized(monkeypatch):
     with pytest.raises(ScheduleError) as observed:
         schedule._systemctl("daemon-reload")
     assert "PRIVATE" not in str(observed.value)
+
+
+@pytest.mark.parametrize("boundary", ["after_disable", "after_restore"])
+def test_timer_transition_crashes_leave_repairable_desired_state(
+    installation, monkeypatch, boundary
+):
+    config, path, state = installation
+    schedule.install(config, config_path=path, enable=True)
+    systemctl = schedule._systemctl
+    fired = False
+
+    def killed(*args, **kwargs):
+        nonlocal fired
+        result = systemctl(*args, **kwargs)
+        match = (
+            (args[0] == "disable" and "--now" in args)
+            if boundary == "after_disable"
+            else args[0] == "start"
+        )
+        if match and not fired:
+            fired = True
+            raise KeyboardInterrupt
+        return result
+
+    monkeypatch.setattr(schedule, "_systemctl", killed)
+    with pytest.raises(KeyboardInterrupt):
+        schedule.install(replace(config, at="01:30"), config_path=path)
+    assert read_json(schedule._manifest(path))["state"] == "installing"
+    schedule._owned(path, incomplete=True)
+    monkeypatch.setattr(schedule, "_systemctl", systemctl)
+    assert schedule.install(config, config_path=path)["state"] == "installed"
+    assert state["enabled"] is True and state["active"] is True
+
+
+def test_failed_timer_restore_and_failed_rollback_remain_owned(installation, monkeypatch):
+    config, path, state = installation
+    schedule.install(config, config_path=path, enable=True)
+    systemctl = schedule._systemctl
+    write = schedule._write_unit
+    restoring = False
+
+    def fail_restore(*args, **kwargs):
+        nonlocal restoring
+        if args[0] == "start":
+            restoring = True
+            raise ScheduleError("injected_timer_restore_failure")
+        return systemctl(*args, **kwargs)
+
+    def fail_rollback(*args, **kwargs):
+        if restoring:
+            raise OSError("injected_rollback_write_failure")
+        return write(*args, **kwargs)
+
+    monkeypatch.setattr(schedule, "_systemctl", fail_restore)
+    monkeypatch.setattr(schedule, "_write_unit", fail_rollback)
+    with pytest.raises(ScheduleError, match="rollback_incomplete"):
+        schedule.install(replace(config, at="01:30"), config_path=path)
+    assert schedule._owned(path, incomplete=True)["state"] == "installing"
+    monkeypatch.setattr(schedule, "_systemctl", systemctl)
+    monkeypatch.setattr(schedule, "_write_unit", write)
+    assert schedule.install(config, config_path=path)["state"] == "installed"
