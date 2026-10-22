@@ -9,6 +9,7 @@ from .coordination import CaptureBusy, PruneError, PrunedCapture, replay_guard
 from .operations import PruneRequest, PruneSummary, iter_prune_tree, prune_file, result_dict
 from .policy import Policy, parse_duration, parse_timestamp, prune_record
 from .storage import FileResult, discover_events
+from .scheduled import ScheduleConfig, run_scheduled
 
 __all__ = [
     "CaptureBusy",
@@ -18,6 +19,7 @@ __all__ = [
     "PrunedCapture",
     "PruneRequest",
     "PruneSummary",
+    "ScheduleConfig",
     "discover_events",
     "iter_prune_tree",
     "parse_duration",
@@ -26,4 +28,5 @@ __all__ = [
     "prune_record",
     "replay_guard",
     "result_dict",
+    "run_scheduled",
 ]
