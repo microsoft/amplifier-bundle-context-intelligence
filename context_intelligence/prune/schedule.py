@@ -89,6 +89,9 @@ def unit_text(
     service = (
         "[Unit]\nDescription=Local Context Intelligence raw request retention\n\n"
         "[Service]\nType=oneshot\nRestart=no\nUMask=0077\nNice=10\n"
+        # Freeze the installing user's home so default recovery authority lookup
+        # is the same in an interactive invocation and the headless user manager.
+        f"Environment={_argument('HOME=' + str(Path.home())).replace('$$', '$')}\n"
         f"ExecStart={command}\nTimeoutStartSec={config.max_runtime + 120}\nTimeoutStopSec=120\n"
         "StandardOutput=journal\nStandardError=journal\n"
     )
@@ -101,7 +104,10 @@ def unit_text(
 
 
 def _unit_dir() -> Path:
-    return checked_path(Path.home() / ".config/systemd/user")
+    base = Path(os.environ.get("XDG_CONFIG_HOME", str(Path.home() / ".config")))
+    if not base.is_absolute():
+        raise ScheduleError("XDG_CONFIG_HOME_requires_absolute_path")
+    return checked_path(base / "systemd/user")
 
 
 def _hash(raw: bytes) -> str:
@@ -272,21 +278,30 @@ def install(
             "previous_units": {filename: _hash(raw) for filename, raw in old_units.items()},
         }
         try:
-            if prior:
-                _systemctl("disable", "--now", f"{name}.timer")
-            # Durable ownership intent BEFORE the first unit write. A killed
+            # Durable ownership intent BEFORE changing timer state or units. A killed
             # process leaves recognized, resumable missing/old/new owned files.
             atomic_json(_manifest(config_path), manifest)
+            if prior:
+                _systemctl("disable", "--now", f"{name}.timer")
             atomic_json(config_path, config.to_dict())
             for filename, text in texts.items():
                 _write_unit(_unit_dir() / filename, text.encode())
             _systemctl("daemon-reload")
+            _timer_restore(name, enabled, active_timer)
             manifest["state"] = "installed"
             manifest["previous_units"] = {}
             atomic_json(_manifest(config_path), manifest)
-            _timer_restore(name, enabled, active_timer)
         except (OSError, ScheduleError) as failure:
             try:
+                # Retain both generations throughout rollback too. A second
+                # failure must not turn our own restored units into foreign files.
+                manifest.update(
+                    state="installing",
+                    timer_enabled=was_enabled,
+                    timer_active=was_active,
+                    previous_units={filename: _hash(raw) for filename, raw in old_units.items()},
+                )
+                atomic_json(_manifest(config_path), manifest)
                 _systemctl("disable", "--now", f"{name}.timer", allow_failure=True)
                 for filename, text in texts.items():
                     path = _unit_dir() / filename
@@ -307,17 +322,16 @@ def install(
                     if ScheduleConfig.load(config_path).sha256 != config.sha256:
                         raise ScheduleError("rollback_refuses_modified_configuration")
                     config_path.unlink()
+                _systemctl("daemon-reload")
+                if prior and prior.get("state", "installed") == "installed":
+                    _timer_restore(name, was_enabled, was_active)
                 if prior:
                     atomic_json(_manifest(config_path), prior)
                 elif _manifest(config_path).exists():
                     _manifest(config_path).unlink()
-                _systemctl("daemon-reload")
-                if prior and prior.get("state", "installed") == "installed":
-                    _timer_restore(name, was_enabled, was_active)
             except (OSError, ScheduleError) as rollback:
                 raise ScheduleError("installation_rollback_incomplete") from rollback
             raise failure
-            raise
     return status(config_path)
 
 

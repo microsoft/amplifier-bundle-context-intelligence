@@ -42,7 +42,10 @@ class RunInterrupted(ScheduleError):
 
 
 def default_config_path() -> Path:
-    return Path.home() / ".config/context-intelligence/local-prune/config.json"
+    base = Path(os.environ.get("XDG_CONFIG_HOME", str(Path.home() / ".config")))
+    if not base.is_absolute():
+        raise ScheduleError("XDG_CONFIG_HOME_requires_absolute_path")
+    return base / "context-intelligence/local-prune/config.json"
 
 
 def checked_path(path: Path) -> Path:
