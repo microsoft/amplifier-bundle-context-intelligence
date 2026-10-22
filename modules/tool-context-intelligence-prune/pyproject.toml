@@ -12,6 +12,7 @@ dependencies = [
 [project.scripts]
 context-intelligence-prune = "amplifier_module_tool_context_intelligence_prune.cli:main"
 amplifier-event-prune = "amplifier_module_tool_context_intelligence_prune.cli:main"
+context-intelligence-prune-schedule = "amplifier_module_tool_context_intelligence_prune.scheduled_cli:main"
 
 [build-system]
 requires = ["hatchling"]

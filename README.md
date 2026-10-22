@@ -830,6 +830,82 @@ for result in iter_prune_tree(request):
 print(summary.to_dict())
 ```
 
+#### Opt-in nightly local retention (Linux)
+
+The same CLI package also installs `context-intelligence-prune-schedule`.
+Scheduling, configuration, and execution live in the reusable
+`context_intelligence.prune.schedule` and `.scheduled` libraries; Click only
+parses options, renders JSON, and sets the exit code. No model, server, or
+credentials are required by this local job.
+
+```bash
+# Install without enabling. Defaults are 02:00 local, 7d payload age, 7d inactivity.
+context-intelligence-prune-schedule install
+context-intelligence-prune-schedule run --dry-run
+context-intelligence-prune-schedule enable
+context-intelligence-prune-schedule status
+
+# Reconfigure owned units. Unspecified options reset to their defaults.
+context-intelligence-prune-schedule install --at 01:30 --older-than 14d \
+  --min-inactive 7d --root ~/.amplifier/projects --enable
+
+context-intelligence-prune-schedule disable
+context-intelligence-prune-schedule uninstall
+```
+
+Use a **dedicated, pinned pruner installation**, not Amplifier's shared Python
+environment: the service saves the absolute installed interpreter path. When
+testing an unmerged commit, pin both the CLI and its shared library to that same
+commit using `uv tool install --overrides`; the CLI's published dependency follows
+the repository's `main`. Install this module separately from Amplifier itself.
+The user systemd manager must be available. A lingering user manager is needed
+for execution while logged out; this command does not enable linger or install
+system software.
+
+The default configuration is
+`~/.config/context-intelligence/local-prune/config.json`. `--config PATH` selects
+another installation directory; `--name context-intelligence-local-prune-test`
+selects distinct test units. Configurable parameters include the daily `--at`
+time, root, ownership state root, repeated custom recovery roots, payload age,
+minimum inactivity, mtime guard, maximum runtime, and preview-only mode. Options
+are validated before publication. Management and execution share a stable,
+nonblocking admission lock. A busy run is reported as `skipped_busy`; management
+refuses rather than stopping a transaction. Foreign or modified unit files are
+not overwritten.
+
+**This is conditional retention, not a seven-day cap on every log.** The job
+removes direct request `data.raw` older than `older_than` only from otherwise
+eligible sessions idle for at least `min_inactive`. It retains active, child,
+legacy, foreign, lock-held, recovery-registered, and ambiguous sessions regardless
+of payload age. The scheduled path never asserts stopped writers, removes raw
+responses, or creates raw backups. Inactivity must be at least one day and at
+least the mtime guard. Scheduled defaults are seven days; the unchanged manual
+CLI retains its coupled `max(14d, min-idle, cutoff age)` rule. Python callers can
+explicitly set `PruneRequest.min_inactive` to select a separate inactivity
+boundary; leaving it `None` preserves the legacy rule.
+
+Nightly runs explicitly enable repeat pruning under the same writer and recovery
+guards. **Every event remains; no event or session is deleted.** A permanent base
+`events.jsonl.prune-receipt.json` still denies upload/recovery of the entire
+capture. Repeat transactions leave that fence byte-identical and publish separate
+immutable `events.jsonl.prune-attempt-UUID.json` records before replacing current
+content. A prepared receipt never proves a prior replacement completed.
+Unrecognized fences fail closed; no receipt is removed to permit replay.
+Unchanged marked captures remain visible in the run's fenced/unconfirmed counts.
+Preserved file mtimes mean maintenance does not itself restart the inactivity
+clock. Genuine session resumption does: new data is pruned only after that session
+becomes eligible again.
+
+The timer is opt-in, user-scoped, and does not restart ingestion or other sessions.
+It uses machine local time, with no missed-run catch-up, randomized delay, or
+automatic retry. A nonexistent 02:00 during a daylight-saving transition can skip
+a run. Status distinguishes saved configuration, enabled/active timer state,
+next trigger, service result, and the latest bounded JSON run receipt. Results
+include effective policy, cutoff, counts, fixed refusal categories, and timestamps
+without raw payloads. Zero exit can mean completion, preview, or a busy skip,
+not necessarily bytes reclaimed. Disabled timers do not cancel a running job.
+Uninstall retains configuration, stable locks, and last-run evidence.
+
 ### Server-side graph (when server configured)
 
 All graph building, Neo4j writes, and blob management happen in the CI server.

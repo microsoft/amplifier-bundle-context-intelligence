@@ -13,6 +13,7 @@ import os
 import shutil
 import stat
 import tempfile
+import uuid
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -35,6 +36,8 @@ class FileResult:
     bytes_after: int = 0
     backup: Path | None = None
     reason: str | None = None
+    fenced: bool = False
+    prior_attempt_unconfirmed: bool = False
 
     @property
     def bytes_saved(self) -> int:
@@ -246,7 +249,74 @@ def _capture_schema(path: Path) -> tuple[Path, tuple[int, ...]] | None:
     return metadata, _signature(info)
 
 
-def _publish_receipt(path: Path, body: dict[str, Any]) -> None:
+@dataclass(frozen=True)
+class _RepeatFence:
+    path: Path
+    signature: tuple[int, ...]
+    sha256: str
+
+    def check(self) -> None:
+        if _signature(self.path.lstat()) != self.signature:
+            raise PruneError("repeat fence changed; source not replaced")
+
+
+def repeat_fence(path: Path) -> _RepeatFence | None:
+    """Validate a permanent deny-only fence, while the caller owns writer exclusion.
+
+    The expected digest is historical audit data, not a prerequisite for another
+    independent transaction on a legitimately resumed capture. Never clear it.
+    """
+    marker = receipt_path(path)
+    if not os.path.lexists(marker):
+        return None
+    info = marker.lstat()
+    if (
+        not stat.S_ISREG(info.st_mode)
+        or info.st_nlink != 1
+        or info.st_uid != os.getuid()
+        or info.st_size > 32768
+    ):
+        raise PruneError("unsafe repeat fence")
+    fd = os.open(marker, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    with os.fdopen(fd, "rb") as handle:
+        if _signature(os.fstat(handle.fileno())) != _signature(info):
+            raise PruneError("repeat fence changed while opening")
+        raw = handle.read(32769)
+    try:
+        value = json.loads(raw, object_pairs_hook=_unique_object)
+        if not isinstance(value, dict):
+            raise ValueError
+        if (
+            value.get("format") != "context-intelligence-prune"
+            or type(value.get("version")) is not int
+            or value["version"] != 1
+            or value.get("state") != "prepared"
+            or type(value.get("include_responses")) is not bool
+            or value["include_responses"]
+        ):
+            raise ValueError
+        for key in ("source", "expected"):
+            entry = value[key]
+            digest = entry["sha256"]
+            if (
+                not isinstance(digest, str)
+                or len(digest) != 64
+                or any(char not in "0123456789abcdef" for char in digest)
+                or type(entry["bytes"]) is not int
+                or entry["bytes"] < 0
+            ):
+                raise ValueError
+        for key in ("payloads", "lines"):
+            if type(value[key]) is not int or value[key] < 1:
+                raise ValueError
+    except (ValueError, TypeError, KeyError, RecursionError) as exc:
+        raise PruneError("unrecognized repeat fence; replay remains refused") from exc
+    fence = _RepeatFence(marker, _signature(info), hashlib.sha256(raw).hexdigest())
+    fence.check()
+    return fence
+
+
+def _publish_receipt(path: Path, body: dict[str, Any], *, destination: Path | None = None) -> None:
     """Publish the deny-replay fence durably BEFORE the source replacement.
 
     link() publishes without overwriting even a concurrently created marker.
@@ -260,7 +330,7 @@ def _publish_receipt(path: Path, body: dict[str, Any]) -> None:
             output.write("\n")
             output.flush()
             os.fsync(output.fileno())
-        os.link(temporary, receipt_path(path), follow_symlinks=False)
+        os.link(temporary, destination or receipt_path(path), follow_symlinks=False)
         temporary.unlink()
         _sync_directory(path.parent)
     finally:
@@ -276,6 +346,8 @@ def prune_file(
     min_idle: timedelta = timedelta(hours=1),
     now: datetime | None = None,
     before_commit: Callable[[], None] | None = None,
+    fence: _RepeatFence | None = None,
+    audit_policy: dict[str, Any] | None = None,
 ) -> FileResult:
     """Inspect or atomically replace one log, raising PruneError on unsafe input.
 
@@ -286,12 +358,19 @@ def prune_file(
     if min_idle < timedelta(0):
         raise ValueError("min_idle must not be negative")
     path = Path(path).expanduser().absolute()
-    assert_replayable(path)
+    if fence is None:
+        assert_replayable(path)
+    else:
+        if fence.path != receipt_path(path):
+            raise PruneError("repeat fence path mismatch")
+        fence.check()
     now = now or datetime.now(timezone.utc)
     if now.utcoffset() is None:
         raise ValueError("now must be timezone-aware")
     initial = path.lstat()
     result = FileResult(path, bytes_before=initial.st_size, bytes_after=initial.st_size)
+    result.fenced = fence is not None
+    result.prior_attempt_unconfirmed = fence is not None
     if not stat.S_ISREG(initial.st_mode) or initial.st_nlink != 1:
         result.status, result.reason = "skipped", "not a regular, single-link file"
         return result
@@ -303,6 +382,8 @@ def prune_file(
     capture_schema = _capture_schema(path)
 
     def check_schema() -> None:
+        if fence is not None:
+            fence.check()
         if capture_schema is not None:
             metadata, signature = capture_schema
             if _signature(metadata.lstat()) != signature:
@@ -366,9 +447,19 @@ def prune_file(
                     "include_responses": policy.include_responses,
                     "payloads": result.payloads,
                     "lines": result.lines,
+                    "repeat_pruned": bool(audit_policy and audit_policy.get("repeat_pruned")),
+                    "base_receipt_sha256": fence.sha256 if fence else None,
+                    "effective_policy": audit_policy
+                    or {
+                        "include_responses": policy.include_responses,
+                        "backup": backup,
+                    },
                     "notice": "Raw content may be permanently lost. Every present receipt blocks replay. "
                     "Prepared is not proof that source replacement completed.",
                 },
+                destination=path.with_name(path.name + f".prune-attempt-{uuid.uuid4()}.json")
+                if fence is not None
+                else None,
             )
             # Receipt durability is necessary, but does not waive final source checks.
             _assert_unchanged(path, source, initial)

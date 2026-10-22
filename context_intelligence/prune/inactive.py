@@ -18,10 +18,10 @@ import stat
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from .policy import Policy, parse_timestamp
-from .storage import FileResult, PruneError, _signature, prune_file
+from .storage import FileResult, PruneError, _signature, prune_file, repeat_fence
 
 
 class InactiveSkip(PruneError):
@@ -93,6 +93,9 @@ class InactiveInventory:
         backup: bool = False,
         now: datetime | None = None,
         min_idle: timedelta = timedelta(days=14),
+        min_inactive: timedelta | None = None,
+        repeat_pruned: bool = False,
+        before_commit: Callable[[], None] | None = None,
     ) -> FileResult:
         """Acquire a matching existing execution lock, or return a safety skip."""
         now = now or datetime.now(timezone.utc)
@@ -104,7 +107,10 @@ class InactiveInventory:
                 apply=apply,
                 backup=backup,
                 now=now,
-                min_idle=max(min_idle, timedelta(days=14)),
+                min_idle=max(min_idle, min_inactive or timedelta(days=14)),
+                coupled_cutoff=min_inactive is None,
+                repeat_pruned=repeat_pruned,
+                before_commit=before_commit,
             )
         except (InactiveSkip, FileNotFoundError) as exc:
             return FileResult(path, status="skipped", reason=str(exc))
@@ -118,6 +124,9 @@ class InactiveInventory:
         backup: bool,
         now: datetime,
         min_idle: timedelta,
+        coupled_cutoff: bool,
+        repeat_pruned: bool,
+        before_commit: Callable[[], None] | None,
     ) -> FileResult:
         import fcntl
 
@@ -168,11 +177,13 @@ class InactiveInventory:
             if owner.get("active") is not False:
                 raise InactiveSkip("owner has not recorded a clean release")
             inactive_before = now - min_idle
-            if policy.cutoff is not None:
+            if coupled_cutoff and policy.cutoff is not None:
                 inactive_before = min(inactive_before, policy.cutoff)
             released = parse_timestamp(owner.get("released_at"))
             if released is None or released >= inactive_before:
-                raise InactiveSkip("execution ownership not released for at least 14 days")
+                raise InactiveSkip(
+                    "execution ownership not released before the inactivity boundary"
+                )
             ci_path = session / "context-intelligence/metadata.json"
             ci, ci_info = _json(ci_path)
             if (
@@ -186,7 +197,9 @@ class InactiveInventory:
             for key_name in ("ended_at", "last_event_at"):
                 value = parse_timestamp(ci.get(key_name))
                 if value is None or value >= inactive_before:
-                    raise InactiveSkip("session completion/activity is not at least 14 days old")
+                    raise InactiveSkip(
+                        "session completion/activity is newer than the inactivity boundary"
+                    )
             stamps = {owner_path: owner_info, ci_path: ci_info}
             # Root-native metadata can contain large frozen configuration.
             native_path = session / "metadata.json"
@@ -209,6 +222,8 @@ class InactiveInventory:
                 raise InactiveSkip("session has a transfer fence")
 
             def check() -> None:
+                if before_commit is not None:
+                    before_commit()
                 # The stable execution lock remains held THROUGH replacement.
                 if _signature(lock_path.lstat()) != _signature(lock_info):
                     raise InactiveSkip("execution-lock identity changed")
@@ -227,6 +242,15 @@ class InactiveInventory:
                 now=now,
                 min_idle=min_idle,
                 before_commit=check,
+                fence=repeat_fence(path) if repeat_pruned else None,
+                audit_policy={
+                    "inactive_only": True,
+                    "writers_stopped": False,
+                    "backup": backup,
+                    "repeat_pruned": repeat_pruned,
+                    "min_inactive_seconds": min_idle.total_seconds(),
+                    "include_responses": policy.include_responses,
+                },
             )
         finally:
             os.close(fd)
