@@ -871,7 +871,11 @@ minimum inactivity, mtime guard, maximum runtime, and preview-only mode. Options
 are validated before publication. Management and execution share a stable,
 nonblocking admission lock. A busy run is reported as `skipped_busy`; management
 refuses rather than stopping a transaction. Foreign or modified unit files are
-not overwritten.
+not overwritten. Reconfiguration preserves the timer's prior enabled/active state
+unless `--enable` or `--disable` is explicit. Interrupted installation/removal
+retains an ownership manifest so missing files can be repaired without accepting
+modified surviving units; ordinary update failure restores the prior files and
+timer state.
 
 **This is conditional retention, not a seven-day cap on every log.** The job
 removes direct request `data.raw` older than `older_than` only from otherwise
@@ -905,6 +909,11 @@ include effective policy, cutoff, counts, fixed refusal categories, and timestam
 without raw payloads. Zero exit can mean completion, preview, or a busy skip,
 not necessarily bytes reclaimed. Disabled timers do not cancel a running job.
 Uninstall retains configuration, stable locks, and last-run evidence.
+The runtime limit is cooperative: it is checked between records, files, and
+before commitment. Parsing one large record or blocked filesystem I/O can delay
+that check. The systemd service supplies a separate outer termination budget.
+Status also reports linger availability and the age of the last successful run;
+the job does not enable lingering itself.
 
 ### Server-side graph (when server configured)
 
