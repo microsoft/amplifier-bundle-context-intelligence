@@ -247,3 +247,53 @@ def test_precommit_deadline_prevents_publication(capture):
     assert result["state"] == "interrupted"
     assert capture.path.read_bytes() == capture.original
     assert not receipt_path(capture.path).exists()
+
+
+def test_sigterm_during_record_stops_before_replacement(capture):
+    import signal
+    from context_intelligence.prune import storage
+
+    path = save_config(capture, config_for(capture))
+    transform = storage.prune_record
+    previous_handler = signal.getsignal(signal.SIGTERM)
+
+    def stop(record, policy):
+        signal.raise_signal(signal.SIGTERM)
+        return transform(record, policy)
+
+    with patch.object(storage, "prune_record", stop):
+        result = run_scheduled(path, now=fixtures.NOW)
+    assert result["state"] == "interrupted"
+    assert capture.path.read_bytes() == capture.original
+    assert not receipt_path(capture.path).exists()
+    assert signal.getsignal(signal.SIGTERM) == previous_handler
+
+
+def test_only_safety_skips_is_success_without_claiming_deletion(capture):
+    capture.owner["active"] = True
+    capture.write(capture.owner_path, capture.owner)
+    path = save_config(capture, config_for(capture))
+    result = run_scheduled(path, now=fixtures.NOW)
+    assert result["state"] == "completed" and result["exit_code"] == 0
+    assert result["summary"]["skipped_files"] == 1
+    assert result["summary"]["payloads"] == 0
+    assert result["reasons"] == {"owner_not_released": 1}
+    assert capture.path.read_bytes() == capture.original
+
+
+def test_incomplete_installation_refuses_run_before_capture_scan(capture):
+    path = save_config(capture, config_for(capture))
+    atomic_json(
+        path.parent / "installation.json",
+        {
+            "format": "context-intelligence-local-prune-installation",
+            "version": 1,
+            "config": str(path),
+            "state": "installing",
+            "config_sha256": config_for(capture).sha256,
+        },
+    )
+    result = run_scheduled(path, now=fixtures.NOW)
+    assert result["state"] == "failed" and result["exit_code"] == 1
+    assert capture.path.read_bytes() == capture.original
+    assert not receipt_path(capture.path).exists()

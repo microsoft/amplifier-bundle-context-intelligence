@@ -76,7 +76,9 @@ def _config_option(function: Any) -> Any:
 )
 @click.option("--name", default=DEFAULT_NAME, show_default=True)
 @click.option(
-    "--enable", is_flag=True, help="Enable only the timer, never start a prune immediately."
+    "--enable/--disable",
+    default=None,
+    help="Set timer state; omitted preserves prior state (first install is disabled).",
 )
 def install_command(
     config: Path,
@@ -90,7 +92,7 @@ def install_command(
     max_runtime: int,
     dry_run: bool,
     name: str,
-    enable: bool,
+    enable: bool | None,
 ) -> None:
     """Install or replace owned configuration (unspecified options reset to defaults)."""
     try:

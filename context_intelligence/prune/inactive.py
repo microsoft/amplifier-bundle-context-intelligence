@@ -92,13 +92,15 @@ class InactiveInventory:
         apply: bool = False,
         backup: bool = False,
         now: datetime | None = None,
-        min_idle: timedelta = timedelta(days=14),
+        min_idle: timedelta = timedelta(hours=1),
         min_inactive: timedelta | None = None,
         repeat_pruned: bool = False,
         before_commit: Callable[[], None] | None = None,
     ) -> FileResult:
         """Acquire a matching existing execution lock, or return a safety skip."""
         now = now or datetime.now(timezone.utc)
+        if min_inactive is not None and min_inactive < timedelta(days=1):
+            raise ValueError("min_inactive must be at least one day")
         path = path.expanduser().absolute()
         try:
             return self._prune(
@@ -242,6 +244,7 @@ class InactiveInventory:
                 now=now,
                 min_idle=min_idle,
                 before_commit=check,
+                during_scan=before_commit,
                 fence=repeat_fence(path) if repeat_pruned else None,
                 audit_policy={
                     "inactive_only": True,

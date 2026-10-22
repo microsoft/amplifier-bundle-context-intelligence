@@ -140,6 +140,8 @@ def prune_file(path: Path, request: PruneRequest, *, now: datetime | None = None
                 backup=request.backup,
                 now=now,
                 min_idle=request.min_idle,
+                before_commit=request.before_commit,
+                during_scan=request.before_commit,
             )
     except PruneError as exc:
         reason = str(exc)

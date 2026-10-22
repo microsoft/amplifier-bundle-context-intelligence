@@ -143,9 +143,12 @@ def _stream(
     output: BinaryIO | None,
     policy: Policy,
     result: FileResult,
+    poll: Callable[[], None] | None = None,
 ) -> str:
     digest = hashlib.sha256()
     for number, line in enumerate(source, 1):
+        if poll is not None:
+            poll()
         digest.update(line)
         result.lines = number
         new_line = line
@@ -189,6 +192,8 @@ def _stream(
                         f"event nesting too deep at line {number}; file left unchanged"
                     ) from exc
                 result.payloads += 1
+        if poll is not None:
+            poll()
         result.bytes_after += len(new_line)
         if output is not None:
             output.write(new_line)
@@ -348,6 +353,7 @@ def prune_file(
     before_commit: Callable[[], None] | None = None,
     fence: _RepeatFence | None = None,
     audit_policy: dict[str, Any] | None = None,
+    during_scan: Callable[[], None] | None = None,
 ) -> FileResult:
     """Inspect or atomically replace one log, raising PruneError on unsafe input.
 
@@ -403,7 +409,7 @@ def prune_file(
                 temp_fd, temp_name = tempfile.mkstemp(prefix=".events-prune-", dir=path.parent)
                 temporary = Path(temp_name)
                 with os.fdopen(temp_fd, "wb") as output:
-                    digest = _stream(source, output, policy, result)
+                    digest = _stream(source, output, policy, result, during_scan)
                     output.flush()
                     if hasattr(os, "fchown"):
                         os.fchown(output.fileno(), initial.st_uid, initial.st_gid)
@@ -412,7 +418,7 @@ def prune_file(
                     os.utime(temporary, ns=(initial.st_atime_ns, initial.st_mtime_ns))
                     os.fsync(output.fileno())
             else:
-                digest = _stream(source, None, policy, result)
+                digest = _stream(source, None, policy, result, during_scan)
             _assert_unchanged(path, source, initial)
             if before_commit is not None:
                 before_commit()

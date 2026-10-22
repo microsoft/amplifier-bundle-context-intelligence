@@ -144,7 +144,7 @@ def _manifest(config_path: Path) -> Path:
     return config_path.parent / "installation.json"
 
 
-def _owned(config_path: Path) -> dict[str, Any]:
+def _owned(config_path: Path, *, incomplete: bool = False) -> dict[str, Any]:
     value = read_json(_manifest(config_path))
     if (
         value.get("format") != "context-intelligence-local-prune-installation"
@@ -152,14 +152,44 @@ def _owned(config_path: Path) -> dict[str, Any]:
     ):
         raise ScheduleError("unknown_installation_manifest")
     name = _name(value.get("name"))
+    if value.get("config") != str(checked_path(config_path)):
+        raise ScheduleError("installation_configuration_path_mismatch")
     expected = {f"{name}.service", f"{name}.timer"}
     units = value.get("units")
     if not isinstance(units, dict) or set(units) != expected:
         raise ScheduleError("invalid_installation_units")
+    phase = value.get("state", "installed")
+    if phase not in ("installed", "installing", "uninstalling"):
+        raise ScheduleError("unknown_installation_state")
+    pending = phase != "installed"
+    if pending and not incomplete:
+        raise ScheduleError("installation_incomplete")
+    previous = value.get("previous_units", {})
+    if not isinstance(previous, dict) or not set(previous) <= expected:
+        raise ScheduleError("invalid_prior_unit_manifest")
     for filename, digest in units.items():
-        if _hash(_read_unit(_unit_dir() / filename)) != digest:
+        path = _unit_dir() / filename
+        if pending and incomplete and not os.path.lexists(path):
+            continue
+        accepted = (digest, previous.get(filename)) if pending and incomplete else (digest,)
+        if _hash(_read_unit(path)) not in accepted:
             raise ScheduleError("owned_unit_was_modified")
     return value
+
+
+def _timer_state(name: str) -> tuple[bool, bool]:
+    text = _systemctl(
+        "show", name + ".timer", "--property=UnitFileState,ActiveState", allow_failure=True
+    )
+    state = dict(line.split("=", 1) for line in text.splitlines() if "=" in line)
+    return state.get("UnitFileState") in ("enabled", "enabled-runtime"), state.get(
+        "ActiveState"
+    ) == "active"
+
+
+def _timer_restore(name: str, enabled: bool, active: bool) -> None:
+    _systemctl("enable" if enabled else "disable", name + ".timer")
+    _systemctl("start" if active else "stop", name + ".timer")
 
 
 def install(
@@ -168,16 +198,19 @@ def install(
     config_path: Path | None = None,
     name: str = DEFAULT_NAME,
     python: Path | None = None,
-    enable: bool = False,
+    enable: bool | None = None,
 ) -> dict[str, Any]:
     """Install/update only owned units. Never start the service immediately.
 
     Configuration and execution admission share the same lock. Timer updates are
-    disabled before publication. Failures leave it disabled, with prior bytes
-    restored when possible, rather than arming a partially installed job.
+    disabled before publication. Owned incomplete transactions can be repaired
+    without accepting modified foreign files. A failed update restores the prior
+    timer state only after all prior bytes and the manager reload are restored.
     """
     config_path = checked_path(config_path or default_config_path())
     name = _name(name)
+    if enable is not None and type(enable) is not bool:
+        raise ScheduleError("enable_requires_boolean_or_none")
     python = (python or Path(sys.executable)).absolute()
     texts = unit_text(config, config_path, python, name)
     with admission(config_path):
@@ -200,7 +233,7 @@ def install(
             raise ScheduleError("installed_runtime_import_failed")
         prior: dict[str, Any] | None = None
         if _manifest(config_path).exists():
-            prior = _owned(config_path)
+            prior = _owned(config_path, incomplete=True)
             if prior["name"] != name:
                 raise ScheduleError("installation_name_change_refused")
         else:
@@ -214,38 +247,76 @@ def install(
         active = _systemctl("is-active", f"{name}.service", allow_failure=True)
         if active in ("active", "activating", "deactivating", "reloading"):
             raise JobBusy("service_active")
-        old_config = read_json(config_path) if prior else None
-        old_units = (
-            {filename: _read_unit(_unit_dir() / filename) for filename in texts} if prior else {}
-        )
-        if prior:
-            _systemctl("disable", "--now", f"{name}.timer")
+        old_config = read_json(config_path) if config_path.exists() else None
+        old_units = {
+            filename: _read_unit(_unit_dir() / filename)
+            for filename in texts
+            if prior and os.path.lexists(_unit_dir() / filename)
+        }
+        was_enabled, was_active = _timer_state(name) if prior else (False, False)
+        if prior and prior.get("state", "installed") != "installed":
+            was_enabled = prior.get("timer_enabled", False) is True
+            was_active = prior.get("timer_active", False) is True
+        enabled, active_timer = (was_enabled, was_active) if enable is None else (enable, enable)
+        manifest = {
+            "format": "context-intelligence-local-prune-installation",
+            "version": 1,
+            "state": "installing",
+            "name": name,
+            "python": str(python),
+            "config": str(config_path),
+            "config_sha256": config.sha256,
+            "timer_enabled": enabled,
+            "timer_active": active_timer,
+            "units": {filename: _hash(text.encode()) for filename, text in texts.items()},
+            "previous_units": {filename: _hash(raw) for filename, raw in old_units.items()},
+        }
         try:
+            if prior:
+                _systemctl("disable", "--now", f"{name}.timer")
+            # Durable ownership intent BEFORE the first unit write. A killed
+            # process leaves recognized, resumable missing/old/new owned files.
+            atomic_json(_manifest(config_path), manifest)
             atomic_json(config_path, config.to_dict())
             for filename, text in texts.items():
                 _write_unit(_unit_dir() / filename, text.encode())
-            manifest = {
-                "format": "context-intelligence-local-prune-installation",
-                "version": 1,
-                "name": name,
-                "python": str(python),
-                "config": str(config_path),
-                "config_sha256": config.sha256,
-                "units": {filename: _hash(text.encode()) for filename, text in texts.items()},
-            }
-            atomic_json(_manifest(config_path), manifest)
             _systemctl("daemon-reload")
-            if enable:
-                _systemctl("enable", "--now", f"{name}.timer")
-        except (OSError, ScheduleError):
-            # No auto-enable on failure. Preserve a truthful incomplete result.
-            _systemctl("disable", "--now", f"{name}.timer", allow_failure=True)
-            if prior and old_config is not None:
-                atomic_json(config_path, old_config)
-                for filename, raw in old_units.items():
-                    _write_unit(_unit_dir() / filename, raw)
-                atomic_json(_manifest(config_path), prior)
-                _systemctl("daemon-reload", allow_failure=True)
+            manifest["state"] = "installed"
+            manifest["previous_units"] = {}
+            atomic_json(_manifest(config_path), manifest)
+            _timer_restore(name, enabled, active_timer)
+        except (OSError, ScheduleError) as failure:
+            try:
+                _systemctl("disable", "--now", f"{name}.timer", allow_failure=True)
+                for filename, text in texts.items():
+                    path = _unit_dir() / filename
+                    if filename in old_units:
+                        if os.path.lexists(path) and _hash(_read_unit(path)) not in (
+                            _hash(old_units[filename]),
+                            _hash(text.encode()),
+                        ):
+                            raise ScheduleError("rollback_refuses_modified_unit")
+                        _write_unit(path, old_units[filename])
+                    elif os.path.lexists(path):
+                        if _hash(_read_unit(path)) != _hash(text.encode()):
+                            raise ScheduleError("rollback_refuses_modified_unit")
+                        path.unlink()
+                if old_config is not None:
+                    atomic_json(config_path, old_config)
+                elif config_path.exists():
+                    if ScheduleConfig.load(config_path).sha256 != config.sha256:
+                        raise ScheduleError("rollback_refuses_modified_configuration")
+                    config_path.unlink()
+                if prior:
+                    atomic_json(_manifest(config_path), prior)
+                elif _manifest(config_path).exists():
+                    _manifest(config_path).unlink()
+                _systemctl("daemon-reload")
+                if prior and prior.get("state", "installed") == "installed":
+                    _timer_restore(name, was_enabled, was_active)
+            except (OSError, ScheduleError) as rollback:
+                raise ScheduleError("installation_rollback_incomplete") from rollback
+            raise failure
             raise
     return status(config_path)
 
@@ -258,18 +329,22 @@ def set_enabled(config_path: Path, enabled: bool) -> dict[str, Any]:
             if config.sha256 != manifest["config_sha256"]:
                 raise ScheduleError("configuration_differs_from_installed_units")
         _systemctl("enable" if enabled else "disable", "--now", manifest["name"] + ".timer")
+        manifest.update(timer_enabled=enabled, timer_active=enabled)
+        atomic_json(_manifest(config_path), manifest)
     return status(config_path)
 
 
 def uninstall(config_path: Path) -> dict[str, Any]:
     with admission(config_path):
-        manifest = _owned(config_path)
+        manifest = _owned(config_path, incomplete=True)
         active = _systemctl("is-active", manifest["name"] + ".service", allow_failure=True)
         if active in ("active", "activating", "deactivating", "reloading"):
             raise JobBusy("service_active")
         _systemctl("disable", "--now", manifest["name"] + ".timer")
+        manifest["state"] = "uninstalling"
+        atomic_json(_manifest(config_path), manifest)
         for filename in manifest["units"]:
-            (_unit_dir() / filename).unlink()
+            (_unit_dir() / filename).unlink(missing_ok=True)
         _systemctl("daemon-reload")
         _manifest(config_path).unlink()
         # Keep config, last-run evidence and stable lock. No raw data removed here.
@@ -291,17 +366,32 @@ def status(config_path: Path | None = None) -> dict[str, Any]:
     )
     last = config_path.parent / "last-run.json"
     report = read_json(last) if last.exists() else None
+    success_path = config_path.parent / "last-success.json"
+    success = read_json(success_path) if success_path.exists() else None
     age = None
-    if report and report.get("finished_at"):
+    if success and success.get("finished_at"):
         try:
             age = max(
                 0.0,
                 (
-                    datetime.now().astimezone() - datetime.fromisoformat(report["finished_at"])
+                    datetime.now().astimezone() - datetime.fromisoformat(success["finished_at"])
                 ).total_seconds(),
             )
         except (ValueError, TypeError):
             pass
+    linger = "unknown"
+    try:
+        probe = subprocess.run(
+            ["/usr/bin/loginctl", "show-user", str(os.getuid()), "--property=Linger", "--value"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+        if probe.returncode == 0 and probe.stdout.strip() in ("yes", "no"):
+            linger = probe.stdout.strip()
+    except (OSError, subprocess.TimeoutExpired):
+        pass
     return {
         "state": "installed",
         "config": config.to_dict(),
@@ -312,7 +402,9 @@ def status(config_path: Path | None = None) -> dict[str, Any]:
         "timer": dict(line.split("=", 1) for line in timer.splitlines() if "=" in line),
         "service": dict(line.split("=", 1) for line in service.splitlines() if "=" in line),
         "last_run": report,
-        "last_run_age_seconds": age,
-        "last_run_stale": age is None or age > 2 * 86400,
+        "last_successful_run": success,
+        "last_successful_run_age_seconds": age,
+        "last_successful_run_stale": age is None or age > 2 * 86400,
+        "linger": linger,
         "notice": "Local time; missed runs are not caught up. Only safely inactive supported roots qualify.",
     }

@@ -219,6 +219,7 @@ def _reason(reason: str | None) -> str:
         ("recognized root", "unsupported_path"),
         ("inactivity", "recent_activity"),
         ("released", "owner_not_released"),
+        ("clean release", "owner_not_released"),
         ("completed root", "not_completed_root"),
         ("marked running", "running"),
         ("identity", "identity_mismatch"),
@@ -241,8 +242,20 @@ def run_scheduled(
     is independently authorized and rechecks every capture from current state.
     """
     try:
+        config_path = checked_path(config_path)
         with admission(config_path):
             config = ScheduleConfig.load(config_path)
+            installation = config_path.parent / "installation.json"
+            if os.path.lexists(installation):
+                installed = read_json(installation)
+                if (
+                    installed.get("format") != "context-intelligence-local-prune-installation"
+                    or installed.get("version") != 1
+                    or installed.get("config") != str(config_path)
+                    or installed.get("state", "installed") != "installed"
+                    or installed.get("config_sha256") != config.sha256
+                ):
+                    raise ScheduleError("installation_not_ready_or_configuration_changed")
             now = now or datetime.now(timezone.utc)
             if now.utcoffset() is None:
                 raise ScheduleError("now_requires_timezone")
@@ -273,7 +286,6 @@ def run_scheduled(
             def interrupted(signum: int, frame: Any) -> None:
                 nonlocal stopped
                 stopped = True
-                raise RunInterrupted("signal_interrupted")
 
             # The dataclass is immutable; construct the checked request once more
             # rather than mutating public state behind the caller's back.
@@ -337,8 +349,6 @@ def run_scheduled(
             except (OSError, PruneError, ValueError):
                 report.update(state="failed", exit_code=1, error_code="run_failed")
             finally:
-                for sig, handler in old_handlers.items():
-                    signal.signal(sig, handler)
                 report.update(
                     summary=summary.to_dict(),
                     reasons=dict(reasons),
@@ -346,7 +356,19 @@ def run_scheduled(
                     prior_attempts_unconfirmed=unconfirmed,
                     finished_at=datetime.now().astimezone().isoformat(),
                 )
-                atomic_json(last, report)
+                try:
+                    atomic_json(last, report)
+                    if report["exit_code"] == 0:
+                        atomic_json(
+                            config_path.parent / "last-success.json",
+                            {
+                                key: report[key]
+                                for key in ("run_id", "finished_at", "state", "config_sha256")
+                            },
+                        )
+                finally:
+                    for sig, handler in old_handlers.items():
+                        signal.signal(sig, handler)
             return report
     except JobBusy:
         # Do not overwrite the current owner's last result on contention.
