@@ -7,7 +7,6 @@ from pathlib import Path
 from typing import Any
 
 import click
-
 from context_intelligence.prune.schedule import (
     DEFAULT_NAME,
     install,
@@ -96,16 +95,16 @@ def install_command(
 ) -> None:
     """Install or replace owned configuration (unspecified options reset to defaults)."""
     try:
-        options: dict[str, Any] = dict(
-            root=root.expanduser().absolute(),
-            recovery_roots=tuple(p.expanduser().absolute() for p in recovery_root),
-            at=at,
-            older_than=older_than,
-            min_inactive=min_inactive,
-            min_idle=min_idle,
-            max_runtime=max_runtime,
-            dry_run=dry_run,
-        )
+        options: dict[str, Any] = {
+            "root": root.expanduser().absolute(),
+            "recovery_roots": tuple(p.expanduser().absolute() for p in recovery_root),
+            "at": at,
+            "older_than": older_than,
+            "min_inactive": min_inactive,
+            "min_idle": min_idle,
+            "max_runtime": max_runtime,
+            "dry_run": dry_run,
+        }
         if state_root is not None:
             options["state_root"] = state_root.expanduser().absolute()
         parsed = ScheduleConfig(**options)
