@@ -122,6 +122,10 @@ def _validate_registry(path: Path) -> None:
 def _exclude_registered(connection: sqlite3.Connection, source: Path) -> None:
     columns = {row[1] for row in connection.execute("PRAGMA table_info(artifact)")}
     cursors = {row[1] for row in connection.execute("PRAGMA table_info(cursor)")}
+    # Full historical jobs contain BOTH local-location columns. A hybrid with
+    # only path must not masquerade as the historical reader and bypass IDs.
+    if _PATHLESS_ARTIFACT <= columns and "path" in columns and "working_dir" not in columns:
+        raise PruneError("recovery-state-unknown: ambiguous V2 source identity")
     if {"artifact_id", "path", "source_sha256", "state"} <= columns and {
         "artifact_id",
         "ordinal",
@@ -136,6 +140,8 @@ def _exclude_registered(connection: sqlite3.Connection, source: Path) -> None:
     if columns != _PATHLESS_ARTIFACT or cursors not in (
         _PATHLESS_CURSOR,
         _PATHLESS_CURSOR | {"source_refusal_attempts"},
+        _PATHLESS_CURSOR | {"unavailable_attempts"},
+        _PATHLESS_CURSOR | {"source_refusal_attempts", "unavailable_attempts"},
     ):
         raise PruneError("recovery-state-unknown: unsupported V2 checkpoint")
     # The sourcecap writer hashes absolute(), NOT resolve(). Keep that contract.

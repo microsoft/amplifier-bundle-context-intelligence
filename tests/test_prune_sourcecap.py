@@ -210,3 +210,32 @@ def test_replaced_ledger_lock_refuses_before_receipt(tmp_path):
         assert path.read_bytes() == before and not receipt_path(path).exists()
     finally:
         writer.close()
+
+
+def test_hybrid_path_and_pathless_schema_cannot_bypass_membership(tmp_path):
+    path = source(tmp_path)
+    before = path.read_bytes()
+    _, writer = ledger(tmp_path, path, "accepted")
+    try:
+        writer.execute("ALTER TABLE artifact ADD COLUMN path TEXT")
+        writer.execute("UPDATE artifact SET path=?", (str(tmp_path / "unrelated"),))
+        writer.commit()
+        result = prune_file(path, request(tmp_path), now=NOW)
+        assert result.status == "error" and "ambiguous V2" in (result.reason or "")
+        assert path.read_bytes() == before and not receipt_path(path).exists()
+    finally:
+        writer.close()
+
+
+@pytest.mark.parametrize("registered", [False, True])
+def test_supported_migration_retains_unavailable_attempts_column(tmp_path, registered):
+    path = source(tmp_path)
+    _, writer = ledger(tmp_path, path if registered else tmp_path / "other", "accepted")
+    try:
+        writer.execute("ALTER TABLE cursor ADD COLUMN unavailable_attempts INTEGER DEFAULT 0")
+        writer.execute("ALTER TABLE cursor ADD COLUMN source_refusal_attempts INTEGER DEFAULT 0")
+        writer.commit()
+        result = prune_file(path, request(tmp_path), now=NOW)
+        assert result.status == ("skipped" if registered else "pruned")
+    finally:
+        writer.close()
