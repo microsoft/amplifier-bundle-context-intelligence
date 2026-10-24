@@ -803,6 +803,21 @@ is skipped, regardless of delivery state; no byte-offset/cursor is reset.
 Supply every custom state root with repeated `--recovery-state-dir PATH`.
 Unknown, busy, or unreadable state refuses pruning; absent standard state does not
 prove delivery. Stop independent uncoordinated readers/recovery processes too.
+The adapter recognizes both historical path-bearing V2 jobs and source-capability
+pathless V2 jobs. Pathless membership uses the producer's absolute-path hash and
+conservatively checks native session/workspace identity too. All job states remain
+excluded, including accepted and quarantined sources.
+
+`recovery-source-enrollments.sqlite3` is a separate anti-reenrollment authority,
+not a delivery checkpoint. Its fixed filename **and** supported schema are validated
+read-only; enrollment itself neither permits nor excludes pruning. Unknown, corrupt,
+obsolete content-keyed, or unsafe authority files refuse. The adapter never constructs
+the producer's mutating registry class, reads raw capabilities, resets cursors, or
+migrates SQLite schemas. SQLite may maintain WAL shared-memory reader marks; this is
+not a promise that every `-shm` byte remains unchanged. The standard root follows the
+producer's global `recovery_state_root`; include all custom job roots explicitly.
+This format compatibility does not upgrade older consumers: install coordinated
+upload/recovery clients before using the pruner alongside source-capability recovery.
 Files/ancestors must not be symlinks; this is a cooperative trusted-directory
 protocol, not protection against a hostile directory owner.
 This POSIX protocol requires capture directories writable by the current user
