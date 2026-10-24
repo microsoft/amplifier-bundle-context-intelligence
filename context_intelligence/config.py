@@ -37,6 +37,7 @@ _HOOK_OVERRIDE_KEY = "hook-context-intelligence"
 #: The ONE canonical reader-side default root for context-intelligence captures.
 #: All readers fall back to this when AMPLIFIER_CONTEXT_INTELLIGENCE_BASE_PATH is unset.
 DEFAULT_BASE_PATH = Path.home() / ".amplifier" / "projects"
+DEFAULT_RECOVERY_STATE_ROOT = Path.home() / ".local" / "state" / "context-intelligence" / "recovery"
 
 
 # ---------------------------------------------------------------------------
@@ -220,6 +221,24 @@ def _expand_env_placeholders(value: str) -> str:
         return os.environ.get(var_name, default)
 
     return _PLACEHOLDER_RE.sub(_replace, value)
+
+
+def canonicalize_recovery_state_root(raw: str | Path | None) -> Path:
+    """Match the source-capability producer's global-only authority location."""
+    value = _expand_env_placeholders(str(raw).strip()) if raw is not None else ""
+    if not value:
+        return DEFAULT_RECOVERY_STATE_ROOT
+    path = Path(value).expanduser()
+    if not path.is_absolute():
+        log.warning("recovery_state_root is not absolute; using the default")
+        return DEFAULT_RECOVERY_STATE_ROOT
+    return path
+
+
+def global_recovery_state_root(settings_path: Path | None = None) -> Path:
+    """Resolve the global recovery enrollment authority, never project overrides."""
+    path = SETTINGS_PATH if settings_path is None else settings_path
+    return canonicalize_recovery_state_root(read_hook_config_block(path).get("recovery_state_root"))
 
 
 # ---------------------------------------------------------------------------

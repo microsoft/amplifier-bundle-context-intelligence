@@ -117,7 +117,16 @@ def prune_file(path: Path, request: PruneRequest, *, now: datetime | None = None
     try:
         # Fence source registration before inventorying ledgers. A newly started
         # runner cannot scan/register this capture while the exclusive lock is held.
-        with capture_lock(path, exclusive=True), recovery_guard(path, request.recovery_roots):
+        with (
+            capture_lock(path, exclusive=True),
+            recovery_guard(path, request.recovery_roots) as check_recovery,
+        ):
+
+            def check_commit() -> None:
+                if request.before_commit is not None:
+                    request.before_commit()
+                check_recovery()
+
             if not request.repeat_pruned:
                 assert_replayable(path)
             if request.inactive_only:
@@ -131,7 +140,7 @@ def prune_file(path: Path, request: PruneRequest, *, now: datetime | None = None
                     min_idle=request.min_idle,
                     min_inactive=request.min_inactive,
                     repeat_pruned=request.repeat_pruned,
-                    before_commit=request.before_commit,
+                    before_commit=check_commit,
                 )
             return _transaction(
                 path,
@@ -140,8 +149,8 @@ def prune_file(path: Path, request: PruneRequest, *, now: datetime | None = None
                 backup=request.backup,
                 now=now,
                 min_idle=request.min_idle,
-                before_commit=request.before_commit,
-                during_scan=request.before_commit,
+                before_commit=check_commit,
+                during_scan=check_commit,
             )
     except PruneError as exc:
         reason = str(exc)
