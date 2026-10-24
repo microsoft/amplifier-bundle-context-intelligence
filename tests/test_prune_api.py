@@ -201,19 +201,26 @@ def test_fsync_order_and_marker_durable_before_source_replace(tmp_path: Path) ->
 
 
 def make_ledger(root: Path, source: Path) -> tuple[Path, Path]:
+    import hashlib
+
+    from context_intelligence.prune.recovery import _PATHLESS_ARTIFACT, _PATHLESS_CURSOR
+
     root.mkdir()
     db = root / "job.v2.sqlite3"
+    identity = hashlib.sha256(str(source.absolute()).encode()).hexdigest()
+    columns = sorted(_PATHLESS_ARTIFACT | {"path", "working_dir"})
     with sqlite3.connect(db) as connection:
+        connection.execute("CREATE TABLE artifact(" + ",".join(c + " TEXT" for c in columns) + ")")
         connection.execute(
-            "CREATE TABLE artifact(artifact_id TEXT, path TEXT, source_sha256 TEXT, state TEXT)"
+            "CREATE TABLE cursor(" + ",".join(c + " TEXT" for c in sorted(_PATHLESS_CURSOR)) + ")"
         )
         connection.execute(
-            "CREATE TABLE cursor(artifact_id TEXT, ordinal INTEGER, byte_offset INTEGER)"
+            "INSERT INTO artifact(artifact_id,path,source_sha256,state) VALUES(?,?,?,?)",
+            (identity, str(source), "synthetic", "eligible"),
         )
         connection.execute(
-            "INSERT INTO artifact VALUES('a', ?, 'synthetic', 'eligible')", (str(source),)
+            "INSERT INTO cursor(artifact_id,ordinal,byte_offset) VALUES(?,12,345)", (identity,)
         )
-        connection.execute("INSERT INTO cursor VALUES('a', 12, 345)")
     lock = Path(str(db) + ".lock")
     lock.touch(mode=0o600)
     return db, lock

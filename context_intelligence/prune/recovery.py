@@ -122,32 +122,37 @@ def _validate_registry(path: Path) -> None:
 def _exclude_registered(connection: sqlite3.Connection, source: Path) -> None:
     columns = {row[1] for row in connection.execute("PRAGMA table_info(artifact)")}
     cursors = {row[1] for row in connection.execute("PRAGMA table_info(cursor)")}
-    # Full historical jobs contain BOTH local-location columns. A hybrid with
-    # only path must not masquerade as the historical reader and bypass IDs.
-    if _PATHLESS_ARTIFACT <= columns and "path" in columns and "working_dir" not in columns:
-        raise PruneError("recovery-state-unknown: ambiguous V2 source identity")
-    if {"artifact_id", "path", "source_sha256", "state"} <= columns and {
-        "artifact_id",
-        "ordinal",
-        "byte_offset",
-    } <= cursors:
-        for (path,) in connection.execute("SELECT path FROM artifact"):
-            if not isinstance(path, str) or not Path(path).is_absolute():
-                raise PruneError("recovery-state-unknown: invalid source identity")
-            if Path(path).resolve() == source.resolve():
-                raise PruneError("skipped-ledger: source registered with a recovery job")
-        return
-    if columns != _PATHLESS_ARTIFACT or cursors not in (
+    supported_cursors = (
         _PATHLESS_CURSOR,
         _PATHLESS_CURSOR | {"source_refusal_attempts"},
         _PATHLESS_CURSOR | {"unavailable_attempts"},
         _PATHLESS_CURSOR | {"source_refusal_attempts", "unavailable_attempts"},
-    ):
+    )
+    historical = columns == _PATHLESS_ARTIFACT | {"path", "working_dir"}
+    if columns != _PATHLESS_ARTIFACT and not historical:
+        raise PruneError("recovery-state-unknown: ambiguous V2 checkpoint schema")
+    if cursors not in supported_cursors:
         raise PruneError("recovery-state-unknown: unsupported V2 checkpoint")
-    # The sourcecap writer hashes absolute(), NOT resolve(). Keep that contract.
+    # Both supported producers use absolute(), not resolve(), for this ID.
     artifact_id = hashlib.sha256(str(source.absolute()).encode("utf-8")).hexdigest()
     if connection.execute("SELECT 1 FROM artifact WHERE artifact_id=?", (artifact_id,)).fetchone():
         raise PruneError("skipped-ledger: source registered with a recovery job")
+    if historical:
+        for stored_id, path in connection.execute("SELECT artifact_id,path FROM artifact"):
+            if not isinstance(path, str) or not Path(path).is_absolute():
+                raise PruneError("recovery-state-unknown: invalid source identity")
+            if Path(path).resolve() == source.resolve():
+                raise PruneError("skipped-ledger: source registered with a recovery job")
+            expected = hashlib.sha256(str(Path(path).absolute()).encode("utf-8")).hexdigest()
+            if stored_id != expected:
+                raise PruneError("recovery-state-unknown: inconsistent historical source identity")
+    # The stored schema has no device ID, so inode matching is deliberately
+    # conservative: an unrelated same-number inode may over-skip, never permit.
+    if connection.execute(
+        "SELECT 1 FROM artifact WHERE CAST(source_inode AS TEXT)=?",
+        (str(_safe_file(source).st_ino),),
+    ).fetchone():
+        raise PruneError("skipped-ledger: source inode registered with a recovery job")
     # A ledger made through an alternate path spelling must not escape exclusion.
     # Conservatively exclude same native identity as well; no event bodies read.
     if source.parent.name == "context-intelligence":

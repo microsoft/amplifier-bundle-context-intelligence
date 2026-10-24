@@ -239,3 +239,49 @@ def test_supported_migration_retains_unavailable_attempts_column(tmp_path, regis
         assert result.status == ("skipped" if registered else "pruned")
     finally:
         writer.close()
+
+
+@pytest.mark.parametrize("kind", ["matching", "unrelated", "mismatched", "unknown-superset"])
+def test_full_historical_schema_identity_and_exact_classification(tmp_path, kind):
+    from test_prune_api import make_ledger
+
+    path = source(tmp_path)
+    before = path.read_bytes()
+    registered = path if kind == "matching" else tmp_path / "other.jsonl"
+    db, _ = make_ledger(tmp_path / "recovery", registered)
+    with sqlite3.connect(db) as writer:
+        if kind == "mismatched":
+            writer.execute(
+                "UPDATE artifact SET artifact_id=?",
+                (hashlib.sha256(str(path.absolute()).encode()).hexdigest(),),
+            )
+        elif kind == "unknown-superset":
+            writer.execute("ALTER TABLE artifact ADD COLUMN future_identity TEXT")
+    db_before = db.read_bytes()
+    result = prune_file(path, request(tmp_path), now=NOW)
+    assert (
+        result.status
+        == {
+            "matching": "skipped",
+            "mismatched": "skipped",
+            "unrelated": "pruned",
+            "unknown-superset": "error",
+        }[kind]
+    )
+    assert db.read_bytes() == db_before
+    if kind != "unrelated":
+        assert path.read_bytes() == before and not receipt_path(path).exists()
+
+
+def test_pathless_inode_alias_excludes_without_native_metadata(tmp_path):
+    path = source(tmp_path)
+    before = path.read_bytes()
+    _, writer = ledger(tmp_path, tmp_path / "alias", "accepted")
+    try:
+        writer.execute("UPDATE artifact SET source_inode=?", (str(path.stat().st_ino),))
+        writer.commit()
+        result = prune_file(path, request(tmp_path), now=NOW)
+        assert result.status == "skipped" and "inode" in (result.reason or "")
+        assert path.read_bytes() == before and not receipt_path(path).exists()
+    finally:
+        writer.close()
