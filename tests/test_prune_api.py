@@ -47,6 +47,9 @@ def line(event: str = "llm:request", **data: object) -> bytes:
 @pytest.fixture(autouse=True)
 def isolated_recovery(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
+        "context_intelligence.config.DEFAULT_RECOVERY_STATE_ROOT", tmp_path / "standard-recovery"
+    )
+    monkeypatch.setattr(
         "context_intelligence.prune.recovery.default_recovery_root", lambda: tmp_path / "recovery"
     )
 

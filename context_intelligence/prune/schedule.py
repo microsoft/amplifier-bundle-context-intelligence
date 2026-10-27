@@ -13,16 +13,19 @@ import stat
 import subprocess
 import sys
 import tempfile
+from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from ..config import DEFAULT_RECOVERY_STATE_ROOT, strict_global_recovery_state_root
 from .scheduled import (
     JobBusy,
     ScheduleConfig,
     ScheduleError,
     admission,
     atomic_json,
+    checked_config_path,
     checked_path,
     default_config_path,
     read_json,
@@ -89,8 +92,8 @@ def unit_text(
     service = (
         "[Unit]\nDescription=Local Context Intelligence raw request retention\n\n"
         "[Service]\nType=oneshot\nRestart=no\nUMask=0077\nNice=10\n"
-        # Freeze the installing user's home so default recovery authority lookup
-        # is the same in an interactive invocation and the headless user manager.
+        # HOME freezes defaults only. Resolved additional recovery authority is
+        # saved in the installed policy; current settings must still resolve.
         f"Environment={_argument('HOME=' + str(Path.home())).replace('$$', '$')}\n"
         f"ExecStart={command}\nTimeoutStartSec={config.max_runtime + 120}\nTimeoutStopSec=120\n"
         "StandardOutput=journal\nStandardError=journal\n"
@@ -184,13 +187,20 @@ def _owned(config_path: Path, *, incomplete: bool = False) -> dict[str, Any]:
 
 
 def _timer_state(name: str) -> tuple[bool, bool]:
-    text = _systemctl(
-        "show", name + ".timer", "--property=UnitFileState,ActiveState", allow_failure=True
-    )
-    state = dict(line.split("=", 1) for line in text.splitlines() if "=" in line)
-    return state.get("UnitFileState") in ("enabled", "enabled-runtime"), state.get(
-        "ActiveState"
-    ) == "active"
+    text = _systemctl("show", name + ".timer", "--property=UnitFileState,ActiveState")
+    state: dict[str, str] = {}
+    for line in text.splitlines():
+        key, separator, value = line.partition("=")
+        if not separator or key in state:
+            raise ScheduleError("timer_state_unavailable")
+        state[key] = value
+    if (
+        set(state) != {"UnitFileState", "ActiveState"}
+        or state["UnitFileState"] not in ("enabled", "enabled-runtime", "disabled")
+        or state["ActiveState"] not in ("active", "inactive", "failed")
+    ):
+        raise ScheduleError("timer_state_unavailable")
+    return state["UnitFileState"] != "disabled", state["ActiveState"] == "active"
 
 
 def _timer_restore(name: str, enabled: bool, active: bool) -> None:
@@ -213,10 +223,25 @@ def install(
     without accepting modified foreign files. A failed update restores the prior
     timer state only after all prior bytes and the manager reload are restored.
     """
-    config_path = checked_path(config_path or default_config_path())
     name = _name(name)
+    config_path = checked_config_path(
+        config_path or default_config_path(),
+        unit_paths=tuple(_unit_dir() / f"{name}.{suffix}" for suffix in ("service", "timer")),
+    )
     if enable is not None and type(enable) is not bool:
         raise ScheduleError("enable_requires_boolean_or_none")
+    try:
+        authority = strict_global_recovery_state_root()
+    except ValueError:
+        raise ScheduleError("recovery_authority_unavailable") from None
+    authority = checked_path(authority).resolve(strict=False)
+    standard = checked_path(DEFAULT_RECOVERY_STATE_ROOT).resolve(strict=False)
+    roots = tuple(
+        dict.fromkeys(checked_path(root).resolve(strict=False) for root in config.recovery_roots)
+    )
+    if authority != standard and authority not in roots:
+        roots += (authority,)
+    config = replace(config, recovery_roots=roots)
     python = (python or Path(sys.executable)).absolute()
     texts = unit_text(config, config_path, python, name)
     with admission(config_path):
@@ -259,10 +284,17 @@ def install(
             for filename in texts
             if prior and os.path.lexists(_unit_dir() / filename)
         }
-        was_enabled, was_active = _timer_state(name) if prior else (False, False)
-        if prior and prior.get("state", "installed") != "installed":
-            was_enabled = prior.get("timer_enabled", False) is True
-            was_active = prior.get("timer_active", False) is True
+        if prior is None:
+            was_enabled, was_active = False, False
+        elif prior.get("state", "installed") != "installed":
+            if (
+                type(prior.get("timer_enabled")) is not bool
+                or type(prior.get("timer_active")) is not bool
+            ):
+                raise ScheduleError("timer_state_unavailable")
+            was_enabled, was_active = prior["timer_enabled"], prior["timer_active"]
+        else:
+            was_enabled, was_active = _timer_state(name)
         enabled, active_timer = (was_enabled, was_active) if enable is None else (enable, enable)
         manifest = {
             "format": "context-intelligence-local-prune-installation",

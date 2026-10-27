@@ -972,6 +972,9 @@ def test_prune_refuses_registered_real_v2_checkpoint_without_changing_cursors(
     finally:
         runner.close()
     monkeypatch.setattr("context_intelligence.prune.recovery.default_recovery_root", lambda: state)
+    monkeypatch.setattr(
+        "context_intelligence.config.DEFAULT_RECOVERY_STATE_ROOT", tmp_path / "standard-recovery"
+    )
     before = path.read_bytes()
     req = PruneRequest(tmp_path, apply=True, writers_stopped=True, min_idle=timedelta(0))
     result = prune_file(path, req, now=datetime.now(UTC))
@@ -984,3 +987,86 @@ def test_prune_refuses_registered_real_v2_checkpoint_without_changing_cursors(
     finally:
         runner.close()
     assert path.read_bytes() == before
+
+
+def test_prune_keeps_current_cli_default_job_with_alternate_authority(
+    tmp_path: Path,
+    configured_roots: None,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    import hashlib
+    import sqlite3
+    from contextlib import closing
+    from datetime import UTC, datetime, timedelta
+
+    from context_intelligence import config
+    from context_intelligence.prune import PruneRequest, prune_file
+    from context_intelligence.prune.coordination import receipt_path
+
+    standard = tmp_path / ".local/state/context-intelligence/recovery"
+    alternate = tmp_path / "alternate-authority"
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setattr(config, "DEFAULT_RECOVERY_STATE_ROOT", standard)
+    monkeypatch.setattr(config, "SETTINGS_PATH", tmp_path / ".amplifier/settings.yaml")
+    config.SETTINGS_PATH.parent.mkdir()
+    config.SETTINGS_PATH.write_text(
+        "overrides:\n  hook-context-intelligence:\n    config:\n"
+        f"      recovery_state_root: {json.dumps(str(alternate))}\n",
+        encoding="utf-8",
+    )
+    work = tmp_path / "workspace"
+    work.mkdir()
+    body = (
+        json.dumps(
+            {
+                "event": "llm:request",
+                "workspace": "project",
+                "timestamp": "2026-01-01T00:00:00Z",
+                "data": {
+                    "session_id": "session-1",
+                    "timestamp": "2026-01-01T00:00:00Z",
+                    "raw": "SYNTHETIC ONLY",
+                },
+            }
+        ).encode()
+        + b"\n"
+    )
+    root = tmp_path / "captures"
+    path = _capture(root, working_dir=str(work), body=body)
+    with pytest.raises(SystemExit) as exited:
+        cli.main(["--path", str(root), "--dry-run"])
+    assert exited.value.code == 1
+    report = json.loads(capsys.readouterr().out)
+    assert report["inventory"]["eligible"] == 1
+    assert report["delivered"] == 0 and report["pending"] is True
+    db = standard / "default/default.v2.sqlite3"
+
+    def rows():
+        with closing(sqlite3.connect(db)) as connection:
+            return (
+                list(connection.execute("SELECT * FROM artifact")),
+                list(connection.execute("SELECT * FROM cursor")),
+            )
+
+    before_rows = rows()
+    with closing(sqlite3.connect(db)) as connection:
+        assert connection.execute("SELECT artifact_id FROM artifact").fetchone() == (
+            hashlib.sha256(str(path.absolute()).encode()).hexdigest(),
+        )
+        assert connection.execute("SELECT source_sha256 FROM artifact").fetchone() == (
+            hashlib.sha256(body).hexdigest(),
+        )
+        assert connection.execute("SELECT ordinal,byte_offset,state FROM cursor").fetchone() == (
+            0,
+            0,
+            "pending",
+        )
+    lock = Path(str(db) + ".lock")
+    before = [(p.read_bytes(), p.stat().st_ino, p.stat().st_mtime_ns) for p in (db, lock)]
+    request = PruneRequest(root, apply=True, writers_stopped=True, min_idle=timedelta(0))
+    result = prune_file(path, request, now=datetime.now(UTC))
+    assert result.status == "skipped" and (result.reason or "").startswith("skipped-ledger:")
+    assert path.read_bytes() == body and not receipt_path(path).exists()
+    assert rows() == before_rows
+    assert [(p.read_bytes(), p.stat().st_ino, p.stat().st_mtime_ns) for p in (db, lock)] == before

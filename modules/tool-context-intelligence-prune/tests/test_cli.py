@@ -54,6 +54,12 @@ class Fixture(unittest.TestCase):
         )
         isolation.start()
         self.addCleanup(isolation.stop)
+        standard = patch(
+            "context_intelligence.config.DEFAULT_RECOVERY_STATE_ROOT",
+            self.root / "synthetic-standard-recovery",
+        )
+        standard.start()
+        self.addCleanup(standard.stop)
 
     def put(self, content, path=None):
         path = path or self.path

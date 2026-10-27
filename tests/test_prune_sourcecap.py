@@ -21,6 +21,9 @@ NOW = datetime(2026, 10, 1, tzinfo=timezone.utc)
 @pytest.fixture(autouse=True)
 def isolate(tmp_path, monkeypatch):
     monkeypatch.setattr(
+        "context_intelligence.config.DEFAULT_RECOVERY_STATE_ROOT", tmp_path / "standard-recovery"
+    )
+    monkeypatch.setattr(
         "context_intelligence.prune.recovery.default_recovery_root", lambda: tmp_path / "recovery"
     )
 

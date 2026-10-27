@@ -126,6 +126,8 @@ def _prune_file(
 ) -> FileResult:
     path = path.expanduser().absolute()
     now = now or datetime.now(timezone.utc)
+    # Final guard checks may fail after storage has returned a committed result.
+    result: FileResult | None = None
     try:
         # Fence new source scans before inventorying ledgers. recovery_guard also
         # checks job EX: an earlier scan can have dropped capture SH while its
@@ -145,7 +147,7 @@ def _prune_file(
             if request.inactive_only:
                 if inventory is None:
                     inventory = InactiveInventory.load(request.state_root)
-                return inventory.prune(
+                result = inventory.prune(
                     path,
                     request.policy,
                     apply=request.apply,
@@ -156,23 +158,33 @@ def _prune_file(
                     repeat_pruned=request.repeat_pruned,
                     before_commit=check_commit,
                 )
-            return _transaction(
-                path,
-                request.policy,
-                apply=request.apply,
-                backup=request.backup,
-                now=now,
-                min_idle=request.min_idle,
-                before_commit=check_commit,
-                during_scan=check_commit,
-            )
+            else:
+                result = _transaction(
+                    path,
+                    request.policy,
+                    apply=request.apply,
+                    backup=request.backup,
+                    now=now,
+                    min_idle=request.min_idle,
+                    before_commit=check_commit,
+                    during_scan=check_commit,
+                )
+        return result
     except PruneError as exc:
+        if result is not None and result.status == "pruned":
+            warning = "replacement completed, but postcommit guard cleanup failed"
+            result.reason = f"{result.reason}; {warning}" if result.reason else warning
+            return result
         reason = str(exc)
         safety_skip = reason.startswith(
             ("skipped-ledger:", "pruned-capture:", "capture-maintenance-busy:")
         )
         return FileResult(path, status="skipped" if safety_skip else "error", reason=reason)
     except OSError as exc:
+        if result is not None and result.status == "pruned":
+            warning = "replacement completed, but postcommit guard cleanup failed"
+            result.reason = f"{result.reason}; {warning}" if result.reason else warning
+            return result
         return FileResult(path, status="error", reason=str(exc))
 
 

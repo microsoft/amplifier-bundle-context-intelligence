@@ -32,6 +32,12 @@ class InactiveTests(unittest.TestCase):
         )
         isolation.start()
         self.addCleanup(isolation.stop)
+        standard = patch(
+            "context_intelligence.config.DEFAULT_RECOVERY_STATE_ROOT",
+            self.root / "synthetic-standard-recovery",
+        )
+        standard.start()
+        self.addCleanup(standard.stop)
         self.workspace = self.root / "workspace"
         self.workspace.mkdir()
         self.sid = "synthetic-session"

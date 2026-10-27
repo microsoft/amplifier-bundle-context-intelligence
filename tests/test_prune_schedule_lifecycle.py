@@ -1,6 +1,6 @@
 """Installer fault injection, not a substitute for actual systemd acceptance.
 
-Only the outgoing systemctl boundary is replaced. Real ownership manifests,
+External manager/runtime probes are replaced. Real ownership manifests,
 configuration files, unit publication, rollback and locking execute on fixtures.
 """
 
@@ -13,6 +13,7 @@ from pathlib import Path
 
 import pytest
 
+from context_intelligence import config as global_config
 from context_intelligence.prune import schedule
 from context_intelligence.prune.scheduled import ScheduleConfig, ScheduleError, read_json
 
@@ -21,6 +22,32 @@ from context_intelligence.prune.scheduled import ScheduleConfig, ScheduleError, 
 def installation(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
+    monkeypatch.setattr(global_config, "SETTINGS_PATH", tmp_path / ".amplifier/settings.yaml")
+    standard = tmp_path / ".local/state/context-intelligence/recovery"
+    monkeypatch.setattr(global_config, "DEFAULT_RECOVERY_STATE_ROOT", standard)
+    monkeypatch.setattr(schedule, "DEFAULT_RECOVERY_STATE_ROOT", standard, raising=False)
+
+    # status() probes loginctl directly, outside the _systemctl seam below.
+    # Keep every external probe inside this fixture; actual CLI imports are
+    # independently exercised in the scheduled subprocess regressions.
+    def probe(argv, **kwargs):
+        if argv[0] == "/usr/bin/loginctl":
+            assert argv[1:] == [
+                "show-user",
+                str(schedule.os.getuid()),
+                "--property=Linger",
+                "--value",
+            ]
+            return subprocess.CompletedProcess(argv, 0, "no", "")
+        assert argv == [
+            sys.executable,
+            "-m",
+            "amplifier_module_tool_context_intelligence_prune.scheduled_cli",
+            "--help",
+        ]
+        return subprocess.CompletedProcess(argv, 0, b"", b"")
+
+    monkeypatch.setattr(schedule.subprocess, "run", probe)
     config = ScheduleConfig(root=tmp_path / "projects", state_root=tmp_path / "state")
     path = tmp_path / "prune/config.json"
     state = {"enabled": False, "active": False, "calls": []}

@@ -199,6 +199,9 @@ def synthetic_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     work = home / "work"
     work.mkdir(parents=True)
     monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setattr(
+        "context_intelligence.config.DEFAULT_RECOVERY_STATE_ROOT", home / "standard-recovery"
+    )
     monkeypatch.setattr(recovery, "default_recovery_root", lambda: home / "state")
     source = home / "captures/project/sessions/synthetic/context-intelligence/events.jsonl"
     source.parent.mkdir(parents=True)

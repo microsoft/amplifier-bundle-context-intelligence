@@ -56,6 +56,32 @@ def checked_path(path: Path) -> Path:
     return path
 
 
+def checked_config_path(path: Path, *, unit_paths: tuple[Path, ...] = ()) -> Path:
+    """Keep policy, evidence, lock and selected unit files in distinct roles."""
+    path = checked_path(path)
+    managed = (
+        path,
+        *(
+            path.parent / name
+            for name in (
+                "installation.json",
+                "last-run.json",
+                "last-success.json",
+                "admission.lock",
+            )
+        ),
+        *unit_paths,
+    )
+    # Check links before canonical comparison, never normalize links to acceptance.
+    checked = tuple(checked_path(item) for item in managed)
+    canonical = tuple(item.resolve(strict=False) for item in checked)
+    for index, item in enumerate(canonical):
+        for other in canonical[:index]:
+            if item == other or item in other.parents or other in item.parents:
+                raise ScheduleError("managed_configuration_path_overlap")
+    return path
+
+
 def _unique(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
     result: dict[str, Any] = {}
     for key, value in pairs:
@@ -121,7 +147,7 @@ def admission(config_path: Path) -> Iterator[None]:
         import fcntl
     except ImportError as exc:
         raise ScheduleError("local_scheduling_requires_posix_locks") from exc
-    config_path = checked_path(config_path)
+    config_path = checked_config_path(config_path)
     config_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     lock = config_path.parent / "admission.lock"
     fd = os.open(lock, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK, 0o600)
@@ -245,7 +271,7 @@ def run_scheduled(
     is independently authorized and rechecks every capture from current state.
     """
     try:
-        config_path = checked_path(config_path)
+        config_path = checked_config_path(config_path)
         with admission(config_path):
             config = ScheduleConfig.load(config_path)
             installation = config_path.parent / "installation.json"
