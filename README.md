@@ -619,10 +619,50 @@ failures (the transport errors above, plus `validation_error` and `uri_error`) c
 pre-resolution failures (an unknown `source=` name, `ambiguous_source_selection`,
 `configuration_error`) do not, since no endpoint was chosen.
 
-**Read timeout.** Configurable via `request_timeout` in the tool's config, or the env var
-`AMPLIFIER_CONTEXT_INTELLIGENCE_QUERY_TIMEOUT` — default **30s**. A non-positive value
-clamps up to a **0.1s floor** rather than disabling the timeout. This is distinct from the
-hook's `dispatch_*` timeouts in the config table above, which govern the write/upload path.
+**Graph-query HTTP timeout.** `graph_query` falls back to **120 seconds**; blob,
+identity, and upload defaults remain **30 seconds**. Precedence for a graph call:
+top-level per-call `request_timeout` → tool config `request_timeout` → coordinator
+config `request_timeout` → `AMPLIFIER_CONTEXT_INTELLIGENCE_QUERY_TIMEOUT` → 120.
+The shared operator setting also applies to blob/identity reads, with their 30-second
+fallback; it does not change the hook's separate write-side `dispatch_*` timeouts.
+
+Operator config/env retains coercion: numeric strings are accepted; finite values
+below 0.1 seconds (including zero/negative) clamp to 0.1. Absent settings proceed
+down the precedence chain. At the selected tier, an unparseable or non-finite
+value falls back to the operation default, not a lower-precedence setting.
+In contrast, an explicit **per-call** value must be a positive finite JSON number:
+strings, booleans, null, zero, negatives, and non-finite values return
+`validation_error` without sending the query. A valid call override is not clamped
+to 0.1 and does not persist. Put it at the top level, **not inside `params`**:
+
+```json
+{
+  "query": "MATCH (s:Session {workspace: $workspace})\nRETURN s.node_id AS session_id ORDER BY session_id LIMIT 25",
+  "workspace": "demo-workspace",
+  "params": {},
+  "request_timeout": 2.0
+}
+```
+
+That short budget is illustrative, not a retry recommendation. This is an **HTTP
+operation/phase timeout**, not a database execution or total-query deadline.
+Authentication and gateways have independent budgets; database work may continue
+after the client times out. The tool neither rewrites nor automatically retries queries.
+
+On `error.type=timeout`, `error.request_timeout` reports the **effective value for
+that call** and `error.retry_hint` explains the safe next steps; both also appear
+in the agent-visible message. Inspect explicit workspace predicates, selective
+anchors, projections, bounded paths, and pagination first. `LIMIT` bounds output,
+not scans, joins, procedures, or aggregation work; counts are not necessarily cheap.
+Only if an intentionally complex query still warrants more time and retrying is safe,
+make **at most one deliberate retry**, preserving query intent, source, workspace,
+and parameters, with an explicit finite timeout **larger than the reported value**.
+There is no universally sufficient retry value and no obligation to retry.
+
+A timeout alone does not mean the server is down. Empty successful rows are scoped
+data, not an outage; auth/HTTP/connection/decode errors require their own diagnosis,
+not blind timeout escalation. If necessary, use local fallback only for the affected
+query. See the graph-query skill for typed, tied-key pagination and its consistency limits.
 
 #### Graph-query skill — vendored statically (no configuration)
 

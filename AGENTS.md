@@ -146,6 +146,12 @@ So authoring these skills is **evidence-based, live-first — never from memory 
   edit that has not been shown to change what runs — *correctly* — is **not done**. Capture the
   before/after: the wrong query over-counts / 500s; the shipped one returns the verified figure.
 
+Validate pagination against stored property and serialized cursor types: native
+zoned datetimes need `datetime($after_started_at)` in both cursor comparisons,
+with a unique-ID tie-break and scoped oracles. Timeout evidence must name the
+source and effective `error.request_timeout`; a client timeout neither proves
+server-down nor cancels prior database work.
+
 The bar, from this repo's own history: the cost/token aggregation patterns were proven three ways
 (aggregate == independent reduce == hand-summed subset) on a live graph, **and** re-run on a DTU
 with a negative control, **before** a single line was written into the skill. Ship queries you have

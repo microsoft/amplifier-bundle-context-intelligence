@@ -36,11 +36,10 @@ metadata:
 
 ## When the graph server is not configured
 
-If the context-intelligence server is unavailable or not configured for this
-session, graph-based analysis cannot proceed here. Delegate immediately to
-`session-navigator` for all session analysis, event lookup, and delegation
-tree tracing — do not attempt Cypher queries against a server that isn't
-reachable.
+If no context-intelligence server is configured, delegate local session lookups
+to `session-navigator`; do not issue Cypher to an absent endpoint. A query timeout
+alone does not prove the server unavailable. Diagnose the affected query using
+the failure guidance below rather than abandoning unrelated graph work.
 
 ---
 
@@ -61,25 +60,31 @@ scoping levers, the traps, the cross-layer joins, and the verified patterns.
 
 ## Section 1 — Introspect the Live Schema First
 
-Before writing analytical Cypher against an unfamiliar area of the graph, ask the
-server what it actually contains. These calls are cheap and always current.
+Before analytical Cypher in an unfamiliar area, inspect the needed live shape.
+Schema procedures and counts are **not guaranteed cheap**: output limits do not
+bound their scans. Start with a scoped sample on a known label when it suffices:
 
 ```cypher
-CALL db.labels()                          // every node label present
-CALL db.relationshipTypes()               // every edge type present
-CALL db.schema.nodeTypeProperties()       // property names + types per label
-CALL db.schema.visualization()            // label/edge connectivity overview
+MATCH (s:Session {workspace: $workspace})
+WITH s ORDER BY s.node_id LIMIT $sample_size
+UNWIND keys(s) AS property RETURN DISTINCT property ORDER BY property LIMIT 25
 ```
 
-To learn the real properties on a specific label (names AND which are populated),
-sample a few live nodes rather than trusting any documented list:
+Use a positive integer `sample_size` (e.g. 2). This is **incomplete sampling**:
+rare properties outside the sample are missed, and selecting/sorting the sample
+can itself require substantial work. Do not treat missing keys as absent schema.
+For an intentional, potentially expensive whole-graph property census:
 
 ```cypher
-MATCH (n:ToolCall) WITH n LIMIT 25
-UNWIND keys(n) AS k
-RETURN k AS property, count(*) AS present_on_n_nodes
-ORDER BY present_on_n_nodes DESC
+CALL db.schema.nodeTypeProperties() YIELD nodeLabels, propertyName
+WHERE 'Session' IN nodeLabels
+RETURN DISTINCT propertyName AS property ORDER BY property LIMIT 25
 ```
+
+`nodeType` describes a **full multi-label combination**, not a singleton label;
+use `nodeLabels` membership for an intentional label census. The procedure may
+scan all nodes/properties before emitting rows, is not workspace-scoped, and
+`LIMIT 25` only truncates its output (possibly an incomplete catalog).
 
 **The three-layer shape (stable orientation, not a dictionary):**
 
@@ -97,8 +102,8 @@ ORDER BY present_on_n_nodes DESC
 
 All layers coexist in one graph, bridged by **`SOURCED_FROM`** edges: every layer-2
 entity points back to the layer-1 event(s) that produced it (Section 4). Use
-`db.schema.nodeTypeProperties()` to confirm exact property names before you rely on
-them — the sections below cover only the meaning the server cannot self-describe.
+scoped samples or an intentional schema census to check names before relying on
+them — the sections below cover meaning the server cannot self-describe.
 
 ### Reading results & citing the source (required)
 
@@ -121,6 +126,24 @@ returns the connectable set (`{"connectable_set": [{name, url, origin}, ...]}`)
 without running a query. To target a specific endpoint (a configured read source
 OR a hook upload destination), pass `source: "<name>"`.
 
+### Timeouts are query outcomes, not server-down verdicts
+
+Graph calls fall back to 120 seconds; blob/identity/upload defaults stay 30.
+Top-level `request_timeout` overrides the HTTP operation/phase budget for one call
+only: a positive finite JSON number, never a value inside `params`. The timeout
+error reports effective `error.request_timeout` and `retry_hint`, also in the
+agent-visible message. This is not a database or total-query deadline; auth and
+gateway budgets are independent and prior database work may continue.
+
+Inspect scope, selective anchors, projections, bounded paths, and pagination
+first. Only when an intentionally complex query justifies more time and retrying
+is safe, make **at most one deliberate retry**, preserving intent, source,
+workspace, and params, with an explicit finite timeout **larger than the reported
+value**. Never blindly double or auto-loop; no retry is mandatory. Empty successful
+rows mean no matching data in that scope. Connection/config/auth/HTTP/decode errors
+need their own diagnosis, not timeout escalation. If needed, delegate only the
+affected query's local fallback to `session-navigator`.
+
 ---
 
 ## Section 2 — Scoping (Mandatory, and Not Self-Describing)
@@ -130,18 +153,16 @@ cannot tell you how its client scopes. Get this right first.
 
 ### The `workspace` tool argument — NOT a Cypher param
 
-**The `graph_query` tool reads a top-level `workspace` argument.** It injects that
-value as `$workspace` into your Cypher. Do **not** try to set the workspace through
-`params: {"workspace": ...}` — the tool does not read the workspace from `params`, and
-a mis-set workspace silently scopes to a tiny `"default"` decoy partition instead of
-the real one. If your counts look implausibly small (a handful of sessions where you
-expected hundreds), you are almost certainly scoped to the decoy.
+**The tool binds a value; it does not rewrite Cypher or insert predicates.** Set
+top-level `workspace` deliberately or omit it for the configured workspace.
+A specific non-`"*"` workspace overrides `params.workspace`. With `"*"`, no
+workspace parameter override occurs; your supplied parameter, if any, passes
+through unchanged. Write the filtering predicate yourself. Small/empty results
+are not evidence of a particular "decoy" partition; verify source, scope, and data.
 
 ```cypher
-// Correct: reference $workspace; set the workspace via the tool's top-level
-// `workspace` argument, not via params.
 MATCH (s:Session {workspace: $workspace})
-RETURN count(s) AS session_count
+RETURN s.node_id AS session_id LIMIT 1
 ```
 
 ### The two real scoping levers
@@ -157,25 +178,15 @@ Both live as first-class properties on nodes — confirm them by sampling:
   `workspace` slugs (`myproject`, `proj`, `multi`). Treat `workspace` as the reliable scoping
   slug; treat `working_dir` as a **payload field, ~0% queryable in-graph (0 of 4,504 / 0 of
   9,086 sessions — not a lifted Session property)** with no canonical per-session source — read
-  it via the APOC parse in Section 8, but do **not** scope by it. The `/cypher` request's own
-  `workspace` scope is a second, orthogonal server-side filter layered on top.
+  it via the APOC parse in Section 8, but do **not** scope by it. The `/cypher`
+  request's workspace binds a parameter, **not** an additional server-side filter.
 
-**Always anchor scope on the first `MATCH`** so the workspace index is used:
-
-```cypher
-// CORRECT — workspace on the anchor node
-MATCH (s:Session {workspace: $workspace, node_id: $session_id})
-      -[:HAS_EXECUTION]->(run:OrchestratorRun)
-RETURN run.orchestrator_name, run.started_at
-
-// INCORRECT — workspace on a downstream node misses the index
-MATCH (s:Session {node_id: $session_id})
-      -[:HAS_EXECUTION]->(run:OrchestratorRun {workspace: $workspace})
-RETURN run.orchestrator_name, run.started_at
-```
+Anchor explicit workspace and selective session/ID predicates before traversal.
+This expresses the intended population, but does not guarantee an index exists
+or that the planner will use it. Verify the actual plan when cost matters.
 
 To discover which workspaces exist before scoping, aggregate across all of them
-(use sparingly — it skips the partition index):
+(use sparingly — this is an intentional cross-workspace census, not a cheap probe):
 
 ```cypher
 MATCH (s:Session)
@@ -759,19 +770,81 @@ LIMIT 50
 
 ### Size discipline (the cardinal rule)
 
-The graph can hold thousands of sessions. **Every traversal query MUST have a `LIMIT`.**
-Work as a funnel:
+Anchor scope and selective session/ID predicates before traversal; bound paths
+(e.g. `*1..3`), project only needed fields, and usually return at most 25 rows.
+No mandatory count-before-fetch: counts, joins, sorts, aggregation, and schema
+procedures can be expensive even with tiny output. `LIMIT` bounds returned rows,
+**not database work**. Neither the tool nor the server automatically rewrites,
+splits, or pages your query.
 
-1. **Count first.** `RETURN count(...)` costs almost nothing — run it before any wide
-   query over an unknown population.
-2. **Anchor on a session** (`node_id: $session_id` or `WHERE s.node_id IN [...]`)
-   before traversing; an un-anchored `MATCH (s:Session {workspace: $workspace})` spans
-   every session and multiplies rows.
-3. **Filter and aggregate in Cypher**, not in the client — every unneeded row is wasted
-   context.
-4. **Bound variable-length paths** (`*1..3`), never bare `*`.
-5. **Paginate** with `ORDER BY <stable key> SKIP n LIMIT m` when you genuinely need more
-   than one page.
+**Keyset pagination:** require stable, comparable timestamps and a unique non-null
+ID within scope, giving a total order. For a verified native **zoned datetime**
+property and a JSON ISO timestamp cursor, use `datetime($after_started_at)` in
+**both** comparisons below. Do not compare native datetimes directly to JSON
+strings or apply this conversion blindly to unknown/string-valued properties.
+Use a positive integer `page_size` (typically 25; the tied-key illustration uses 2).
+
+First page — omit the **entire** cursor condition:
+
+```cypher
+MATCH (s:Session {workspace: $workspace})
+WHERE s.started_at IS NOT NULL AND s.node_id IS NOT NULL
+RETURN s.node_id AS session_id, s.started_at AS started_at
+ORDER BY started_at ASC, session_id ASC
+LIMIT $page_size
+```
+
+Next page — use the last row's `started_at` and `session_id` as
+`after_started_at` and `after_node_id` in `params`:
+
+```cypher
+MATCH (s:Session {workspace: $workspace})
+WHERE s.started_at IS NOT NULL AND s.node_id IS NOT NULL
+AND (s.started_at > datetime($after_started_at) OR (s.started_at = datetime($after_started_at) AND s.node_id > $after_node_id))
+RETURN s.node_id AS session_id, s.started_at AS started_at
+ORDER BY started_at ASC, session_id ASC
+LIMIT $page_size
+```
+
+```json
+{"after_node_id": "b", "after_started_at": "2026-01-01T00:00:00.000000000+00:00", "page_size": 2}
+```
+
+With a/b/c tied at the first second, d/e at the next, and f at the next,
+these pages are `[a,b]`, `[c,d]`, `[e,f]`, `[]`; timestamp-only paging loses c.
+Null timestamps are excluded (g in this illustration). To include them, use a
+verified unique non-null comparable **ID-only** order instead:
+
+```cypher
+MATCH (s:Session {workspace: $workspace})
+WHERE s.node_id IS NOT NULL
+RETURN s.node_id AS session_id ORDER BY session_id ASC LIMIT $page_size
+```
+
+```cypher
+MATCH (s:Session {workspace: $workspace})
+WHERE s.node_id IS NOT NULL AND s.node_id > $after_node_id
+RETURN s.node_id AS session_id ORDER BY session_id ASC LIMIT $page_size
+```
+
+With `page_size=2`, last-row cursors b/d/f/g give `[a,b]`, `[c,d]`, `[e,f]`,
+`[g]`, `[]`. Keep source, workspace, filters, order, and types consistent across
+pages. Calls are **not snapshots**: mutations, backfill, or changing membership/
+order can cause omissions or duplicates. Stop on empty/short pages or when enough
+evidence answers the question; label partial evidence instead of implying completeness.
+
+`SKIP` is only an alternative for small, stable, totally ordered sets:
+
+```cypher
+MATCH (s:Session {workspace: $workspace})
+WHERE s.started_at IS NOT NULL AND s.node_id IS NOT NULL
+RETURN s.node_id AS session_id, s.started_at AS started_at
+ORDER BY started_at ASC, session_id ASC
+SKIP $offset LIMIT $page_size
+```
+
+Offsets 0/2/4/6 with `page_size=2` give the same timestamp pages in the static
+illustration. This is not a scale or work-budget guarantee.
 
 ---
 

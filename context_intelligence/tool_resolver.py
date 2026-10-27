@@ -48,9 +48,12 @@ log = logging.getLogger(__name__)
 _TRUE_TOKENS = frozenset({"true", "1", "yes", "on"})
 _FALSE_TOKENS = frozenset({"false", "0", "no", "off"})
 
-#: Default per-request HTTP timeout (seconds) for the read/query path -- matches
+#: Default per-request HTTP timeout (seconds) for shared read operations -- matches
 #: the sync helpers' existing ``timeout=30`` (client.py _http_post/_http_get).
 _DEFAULT_REQUEST_TIMEOUT = 30.0
+
+#: Graph-query-only HTTP operation timeout fallback (seconds), not a query deadline.
+_DEFAULT_QUERY_REQUEST_TIMEOUT = 120.0
 
 
 def _coerce_positive_float(value: Any, *, default: float, minimum: float) -> float:
@@ -529,23 +532,20 @@ class ToolConfigResolver:
             self._workspace = str(raw)
         return self._workspace
 
-    @property
-    def request_timeout(self) -> float:
-        """Per-request HTTP timeout (seconds) for the read/query path.
+    def _resolve_request_timeout(self, *, default: float) -> float:
+        """Resolve an HTTP operation timeout with an operation-specific fallback.
 
         Resolution: config['request_timeout'] -> coordinator.config -> env
-        (``AMPLIFIER_CONTEXT_INTELLIGENCE_QUERY_TIMEOUT``) -> default 30.0.
+        (``AMPLIFIER_CONTEXT_INTELLIGENCE_QUERY_TIMEOUT``) -> *default*.
 
         Coercion (never raises -- see ``_coerce_positive_float``), and note the
         two distinct fallbacks, which are deliberate:
         - Missing / unparseable / non-finite (None, "", "abc", inf, nan) -> the
-          30.0s DEFAULT.
-        - A parseable but non-positive value (0, negative) -> CLAMPED UP to the
-          0.1s floor (``minimum=0.1``), NOT the 30.0s default. So configuring
-          ``request_timeout: 0`` yields 0.1s, not 30s -- a deliberate, documented
-          behavior (a positive number the operator wrote is honored as "as small
-          as allowed" rather than silently reset to the default), and the 0.1s
-          floor still prevents a zero/negative timeout from disabling the guard.
+          operation's DEFAULT, not a lower-precedence configured value.
+        - A parseable value below 0.1 -> CLAMPED UP to the 0.1s floor
+          (``minimum=0.1``), NOT the default. So configuring
+          ``request_timeout: 0`` yields 0.1s. The floor prevents a zero/negative
+          timeout from disabling the guard.
 
         Not cached: cheap to compute and mirrors the other scalar properties
         reading fresh each access except workspace (which caches by design).
@@ -557,7 +557,20 @@ class ToolConfigResolver:
         )
         if raw is None:
             raw = _env("QUERY_TIMEOUT")
-        return _coerce_positive_float(raw, default=_DEFAULT_REQUEST_TIMEOUT, minimum=0.1)
+        return _coerce_positive_float(raw, default=default, minimum=0.1)
+
+    @property
+    def request_timeout(self) -> float:
+        """Shared HTTP operation timeout (seconds), falling back to 30.0."""
+        return self._resolve_request_timeout(default=_DEFAULT_REQUEST_TIMEOUT)
+
+    @property
+    def query_request_timeout(self) -> float:
+        """Graph-query HTTP operation timeout (seconds), falling back to 120.0.
+
+        This is not a database execution or total query deadline.
+        """
+        return self._resolve_request_timeout(default=_DEFAULT_QUERY_REQUEST_TIMEOUT)
 
     # ------------------------------------------------------------------
     # Read-config mapping (the new explicit read-config model)
