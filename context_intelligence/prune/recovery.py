@@ -19,9 +19,12 @@ from .coordination import PruneError
 
 
 def default_recovery_root() -> Path:
-    from context_intelligence.config import global_recovery_state_root
+    from context_intelligence.config import strict_global_recovery_state_root
 
-    return global_recovery_state_root()
+    try:
+        return strict_global_recovery_state_root()
+    except ValueError:
+        raise PruneError("recovery-state-unknown: invalid authority configuration") from None
 
 
 _REGISTRY = "recovery-source-enrollments.sqlite3"
@@ -186,25 +189,33 @@ def recovery_guard(
 ) -> Iterator[Callable[[], None]]:
     import fcntl
 
+    from context_intelligence.config import DEFAULT_RECOVERY_STATE_ROOT
+
     with ExitStack():
         ledgers: set[Path] = set()
-        seen: set[Path] = set()
+        roots: dict[Path, tuple[Path, bool]] = {}
         checked_identities: list[tuple[Path, tuple[int, int]]] = []
 
         def walk_error(error: OSError) -> None:
             raise PruneError("recovery-state-unreadable: cannot establish exclusion") from error
 
-        for index, root in enumerate((default_recovery_root(), *additional_roots)):
+        candidates = (
+            (DEFAULT_RECOVERY_STATE_ROOT, False),
+            (default_recovery_root(), False),
+            *((root, True) for root in additional_roots),
+        )
+        for root, required in candidates:
             root = root.expanduser().absolute()
             if ".." in root.parts or ".." in source.parts:
                 raise PruneError("recovery-state-unsafe: ambiguous path spelling")
-            if root in seen:
-                continue
-            seen.add(root)
             if any(parent.is_symlink() for parent in (root, *root.parents)):
                 raise PruneError("recovery-state-unsafe: linked state directory")
+            canonical = root.resolve(strict=False)
+            previous = roots.get(canonical)
+            roots[canonical] = (root, required or (previous is not None and previous[1]))
+        for root, required in roots.values():
             if not root.exists():
-                if index:
+                if required:
                     raise PruneError("recovery-state-missing: explicit root does not exist")
                 continue
             if not root.is_dir():

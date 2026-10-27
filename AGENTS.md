@@ -161,6 +161,12 @@ This bundle ships **layered, composable behaviours** — `context-intelligence-n
 carries its own leading no-server guidance block — there is **no runtime skill fetching, syncing,
 or configuration knob**. See the README.
 
+Destructive retention uses `config.strict_global_recovery_state_root()`, not the
+forgiving settings readers. `prune.recovery.recovery_guard()` combines that
+authority with standard CLI state and explicit roots; `prune.operations.prune_file()`
+owns the mandatory guards for every caller. See the README's pruning and scheduling
+sections for the refusal and installed-policy contracts.
+
 ## Seam Awareness
 
 This bundle has **seams** — integration boundaries where one module's wiring touches the rest of

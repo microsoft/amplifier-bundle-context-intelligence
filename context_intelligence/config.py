@@ -17,6 +17,8 @@ from __future__ import annotations
 import logging
 import os
 import re
+import stat
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
@@ -239,6 +241,72 @@ def global_recovery_state_root(settings_path: Path | None = None) -> Path:
     """Resolve the global recovery enrollment authority, never project overrides."""
     path = SETTINGS_PATH if settings_path is None else settings_path
     return canonicalize_recovery_state_root(read_hook_config_block(path).get("recovery_state_root"))
+
+
+def strict_global_recovery_state_root(settings_path: Path | None = None) -> Path:
+    """Resolve destructive recovery authority, refusing unknown configuration.
+
+    Missing or unconfigured settings use the shipped default. Existing settings
+    require safe YAML parsing and a fully resolved absolute string path.
+
+    Raises:
+        ValueError: With fixed ``recovery_authority_unavailable`` text, without
+            exposing settings, environment values or parser diagnostics.
+    """
+    try:
+        path = Path(SETTINGS_PATH if settings_path is None else settings_path).expanduser()
+        try:
+            info = path.stat()
+        except FileNotFoundError:
+            try:
+                path.lstat()
+            except FileNotFoundError:
+                return DEFAULT_RECOVERY_STATE_ROOT
+            raise ValueError  # A dangling settings link is not unconfigured.
+        if not stat.S_ISREG(info.st_mode):
+            raise ValueError
+        # A read failure (including disappearance after stat) is not absence.
+        text = path.read_text(encoding="utf-8")
+        import yaml
+
+        block = yaml.safe_load(text)
+        if block is None:
+            node = yaml.compose(text)
+            if node is None or (
+                isinstance(node, yaml.ScalarNode)
+                and node.tag == "tag:yaml.org,2002:null"
+                and node.value == ""
+            ):
+                return DEFAULT_RECOVERY_STATE_ROOT
+        for key in ("overrides", _HOOK_OVERRIDE_KEY, "config"):
+            if not isinstance(block, Mapping):
+                raise ValueError
+            if key not in block:
+                return DEFAULT_RECOVERY_STATE_ROOT
+            block = block[key]
+        if not isinstance(block, Mapping):
+            raise ValueError
+        raw = block.get("recovery_state_root")
+        if raw is None or (isinstance(raw, str) and not raw.strip()):
+            return DEFAULT_RECOVERY_STATE_ROOT
+        if not isinstance(raw, str):
+            raise ValueError
+
+        def replace(match: re.Match[str]) -> str:
+            value = os.environ.get(match.group(1), match.group(2) or "")
+            if not value.strip():
+                raise ValueError
+            return value
+
+        expanded = _PLACEHOLDER_RE.sub(replace, raw.strip())
+        if not expanded or "${" in expanded or "\0" in expanded:
+            raise ValueError
+        root = Path(expanded).expanduser()
+        if not root.is_absolute():
+            raise ValueError
+        return root
+    except Exception:
+        raise ValueError("recovery_authority_unavailable") from None
 
 
 # ---------------------------------------------------------------------------

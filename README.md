@@ -804,8 +804,11 @@ The matching Foundation execution lock stays held through replacement.
 All acquisitions are nonblocking, so contention releases/refuses rather than
 deadlocking. Upload holds one capture at a time through its count/read/delivery,
 not all selected captures.
-Every source registered in a standard recovery V2 ledger
-is skipped, regardless of delivery state; no byte-offset/cursor is reset.
+Recovery inventory checks both the CLI's standard
+`~/.local/state/context-intelligence/recovery` and the configured global
+`recovery_state_root`, plus explicit roots. Every source registered in a supported
+recovery V2 ledger is skipped, regardless of delivery state; no byte-offset/cursor
+is reset.
 Supply every custom state root with repeated `--recovery-state-dir PATH`.
 Unknown, busy, or unreadable state refuses pruning; absent standard state does not
 prove delivery. Stop independent uncoordinated readers/recovery processes too.
@@ -820,8 +823,12 @@ read-only; enrollment itself neither permits nor excludes pruning. Unknown, corr
 obsolete content-keyed, or unsafe authority files refuse. The adapter never constructs
 the producer's mutating registry class, reads raw capabilities, resets cursors, or
 migrates SQLite schemas. SQLite may maintain WAL shared-memory reader marks; this is
-not a promise that every `-shm` byte remains unchanged. The standard root follows the
-producer's global `recovery_state_root`; include all custom job roots explicitly.
+not a promise that every `-shm` byte remains unchanged. Malformed or unreadable
+global settings, invalid authority paths, and unavailable placeholder expansions
+refuse pruning rather than silently selecting the default. Existing settings
+require PyYAML for strict validation; its absence refuses rather than using the
+forgiving parser fallback. Absent or unconfigured settings use the standard root;
+explicit roots must exist. Include all custom job roots explicitly.
 This format compatibility does not upgrade older consumers: install coordinated
 upload/recovery clients before using the pruner alongside source-capability recovery.
 Files/ancestors must not be symlinks; this is a cooperative trusted-directory
@@ -832,6 +839,9 @@ and foreign-owned locks fail closed; there is no uncoordinated read fallback.
 
 Transactions are per-file, not per-tree. Rewrites need temporary space up to the
 rewritten file size, and memory scales with the largest event, not the whole log.
+If guard cleanup fails after replacement, the result retains its committed
+file/payload/byte counts and reports a warning with a nonzero exit code; the
+replacement is not undone.
 Preview leaves event content unchanged but can create stable lock sidecars.
 Receipts consume a small amount of space; reported bytes are source logical-byte
 reductions, not measured filesystem reclamation. Backups retain original raw data
@@ -885,7 +895,9 @@ system software.
 
 The default configuration is
 `~/.config/context-intelligence/local-prune/config.json`. `--config PATH` selects
-another installation directory; `--name context-intelligence-local-prune-test`
+another policy path; it must not overlap the installation manifest, run/success
+reports, admission lock, or selected service/timer files (including path aliases
+and ancestor/descendant overlaps). `--name context-intelligence-local-prune-test`
 selects distinct test units. Configurable parameters include the daily `--at`
 time, root, ownership state root, repeated custom recovery roots, payload age,
 minimum inactivity, mtime guard, maximum runtime, and preview-only mode. Options
@@ -893,10 +905,19 @@ are validated before publication. Management and execution share a stable,
 nonblocking admission lock. A busy run is reported as `skipped_busy`; management
 refuses rather than stopping a transaction. Foreign or modified unit files are
 not overwritten. Reconfiguration preserves the timer's prior enabled/active state
-unless `--enable` or `--disable` is explicit. Interrupted installation/removal
+unless `--enable` or `--disable` is explicit. A failed or unknown prior timer-state
+query refuses the update without changing prior files or timer state, even with
+an explicit enable/disable choice. Interrupted installation/removal
 retains an ownership manifest so missing files can be repaired without accepting
 modified surviving units; ordinary update failure restores the prior files and
 timer state.
+
+Installation saves any distinct resolved configured recovery authority as a
+required recovery root; reinstalling refreshes that saved policy. Pruning still
+checks current global settings as well as the saved root. An unavailable
+`${VAR:}` expansion refuses headless pruning with a nonzero exit even with a saved
+root; use a literal authority or a usable nonempty default for reproducible
+resolution. If current settings resolve elsewhere, both locations remain checked.
 
 **This is conditional retention, not a seven-day cap on every log.** The job
 removes direct request `data.raw` older than `older_than` only from otherwise

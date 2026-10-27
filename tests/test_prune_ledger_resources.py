@@ -104,9 +104,11 @@ def _resource_child(home: Path, case: str) -> None:
     # SQLite handles or an already-imported config with the operator's HOME.
     from context_intelligence.prune import prune_file
     from context_intelligence.prune import recovery
+    from context_intelligence.config import DEFAULT_RECOVERY_STATE_ROOT
     from context_intelligence.prune.coordination import capture_lock, receipt_path
 
     assert Path.home() == home
+    assert DEFAULT_RECOVERY_STATE_ROOT == home / ".local/state/context-intelligence/recovery"
     assert Path(recovery.__file__).resolve() == REPO / "context_intelligence/prune/recovery.py"
     state = home / "recovery"
     ledgers = sorted(state.glob("*.v2.sqlite3"))
@@ -133,6 +135,10 @@ def _resource_child(home: Path, case: str) -> None:
         baseline = _fd_count()
         after: list[int] = []
         with (
+            patch(
+                "context_intelligence.config.DEFAULT_RECOVERY_STATE_ROOT",
+                home / "synthetic-standard-recovery",
+            ),
             patch.object(recovery, "default_recovery_root", lambda: state),
             patch.object(recovery, "_exclude_registered", observe),
         ):
@@ -222,6 +228,9 @@ def test_released_ledger_identity_is_still_checked_before_receipt(
     from context_intelligence.prune.coordination import receipt_path
 
     monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setattr(
+        "context_intelligence.config.DEFAULT_RECOVERY_STATE_ROOT", tmp_path / "standard-recovery"
+    )
     monkeypatch.setattr(recovery, "default_recovery_root", lambda: tmp_path / "recovery")
     source = tmp_path / "events.jsonl"
     source.write_bytes(BODY)
