@@ -24,6 +24,14 @@ class InactiveTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name).resolve()
+        # Scheduled API tests reuse this fixture. HOME changes alone cannot
+        # isolate recovery defaults that config.py resolved at import time.
+        isolation = patch(
+            "context_intelligence.prune.recovery.default_recovery_root",
+            return_value=self.root / "synthetic-recovery",
+        )
+        isolation.start()
+        self.addCleanup(isolation.stop)
         self.workspace = self.root / "workspace"
         self.workspace.mkdir()
         self.sid = "synthetic-session"
@@ -226,17 +234,27 @@ class InactiveTests(unittest.TestCase):
         real_stream = core._stream
         for target in (self.owner_path, self.lock):
             with self.subTest(target=target):
+                # Replacing owner.json in the first case refreshes its mtime.
+                # Keep both cases eligible so each reaches the stream callback.
+                self.age(self.owner_path)
 
-                def stream(*args):
+                def stream(*args, target=target):
                     digest = real_stream(*args)
                     replacement = target.with_name("replacement")
                     replacement.write_bytes(target.read_bytes())
                     os.replace(replacement, target)
                     return digest
 
-                with patch.object(core, "_stream", stream):
+                with patch.object(core, "_stream", wraps=stream) as streamed:
                     result = self.prune(apply=True)
+                streamed.assert_called_once()
                 self.assertEqual(result.status, "skipped")
+                expected = (
+                    "execution-lock identity changed"
+                    if target == self.lock
+                    else "session metadata/history changed"
+                )
+                self.assertIn(expected, result.reason or "")
                 self.assertEqual(self.path.read_bytes(), self.original)
                 self.assertEqual(list(self.ci.glob(".events-prune-*")), [])
                 with self.lock.open("rb") as contender:

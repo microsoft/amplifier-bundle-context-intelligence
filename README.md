@@ -794,10 +794,16 @@ disables that filter, not the stopped-writer requirement.
 
 Prune, upload, and recovery share stable, nonblocking `.maintenance.lock` sidecars.
 Contention skips/refuses rather than waits. Pruning fences the capture before
-inventorying recovery jobs, then takes existing job locks and Foundation execution.
-Recovery takes its job lock before a shared capture lock. All acquisitions are
-nonblocking, so contention releases/refuses rather than deadlocking. Upload holds
-one capture at a time through its count/read/delivery, not all selected captures.
+inventorying recovery jobs, then checks one existing job lock and SQLite ledger
+at a time. Each ledger connection closes before its job lock is released; checked
+file identities remain subject to rechecks through commit. Recovery holds its
+job lock through publication or discard of staged scan results, so a scan that
+preceded the capture fence still causes pruning to refuse. Later scans cannot
+acquire the shared capture lock while pruning holds its exclusive fence.
+The matching Foundation execution lock stays held through replacement.
+All acquisitions are nonblocking, so contention releases/refuses rather than
+deadlocking. Upload holds one capture at a time through its count/read/delivery,
+not all selected captures.
 Every source registered in a standard recovery V2 ledger
 is skipped, regardless of delivery state; no byte-offset/cursor is reset.
 Supply every custom state root with repeated `--recovery-state-dir PATH`.

@@ -84,9 +84,11 @@ def main(
         summary.add(result)
         if json_output:
             click.echo(json.dumps(result_dict(result)))
-        elif result.status != "unchanged":
+        elif result.status != "unchanged" or result.missing_timestamps:
             click.echo(
-                f"{result.status}: {result.path} | {result.payloads} payloads | {result.bytes_saved:,} bytes | {result.reason or ''}"
+                f"{result.status}: {result.path} | {result.payloads} payloads | "
+                f"{result.bytes_saved:,} bytes | {result.missing_timestamps} kept undated | "
+                f"{result.reason or ''}"
             )
     if json_output:
         click.echo(
@@ -95,6 +97,9 @@ def main(
     else:
         click.echo(
             f"{summary.payloads:,} payloads; {summary.bytes_saved:,} bytes; "
-            f"{summary.changed_files} changed; {summary.skipped_files} skipped; {summary.errors} errors"
+            f"{summary.changed_files} changed; {summary.skipped_files} skipped; "
+            f"{summary.errors} errors; {summary.kept_undated} kept undated"
         )
+        if summary.kept_undated:
+            click.echo("Undated payloads kept: missing or ambiguous timestamps (exit status 1).")
     raise click.exceptions.Exit(summary.exit_code)

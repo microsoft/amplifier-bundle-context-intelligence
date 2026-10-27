@@ -112,11 +112,24 @@ def result_dict(result: FileResult) -> dict[str, Any]:
 
 def prune_file(path: Path, request: PruneRequest, *, now: datetime | None = None) -> FileResult:
     """Apply the same mandatory guards for Python, CLI and future tool callers."""
+    # Standalone calls always discover fresh ownership paths. Only our traversal
+    # can supply a shared advisory index; it is not public pruning authority.
+    return _prune_file(path, request, now=now)
+
+
+def _prune_file(
+    path: Path,
+    request: PruneRequest,
+    *,
+    now: datetime | None = None,
+    inventory: InactiveInventory | None = None,
+) -> FileResult:
     path = path.expanduser().absolute()
     now = now or datetime.now(timezone.utc)
     try:
-        # Fence source registration before inventorying ledgers. A newly started
-        # runner cannot scan/register this capture while the exclusive lock is held.
+        # Fence new source scans before inventorying ledgers. recovery_guard also
+        # checks job EX: an earlier scan can have dropped capture SH while its
+        # registration transaction is still pending under that job lock.
         with (
             capture_lock(path, exclusive=True),
             recovery_guard(path, request.recovery_roots) as check_recovery,
@@ -130,7 +143,8 @@ def prune_file(path: Path, request: PruneRequest, *, now: datetime | None = None
             if not request.repeat_pruned:
                 assert_replayable(path)
             if request.inactive_only:
-                inventory = InactiveInventory.load(request.state_root)
+                if inventory is None:
+                    inventory = InactiveInventory.load(request.state_root)
                 return inventory.prune(
                     path,
                     request.policy,
@@ -164,10 +178,16 @@ def prune_file(path: Path, request: PruneRequest, *, now: datetime | None = None
 
 def iter_prune_tree(request: PruneRequest, *, now: datetime | None = None) -> Iterator[FileResult]:
     now = now or datetime.now(timezone.utc)
+    inventory: InactiveInventory | None = None
     try:
         for path in discover_events(request.root):
             if request.before_commit is not None:
                 request.before_commit()
-            yield prune_file(path, request, now=now)
+            if request.inactive_only and inventory is None:
+                # Index paths once, lazily: empty trees need no ownership state.
+                # Eligibility, execution locks, owner bytes and metadata are
+                # still revalidated by inventory.prune for every capture.
+                inventory = InactiveInventory.load(request.state_root)
+            yield _prune_file(path, request, now=now, inventory=inventory)
     except (PruneError, OSError) as exc:
         yield FileResult(request.root, status="error", reason=str(exc))

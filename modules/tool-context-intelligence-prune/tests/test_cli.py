@@ -106,6 +106,33 @@ class CliTests(Fixture):
         self.assertEqual(result.exit_code, 1)
         self.assertEqual(json.loads(result.output.splitlines()[-1])["kept_undated"], 1)
 
+    def test_text_reports_unchanged_file_with_only_undated_payloads(self):
+        original = encoded(event(stamp=None)) + encoded(event(stamp="invalid"))
+        self.put(original)
+        for options in ((), ("--apply", "--writers-stopped")):
+            with self.subTest(options=options):
+                result = self.run_cli("--older-than", "14d", *options)
+                self.assertEqual(result.exit_code, 1, result.output)
+                self.assertIn(f"unchanged: {self.path}", result.output)
+                self.assertIn("2 kept undated", result.output)
+                self.assertIn("missing or ambiguous timestamps", result.output)
+                self.assertIn("0 changed; 0 skipped; 0 errors; 2 kept undated", result.output)
+                self.assertEqual(self.path.read_bytes(), original)
+
+    def test_text_reports_mixed_dated_and_undated_payloads(self):
+        undated = encoded(event(stamp=None))
+        self.put(encoded(event()) + undated)
+        result = self.run_cli("--older-than", "14d", "--apply", "--writers-stopped")
+        self.assertEqual(result.exit_code, 1, result.output)
+        self.assertIn(f"pruned: {self.path}", result.output)
+        self.assertIn("1 payloads", result.output)
+        self.assertIn("1 kept undated", result.output)
+        self.assertIn("missing or ambiguous timestamps", result.output)
+        self.assertIn("1 changed; 0 skipped; 0 errors; 1 kept undated", result.output)
+        lines = self.path.read_bytes().splitlines(keepends=True)
+        self.assertNotIn("raw", json.loads(lines[0])["data"])
+        self.assertEqual(lines[1], undated)
+
     def test_bad_file_does_not_hide_other_successes(self):
         self.put(b'{"truncated"', self.root / "a" / "events.jsonl")
         good = self.put(encoded(event()), self.root / "b" / "events.jsonl")
