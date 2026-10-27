@@ -6,7 +6,8 @@ import json
 import os
 import sys
 from dataclasses import replace
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
+from importlib import import_module
 from pathlib import Path
 from unittest.mock import patch
 
@@ -181,6 +182,84 @@ def test_config_duplicates_and_unknown_values_sanitized(capture):
     assert result["exit_code"] == 1
     assert "SENTINEL" not in json.dumps(result)
     assert not (path.parent / "last-run.json").exists()
+
+
+@pytest.mark.parametrize(
+    "older_than,min_inactive,now",
+    [
+        ("1000000d", "7d", fixtures.NOW),
+        ("7d", "1000000d", fixtures.NOW),
+        ("14d", "7d", datetime(1, 1, 10, tzinfo=timezone.utc)),
+        ("7d", "14d", datetime(1, 1, 10, tzinfo=timezone.utc)),
+        ("7d", "7d", fixtures.NOW.replace(tzinfo=None)),
+    ],
+    ids=["age-overflow", "inactivity-overflow", "ancient-age", "ancient-inactivity", "naive"],
+)
+def test_duration_refusal_precedes_scan_and_preserves_prior_reports(
+    capture, older_than, min_inactive, now
+):
+    path = save_config(
+        capture, config_for(capture, older_than=older_than, min_inactive=min_inactive)
+    )
+    reports = [path.parent / name for name in ("last-run.json", "last-success.json")]
+    for report in reports:
+        atomic_json(report, {"sentinel": "PRIOR"})
+    protected = {
+        item: item.read_bytes()
+        for item in (path, capture.path, capture.owner_path, capture.metadata_path, *reports)
+    }
+    with patch(
+        "context_intelligence.prune.scheduled.iter_prune_tree",
+        side_effect=AssertionError("configuration refusal must precede capture traversal"),
+    ):
+        try:
+            result = run_scheduled(path, now=now)
+        finally:
+            assert {item: item.read_bytes() for item in protected} == protected
+            assert not receipt_path(capture.path).exists()
+    assert result == {
+        "state": "failed",
+        "exit_code": 1,
+        "error_code": "configuration_or_state_refused",
+    }
+
+
+@pytest.mark.parametrize("field", ["older_than", "min_inactive"])
+def test_saved_extreme_duration_cli_emits_one_refusal_json(capture, monkeypatch, field):
+    from click.testing import CliRunner
+
+    repo = Path(__file__).resolve().parents[1]
+    module = repo / "modules/tool-context-intelligence-prune"
+    monkeypatch.syspath_prepend(str(module))
+    cli = import_module("amplifier_module_tool_context_intelligence_prune.scheduled_cli")
+    module_path = cli.__file__
+    assert module_path is not None
+    assert Path(module_path).resolve() == (
+        module / "amplifier_module_tool_context_intelligence_prune/scheduled_cli.py"
+    )
+    assert cli.run_scheduled is run_scheduled
+    path = save_config(capture, config_for(capture, **{field: "1000000d"}))
+    marker = receipt_path(capture.path)
+    marker.write_bytes(b"SENTINEL-RECEIPT")
+    reports = [path.parent / name for name in ("last-run.json", "last-success.json")]
+    for report in reports:
+        atomic_json(report, {"sentinel": "PRIOR"})
+    protected = {item: item.read_bytes() for item in (path, capture.path, marker, *reports)}
+    with patch(
+        "context_intelligence.prune.scheduled.iter_prune_tree",
+        side_effect=AssertionError("configuration refusal must precede capture traversal"),
+    ):
+        result = CliRunner().invoke(cli.main, ["run", "--config", str(path)])
+    assert {item: item.read_bytes() for item in protected} == protected
+    assert result.exit_code == 1
+    assert isinstance(result.exception, SystemExit), result.exception
+    assert result.stderr == ""
+    assert len(result.stdout.splitlines()) == 1
+    assert json.loads(result.stdout) == {
+        "state": "failed",
+        "exit_code": 1,
+        "error_code": "configuration_or_state_refused",
+    }
 
 
 def test_busy_does_not_overwrite_last_result(capture):

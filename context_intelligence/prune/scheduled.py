@@ -288,6 +288,9 @@ def run_scheduled(
             now = now or datetime.now(timezone.utc)
             if now.utcoffset() is None:
                 raise ScheduleError("now_requires_timezone")
+            min_inactive = parse_duration(config.min_inactive)
+            # Refuse unrepresentable inactivity before publishing a report or scanning.
+            _ = now - min_inactive
             preview = config.dry_run if dry_run is None else dry_run
             if type(preview) is not bool:
                 raise ScheduleError("dry_run_requires_boolean")
@@ -301,7 +304,7 @@ def run_scheduled(
                 backup=False,
                 repeat_pruned=True,
                 min_idle=config.min_idle,
-                min_inactive=parse_duration(config.min_inactive),
+                min_inactive=min_inactive,
                 state_root=config.state_root,
                 recovery_roots=config.recovery_roots,
             )
@@ -402,5 +405,5 @@ def run_scheduled(
     except JobBusy:
         # Do not overwrite the current owner's last result on contention.
         return {"state": "skipped_busy", "exit_code": 0, "error_code": "job_or_management_busy"}
-    except (OSError, PruneError, ValueError):
+    except (OSError, PruneError, ValueError, OverflowError):
         return {"state": "failed", "exit_code": 1, "error_code": "configuration_or_state_refused"}

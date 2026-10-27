@@ -7,6 +7,7 @@ import hashlib
 import json
 import os
 import sqlite3
+import stat
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -166,15 +167,28 @@ def test_fsync_order_and_marker_durable_before_source_replace(tmp_path: Path) ->
     path = tmp_path / "events.jsonl"
     path.write_bytes(line(raw="synthetic"))
     real_sync, real_link, real_replace = os.fsync, os.link, os.replace
+    real_readlink = os.readlink
     calls: list[str] = []
 
+    def without_procfs(name: Any, *args: Any, **kwargs: Any) -> Any:
+        if os.fsdecode(name).startswith("/proc/self/fd/"):
+            raise FileNotFoundError("synthetic absent procfs")
+        return real_readlink(name, *args, **kwargs)
+
+    def identity(info: os.stat_result) -> tuple[int, int, int]:
+        return info.st_dev, info.st_ino, stat.S_IFMT(info.st_mode)
+
     def sync(fd: int) -> None:
-        name = os.readlink(f"/proc/self/fd/{fd}")
-        calls.append(
-            "directory"
-            if Path(name) == tmp_path
-            else ("receipt" if ".prune-receipt-" in name else "output")
-        )
+        info = os.fstat(fd)
+        if stat.S_ISDIR(info.st_mode):
+            candidates = [("directory", tmp_path)]
+        else:
+            assert stat.S_ISREG(info.st_mode)
+            candidates = [("output", item) for item in tmp_path.glob(".events-prune-*")]
+            candidates += [("receipt", item) for item in tmp_path.glob(".prune-receipt-*")]
+        matches = [label for label, item in candidates if identity(item.stat()) == identity(info)]
+        assert len(matches) == 1, matches
+        calls.append(matches[0])
         real_sync(fd)
 
     def link(*args: Any, **kwargs: Any) -> None:
@@ -188,11 +202,13 @@ def test_fsync_order_and_marker_durable_before_source_replace(tmp_path: Path) ->
         real_replace(*args, **kwargs)
 
     with (
+        patch.object(os, "readlink", without_procfs),
         patch.object(storage.os, "fsync", sync),
         patch.object(storage.os, "link", link),
         patch.object(storage.os, "replace", replace),
     ):
-        assert prune_file(path, request(tmp_path), now=NOW).status == "pruned"
+        result = prune_file(path, request(tmp_path), now=NOW)
+        assert result.status == "pruned", result.reason
     assert calls == [
         "output",
         "receipt",
