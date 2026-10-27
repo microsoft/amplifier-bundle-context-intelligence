@@ -859,3 +859,95 @@ class TestCountLines:
         events_file.write_text("a\nb\nc\n", encoding="utf-8")
 
         assert _count_lines(events_file) == 3
+
+
+def test_prune_receipt_refuses_read_and_http_including_missing_source(tmp_path: Path) -> None:
+    import pytest
+    from context_intelligence.prune.coordination import PrunedCapture, receipt_path
+
+    session_dir, metadata = _write_session(tmp_path, "synthetic-pruned", _make_events(2))
+    path = session_dir / "events.jsonl"
+    receipt_path(path).write_bytes(b"not even valid JSON")
+    with pytest.raises(PrunedCapture):
+        _count_lines(path)
+    for missing in (False, True):
+        if missing:
+            path.unlink()
+        with patch("httpx.Client") as client:
+            result = run_upload(
+                [(session_dir, metadata)], "http://unused", "synthetic", MagicMock()
+            )
+        assert not result.success and "pruned-capture:" in (result.error or "")
+        client.return_value.__enter__.return_value.post.assert_not_called()
+
+
+def test_shared_replay_guard_is_held_through_http_delivery(tmp_path: Path) -> None:
+    import pytest
+    from context_intelligence.prune.coordination import CaptureBusy, capture_lock
+
+    directory, metadata = _write_session(tmp_path, "synthetic-lock", _make_events(1))
+    observed = []
+
+    def post(*args, **kwargs):
+        with pytest.raises(CaptureBusy):
+            with capture_lock(directory / "events.jsonl", exclusive=True):
+                pytest.fail("pruner must not acquire lock during delivery")
+        observed.append(True)
+        return _mock_response(202)
+
+    with patch("httpx.Client") as client:
+        client.return_value.__enter__.return_value.post.side_effect = post
+        result = run_upload([(directory, metadata)], "http://unused", "synthetic", MagicMock())
+    assert result.success and observed == [True]
+
+
+def test_large_sweep_keeps_constant_capture_descriptors(tmp_path: Path) -> None:
+    import pytest
+
+    if not Path("/proc/self/fd").is_dir():
+        pytest.skip("Linux FD-limit regression")
+    sessions = [_write_session(tmp_path, f"synthetic-{i}", _make_events(1)) for i in range(140)]
+    initial_fds = len(list(Path("/proc/self/fd").iterdir()))
+    observed = []
+
+    def post(*args, **kwargs):
+        observed.append(len(list(Path("/proc/self/fd").iterdir())))
+        return _mock_response(202)
+
+    with patch("httpx.Client") as client:
+        client.return_value.__enter__.return_value.post.side_effect = post
+        result = run_upload(sessions, "http://unused", "synthetic", MagicMock())
+    assert result.success and result.events_uploaded == len(sessions)
+    assert max(observed) <= initial_fds + 5  # not one descriptor per capture
+    assert len(list(Path("/proc/self/fd").iterdir())) == initial_fds
+
+
+def test_later_guard_refusal_keeps_prior_delivery_counts_and_releases_locks(tmp_path: Path) -> None:
+    from context_intelligence.prune.coordination import capture_lock, receipt_path
+
+    first = _write_session(tmp_path, "first", _make_events(2))
+    second = _write_session(tmp_path, "marked-second", _make_events(1))
+    receipt_path(second[0] / "events.jsonl").write_bytes(b"prepared")
+    tracker = MagicMock()
+    with patch("httpx.Client") as client:
+        client.return_value.__enter__.return_value.post.return_value = _mock_response(202)
+        result = run_upload([first, second], "http://unused", "synthetic", tracker)
+    assert not result.success and result.sessions_uploaded == 1 and result.events_uploaded == 2
+    assert "pruned-capture:" in (result.error or "")
+    tracker.mark_completed.assert_not_called()
+    with capture_lock(first[0] / "events.jsonl", exclusive=True):
+        pass  # early exit must close the suspended iterator's shared guard
+
+
+def test_unwritable_capture_lock_fails_closed_without_network(tmp_path: Path) -> None:
+    import errno
+
+    directory, metadata = _write_session(tmp_path, "unwritable", _make_events(1))
+    with patch(
+        "context_intelligence.prune.coordination.os.open",
+        side_effect=OSError(errno.EROFS, "read-only"),
+    ):
+        with patch("httpx.Client") as client:
+            result = run_upload([(directory, metadata)], "http://unused", "synthetic", MagicMock())
+    assert not result.success and result.error == "cannot open capture maintenance lock"
+    client.return_value.__enter__.return_value.post.assert_not_called()

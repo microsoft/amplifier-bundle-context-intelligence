@@ -426,11 +426,13 @@ def _stream_fingerprint(path: Path, metadata: dict[str, Any]) -> tuple[int, str,
 
     if _target_is_outside_owner_home(path):
         return 0, "", "", "target-outside-owner-home"
+    from context_intelligence.prune.coordination import open_capture
+
     stream = hashlib.sha256()
     source = hashlib.sha256()
     count = 0
     try:
-        with path.open("rb") as handle:
+        with open_capture(path, binary=True) as handle:
             while True:
                 raw_line, line_error = _bounded_readline(handle)
                 if line_error == "end-of-file":
@@ -1111,6 +1113,7 @@ class RecoveryRunner:
         self._inventory_cache: dict[str, int] = {}
         self._artifact_state_cache: dict[str, str] = {}
         self._unrouted_pending = False
+        self._maintenance_busy: set[str] = set()
         self._routing_config_cache: (
             dict[str, tuple[DestinationConfig | None, str | None]] | None
         ) = None
@@ -1132,6 +1135,7 @@ class RecoveryRunner:
         """Optionally refresh the plan, then make bounded one-record target progress."""
 
         if refresh:
+            self._maintenance_busy.clear()
             self._keys_env.refresh()
             self._available_targets.clear()
             try:
@@ -1149,7 +1153,8 @@ class RecoveryRunner:
                          'eligible','accepted','filtered','not-required-by-current-policy','blocked'
                        )"""
                 ):
-                    self._route(str(row["artifact_id"]), str(row["working_dir"]))
+                    if str(row["artifact_id"]) not in self._maintenance_busy:
+                        self._route(str(row["artifact_id"]), str(row["working_dir"]))
             finally:
                 self._routing_config_cache = None
             self.checkpoint.defer_children_pending_parent()
@@ -1191,7 +1196,9 @@ class RecoveryRunner:
                 if retry_at is not None and retry_at > time.time():
                     wait = retry_at - time.time()
                     retry_after = wait if retry_after is None else min(retry_after, wait)
-        pending = bool(self._target_cache) or self._unrouted_pending
+        if self._maintenance_busy:
+            retry_after = 1.0 if retry_after is None else min(retry_after, 1.0)
+        pending = bool(self._target_cache) or self._unrouted_pending or bool(self._maintenance_busy)
         return RecoverySummary(
             self._inventory_cache,
             delivered,
@@ -1201,6 +1208,35 @@ class RecoveryRunner:
         )
 
     def _scan_artifact(self, path: Path) -> None:
+        from context_intelligence.prune.coordination import CaptureBusy, PruneError, replay_guard
+
+        # Preserve the existing storage boundary before opening any sidecar.
+        if _target_is_outside_owner_home(path):
+            self.checkpoint.save_artifact(
+                ArtifactFact(_artifact_id(path), path, "quarantined", "target-outside-owner-home")
+            )
+            return
+        try:
+            with replay_guard(path):
+                self._scan_unmarked_artifact(path)
+        except CaptureBusy:
+            # Contention is not a new snapshot. Never erase validated identity,
+            # reroute from an empty working_dir, or reset acknowledged offsets.
+            self._maintenance_busy.add(_artifact_id(path))
+        except (PruneError, OSError) as exc:
+            artifact_id = _artifact_id(path)
+            updated = self.checkpoint.connection.execute(
+                """UPDATE artifact SET state='quarantined',
+                   reason=CASE WHEN state='quarantined' AND reason='source-changed'
+                               THEN reason ELSE ? END WHERE artifact_id=?""",
+                (str(exc), artifact_id),
+            )
+            if not updated.rowcount:
+                self.checkpoint.save_artifact(
+                    ArtifactFact(artifact_id, path, "quarantined", str(exc))
+                )
+
+    def _scan_unmarked_artifact(self, path: Path) -> None:
         artifact_id = _artifact_id(path)
         if _target_is_outside_owner_home(path):
             self.checkpoint.save_artifact(
@@ -1439,6 +1475,29 @@ class RecoveryRunner:
     def _deliver_target(
         self, client: httpx.Client, target: str
     ) -> tuple[int, float | None, str | None]:
+        from context_intelligence.prune.coordination import CaptureBusy, PruneError, replay_guard
+
+        row = self.checkpoint.row_for_target(target)
+        if row is None:
+            return 0, None, None
+        artifact_id = str(row["artifact_id"])
+        path = Path(str(row["path"]))
+        if _target_is_outside_owner_home(path):
+            self.checkpoint.quarantine_artifact(artifact_id, "target-outside-owner-home")
+            return 0, None, artifact_id
+        try:
+            with replay_guard(path):
+                return self._deliver_unmarked_target(client, target)
+        except CaptureBusy:
+            self.checkpoint.defer_cursor(row, time.time() + 1, "capture-maintenance-busy")
+            return 0, 1, artifact_id
+        except (PruneError, OSError) as exc:
+            self.checkpoint.quarantine_artifact(artifact_id, str(exc))
+            return 0, None, artifact_id
+
+    def _deliver_unmarked_target(
+        self, client: httpx.Client, target: str
+    ) -> tuple[int, float | None, str | None]:
         row = self.checkpoint.row_for_target(target)
         if row is None:
             return 0, None, None
@@ -1573,7 +1632,7 @@ class RecoveryRunner:
             return None, 0, "source-changed"
         metadata = {"session_id": row["session_id"], "workspace": row["workspace"]}
         try:
-            descriptor = os.open(path, os.O_RDONLY)
+            descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
             with os.fdopen(descriptor, "rb") as handle:
                 if _stat_facts_from_result(os.fstat(handle.fileno())) != source_facts:
                     refresh_error = self._revalidate_changed_snapshot(row, path, metadata_path)[2]

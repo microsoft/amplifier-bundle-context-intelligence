@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
+import os
 import tracemalloc
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 
 import httpx
@@ -899,3 +903,419 @@ def test_scan_roots_deduplicate_and_reject_other_home(
     expected = [home / ".amplifier" / "projects", home / "captures"]
     explicit_paths = [home / ".amplifier" / "projects", home.parent, home / "captures"]
     assert resolve_scan_roots(config, explicit_paths) == expected
+
+
+def test_prune_receipt_blocks_new_job_before_any_network(
+    tmp_path: Path, configured_roots: None
+) -> None:
+    from context_intelligence.prune.coordination import receipt_path
+
+    path = _capture(tmp_path)
+    original = path.read_bytes()
+    receipt_path(path).write_bytes(b"prepared or invalid")
+    requests: list[httpx.Request] = []
+    runner = RecoveryRunner(state_dir=tmp_path / "state", job_id="pruned", client=_server(requests))
+    try:
+        summary = runner.run([tmp_path])
+        row = runner.checkpoint.connection.execute("SELECT * FROM artifact").fetchone()
+        assert row["state"] == "quarantined"
+        assert "pruned-capture:" in row["reason"]
+        assert summary.delivered == 0
+        assert list(runner.checkpoint.connection.execute("SELECT * FROM cursor")) == []
+    finally:
+        runner.close()
+    assert requests == [] and path.read_bytes() == original
+
+
+def _checkpoint_rows(
+    runner: RecoveryRunner,
+) -> tuple[dict[str, object], list[dict[str, object]]]:
+    connection = runner.checkpoint.connection
+    return (
+        dict(connection.execute("SELECT * FROM artifact").fetchone()),
+        [dict(row) for row in connection.execute("SELECT * FROM cursor")],
+    )
+
+
+def _seed_source_changed(runner: RecoveryRunner, root: Path, mutation: str) -> Path:
+    """Create real completed cursors with a synthetic ACK, then detect changed bytes."""
+    body = (
+        json.dumps(
+            {
+                "event": "llm:request",
+                "workspace": "project",
+                "data": {
+                    "timestamp": "2026-09-15T00:00:00Z",
+                    "session_id": "session-1",
+                    "raw": "SYNTHETIC-ORIGINAL",
+                },
+            }
+        ).encode("utf-8")
+        + b"\n"
+    )
+    path = _capture(root, body=body)
+    metadata = path.parent / "metadata.json"
+    original_metadata = metadata.read_bytes()
+    seeded = runner.run([root])
+    artifact, cursors = _checkpoint_rows(runner)
+    assert seeded.inventory == {"accepted": 1}
+    assert seeded.delivered == 1 and seeded.pending is False
+    assert artifact["source_sha256"] == hashlib.sha256(body).hexdigest()
+    assert artifact["metadata_sha256"] == hashlib.sha256(original_metadata).hexdigest()
+    assert len(cursors) == 1
+    assert (cursors[0]["state"], cursors[0]["ordinal"], cursors[0]["byte_offset"]) == (
+        "complete",
+        1,
+        len(body),
+    )
+    if mutation == "events":
+        changed = body.replace(b"SYNTHETIC-ORIGINAL", b"SYNTHETIC-MODIFIED")
+        assert changed != body and len(changed) == len(body)
+        path.write_bytes(changed)
+    else:
+        assert mutation == "metadata"
+        changed = original_metadata.replace(b"01:00:00Z", b"02:00:00Z")
+        assert changed != original_metadata and len(changed) == len(original_metadata)
+        metadata.write_bytes(changed)
+    detected = runner.run([root])
+    changed_artifact, changed_cursors = _checkpoint_rows(runner)
+    assert detected.inventory == {"quarantined": 1}
+    assert detected.delivered == 0 and detected.pending is True
+    assert changed_artifact["reason"] == "source-changed"
+    assert changed_artifact["source_sha256"] == hashlib.sha256(path.read_bytes()).hexdigest()
+    assert changed_artifact["metadata_sha256"] == hashlib.sha256(metadata.read_bytes()).hexdigest()
+    changed_column = "source_sha256" if mutation == "events" else "metadata_sha256"
+    assert changed_artifact[changed_column] != artifact[changed_column]
+    assert changed_cursors == cursors
+    return path
+
+
+@contextmanager
+def _maintenance_refusal(path: Path, refusal: str) -> Iterator[str]:
+    """Repair only this synthetic sidecar; never unlink or move the stable lock."""
+    from context_intelligence.prune.coordination import receipt_path
+
+    lock = path.with_name(path.name + ".maintenance.lock")
+    inode = lock.stat().st_ino
+    if refusal == "receipt":
+        sidecar = receipt_path(path)
+        sidecar.write_bytes(b"synthetic refusal marker; source has NOT been pruned")
+        reason = "pruned-capture: raw retention is irreversible; replay refused"
+    else:
+        assert refusal == "unsafe-lock"
+        sidecar = path.with_name(path.name + ".extra-maintenance-link")
+        os.link(lock, sidecar)
+        assert lock.stat().st_nlink == 2
+        reason = "unsafe capture maintenance lock"
+    try:
+        yield reason
+    finally:
+        sidecar.unlink()
+        assert lock.stat().st_ino == inode and lock.stat().st_nlink == 1
+
+
+def _seed_only_server(requests: list[httpx.Request]) -> httpx.Client:
+    client = _server(requests)
+
+    def reject_after_seed(request: httpx.Request) -> None:
+        if len(requests) >= 2:
+            pytest.fail(f"Unexpected request after seed: {request.method} {request.url.path}")
+
+    client.event_hooks["request"].append(reject_after_seed)
+    return client
+
+
+@pytest.mark.parametrize("mutation", ["events", "metadata"])
+@pytest.mark.parametrize("refusal", ["receipt", "unsafe-lock"])
+def test_source_changed_quarantine_survives_maintenance_refusal_and_repair(
+    tmp_path: Path,
+    configured_roots: None,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    mutation: str,
+    refusal: str,
+) -> None:
+    requests: list[httpx.Request] = []
+    root, state, job = tmp_path / "captures", tmp_path / "state", "permanent"
+    with _seed_only_server(requests) as client:
+        runner = RecoveryRunner(state_dir=state, job_id=job, client=client)
+        try:
+            path = _seed_source_changed(runner, root, mutation)
+            before = _checkpoint_rows(runner)
+            source = path.read_bytes()
+            metadata = (path.parent / "metadata.json").read_bytes()
+            with _maintenance_refusal(path, refusal):
+                refused = runner.run([root])
+                after_refusal = _checkpoint_rows(runner)
+        finally:
+            runner.close()
+
+        # Exercise the public non-dry-run CLI after reopening the same real job.
+        # The double supplies no further ACKs, including capability requests.
+        client_type = httpx.Client
+
+        def unexpected(request: httpx.Request) -> httpx.Response:
+            pytest.fail(f"Unexpected CLI request: {request.method} {request.url.path}")
+
+        monkeypatch.setattr(
+            recovery.httpx,
+            "Client",
+            lambda **_kwargs: client_type(transport=httpx.MockTransport(unexpected)),
+        )
+        with pytest.raises(SystemExit) as exited:
+            cli.main(["--path", str(root), "--state-dir", str(state), "--job-id", job, "--once"])
+        report = json.loads(capsys.readouterr().out)
+        assert exited.value.code == 1, f"Changed source falsely completed: {report}"
+        assert report["inventory"] == {"quarantined": 1}
+        assert report["delivered"] == 0 and report["pending"] is True
+        assert refused.inventory == {"quarantined": 1}
+        assert refused.delivered == 0 and refused.pending is True
+        assert after_refusal == before
+
+        reopened = RecoveryRunner(state_dir=state, job_id=job, client=client)
+        try:
+            assert _checkpoint_rows(reopened) == before
+            subsequent = reopened.run([root])
+            assert subsequent.inventory == {"quarantined": 1}
+            assert subsequent.delivered == 0 and subsequent.pending is True
+            assert _checkpoint_rows(reopened) == before
+        finally:
+            reopened.close()
+        assert path.read_bytes() == source
+        assert (path.parent / "metadata.json").read_bytes() == metadata
+        assert [(r.method, r.url.path) for r in requests] == [
+            ("GET", "/version"),
+            ("POST", "/recovery/events"),
+        ]
+        assert json.loads(requests[1].content)["data"]["raw"] == "SYNTHETIC-ORIGINAL"
+
+
+def test_busy_scan_preserves_source_changed_quarantine(
+    tmp_path: Path, configured_roots: None
+) -> None:
+    from context_intelligence.prune.coordination import capture_lock
+
+    root = tmp_path / "captures"
+    requests: list[httpx.Request] = []
+    with _seed_only_server(requests) as client:
+        runner = RecoveryRunner(
+            state_dir=tmp_path / "state", job_id="permanent-busy", client=client
+        )
+        try:
+            path = _seed_source_changed(runner, root, "events")
+            before = _checkpoint_rows(runner)
+            with capture_lock(path, exclusive=True):
+                busy = runner.run([root])
+                assert _checkpoint_rows(runner) == before
+            assert busy.inventory == {"quarantined": 1}
+            assert busy.delivered == 0 and busy.pending is True
+            assert busy.retry_after_s == 1.0
+            released = runner.run([root])
+            assert released.inventory == {"quarantined": 1}
+            assert released.delivered == 0 and released.pending is True
+            assert released.retry_after_s is None
+            assert _checkpoint_rows(runner) == before
+        finally:
+            runner.close()
+    assert len(requests) == 2
+
+
+@pytest.mark.parametrize("refusal", ["receipt", "unsafe-lock"])
+def test_maintenance_refusal_replaces_retryable_reason_and_recovers(
+    tmp_path: Path, configured_roots: None, refusal: str
+) -> None:
+    root = tmp_path / "captures"
+    path = _capture(root)
+    source = path.read_bytes()
+    metadata = path.parent / "metadata.json"
+    completed = metadata.read_bytes()
+    incomplete = json.loads(completed)
+    incomplete["status"] = "running"
+    incomplete.pop("ended_at")
+    metadata.write_text(json.dumps(incomplete), encoding="utf-8")
+    requests: list[httpx.Request] = []
+    with _server(requests) as client:
+        runner = RecoveryRunner(state_dir=tmp_path / "state", job_id="repairable", client=client)
+        try:
+            # Observe the scan's repairable diagnosis before run() derives
+            # aggregate state from the (not-yet-created) delivery cursors.
+            runner._scan_artifact(path)
+            runner.checkpoint.commit()
+            artifact, cursors = _checkpoint_rows(runner)
+            assert artifact["state"] == "deferred"
+            assert artifact["reason"] == "session-incomplete" and cursors == []
+            with _maintenance_refusal(path, refusal) as reason:
+                refused = runner.run([root])
+                artifact, cursors = _checkpoint_rows(runner)
+                assert refused.inventory == {"quarantined": 1}
+                assert refused.delivered == 0 and refused.pending is True
+                assert artifact["reason"] == reason and cursors == []
+                assert requests == []
+            metadata.write_bytes(completed)
+            repaired = runner.run([root])
+            artifact, cursors = _checkpoint_rows(runner)
+            assert repaired.inventory == {"accepted": 1}
+            assert repaired.delivered == 1 and repaired.pending is False
+            assert artifact["reason"] == ""
+            assert len(cursors) == 1
+            assert (cursors[0]["state"], cursors[0]["ordinal"], cursors[0]["byte_offset"]) == (
+                "complete",
+                1,
+                len(source),
+            )
+        finally:
+            runner.close()
+    assert path.read_bytes() == source and metadata.read_bytes() == completed
+    assert [(r.method, r.url.path) for r in requests] == [
+        ("GET", "/version"),
+        ("POST", "/recovery/events"),
+    ]
+
+
+def test_busy_scan_preserves_existing_identity_routes_and_acknowledged_offsets(
+    tmp_path: Path, configured_roots: None
+) -> None:
+    from context_intelligence.prune.coordination import capture_lock
+
+    path = _capture(tmp_path, body=_event("session-1") + _event("session-1"))
+    requests: list[httpx.Request] = []
+    runner = RecoveryRunner(state_dir=tmp_path / "state", job_id="busy", client=_server(requests))
+    try:
+        runner.run([tmp_path])
+        artifact = dict(runner.checkpoint.connection.execute("SELECT * FROM artifact").fetchone())
+        cursor = dict(runner.checkpoint.connection.execute("SELECT * FROM cursor").fetchone())
+        assert cursor["ordinal"] == 1 and cursor["byte_offset"] > 0
+        with capture_lock(path, exclusive=True):
+            summary = runner.run([tmp_path], dry_run=True)
+            assert summary.pending and summary.retry_after_s == 1
+            assert (
+                dict(runner.checkpoint.connection.execute("SELECT * FROM artifact").fetchone())
+                == artifact
+            )
+            assert (
+                dict(runner.checkpoint.connection.execute("SELECT * FROM cursor").fetchone())
+                == cursor
+            )
+        runner.run([tmp_path])
+        after = runner.checkpoint.connection.execute("SELECT * FROM cursor").fetchone()
+        assert after["ordinal"] == 2 and after["byte_offset"] > cursor["byte_offset"]
+    finally:
+        runner.close()
+
+
+def test_prune_refuses_registered_real_v2_checkpoint_without_changing_cursors(
+    tmp_path: Path, configured_roots: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from datetime import UTC, datetime, timedelta
+
+    from context_intelligence.prune import PruneRequest, prune_file
+
+    path = _capture(tmp_path)
+    state = tmp_path / "state"
+    runner = RecoveryRunner(state_dir=state, job_id="registered", client=_server([]))
+    try:
+        runner.run([tmp_path], dry_run=True)
+        cursor_before = [
+            dict(row) for row in runner.checkpoint.connection.execute("SELECT * FROM cursor")
+        ]
+    finally:
+        runner.close()
+    monkeypatch.setattr("context_intelligence.prune.recovery.default_recovery_root", lambda: state)
+    monkeypatch.setattr(
+        "context_intelligence.config.DEFAULT_RECOVERY_STATE_ROOT", tmp_path / "standard-recovery"
+    )
+    before = path.read_bytes()
+    req = PruneRequest(tmp_path, apply=True, writers_stopped=True, min_idle=timedelta(0))
+    result = prune_file(path, req, now=datetime.now(UTC))
+    assert result.status == "skipped" and "skipped-ledger:" in (result.reason or "")
+    runner = RecoveryRunner(state_dir=state, job_id="registered", client=_server([]))
+    try:
+        assert [
+            dict(row) for row in runner.checkpoint.connection.execute("SELECT * FROM cursor")
+        ] == cursor_before
+    finally:
+        runner.close()
+    assert path.read_bytes() == before
+
+
+def test_prune_keeps_current_cli_default_job_with_alternate_authority(
+    tmp_path: Path,
+    configured_roots: None,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    import hashlib
+    import sqlite3
+    from contextlib import closing
+    from datetime import UTC, datetime, timedelta
+
+    from context_intelligence import config
+    from context_intelligence.prune import PruneRequest, prune_file
+    from context_intelligence.prune.coordination import receipt_path
+
+    standard = tmp_path / ".local/state/context-intelligence/recovery"
+    alternate = tmp_path / "alternate-authority"
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setattr(config, "DEFAULT_RECOVERY_STATE_ROOT", standard)
+    monkeypatch.setattr(config, "SETTINGS_PATH", tmp_path / ".amplifier/settings.yaml")
+    config.SETTINGS_PATH.parent.mkdir()
+    config.SETTINGS_PATH.write_text(
+        "overrides:\n  hook-context-intelligence:\n    config:\n"
+        f"      recovery_state_root: {json.dumps(str(alternate))}\n",
+        encoding="utf-8",
+    )
+    work = tmp_path / "workspace"
+    work.mkdir()
+    body = (
+        json.dumps(
+            {
+                "event": "llm:request",
+                "workspace": "project",
+                "timestamp": "2026-01-01T00:00:00Z",
+                "data": {
+                    "session_id": "session-1",
+                    "timestamp": "2026-01-01T00:00:00Z",
+                    "raw": "SYNTHETIC ONLY",
+                },
+            }
+        ).encode()
+        + b"\n"
+    )
+    root = tmp_path / "captures"
+    path = _capture(root, working_dir=str(work), body=body)
+    with pytest.raises(SystemExit) as exited:
+        cli.main(["--path", str(root), "--dry-run"])
+    assert exited.value.code == 1
+    report = json.loads(capsys.readouterr().out)
+    assert report["inventory"]["eligible"] == 1
+    assert report["delivered"] == 0 and report["pending"] is True
+    db = standard / "default/default.v2.sqlite3"
+
+    def rows():
+        with closing(sqlite3.connect(db)) as connection:
+            return (
+                list(connection.execute("SELECT * FROM artifact")),
+                list(connection.execute("SELECT * FROM cursor")),
+            )
+
+    before_rows = rows()
+    with closing(sqlite3.connect(db)) as connection:
+        assert connection.execute("SELECT artifact_id FROM artifact").fetchone() == (
+            hashlib.sha256(str(path.absolute()).encode()).hexdigest(),
+        )
+        assert connection.execute("SELECT source_sha256 FROM artifact").fetchone() == (
+            hashlib.sha256(body).hexdigest(),
+        )
+        assert connection.execute("SELECT ordinal,byte_offset,state FROM cursor").fetchone() == (
+            0,
+            0,
+            "pending",
+        )
+    lock = Path(str(db) + ".lock")
+    before = [(p.read_bytes(), p.stat().st_ino, p.stat().st_mtime_ns) for p in (db, lock)]
+    request = PruneRequest(root, apply=True, writers_stopped=True, min_idle=timedelta(0))
+    result = prune_file(path, request, now=datetime.now(UTC))
+    assert result.status == "skipped" and (result.reason or "").startswith("skipped-ledger:")
+    assert path.read_bytes() == body and not receipt_path(path).exists()
+    assert rows() == before_rows
+    assert [(p.read_bytes(), p.stat().st_ino, p.stat().st_mtime_ns) for p in (db, lock)] == before
