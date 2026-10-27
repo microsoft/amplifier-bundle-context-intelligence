@@ -826,8 +826,10 @@ migrates SQLite schemas. SQLite may maintain WAL shared-memory reader marks; thi
 not a promise that every `-shm` byte remains unchanged. Malformed or unreadable
 global settings, invalid authority paths, and unavailable placeholder expansions
 refuse pruning rather than silently selecting the default. Existing settings
-require PyYAML for strict validation; its absence refuses rather than using the
-forgiving parser fallback. Absent or unconfigured settings use the standard root;
+require PyYAML for strict validation; the standalone pruner installs `PyYAML>=6.0`
+as a runtime dependency. Lean library-only environments must supply it themselves:
+its absence still refuses rather than using the forgiving parser fallback.
+Absent or unconfigured settings use the standard root;
 explicit roots must exist. Include all custom job roots explicitly.
 This format compatibility does not upgrade older consumers: install coordinated
 upload/recovery clients before using the pruner alongside source-capability recovery.

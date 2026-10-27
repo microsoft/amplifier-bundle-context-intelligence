@@ -137,9 +137,12 @@ def _prune_file(
             recovery_guard(path, request.recovery_roots) as check_recovery,
         ):
 
-            def check_commit() -> None:
+            def check_runtime() -> None:
                 if request.before_commit is not None:
                     request.before_commit()
+
+            def check_commit() -> None:
+                check_runtime()
                 check_recovery()
 
             if not request.repeat_pruned:
@@ -157,6 +160,7 @@ def _prune_file(
                     min_inactive=request.min_inactive,
                     repeat_pruned=request.repeat_pruned,
                     before_commit=check_commit,
+                    _check_runtime=check_runtime,
                 )
             else:
                 result = _transaction(
@@ -167,7 +171,7 @@ def _prune_file(
                     now=now,
                     min_idle=request.min_idle,
                     before_commit=check_commit,
-                    during_scan=check_commit,
+                    during_scan=check_runtime,
                 )
         return result
     except PruneError as exc:
