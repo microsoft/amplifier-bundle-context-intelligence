@@ -14,17 +14,18 @@ import sqlite3
 import subprocess
 import sys
 from contextlib import closing, contextmanager
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from unittest.mock import patch
 
 import pytest
+
 from amplifier_module_tool_context_intelligence_recover import recovery as producer
 from context_intelligence.prune import Policy, PruneRequest, prune_file, recovery
 from context_intelligence.prune import coordination
 
 REPO = Path(__file__).resolve().parents[3]
-NOW = datetime(2026, 10, 1, tzinfo=timezone.utc)
+NOW = datetime(2026, 10, 1, tzinfo=UTC)
 WAIT = 20
 
 
