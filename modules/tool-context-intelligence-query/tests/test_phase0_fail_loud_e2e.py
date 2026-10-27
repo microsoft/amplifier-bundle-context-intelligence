@@ -26,6 +26,7 @@ import json
 import socket
 import threading
 import time
+from copy import deepcopy
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 from unittest.mock import MagicMock
@@ -47,6 +48,11 @@ class _Behavior:
         self.sleep_s: float = 0.0
         self.body: bytes = b'{"results": []}'
         self.content_type: str = "application/json"
+        self.accepted = threading.Condition()
+        self.post_bodies: list[bytes] = []
+        self.handler_threads: list[threading.Thread] = []
+        self.finished_posts = 0
+        self.serving_thread: threading.Thread | None = None
 
 
 def _find_free_port() -> int:
@@ -64,18 +70,30 @@ def _make_handler_class(behavior: _Behavior) -> type[BaseHTTPRequestHandler]:
         def _respond(self) -> None:
             if behavior.sleep_s:
                 time.sleep(behavior.sleep_s)
-            self.send_response(behavior.status_code)
-            self.send_header("Content-Type", behavior.content_type)
-            self.end_headers()
-            self.wfile.write(behavior.body)
+            try:
+                self.send_response(behavior.status_code)
+                self.send_header("Content-Type", behavior.content_type)
+                self.end_headers()
+                self.wfile.write(behavior.body)
+            except (BrokenPipeError, ConnectionResetError):
+                pass  # Expected when the real client times out and closes its socket.
 
         def do_POST(self) -> None:  # noqa: N802
             if self.path != "/cypher":
                 self.send_error(404)
                 return
             length = int(self.headers.get("Content-Length", 0))
-            self.rfile.read(length)  # drain request body
-            self._respond()
+            body = self.rfile.read(length)
+            with behavior.accepted:
+                behavior.post_bodies.append(body)
+                behavior.handler_threads.append(threading.current_thread())
+                behavior.accepted.notify_all()
+            try:
+                self._respond()
+            finally:
+                with behavior.accepted:
+                    behavior.finished_posts += 1
+                    behavior.accepted.notify_all()
 
         def do_GET(self) -> None:  # noqa: N802
             if not self.path.startswith("/blobs/"):
@@ -93,6 +111,7 @@ def _start_server(port: int, behavior: _Behavior) -> ThreadingHTTPServer:
     """Bind a ThreadingHTTPServer on *port* and serve it in a daemon thread."""
     server = ThreadingHTTPServer(("127.0.0.1", port), _make_handler_class(behavior))
     t = threading.Thread(target=server.serve_forever, daemon=True)
+    behavior.serving_thread = t
     t.start()
     return server
 
@@ -132,6 +151,92 @@ def _make_tool_resolver(
 class TestGraphQueryPhase0:
     """Real-socket scenarios a-d from build-spec-v5 §6.1, driven through
     GraphQueryTool.execute()."""
+
+    async def test_request_timeout_is_invocation_local_over_real_tcp(self) -> None:
+        """Long/short overrides change only this call; four calls yield four POSTs."""
+        from amplifier_module_tool_context_intelligence_query.graph_query_tool import GraphQueryTool
+
+        behavior = _Behavior()
+        behavior.sleep_s = 1.0
+        server = _start_server(0, behavior)
+        port = server.server_address[1]
+        base_url = f"http://127.0.0.1:{port}"
+        results = []
+        elapsed = []
+        expected_body = {
+            "query": "synthetic query",
+            "params": {"request_timeout": 999, "nested": {"value": 7}},
+            "workspace": "*",
+        }
+        try:
+            tool = GraphQueryTool(
+                _make_coordinator(), _make_tool_resolver(base_url, request_timeout=0.2)
+            )
+            for index, override in enumerate(
+                [{}, {"request_timeout": 3}, {"request_timeout": 0.1}, {}], start=1
+            ):
+                # Never share nested params with the independent wire oracle.
+                invocation = deepcopy(expected_body)
+                invocation.update(override)
+                t0 = time.monotonic()
+                results.append(await tool.execute(invocation))
+                elapsed.append(time.monotonic() - t0)
+                assert invocation == {**expected_body, **override}
+                with behavior.accepted:
+                    assert behavior.accepted.wait_for(
+                        lambda expected_count=index: len(behavior.post_bodies) >= expected_count,
+                        timeout=3.0,
+                    ), "tool returned without an accepted POST"
+            with behavior.accepted:
+                assert behavior.accepted.wait_for(
+                    lambda: behavior.finished_posts == 4, timeout=5.0
+                ), "not all POST handlers finished"
+        finally:
+            server.shutdown()
+            server.server_close()  # Daemon request handlers are explicitly joined below.
+            assert behavior.serving_thread is not None
+            behavior.serving_thread.join(timeout=5.0)
+            assert not behavior.serving_thread.is_alive()
+            for thread in behavior.handler_threads:
+                thread.join(timeout=5.0)
+                assert not thread.is_alive()
+            assert server.socket.fileno() == -1
+            with socket.socket() as probe:
+                probe.settimeout(1.0)
+                assert probe.connect_ex(("127.0.0.1", port)) != 0
+
+        assert [result.success for result in results] == [False, True, False, False]
+        assert len(behavior.post_bodies) == behavior.finished_posts == 4
+        assert [json.loads(body) for body in behavior.post_bodies] == [expected_body] * 4
+        assert all(elapsed[index] < 0.9 for index in (0, 2, 3)), elapsed
+        assert 1.0 <= elapsed[1] < 3.0, elapsed
+        hint = (
+            "The tool does not retry automatically. Inspect query scope, projections, and "
+            "pagination first. If an intentionally complex query still needs more time and "
+            "retrying is safe, retry with a larger top-level request_timeout in seconds. "
+            "A client timeout is not a database deadline; prior work may still be running."
+        )
+        for index, effective in [(0, 0.2), (2, 0.1), (3, 0.2)]:
+            result = results[index]
+            assert result.error is not None
+            assert result.error["type"] == "timeout"
+            assert result.error["request_timeout"] == effective
+            assert result.error["retry_hint"] == hint
+            assert result.error["source"] == {
+                "name": "testsrc",
+                "url": base_url,
+                "origin": "source",
+            }
+            assert (
+                f"Effective HTTP request_timeout={effective:g} seconds." in result.error["message"]
+            )
+            assert result.output == result.error["message"]
+            assert hint in result.get_serialized_output()
+        assert results[1].error is None
+        assert results[1].output == {
+            "source": {"name": "testsrc", "url": base_url, "origin": "source"},
+            "rows": [],
+        }
 
     async def test_a_connection_refused(self) -> None:
         """(a) Down/refused source -> success False, error.type == connection_error."""
