@@ -902,6 +902,10 @@ def test_shared_replay_guard_is_held_through_http_delivery(tmp_path: Path) -> No
 
 
 def test_large_sweep_keeps_constant_capture_descriptors(tmp_path: Path) -> None:
+    import pytest
+
+    if not Path("/proc/self/fd").is_dir():
+        pytest.skip("Linux FD-limit regression")
     sessions = [_write_session(tmp_path, f"synthetic-{i}", _make_events(1)) for i in range(140)]
     initial_fds = len(list(Path("/proc/self/fd").iterdir()))
     observed = []
