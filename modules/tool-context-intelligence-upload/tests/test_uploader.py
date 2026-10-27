@@ -945,5 +945,5 @@ def test_unwritable_capture_lock_fails_closed_without_network(tmp_path: Path) ->
     ):
         with patch("httpx.Client") as client:
             result = run_upload([(directory, metadata)], "http://unused", "synthetic", MagicMock())
-    assert not result.success and "read-only" in (result.error or "")
+    assert not result.success and result.error == "cannot open capture maintenance lock"
     client.return_value.__enter__.return_value.post.assert_not_called()

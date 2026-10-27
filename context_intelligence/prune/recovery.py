@@ -6,9 +6,9 @@ delivery inference, schema migration or checkpoint mutation is performed here.
 
 from __future__ import annotations
 
-import os
 import hashlib
 import json
+import os
 import sqlite3
 import stat
 from contextlib import ExitStack, contextmanager
@@ -186,10 +186,10 @@ def recovery_guard(
 ) -> Iterator[Callable[[], None]]:
     import fcntl
 
-    with ExitStack() as stack:
+    with ExitStack():
         ledgers: set[Path] = set()
         seen: set[Path] = set()
-        held_identities: list[tuple[Path, tuple[int, int]]] = []
+        checked_identities: list[tuple[Path, tuple[int, int]]] = []
 
         def walk_error(error: OSError) -> None:
             raise PruneError("recovery-state-unreadable: cannot establish exclusion") from error
@@ -229,39 +229,48 @@ def recovery_guard(
         for db in sorted(ledgers):
             lock_path = Path(str(db) + ".lock")
             try:
-                info = lock_path.lstat()
-                db_info = db.lstat()
-                if (
-                    not stat.S_ISREG(info.st_mode)
-                    or info.st_uid != os.getuid()
-                    or info.st_nlink != 1
-                    or not stat.S_ISREG(db_info.st_mode)
-                    or db_info.st_nlink != 1
-                    or db_info.st_uid != os.getuid()
-                ):
-                    raise PruneError("recovery-state-unsafe")
-                fd = os.open(lock_path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
-                stack.callback(os.close, fd)
-                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                held = os.fstat(fd)
-                current = lock_path.lstat()
-                if (held.st_dev, held.st_ino) != (current.st_dev, current.st_ino):
-                    raise PruneError("recovery-state-changed: execution lock replaced")
-                held_identities.extend(((lock_path, _identity(held)), (db, _identity(db_info))))
-                # mode=ro reads committed WAL too; do not use immutable=1,
-                # which can silently ignore a live WAL. Runner lock is held.
-                connection = _open_readonly(db)
-                stack.callback(connection.close)
-                _exclude_registered(connection, source)
+                # A prior scan may have dropped capture SH before publishing its
+                # SQLite transaction. Job EX must therefore succeed before the
+                # membership read. It fences that pending transaction, not only
+                # the source read. All acquisitions remain nonblocking.
+                with ExitStack() as ledger:
+                    info = lock_path.lstat()
+                    db_info = db.lstat()
+                    if (
+                        not stat.S_ISREG(info.st_mode)
+                        or info.st_uid != os.getuid()
+                        or info.st_nlink != 1
+                        or not stat.S_ISREG(db_info.st_mode)
+                        or db_info.st_nlink != 1
+                        or db_info.st_uid != os.getuid()
+                    ):
+                        raise PruneError("recovery-state-unsafe")
+                    fd = os.open(lock_path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+                    ledger.callback(os.close, fd)
+                    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    held = os.fstat(fd)
+                    current = lock_path.lstat()
+                    if (held.st_dev, held.st_ino) != (current.st_dev, current.st_ino):
+                        raise PruneError("recovery-state-changed: execution lock replaced")
+                    checked_identities.extend(
+                        ((lock_path, _identity(held)), (db, _identity(db_info)))
+                    )
+                    # mode=ro reads committed WAL too; immutable=1 would not.
+                    connection = _open_readonly(db)
+                    ledger.callback(connection.close)
+                    _exclude_registered(connection, source)
+                # Close SQLite before releasing job EX. A later cooperating
+                # runner cannot scan/register this source while the caller still
+                # holds capture EX. Keep only identities, not O(job-count) FDs.
             except (OSError, sqlite3.Error) as exc:
                 raise PruneError(
                     "recovery-state-busy-or-unreadable: retry after recovery settles"
                 ) from exc
 
         def recheck() -> None:
-            for path, identity in held_identities:
+            for path, identity in checked_identities:
                 if _identity(_safe_file(path)) != identity:
-                    raise PruneError("recovery-state-changed: held state identity replaced")
+                    raise PruneError("recovery-state-changed: checked state identity replaced")
 
         recheck()
         yield recheck

@@ -47,7 +47,12 @@ def capture_lock(path: Path, *, exclusive: bool = False) -> Iterator[None]:
     for parent in path.parents:
         if not stat.S_ISDIR(parent.lstat().st_mode):
             raise PruneError("symlink or non-directory capture ancestor")
-    fd = os.open(lock, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK, 0o600)
+    try:
+        fd = os.open(lock, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK, 0o600)
+    except OSError as exc:
+        # A failed fence is a maintenance refusal, not evidence that the source
+        # is absent/non-capture. Keep OS details in the cause, not CLI output.
+        raise PruneError("cannot open capture maintenance lock") from exc
     try:
         info = os.fstat(fd)
         if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or info.st_uid != os.getuid():
