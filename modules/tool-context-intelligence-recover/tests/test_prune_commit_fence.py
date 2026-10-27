@@ -19,10 +19,9 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pytest
+from context_intelligence.prune import Policy, PruneRequest, coordination, prune_file, recovery
 
 from amplifier_module_tool_context_intelligence_recover import recovery as producer
-from context_intelligence.prune import Policy, PruneRequest, prune_file, recovery
-from context_intelligence.prune import coordination
 
 REPO = Path(__file__).resolve().parents[3]
 NOW = datetime(2026, 10, 1, tzinfo=UTC)
