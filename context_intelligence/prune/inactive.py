@@ -96,6 +96,7 @@ class InactiveInventory:
         min_inactive: timedelta | None = None,
         repeat_pruned: bool = False,
         before_commit: Callable[[], None] | None = None,
+        _check_runtime: Callable[[], None] | None = None,
     ) -> FileResult:
         """Acquire a matching existing execution lock, or return a safety skip."""
         now = now or datetime.now(timezone.utc)
@@ -113,6 +114,7 @@ class InactiveInventory:
                 coupled_cutoff=min_inactive is None,
                 repeat_pruned=repeat_pruned,
                 before_commit=before_commit,
+                _check_runtime=_check_runtime,
             )
         except (InactiveSkip, FileNotFoundError) as exc:
             return FileResult(path, status="skipped", reason=str(exc))
@@ -129,6 +131,7 @@ class InactiveInventory:
         coupled_cutoff: bool,
         repeat_pruned: bool,
         before_commit: Callable[[], None] | None,
+        _check_runtime: Callable[[], None] | None = None,
     ) -> FileResult:
         import fcntl
 
@@ -244,7 +247,7 @@ class InactiveInventory:
                 now=now,
                 min_idle=min_idle,
                 before_commit=check,
-                during_scan=before_commit,
+                during_scan=_check_runtime if _check_runtime is not None else before_commit,
                 fence=repeat_fence(path) if repeat_pruned else None,
                 audit_policy={
                     "inactive_only": True,

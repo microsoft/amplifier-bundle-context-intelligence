@@ -1226,7 +1226,9 @@ class RecoveryRunner:
         except (PruneError, OSError) as exc:
             artifact_id = _artifact_id(path)
             updated = self.checkpoint.connection.execute(
-                "UPDATE artifact SET state='quarantined', reason=? WHERE artifact_id=?",
+                """UPDATE artifact SET state='quarantined',
+                   reason=CASE WHEN state='quarantined' AND reason='source-changed'
+                               THEN reason ELSE ? END WHERE artifact_id=?""",
                 (str(exc), artifact_id),
             )
             if not updated.rowcount:
