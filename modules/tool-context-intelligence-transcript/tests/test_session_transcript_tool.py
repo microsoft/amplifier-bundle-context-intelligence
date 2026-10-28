@@ -8,6 +8,7 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
+import context_intelligence.native_transcript as native
 
 from amplifier_module_tool_context_intelligence_transcript.session_transcript_tool import (
     SessionTranscriptTool,
@@ -447,3 +448,430 @@ async def test_prefix_stopping_short_of_the_derivation_mark_still_resolves(tmp_p
     assert result.success, result.error
     assert isinstance(result.output, dict)
     assert result.output["sessions"][0]["session_id"] == child
+
+
+requires_secure_open = pytest.mark.skipif(
+    not native._SECURE_OPEN_SUPPORTED, reason="descriptor-relative no-follow operations unavailable"
+)
+
+
+def _write_messages(directory, contents):
+    (directory / "events.jsonl").write_text(
+        "\n".join(
+            json.dumps(
+                {
+                    "event": "prompt:complete",
+                    "timestamp": "2026-09-15T10:00:00Z",
+                    "data": {
+                        "response": content,
+                        "raw": "PRIVATE-PROVIDER",
+                        "tools": "PRIVATE-TOOL",
+                    },
+                }
+            )
+            for content in contents
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+
+@requires_secure_open
+@pytest.mark.parametrize("output_format", ["json", "text"])
+@pytest.mark.parametrize("bounds", [{"max_messages": 1}, {"max_content_chars": 10_000}])
+async def test_alias_keeps_exact_copy_across_pages_with_long_verbatim_messages(
+    tmp_path, output_format, bounds
+):
+    normal = _capture(tmp_path / "normal")
+    first_copy = _capture(tmp_path / "first")
+    second_copy = _capture(tmp_path / "second")
+    long_content = " \n" + "界" * 8192 + "\n\nEND-SENTINEL  "
+    _write_messages(normal, ["NORMAL"])
+    _write_messages(first_copy, [long_content, long_content + "SECOND"])
+    _write_messages(second_copy, ["SECOND-COPY"])
+    coordinator = _coordinator("session-123", normal)
+    tool = SessionTranscriptTool(
+        coordinator,
+        {
+            "capture_roots": {
+                alias: {"directory": str(directory), "session_id": "session-123"}
+                for alias, directory in [("first", first_copy), ("second", second_copy)]
+            }
+        },
+    )
+    first = await tool.execute({"capture_root": "first", "format": output_format, **bounds})
+    assert first.success, first.error
+    assert isinstance(first.output, dict)
+    page = first.output["sessions"][0]
+    assert page["messages"][0]["content"] == long_content
+    assert page["source"] == {
+        "kind": "configured_capture",
+        "capture_root": "first",
+        "capture_directory": str(first_copy),
+    }
+    assert page["session_id"] == "session-123"
+    assert page["has_more"]
+    second = await tool.execute(
+        {
+            "capture_root": "first",
+            "after_event_line": page["next_after_event_line"],
+            "format": output_format,
+            **bounds,
+        }
+    )
+    assert second.success, second.error
+    assert isinstance(second.output, dict)
+    assert second.output["sessions"][0]["source"] == page["source"]
+    assert not second.output["sessions"][0]["has_more"]
+    assert [m["content"] for m in page["messages"] + second.output["sessions"][0]["messages"]] == [
+        long_content,
+        long_content + "SECOND",
+    ]
+    if output_format == "text":
+        assert long_content in first.output["text"]
+        assert long_content + "SECOND" in second.output["text"]
+    assert "PRIVATE-PROVIDER" not in str(first.output)
+    assert "PRIVATE-TOOL" not in str(first.output)
+    other = await tool.execute({"capture_root": "second"})
+    assert other.success
+    assert isinstance(other.output, dict)
+    assert other.output["sessions"][0]["messages"][0]["content"] == "SECOND-COPY"
+    coordinator.get_capability.assert_not_called()
+    ordinary = await tool.execute({"session_ids": ["session-123"]})
+    assert ordinary.success
+    assert isinstance(ordinary.output, dict)
+    assert ordinary.output["sessions"][0]["messages"][0]["content"] == "NORMAL"
+    assert "source" not in ordinary.output["sessions"][0]
+
+
+@pytest.mark.parametrize(
+    "alias",
+    [
+        "../copy",
+        "/copy",
+        "copy/x",
+        "C:\\copy",
+        "C:copy",
+        "\\\\server\\copy",
+        "*",
+        "a?",
+        "a[0]",
+        "a\0b",
+        "",
+        "a" * 65,
+        1,
+        None,
+        [],
+        {},
+        "é",
+    ],
+)
+async def test_alias_attacks_are_rejected_before_any_filesystem_or_resolver(monkeypatch, alias):
+    coordinator = MagicMock()
+    tool = SessionTranscriptTool(coordinator)
+    monkeypatch.setattr(native.os, "open", lambda *a, **kw: pytest.fail("filesystem access"))
+    result = await tool.execute({"capture_root": alias})
+    assert not result.success
+    assert isinstance(result.error, dict)
+    assert result.error["type"] == "invalid_request"
+    coordinator.get_capability.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "selectors",
+    [
+        {"session_ids": []},
+        {"session_ids": None},
+        {"after_event_lines": {}},
+        {"after_event_lines": None},
+    ],
+)
+async def test_alias_rejects_selector_keys_even_empty_or_null(monkeypatch, selectors):
+    coordinator = MagicMock()
+    tool = SessionTranscriptTool(coordinator)
+    monkeypatch.setattr(native.os, "open", lambda *a, **kw: pytest.fail("filesystem access"))
+    result = await tool.execute({"capture_root": "copy", **selectors})
+    assert not result.success
+    assert isinstance(result.error, dict)
+    assert result.error["type"] == "invalid_request"
+    coordinator.get_capability.assert_not_called()
+
+
+async def test_unconfigured_alias_never_opens_or_falls_back(monkeypatch):
+    coordinator = MagicMock()
+    tool = SessionTranscriptTool(coordinator)
+    monkeypatch.setattr(native.os, "open", lambda *a, **kw: pytest.fail("filesystem access"))
+    result = await tool.execute({"capture_root": "copy"})
+    assert not result.success
+    assert isinstance(result.error, dict)
+    assert result.error["type"] == "configured_capture_unknown"
+    coordinator.get_capability.assert_not_called()
+
+
+@requires_secure_open
+async def test_host_config_mutations_cannot_authorize_a_new_alias_or_path(tmp_path):
+    copy = _capture(tmp_path)
+    config = {"capture_roots": {"copy": {"directory": str(copy), "session_id": "session-123"}}}
+    tool = SessionTranscriptTool(MagicMock(), config)
+    config["capture_roots"]["copy"]["directory"] = str(tmp_path / "not-authorized")
+    config["capture_roots"]["copy"]["session_id"] = "other"
+    config["capture_roots"]["new"] = config["capture_roots"]["copy"]
+    result = await tool.execute({"capture_root": "copy"})
+    assert result.success
+    assert isinstance(result.output, dict)
+    assert result.output["sessions"][0]["session_id"] == "session-123"
+    assert result.output["sessions"][0]["source"]["capture_directory"] == str(copy)
+    rejected = await tool.execute({"capture_root": "new"})
+    assert not rejected.success
+    assert isinstance(rejected.error, dict)
+    assert rejected.error["type"] == "configured_capture_unknown"
+
+
+@requires_secure_open
+@pytest.mark.parametrize(
+    "bounds",
+    [
+        {"after_event_line": None},
+        {"after_event_line": True},
+        {"after_event_line": -1},
+        {"max_messages": 201},
+        {"max_content_chars": 100_001},
+    ],
+)
+async def test_configured_bounds_fail_before_filesystem_read(tmp_path, monkeypatch, bounds):
+    copy = _capture(tmp_path)
+    tool = SessionTranscriptTool(
+        MagicMock(),
+        {"capture_roots": {"copy": {"directory": str(copy), "session_id": "session-123"}}},
+    )
+    monkeypatch.setattr(native.os, "open", lambda *a, **kw: pytest.fail("filesystem access"))
+    result = await tool.execute({"capture_root": "copy", **bounds})
+    assert not result.success
+    assert isinstance(result.error, dict)
+    assert result.error["type"] == "invalid_request"
+
+
+@requires_secure_open
+async def test_configured_oversize_message_is_loud_not_truncated(tmp_path):
+    copy = _capture(tmp_path)
+    _write_messages(copy, ["x" * 100_001])
+    coordinator = MagicMock()
+    tool = SessionTranscriptTool(
+        coordinator,
+        {"capture_roots": {"copy": {"directory": str(copy), "session_id": "session-123"}}},
+    )
+    result = await tool.execute({"capture_root": "copy", "max_content_chars": 100_000})
+    assert not result.success
+    assert isinstance(result.error, dict)
+    assert result.error["type"] == "message_too_large"
+    assert "x" * 100 not in str(result.output)
+    assert result.error["message"] == (
+        "a configured capture message exceeds the requested content budget"
+    )
+    coordinator.get_capability.assert_not_called()
+
+
+def _persisted_copy(directory, records):
+    directory.mkdir(parents=True, exist_ok=True)
+    (directory / "metadata.json").write_text('{"session_id":"session-123"}', encoding="utf-8")
+    (directory / "transcript.jsonl").write_text(
+        "\n".join(json.dumps(record, ensure_ascii=False) for record in records) + "\n",
+        encoding="utf-8",
+    )
+    return {
+        "directory": str(directory),
+        "session_id": "session-123",
+        "capture_format": "amplifier-transcript",
+    }
+
+
+@requires_secure_open
+@pytest.mark.parametrize("output_format", ["json", "text"])
+@pytest.mark.parametrize("bounds", [{"max_messages": 1}, {"max_content_chars": 10_000}])
+async def test_persisted_profile_keeps_format_copy_and_text_parts_across_pages(
+    tmp_path, output_format, bounds
+):
+    normal = _capture(tmp_path / "normal")
+    _write_messages(normal, ["NORMAL-CI"])
+    first_part = "  \n" + "界" * 8192 + "\nEND-SENTINEL  "
+    second_part = "\n\nseparate block "
+    if "max_content_chars" in bounds:
+        bounds = {"max_content_chars": len(first_part) + len(second_part)}
+    config = {
+        "capture_roots": {
+            "persisted": _persisted_copy(
+                tmp_path / "renamed-copy",
+                [
+                    {"role": "system", "content": "SYSTEM-SECRET"},
+                    {
+                        "role": "user",
+                        "content": "<system-reminder>stored</system-reminder>",
+                        "metadata": {
+                            "ephemeral": True,
+                            "persisted": True,
+                            "private": "FLAGS-SECRET",
+                        },
+                    },
+                    {
+                        "role": "assistant",
+                        "content": [
+                            {"type": "text", "text": first_part},
+                            {"type": "thinking", "thinking": "THINKING-SECRET"},
+                            {"type": "text", "text": second_part},
+                            {"type": "tool_call", "input": {"text": "TOOL-SECRET"}},
+                        ],
+                        "provider_continuation": {"text": "PROVIDER-SECRET"},
+                    },
+                    {"role": "tool", "content": "RESULT-SECRET"},
+                ],
+            ),
+            "other": _persisted_copy(
+                tmp_path / "different-copy", [{"role": "assistant", "content": "OTHER-COPY"}]
+            ),
+            "native": {"directory": str(normal), "session_id": "session-123"},
+        }
+    }
+    coordinator = _coordinator("session-123", normal)
+    tool = SessionTranscriptTool(coordinator, config)
+    first = await tool.execute({"capture_root": "persisted", "format": output_format, **bounds})
+    assert first.success, first.error
+    assert isinstance(first.output, dict)
+    page = first.output["sessions"][0]
+    assert page["status"] == "complete"
+    assert page["session_id"] == "session-123"
+    assert page["workspace"] is page["schema_version"] is None
+    assert page["projection"] == {"omitted_messages": 1, "omitted_blocks": 0}
+    assert page["source"] == {
+        "kind": "configured_capture",
+        "capture_root": "persisted",
+        "capture_directory": str(tmp_path / "renamed-copy"),
+        "source_format": "amplifier-transcript",
+        "source_file": "transcript.jsonl",
+        "cursor_unit": "physical_line",
+    }
+    assert page["messages"][0]["context_flags"] == {"ephemeral": True, "persisted": True}
+    assert page["messages"][0]["content"] == "<system-reminder>stored</system-reminder>"
+    assert page["next_after_event_line"] == 2
+    second = await tool.execute(
+        {
+            "capture_root": "persisted",
+            "after_event_line": page["next_after_event_line"],
+            "format": output_format,
+            **bounds,
+        }
+    )
+    assert second.success, second.error
+    assert isinstance(second.output, dict)
+    next_page = second.output["sessions"][0]
+    assert next_page["source"] == page["source"]
+    assert next_page["messages"][0]["content"] == [
+        {"index": 0, "text": first_part},
+        {"index": 2, "text": second_part},
+    ]
+    assert next_page["messages"][0]["timestamp"] is None
+    assert next_page["messages"][0]["source_event"] == "transcript:message"
+    assert next_page["content_chars"] == len(first_part) + len(second_part)
+    assert next_page["projection"] == {"omitted_messages": 1, "omitted_blocks": 2}
+    assert next_page["status"] == "complete"
+    assert not next_page["has_more"]
+    for output in (first.output, second.output):
+        assert "SECRET" not in json.dumps(output)
+    if output_format == "text":
+        assert "[STORED CONTEXT FLAGS | ephemeral=true, persisted=true]" in first.output["text"]
+        assert first_part in second.output["text"]
+        assert second_part in second.output["text"]
+        assert "[TEXT BLOCK 0]" in second.output["text"]
+        assert "[TEXT BLOCK 2]" in second.output["text"]
+        assert "[ASSISTANT | physical-line 3]" in second.output["text"]
+        assert "@ " not in second.output["text"]
+        assert "schema 1.0.0" not in second.output["text"]
+    coordinator.get_capability.assert_not_called()
+    other = await tool.execute({"capture_root": "other"})
+    assert other.success
+    assert isinstance(other.output, dict)
+    assert other.output["sessions"][0]["messages"][0]["content"] == "OTHER-COPY"
+    native_page = await tool.execute({"capture_root": "native"})
+    assert native_page.success
+    assert isinstance(native_page.output, dict)
+    assert "source_format" not in native_page.output["sessions"][0]["source"]
+    assert "projection" not in native_page.output["sessions"][0]
+    ordinary = await tool.execute({})
+    assert ordinary.success
+    assert isinstance(ordinary.output, dict)
+    assert ordinary.output["sessions"][0]["messages"][0]["content"] == "NORMAL-CI"
+    assert "source" not in ordinary.output["sessions"][0]
+
+
+@requires_secure_open
+async def test_persisted_projection_issues_stay_on_their_message_page(tmp_path):
+    entry = _persisted_copy(
+        tmp_path,
+        [
+            {"role": "user", "content": ""},
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "text", "text": "valid"},
+                    {"type": "UNKNOWN-SECRET", "text": "SECRET"},
+                ],
+            },
+        ],
+    )
+    tool = SessionTranscriptTool(MagicMock(), {"capture_roots": {"copy": entry}})
+    first = await tool.execute({"capture_root": "copy", "max_messages": 1})
+    assert first.success
+    assert isinstance(first.output, dict)
+    page = first.output["sessions"][0]
+    assert page["status"] == "complete"
+    assert page["issues"] == []
+    assert page["messages"][0]["content"] == ""
+    second = await tool.execute(
+        {"capture_root": "copy", "after_event_line": page["next_after_event_line"]}
+    )
+    assert second.success
+    assert isinstance(second.output, dict)
+    assert second.output["status"] == "partial"
+    assert second.output["sessions"][0]["messages"][0]["content"] == [{"index": 0, "text": "valid"}]
+    assert second.output["sessions"][0]["issues"][0]["code"] == "unsupported_content_part"
+    assert "SECRET" not in json.dumps(second.output)
+
+
+@requires_secure_open
+async def test_persisted_tool_budget_counts_entire_message_not_individual_blocks(tmp_path):
+    entry = _persisted_copy(
+        tmp_path,
+        [
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "text", "text": "x" * 60_000},
+                    {"type": "text", "text": "y" * 60_000},
+                ],
+            },
+        ],
+    )
+    tool = SessionTranscriptTool(MagicMock(), {"capture_roots": {"copy": entry}})
+    result = await tool.execute({"capture_root": "copy", "max_content_chars": 100_000})
+    assert not result.success
+    assert isinstance(result.error, dict)
+    assert result.error["type"] == "message_too_large"
+    assert "x" * 100 not in str(result.output)
+    assert "y" * 100 not in str(result.output)
+
+
+@requires_secure_open
+async def test_format_is_frozen_with_grant_and_cannot_be_selected_by_tool_caller(tmp_path):
+    entry = _persisted_copy(tmp_path, [{"role": "assistant", "content": "PERSISTED"}])
+    tool = SessionTranscriptTool(MagicMock(), {"capture_roots": {"copy": entry}})
+    entry["capture_format"] = "context-intelligence"
+    result = await tool.execute({"capture_root": "copy"})
+    assert result.success
+    assert isinstance(result.output, dict)
+    assert result.output["sessions"][0]["messages"][0]["content"] == "PERSISTED"
+    rejected = await tool.execute(
+        {"capture_root": "copy", "capture_format": "context-intelligence"}
+    )
+    assert not rejected.success
+    assert isinstance(rejected.error, dict)
+    assert rejected.error["type"] == "invalid_request"
+    assert "capture_format" not in tool.input_schema["properties"]

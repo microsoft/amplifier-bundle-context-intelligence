@@ -8,8 +8,12 @@ from typing import Any
 from amplifier_core.models import ToolResult
 from context_intelligence.native_transcript import (
     CaptureLocator,
+    ConfiguredCapture,
     NativeTranscriptError,
     TranscriptRequest,
+    configure_capture_roots,
+    is_capture_root_alias,
+    read_configured_capture,
     read_native_transcript,
     render_native_transcript,
 )
@@ -32,7 +36,14 @@ _DERIVED_CAPTURE_MARK = "_"
 class SessionTranscriptTool:
     """Read bounded native transcripts without graph or provider-raw fallback."""
 
-    def __init__(self, coordinator: Any) -> None:
+    def __init__(self, coordinator: Any, config: dict[str, Any] | None = None) -> None:
+        if config is not None and not isinstance(config, dict):
+            raise NativeTranscriptError(
+                "invalid_capture_config", "tool mount config must be an object"
+            )
+        self._capture_roots = configure_capture_roots(
+            config.get("capture_roots", {}) if config is not None else {}
+        )
         self._coordinator = coordinator
         self._capture_resolver: Any | None = None
         self._hook_resolver: Any | None = None
@@ -45,7 +56,8 @@ class SessionTranscriptTool:
     def description(self) -> str:
         return (
             "Retrieve verbatim user and assistant messages from a native Context Intelligence "
-            "capture, with role markers and periodic timestamps. Stored captures can contain "
+            "capture or a trusted configured persisted transcript text projection, with role "
+            "markers and available timestamps. Stored captures can contain "
             "sensitive content. USE WHEN the conversation itself is needed. DO NOT USE WHEN "
             "graph relationships, tool executions, or cross-session metrics are needed -- use "
             "graph_query."
@@ -56,6 +68,15 @@ class SessionTranscriptTool:
         return {
             "type": "object",
             "properties": {
+                "capture_root": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z][A-Za-z0-9_-]{0,63}$",
+                    "description": (
+                        "Optional trusted configured capture alias, not a path. Reads one exact "
+                        "capture; cannot be combined with session_ids or after_event_lines. "
+                        "Keep this alias and after_event_line for every subsequent page."
+                    ),
+                },
                 "session_ids": {
                     "type": "array",
                     "items": {"type": "string"},
@@ -65,7 +86,12 @@ class SessionTranscriptTool:
                         "Omit to retrieve the calling session. Use returned full IDs for pagination."
                     ),
                 },
-                "after_event_line": {"type": "integer", "minimum": 0, "default": 0},
+                "after_event_line": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "default": 0,
+                    "description": "Physical line cursor in the selected events or transcript file.",
+                },
                 "after_event_lines": {
                     "type": "object",
                     "additionalProperties": {"type": "integer", "minimum": 0},
@@ -249,6 +275,25 @@ class SessionTranscriptTool:
             )
         return [(session_id, after_event_line) for session_id in session_ids]
 
+    def _requested_capture(self, input_data: dict[str, Any]) -> ConfiguredCapture:
+        alias = input_data["capture_root"]
+        if (
+            not is_capture_root_alias(alias)
+            or "session_ids" in input_data
+            or "after_event_lines" in input_data
+            or "capture_format" in input_data
+        ):
+            raise NativeTranscriptError(
+                "invalid_request",
+                "capture_root must be a safe alias without session_ids, after_event_lines or capture_format",
+            )
+        capture = self._capture_roots.get(alias)
+        if capture is None:
+            raise NativeTranscriptError(
+                "configured_capture_unknown", "capture_root is not configured for this tool"
+            )
+        return capture
+
     async def execute(self, input_data: dict[str, Any]) -> ToolResult:
         if not isinstance(input_data, dict):
             return ToolResult(
@@ -259,7 +304,12 @@ class SessionTranscriptTool:
             output_format = input_data.get("format", "text")
             if output_format not in ("text", "json"):
                 raise NativeTranscriptError("invalid_request", "format must be text or json")
-            sessions = self._requested_sessions(input_data)
+            capture = self._requested_capture(input_data) if "capture_root" in input_data else None
+            sessions = (
+                [(capture.session_id, input_data.get("after_event_line", 0))]
+                if capture is not None
+                else self._requested_sessions(input_data)
+            )
             max_messages = input_data.get("max_messages", 50)
             max_content_chars = input_data.get("max_content_chars", 50_000)
             timestamp_every_seconds = input_data.get("timestamp_every_seconds", 300)
@@ -274,18 +324,19 @@ class SessionTranscriptTool:
                     f"{_MAX_TOTAL_CONTENT_CHARS}",
                 )
             per_session_chars = min(max_content_chars, _MAX_TOTAL_CONTENT_CHARS // len(sessions))
-            pages = [
-                read_native_transcript(
-                    self._resolve_locator(session_id),
-                    TranscriptRequest(
-                        after_event_line=cursor,
-                        max_messages=max_messages,
-                        max_content_chars=per_session_chars,
-                        timestamp_every_seconds=timestamp_every_seconds,
-                    ),
+            pages = []
+            for session_id, cursor in sessions:
+                request = TranscriptRequest(
+                    after_event_line=cursor,
+                    max_messages=max_messages,
+                    max_content_chars=per_session_chars,
+                    timestamp_every_seconds=timestamp_every_seconds,
                 )
-                for session_id, cursor in sessions
-            ]
+                pages.append(
+                    read_configured_capture(capture, request)
+                    if capture is not None
+                    else read_native_transcript(self._resolve_locator(session_id), request)
+                )
         except NativeTranscriptError as exc:
             return ToolResult(success=False, error={"type": exc.code, "message": str(exc)})
 
@@ -297,6 +348,18 @@ class SessionTranscriptTool:
                 "max_total_content_chars": _MAX_TOTAL_CONTENT_CHARS,
             },
         }
+        if capture is not None:
+            output["sessions"][0]["source"] = {
+                "kind": "configured_capture",
+                "capture_root": input_data["capture_root"],
+                "capture_directory": str(capture.directory),
+            }
+            if capture.capture_format == "amplifier-transcript":
+                output["sessions"][0]["source"].update(
+                    source_format="amplifier-transcript",
+                    source_file="transcript.jsonl",
+                    cursor_unit="physical_line",
+                )
         if output_format == "text":
             output["text"] = "\n\n".join(
                 render_native_transcript(page, timestamp_every_seconds=timestamp_every_seconds)
