@@ -44,6 +44,55 @@ the reusable library itself takes explicit event and metadata paths. Stored capt
 replayed verbatim and can contain sensitive content; the logging hook's JSON sanitization
 is not redaction.
 
+Trusted hosts can opt in to reading an exact native capture outside the normal
+store with transcript-module mount config:
+
+```yaml
+capture_roots:
+  review_copy:
+    directory: /srv/captures/review-copy
+    session_id: example-session-full-id
+```
+
+The directory must contain literal `metadata.json` and `events.jsonl` files.
+For a Foundation-persisted conversation directory, explicitly add
+`capture_format: amplifier-transcript` to that trusted entry instead. That profile
+reads only `metadata.json` and `transcript.jsonl`; it does not probe events or
+backups. Omitted `capture_format` remains strict native `context-intelligence`
+with schema `1.0.0`. There is no format detection or fallback.
+
+This is a restricted local read grant, not a tool-supplied path or a change to
+hook storage. It is disabled by default. Call `session_transcript` with
+`{"capture_root":"review_copy","max_messages":1}`. Keep `capture_root` and the
+returned `next_after_event_line` as `after_event_line` on every follow-up; do
+not switch to `session_ids`. Each page includes the configured alias and canonical
+directory in `source`. Aliases match `^[A-Za-z][A-Za-z0-9_-]{0,63}$`;
+`session_ids` and `after_event_lines` cannot accompany an alias, even when empty.
+
+Configured reads require descriptor-relative no-follow operations (currently
+supported POSIX platforms). Unsupported platforms fail closed for this opt-in
+route; ordinary session resolution is unchanged. Symlinks, including directory
+ancestors, and nonregular capture files are refused. Directory identity is pinned
+at mount, and metadata must match the configured full session ID before events
+are opened. This does not make writable capture contents immutable. See the
+[transcript module contract](modules/tool-context-intelligence-transcript/README.md)
+for errors and pagination. Captures remain verbatim, not redacted: configuring an
+alias does not make their contents safe to share.
+
+The persisted profile projects only stored user/assistant text. String content
+is unchanged; ordered text blocks retain exact strings and original indices in
+JSON, with block boundaries labeled in text output. It omits tool/system/developer
+messages and known nontext blocks, reports omission counts, and marks unknown or
+malformed records `partial`. Stored reminder text is preserved with boolean
+context flags when present; stored roles do not prove human authorship. Missing
+timestamps, workspace and schema are `null`, not fabricated. Persisted pages add
+`source_format: amplifier-transcript`, `source_file: transcript.jsonl`, and
+`cursor_unit: physical_line` to `source`. Keep the alias when paging: the existing
+`event_line`/`after_event_line` names refer to physical lines of the selected file.
+This is a bounded text projection, not the CLI's display policy or a new persisted
+schema. It neither reconstructs provider continuation state nor certifies a full
+structured message.
+
 For scripts outside an active Amplifier session, pass one or more capture directories:
 
 ```bash
