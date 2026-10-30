@@ -159,6 +159,38 @@ class TestOpensOnRate:
         assert len(open_records) == 1, f"expected exactly 1 breaker_open record, got {open_records}"
         await d.close()
 
+    async def test_open_warning_scopes_auto_resume_to_new_events(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """The breaker-open warning must not blur auto-resume with manual replay.
+
+        It previously said "delivery auto-resumes ... (no restart needed)" and
+        "replay the backlog with context-intelligence-upload" in one breath.
+        Those describe different populations -- auto-resume covers NEW events,
+        replay covers already-dropped ones -- and reading the first as covering
+        both is how a user silently loses the dropped events.
+        """
+        monkeypatch.setattr(logging_handler, "_BREAKER_MIN_OPEN_SECONDS", 0.0)
+        d = _dispatcher(forwarding_log_dir=tmp_path)
+        d._client = _mock_client([_make_response(401) for _ in range(20)])
+        d._sleep_backoff = AsyncMock()  # type: ignore[method-assign]
+
+        with patch(LOGGER_PATH) as mock_logger:
+            await _drain(d, [f"e{i}" for i in range(20)])
+            fmt = next(
+                c.args[0]
+                for c in mock_logger.warning.call_args_list
+                if "forwarding paused" in str(c)
+            )
+
+        assert "NEW events resume automatically" in fmt, (
+            f"auto-resume must be scoped to NEW events: {fmt!r}"
+        )
+        assert "ONLY if" in fmt and "sweep_max_age_hours" in fmt, (
+            f"manual replay must be scoped to the sweep's gaps (disabled / aged out): {fmt!r}"
+        )
+        await d.close()
+
 
 # ---------------------------------------------------------------------------
 # 2. Does NOT open on 50/50 flapping

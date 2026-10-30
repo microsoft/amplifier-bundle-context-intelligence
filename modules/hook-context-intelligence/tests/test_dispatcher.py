@@ -365,7 +365,7 @@ class TestNoPermanentLatch:
         d = _dispatcher(queue_capacity=1)
         # Prevent worker from draining
         d._ensure_worker = lambda: None  # type: ignore[method-assign]
-        d._queue.put_nowait(("dummy", {}))
+        d._queue.put_nowait(("dummy", {}, None))
         d.enqueue("overflow", {"session_id": "s1"})
         assert d._overflow_dropped == 1
         assert d._queue.qsize() == 1

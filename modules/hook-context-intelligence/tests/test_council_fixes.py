@@ -138,7 +138,7 @@ async def test_redirect_logs_misconfig_and_skips() -> None:
     d._post = fake_post  # type: ignore[method-assign]
 
     with patch(LOGGER_PATH) as mock_logger:
-        d._queue.put_nowait(("test:event", {"session_id": "s1"}))
+        d._queue.put_nowait(("test:event", {"session_id": "s1"}, None))
         task = asyncio.create_task(d._worker())
         await d._queue.join()
         task.cancel()
@@ -202,7 +202,7 @@ async def test_auth_escalation_fires_at_threshold_one() -> None:
     d._sleep_backoff = AsyncMock()
 
     with patch(LOGGER_PATH) as mock_logger:
-        d._queue.put_nowait(("test:event", {"session_id": "s1"}))
+        d._queue.put_nowait(("test:event", {"session_id": "s1"}, None))
         task = asyncio.create_task(d._worker())
         await d._queue.join()
         task.cancel()
@@ -248,9 +248,9 @@ async def test_auth_escalation_rewarns_periodically() -> None:
 
     with patch(f"{MOD}.time.monotonic", side_effect=ticks):
         with patch(LOGGER_PATH) as mock_logger:
-            d._queue.put_nowait(("e1", {"session_id": "s1"}))
-            d._queue.put_nowait(("e2", {"session_id": "s2"}))
-            d._queue.put_nowait(("e3", {"session_id": "s3"}))
+            d._queue.put_nowait(("e1", {"session_id": "s1"}, None))
+            d._queue.put_nowait(("e2", {"session_id": "s2"}, None))
+            d._queue.put_nowait(("e3", {"session_id": "s3"}, None))
             task = asyncio.create_task(d._worker())
             await d._queue.join()
             task.cancel()
@@ -504,7 +504,7 @@ async def test_timeouts_after_401_do_not_refire_auth_warning() -> None:
     ticks = iter(range(61, 100000, 61))
     with patch(f"{MOD}.time.monotonic", side_effect=ticks):
         with patch(LOGGER_PATH) as mock_logger:
-            d._queue.put_nowait(("test:event", {"session_id": "s1"}))
+            d._queue.put_nowait(("test:event", {"session_id": "s1"}, None))
             task = asyncio.create_task(d._worker())
             await d._queue.join()
             task.cancel()
@@ -547,8 +547,8 @@ async def test_persistent_401_is_skipped_immediately_and_unblocks_queue() -> Non
     d._post = always_401  # type: ignore[method-assign]
 
     with patch(LOGGER_PATH):
-        d._queue.put_nowait(("e1", {"session_id": "s1"}))
-        d._queue.put_nowait(("e2", {"session_id": "s2"}))
+        d._queue.put_nowait(("e1", {"session_id": "s1"}, None))
+        d._queue.put_nowait(("e2", {"session_id": "s2"}, None))
         task = asyncio.create_task(d._worker())
         # Without the immediate hard-skip this join() would retry forever ->
         # TimeoutError -> fail.
@@ -587,8 +587,8 @@ async def test_worker_delivers_next_event_after_skipping_a_doomed_one() -> None:
     d._post = fake_post  # type: ignore[method-assign]
 
     with patch(LOGGER_PATH):
-        d._queue.put_nowait(("doomed", {"session_id": "s1"}))
-        d._queue.put_nowait(("healthy", {"session_id": "s2"}))
+        d._queue.put_nowait(("doomed", {"session_id": "s1"}, None))
+        d._queue.put_nowait(("healthy", {"session_id": "s2"}, None))
         task = asyncio.create_task(d._worker())
         await asyncio.wait_for(d._queue.join(), timeout=5.0)
         task.cancel()

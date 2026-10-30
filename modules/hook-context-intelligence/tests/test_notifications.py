@@ -397,6 +397,93 @@ class TestOverflowNotification:
         )
         await d.close()
 
+    async def test_overflow_warning_reports_delta_not_lifetime_total(self) -> None:
+        """Second warning reports drops SINCE THE LAST WARNING, not the lifetime total.
+
+        Regression guard for the message being literally false: the text says
+        "dropped since the last warning", so the number beside it must be a
+        delta. _overflow_dropped itself MUST stay cumulative -- the shutdown
+        summary and the sustained-failure escalation both read it as a session
+        total, so resetting it there would under-report undelivered events.
+        """
+        d = _dispatcher(queue_capacity=1, storage_path="/tmp/ci-test-sessions")
+        d._post = _make_outcome_post([_DELIVERED])  # type: ignore[method-assign]
+        d._sleep_backoff = AsyncMock()  # type: ignore[method-assign]
+
+        with patch(LOGGER_PATH) as mock_logger:
+            # Batch 1: fill the single slot, then drop 3 (no await -> worker idle).
+            d.enqueue("fill", {"session_id": "s0"})
+            for i in range(3):
+                d.enqueue(f"a{i}", {"session_id": f"sa{i}"})
+
+            # Defeat the 60s rate limit so a SECOND warning can fire.
+            d._last_overflow_log = float("-inf")
+
+            # Batch 2: drop 2 more.
+            for i in range(2):
+                d.enqueue(f"b{i}", {"session_id": f"sb{i}"})
+
+            await asyncio.wait_for(d._queue.join(), timeout=2.0)
+
+        overflow_calls = [c for c in mock_logger.warning.call_args_list if "buffer full" in str(c)]
+        assert len(overflow_calls) == 2, (
+            f"Expected 2 overflow warnings (rate limit defeated), got {len(overflow_calls)}: "
+            f"{mock_logger.warning.call_args_list}"
+        )
+
+        # args = (fmt, name, dropped_since_last, dropped_this_session, storage_path)
+        first_delta, first_total = overflow_calls[0].args[2], overflow_calls[0].args[3]
+        second_delta, second_total = overflow_calls[1].args[2], overflow_calls[1].args[3]
+
+        # The first drop warns immediately (the rate-limit sentinel is -inf), so
+        # it reports 1/1; drops 2 and 3 are suppressed by the 60s rate limit.
+        assert (first_delta, first_total) == (1, 1), (
+            f"First warning should report 1 dropped / 1 this session, got "
+            f"{first_delta} / {first_total}"
+        )
+        # Delta covers every drop since the last warning INCLUDING the ones the
+        # rate limit suppressed (drops 2, 3 and 4) -- suppressed drops must be
+        # folded into the next report, never dropped from the accounting.
+        # The bug: this reported 4 (the lifetime total) where 3 is the truth.
+        assert second_delta == 3, (
+            f"Second warning must report the DELTA since the last warning (3), "
+            f"got {second_delta} -- this is the lifetime total, the message is false"
+        )
+        assert second_total == 4, f"Second warning's session total should be 4, got {second_total}"
+        # Cumulative counter is untouched by the delta bookkeeping.
+        assert d._overflow_dropped == 5, (
+            f"_overflow_dropped must stay cumulative (5), got {d._overflow_dropped}"
+        )
+        await d.close()
+
+    async def test_overflow_warning_scopes_manual_replay_to_sweep_gaps(self) -> None:
+        """The warning must not present manual upload as unconditionally required.
+
+        Dropped events freeze the delivery watermark, so the backlog sweep
+        replays them. Saying "to manually upload run: ..." with no condition is
+        what caused users to either act needlessly or -- worse -- read
+        "durable in events.jsonl" as "it heals itself" and lose the events.
+        """
+        d = _dispatcher(queue_capacity=1, storage_path="/tmp/ci-test-sessions")
+        d._post = _make_outcome_post([_DELIVERED])  # type: ignore[method-assign]
+        d._sleep_backoff = AsyncMock()  # type: ignore[method-assign]
+
+        with patch(LOGGER_PATH) as mock_logger:
+            d.enqueue("fill", {"session_id": "s0"})
+            d.enqueue("drop", {"session_id": "s1"})
+            await asyncio.wait_for(d._queue.join(), timeout=2.0)
+
+        fmt = next(c.args[0] for c in mock_logger.warning.call_args_list if "buffer full" in str(c))
+
+        assert "replayed automatically" in fmt, (
+            f"Warning must say the sweep replays drops automatically: {fmt!r}"
+        )
+        assert "ONLY if" in fmt and "sweep_max_age_hours" in fmt, (
+            f"Warning must scope manual replay to the sweep's gaps "
+            f"(disabled / aged out), got: {fmt!r}"
+        )
+        await d.close()
+
     async def test_overflow_while_degraded_combined(self) -> None:
         """OVERFLOW while DEGRADED: _degraded_warned True + _overflow_dropped==1 + loud log."""
         storage_path = "/tmp/ci-test-sessions"

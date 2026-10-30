@@ -47,6 +47,18 @@ _ALLOWED_HOT_PATH_CALLS: frozenset[str] = frozenset(
         "_ensure_worker",
         # enqueue() → asyncio.Queue.put_nowait()
         "put_nowait",
+        # enqueue() → self._wm_freeze() on the OVERFLOW branch only (same-class
+        # sync method; recursed into). Records that a dropped record froze this
+        # session's delivery watermark. Reached only when the queue is already
+        # full, never on the per-event happy path.
+        "_wm_freeze",
+        # _wm_freeze() → dict.setdefault(): one in-memory dict lookup/insert,
+        # no I/O, no awaits. The watermark is PERSISTED by the worker and at
+        # close(), never here.
+        "setdefault",
+        # _wm_freeze() → _SessionWatermarkState(): constructs a 3-field dataclass
+        # of plain scalars. No I/O, no awaits.
+        "_SessionWatermarkState",
         # _ensure_worker() → asyncio.Task.done()
         "done",
         # _ensure_worker() → asyncio.create_task()

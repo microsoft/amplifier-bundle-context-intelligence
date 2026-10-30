@@ -573,7 +573,7 @@ class TestWorkerSupervisorUnclassifiedExceptions:
 
         # Put directly in queue — do NOT use enqueue() which spawns an internal
         # worker that would race with the test worker for the queue item.
-        d._queue.put_nowait(("e1", {"session_id": "s1"}))
+        d._queue.put_nowait(("e1", {"session_id": "s1"}, None))
 
         # Start a standalone worker task.
         worker = asyncio.create_task(d._worker())

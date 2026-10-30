@@ -866,7 +866,7 @@ class TestWorkingDirEnvelope:
         captured: dict[str, Any] = {}
 
         class _SpyDispatcher:
-            def enqueue(self, event: str, data: dict[str, Any]) -> None:
+            def enqueue(self, event: str, data: dict[str, Any], **_kwargs: Any) -> None:
                 captured["event"] = event
                 captured["data"] = data
 
