@@ -22,6 +22,10 @@ from typing import Any
 import httpx
 from amplifier_core.models import HookResult
 
+from amplifier_module_hook_context_intelligence.handlers.offline import (
+    capture_credential_logs,
+    is_offline_error,
+)
 from amplifier_module_hook_context_intelligence.upload import (
     _canonical_json,
     _compute_idempotency_key,  # noqa: F401 — re-exported for test imports
@@ -433,6 +437,14 @@ class _DestinationDispatcher:
         # dispatcher lifetime (per session); routine subsequent deliveries stay
         # silent so the diagnostics file is not flooded on the happy path.
         self._heartbeat_emitted: bool = False
+        # True while delivery is OFFLINE (network unavailable): set on the first
+        # offline failure (one concise console line), cleared on the first
+        # delivered event (one resume line). Offline never feeds the auth-only
+        # breaker and never produces "run az login" advice.
+        self._offline: bool = False
+        # True once the actionable "run az login" warning has been shown for the
+        # CURRENT auth-failure episode; cleared when headers() succeeds again.
+        self._auth_warned: bool = False
 
     def _emit_delivery_heartbeat(self) -> None:
         """Emit a one-time positive liveness record on first successful delivery.
@@ -592,6 +604,15 @@ class _DestinationDispatcher:
         if now - self._last_degraded_escalation_log < _LOG_RATE_LIMIT_SECONDS:
             return
         self._last_degraded_escalation_log = now
+        if not self._offline:
+            self._log_sustained_failure(failing_seconds)
+        self._record_forwarding_issue(
+            "sustained_delivery_failure",
+            "failing for %.0fs (overflow_dropped=%d, breaker_open=%s)"
+            % (failing_seconds, self._overflow_dropped, self._breaker_open),
+        )
+
+    def _log_sustained_failure(self, failing_seconds: float) -> None:
         logger.error(
             "%s (%s) has been failing to deliver for %.0fs \u2014 %d event(s)"
             " dropped from a full queue so far, circuit breaker open=%s."
@@ -605,11 +626,6 @@ class _DestinationDispatcher:
             self._breaker_open,
             self._name,
             self._storage_path,
-        )
-        self._record_forwarding_issue(
-            "sustained_delivery_failure",
-            "failing for %.0fs (overflow_dropped=%d, breaker_open=%s)"
-            % (failing_seconds, self._overflow_dropped, self._breaker_open),
         )
 
     # -- circuit breaker (v2 minimal) ---------------------------------------
@@ -788,6 +804,13 @@ class _DestinationDispatcher:
                     if outcome == _DELIVERED:
                         self._breaker_record_delivered()
                         self._emit_delivery_heartbeat()
+                        if self._offline:
+                            self._offline = False
+                            logger.warning(
+                                "context-intelligence: %s back online; resuming delivery",
+                                self._name,
+                            )
+                            self._record_forwarding_issue("online", "delivery resumed")
                         self._degraded_warned = False
                         self._degraded_since = None
                     elif outcome == _TRANSIENT and self._is_hard_outcome():
@@ -923,6 +946,13 @@ class _DestinationDispatcher:
                     if outcome == _DELIVERED:
                         self._breaker_record_delivered()
                         self._emit_delivery_heartbeat()
+                        if self._offline:
+                            self._offline = False
+                            logger.warning(
+                                "context-intelligence: %s back online; resuming delivery",
+                                self._name,
+                            )
+                            self._record_forwarding_issue("online", "delivery resumed")
                         if self._degraded_warned:
                             logger.info(
                                 "Reconnected to %s — resuming delivery.",
@@ -1059,6 +1089,26 @@ class _DestinationDispatcher:
         delay = random.uniform(0, cap) if self._backoff_jitter else cap
         await asyncio.sleep(delay)
 
+    def _mark_offline(self, detail: str, cred_logs: list[str] | None = None) -> None:
+        """Record that delivery is OFFLINE (network unavailable); idempotent.
+
+        Emits ONE concise console line the first time per outage and one
+        durable ``offline`` forwarding record; everything else (the exception
+        text, captured azure/msal output) goes to the forwarding JSONL only.
+        """
+        if self._offline:
+            return
+        self._offline = True
+        logger.warning(
+            "context-intelligence: %s offline (network); queuing events, will retry automatically",
+            self._name,
+        )
+        extra = " | ".join(m.strip().splitlines()[0] for m in (cred_logs or []) if m.strip())
+        self._record_forwarding_issue(
+            "offline",
+            f"network unavailable: {detail}"[:300] + (f" [{extra[:500]}]" if extra else ""),
+        )
+
     async def _post(self, event: str, data: dict[str, Any]) -> str:
         """POST one event to this destination and return a three-way outcome.
 
@@ -1111,13 +1161,26 @@ class _DestinationDispatcher:
         payload = build_payload(event, self._workspace, data, working_dir=self._working_dir)
         # Per-request header: Entra SDK returns cached token and refreshes near expiry.
         try:
-            auth_headers = self._strategy.headers()
+            # azure-identity logs the full `az` CLI traceback at WARNING on every
+            # failed get_token; capture it (off the terminal) so an outage is
+            # classifiable and quiet.
+            with capture_credential_logs() as cred_logs:
+                auth_headers = self._strategy.headers()
             # Headers succeeded: this failure episode (if any) is over --
             # clear the set of exception types already recorded this episode
             # so a LATER, distinct outage starts clean and gets its own fresh
             # auth_token_unavailable record(s) (see the except block below).
             self._auth_recorded_types.clear()
+            self._auth_warned = False
         except Exception as exc:
+            if is_offline_error(exc, "\n".join(cred_logs)):
+                # Network unavailable (DNS, refused/reset, OSError 22, timeout, or
+                # a credential error whose cause is one of those): NOT an auth
+                # failure. Queue quietly, back off, resume automatically. Not
+                # HARD, so it never feeds the auth breaker, and no `az login`.
+                self._last_status = None
+                self._mark_offline(f"{type(exc).__name__}: {exc}", cred_logs)
+                return _TRANSIENT
             # Auth-strategy failure producing the Authorization header -- e.g. an
             # expired `az login` causes EntraTokenAuth.headers() -> get_token() to
             # raise azure-identity's CredentialUnavailableError / ClientAuthenticationError
@@ -1197,12 +1260,11 @@ class _DestinationDispatcher:
                     "auth_token_unavailable",
                     f"auth token production failed: {type(exc).__name__}: {exc}",
                 )
-            # Console logging (WARNING + DEBUG traceback) stays rate-limited to avoid
-            # spamming the log during a sustained outage; the durable record above is
-            # the diagnostic of record and is intentionally not throttled.
-            now = time.monotonic()
-            if now - self._last_headers_error_log >= _LOG_RATE_LIMIT_SECONDS:
-                self._last_headers_error_log = now
+            # Console WARNING is shown once per auth-failure episode (reset when
+            # headers() next succeeds); the durable record above is the
+            # diagnostic of record. Full tracebacks go to DEBUG only.
+            if not self._auth_warned:
+                self._auth_warned = True
                 logger.warning(
                     "%s (%s) could not produce an auth token (%s) -- run `az login` to"
                     " refresh if your session expired; retrying with backoff, events"
@@ -1239,13 +1301,20 @@ class _DestinationDispatcher:
             # of retrying it, permanently losing an event on a mid-stream server kill.
             httpx.NetworkError,
             httpx.RemoteProtocolError,
-        ):
+            # Raw socket/ssl errors that escape httpx's wrapping (e.g. OSError 22
+            # from ssl getpeername on a dead connection) are network-unavailable
+            # too; anything else that is an OSError is re-raised below.
+            OSError,
+        ) as exc:
+            if isinstance(exc, OSError) and not is_offline_error(exc):
+                raise
             # A timeout / network error carries NO HTTP status. Clear the sentinel
             # so a PRIOR 401 cannot be inherited by this outcome and mis-counted as
             # an auth failure -- that inheritance is what produced false "still
             # rejecting auth (HTTP 401)" warnings for what were really network blips
             # (the counter climbed on timeouts, not on real credential rejections).
             self._last_status = None
+            self._mark_offline(f"{type(exc).__name__}: {exc}")
             return _TRANSIENT
         # Bare Exception / TypeError / other unclassified exceptions propagate.
 
