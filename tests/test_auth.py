@@ -352,9 +352,7 @@ class TestNonInteractiveCredentialSeam:
         with pytest.raises(ImportError):
             _make_cli_credential()
 
-    def test_seam_quiets_chained_credential_warning(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_seam_quiets_chained_credential_warning(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """The per-retry multi-line chain-failure WARNING is suppressed; errors still show."""
         import logging
 
