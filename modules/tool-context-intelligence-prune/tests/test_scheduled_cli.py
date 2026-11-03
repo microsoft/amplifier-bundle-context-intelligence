@@ -8,6 +8,31 @@ from click.testing import CliRunner
 from amplifier_module_tool_context_intelligence_prune import scheduled_cli as cli
 
 
+def test_install_defaults_to_60d_payload_age(monkeypatch, tmp_path):
+    calls = []
+
+    def observe(config, **options):
+        calls.append(config)
+        return {"state": "installed"}
+
+    monkeypatch.setattr(cli, "install", observe)
+    result = CliRunner().invoke(cli.main, ["install", "--root", str(tmp_path)])
+    assert result.exit_code == 0, result.output
+    assert len(calls) == 1
+    assert calls[0].older_than == "60d"
+
+
+def test_help_shows_60d_payload_age():
+    runner = CliRunner()
+    result = runner.invoke(cli.main, ["install", "--help"])
+    assert result.exit_code == 0, result.output
+    assert "--older-than TEXT" in result.output
+    assert "[default: 60d]" in result.output
+    result = runner.invoke(cli.main, ["--help"])
+    assert result.exit_code == 0, result.output
+    assert "older than 60d" in result.output
+
+
 def test_install_passes_config_and_explicit_enable(monkeypatch, tmp_path):
     calls = []
 

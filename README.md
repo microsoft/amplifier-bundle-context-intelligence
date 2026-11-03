@@ -871,10 +871,19 @@ Scheduling, configuration, and execution live in the reusable
 parses options, renders JSON, and sets the exit code. No model, server, or
 credentials are required by this local job.
 
+Prerequisites: Linux with a working systemd user manager, and `uv` plus Python
+3.11+ for the documented installation. Install the standalone prune CLI
+separately; adding the bundle alone does not install it. For an unmerged revision,
+pin both the CLI and shared library to that revision as described below; `main`
+does not include unmerged changes.
+
 ```bash
-# Install without enabling. Defaults are 02:00 local, 7d payload age, 7d inactivity.
+# First installation saves the applying policy with the timer disabled:
+# 02:00 local time, payloads older than 60d, sessions inactive at least 7d.
 context-intelligence-prune-schedule install
+# Preview once; this does not change the saved applying policy.
 context-intelligence-prune-schedule run --dry-run
+# After reviewing the preview, enable future applying runs.
 context-intelligence-prune-schedule enable
 context-intelligence-prune-schedule status
 
@@ -887,13 +896,18 @@ context-intelligence-prune-schedule uninstall
 ```
 
 Use a **dedicated, pinned pruner installation**, not Amplifier's shared Python
-environment: the service saves the absolute installed interpreter path. When
-testing an unmerged commit, pin both the CLI and its shared library to that same
-commit using `uv tool install --overrides`; the CLI's published dependency follows
-the repository's `main`. Install this module separately from Amplifier itself.
+environment: the service saves the absolute installed interpreter path, so keep
+that runtime installed. When testing an unmerged commit, pin both the CLI and its
+shared library to that same commit using `uv tool install --overrides`; the CLI's
+published dependency follows the repository's `main`. Install this module
+separately from Amplifier itself.
 The user systemd manager must be available. A lingering user manager is needed
 for execution while logged out; this command does not enable linger or install
 system software.
+
+Upgrading the package does not rewrite an existing saved configuration. To change
+an existing policy, rerun `install` with the desired options; unspecified options
+reset to their defaults.
 
 The default configuration is
 `~/.config/context-intelligence/local-prune/config.json`. `--config PATH` selects
@@ -921,14 +935,15 @@ checks current global settings as well as the saved root. An unavailable
 root; use a literal authority or a usable nonempty default for reproducible
 resolution. If current settings resolve elsewhere, both locations remain checked.
 
-**This is conditional retention, not a seven-day cap on every log.** The job
+**This is conditional retention, not a sixty-day cap on every log.** The job
 removes direct request `data.raw` older than `older_than` only from otherwise
 eligible sessions idle for at least `min_inactive`. It retains active, child,
 legacy, foreign, lock-held, recovery-registered, and ambiguous sessions regardless
 of payload age. The scheduled path never asserts stopped writers, removes raw
 responses, or creates raw backups. Inactivity must be at least one day and at
-least the mtime guard. Scheduled defaults are seven days; the unchanged manual
-CLI retains its coupled `max(14d, min-idle, cutoff age)` rule. Python callers can
+least the mtime guard. Scheduled defaults are sixty days for payload age and seven
+days for inactivity; the unchanged manual CLI retains its coupled
+`max(14d, min-idle, cutoff age)` rule. Python callers can
 explicitly set `PruneRequest.min_inactive` to select a separate inactivity
 boundary; leaving it `None` preserves the legacy rule.
 

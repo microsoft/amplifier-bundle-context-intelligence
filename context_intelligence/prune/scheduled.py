@@ -173,7 +173,7 @@ class ScheduleConfig:
     state_root: Path = field(default_factory=state_root)
     recovery_roots: tuple[Path, ...] = ()
     at: str = "02:00"
-    older_than: str = "7d"
+    older_than: str = "60d"
     min_inactive: str = "7d"
     min_idle: str = "1h"
     max_runtime: int = 3600

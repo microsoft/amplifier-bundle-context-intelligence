@@ -48,6 +48,50 @@ def save_config(value, config):
     return path
 
 
+@pytest.mark.parametrize(
+    "options,older_than,cutoff,pruned",
+    [
+        ({}, "60d", "2026-08-21T00:00:00+00:00", [False, False, True]),
+        ({"older_than": "14d"}, "14d", "2026-10-06T00:00:00+00:00", [True, True, True]),
+    ],
+    ids=["default-60d", "explicit-14d"],
+)
+def test_scheduled_payload_age_retention(capture, options, older_than, cutoff, pruned):
+    boundary = fixtures.NOW - timedelta(days=60)
+    rows = [
+        json.loads(capture.original),
+        {"event": "llm:request", "timestamp": boundary.isoformat(), "data": {"raw": "BOUNDARY"}},
+        {
+            "event": "llm:request",
+            "timestamp": (boundary - timedelta(seconds=1)).isoformat(),
+            "data": {"raw": "OLDER"},
+        },
+    ]
+    capture.path.write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")
+    capture.age(capture.path)
+    config = config_for(capture, **options)
+    path = save_config(capture, config)
+    saved = path.read_bytes()
+
+    result = run_scheduled(path, now=fixtures.NOW)
+
+    assert result["state"] == "completed", result
+    assert result["summary"]["payloads"] == sum(pruned)
+    assert result["cutoff"] == cutoff
+    body = [json.loads(line) for line in capture.path.read_text(encoding="utf-8").splitlines()]
+    assert len(body) == len(rows)
+    for before, after, removed in zip(rows, body, pruned):
+        assert after["event"] == before["event"]
+        assert after["timestamp"] == before["timestamp"]
+        if removed:
+            assert "raw" not in after["data"]
+        else:
+            assert after == before
+    assert body[0]["data"]["usage"] == {"tokens": 12}
+    assert config.older_than == older_than
+    assert path.read_bytes() == saved
+
+
 def test_two_cycles_prune_newly_aged_request_without_touching_metadata(capture):
     """Actual transaction result of cycle 1 feeds cycle 2; injected clocks only."""
     now = fixtures.NOW
@@ -123,7 +167,7 @@ def test_legacy_none_preserves_coupled_cutoff(capture):
 
 
 def test_resumed_capture_must_be_inactive_again(capture):
-    config = config_for(capture)
+    config = config_for(capture, older_than="7d")
     path = save_config(capture, config)
     assert run_scheduled(path, now=fixtures.NOW)["summary"]["payloads"] == 1
     base = receipt_path(capture.path).read_bytes()

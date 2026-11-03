@@ -38,7 +38,7 @@ def _call(function: Any, *args: Any, **kwargs: Any) -> None:
 
 @click.group()
 def main() -> None:
-    """Configure an opt-in Linux user timer. Defaults: 02:00 local, older than 7d.
+    """Configure an opt-in Linux user timer. Defaults: 02:00 local, older than 60d.
 
     Only supported roots idle for min-inactive qualify. Legacy, active and
     recovery-registered sessions remain untouched regardless of payload age.
@@ -62,7 +62,7 @@ def _config_option(function: Any) -> Any:
 @click.option("--state-root", type=click.Path(path_type=Path), default=None)
 @click.option("--recovery-root", multiple=True, type=click.Path(path_type=Path))
 @click.option("--at", default="02:00", show_default=True, help="Daily HH:MM in machine local time.")
-@click.option("--older-than", default="7d", show_default=True)
+@click.option("--older-than", default="60d", show_default=True)
 @click.option(
     "--min-inactive",
     default="7d",
