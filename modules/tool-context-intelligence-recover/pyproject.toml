@@ -20,6 +20,7 @@ build-backend = "hatchling.build"
 
 [tool.uv]
 package = true
+override-dependencies = ["amplifier-bundle-context-intelligence"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["amplifier_module_tool_context_intelligence_recover"]
@@ -28,6 +29,7 @@ packages = ["amplifier_module_tool_context_intelligence_recover"]
 allow-direct-references = true
 
 [tool.uv.sources]
+amplifier-bundle-context-intelligence = { path = "../..", editable = true }
 amplifier-module-hook-context-intelligence = { path = "../hook-context-intelligence", editable = true }
 
 [dependency-groups]

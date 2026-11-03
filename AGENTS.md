@@ -167,6 +167,13 @@ authority with standard CLI state and explicit roots; `prune.operations.prune_fi
 owns the mandatory guards for every caller. See the README's pruning and scheduling
 sections for the refusal and installed-policy contracts.
 
+Matching numeric versions do not prove shared-library API compatibility.
+Verify installed CLIs against their declared sources, without `PYTHONPATH`.
+Distinguish editable checkout project resolution from non-editable wheels and
+standalone installs, whose production requirements still select Git `@main`.
+Before merge, pin candidate CLIs and their shared library to the same revision;
+recovery also needs the matching hook. See each CLI's installation guidance.
+
 ## Seam Awareness
 
 This bundle has **seams** — integration boundaries where one module's wiring touches the rest of
