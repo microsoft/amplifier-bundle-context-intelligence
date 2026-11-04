@@ -7,6 +7,8 @@ import json
 import time
 from pathlib import Path
 
+from context_intelligence.recovery_retirement import retire_job
+
 from .recovery import RecoveryRunner
 
 
@@ -27,6 +29,12 @@ def _parser() -> argparse.ArgumentParser:
     mode.add_argument(
         "--watch", action="store_true", help="Retry unfinished work, honoring Retry-After."
     )
+    mode.add_argument(
+        "--retire-job",
+        action="store_true",
+        help="Permanently abandon this existing job; stop all old launchers first.",
+    )
+    parser.add_argument("--reason", help="Local explanation for explicit job retirement.")
     parser.add_argument(
         "--dry-run",
         "--plan",
@@ -37,7 +45,18 @@ def _parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> None:
-    args = _parser().parse_args(argv)
+    parser = _parser()
+    args = parser.parse_args(argv)
+    if args.retire_job:
+        if not args.state_dir or not args.job_id or not args.reason or args.path or args.dry_run:
+            parser.error("--retire-job requires --state-dir, --job-id and --reason only")
+        if Path(args.job_id).name != args.job_id or args.job_id in (".", ".."):
+            parser.error("--job-id must be one filename component")
+        receipt = retire_job(args.state_dir / f"{args.job_id}.v2.sqlite3", reason=args.reason)
+        print(json.dumps(receipt, sort_keys=True))
+        return
+    if args.reason:
+        parser.error("--reason requires --retire-job")
     job_id = args.job_id or "default"
     state_dir = args.state_dir or (
         Path.home() / ".local" / "state" / "context-intelligence" / "recovery" / job_id

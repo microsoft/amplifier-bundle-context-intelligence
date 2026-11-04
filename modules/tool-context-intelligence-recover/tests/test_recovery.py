@@ -13,6 +13,7 @@ from pathlib import Path
 import httpx
 import pytest
 from amplifier_module_hook_context_intelligence.config_resolver import Destination
+from context_intelligence.recovery_retirement import RetirementError, retire_job
 
 from amplifier_module_tool_context_intelligence_recover import cli, recovery
 from amplifier_module_tool_context_intelligence_recover.recovery import (
@@ -111,6 +112,86 @@ def _assert_indexed_next_cursor_plan(runner: RecoveryRunner) -> None:
     details = [str(row["detail"]) for row in plan]
     assert any("cursor_target_pending_order" in detail for detail in details)
     assert not any("USE TEMP B-TREE" in detail for detail in details)
+
+
+def test_retired_job_refuses_same_process_and_restarted_entrypoint(
+    tmp_path: Path, configured_roots: None
+) -> None:
+    import sqlite3
+    import subprocess
+    import sys
+    from contextlib import closing
+
+    _capture(tmp_path)
+    state = tmp_path / "state"
+    requests: list[httpx.Request] = []
+    with _server(requests) as client:
+        runner = RecoveryRunner(state_dir=state, job_id="retire-me", client=client)
+        runner.run([tmp_path], dry_run=True)
+        ledger = runner.checkpoint.path
+        with pytest.raises(RetirementError, match="running"):
+            retire_job(ledger, reason="Attempt while runner owns the lock")
+        runner.close()
+        assert not requests
+        with closing(sqlite3.connect(ledger)) as db:
+            before = list(db.execute("SELECT * FROM cursor"))
+        cli.main(
+            [
+                "--state-dir",
+                str(state),
+                "--job-id",
+                "retire-me",
+                "--retire-job",
+                "--reason",
+                "Operator retired old launcher and abandoned catch-up",
+            ]
+        )
+        for _ in range(2):
+            with pytest.raises(RetirementError, match="abandoned"):
+                RecoveryRunner(state_dir=state, job_id="retire-me", client=client)
+        process = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "amplifier_module_tool_context_intelligence_recover",
+                "--state-dir",
+                str(state),
+                "--job-id",
+                "retire-me",
+                "--once",
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        assert process.returncode != 0
+        assert "recovery job is abandoned" in process.stderr
+        assert not requests
+        with closing(sqlite3.connect(ledger)) as db:
+            assert list(db.execute("SELECT * FROM cursor")) == before
+        # An unrelated, ordinary job still starts and performs its normal work.
+        ordinary = RecoveryRunner(state_dir=state, job_id="ordinary", client=client)
+        try:
+            assert ordinary.run([tmp_path]).delivered == 1
+            assert requests
+        finally:
+            ordinary.close()
+
+
+@pytest.mark.parametrize(
+    "args",
+    [
+        ["--retire-job"],
+        ["--reason", "missing retirement command"],
+        ["--retire-job", "--state-dir", "/unused", "--job-id", "../job", "--reason", "bad id"],
+        ["--retire-job", "--state-dir", "/unused", "--job-id", "job", "--reason", "x", "--dry-run"],
+    ],
+)
+def test_retirement_cli_requires_explicit_existing_job(args: list[str]) -> None:
+    with pytest.raises(SystemExit) as exc:
+        cli.main(args)
+    assert exc.value.code == 2
 
 
 def test_v2_checkpoint_is_compact_locked_and_leaves_v1_untouched(

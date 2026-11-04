@@ -38,6 +38,7 @@ from context_intelligence.config import (
     _expand_env_placeholders,
     read_hook_config_block,
 )
+from context_intelligence.recovery_retirement import RetirementError, retired_job
 
 _NATIVE_FORMAT = "context-intelligence"
 _NATIVE_VERSION = "1.0.0"
@@ -551,6 +552,8 @@ class RecoveryCheckpoint:
         try:
             self.connection = sqlite3.connect(self.path)
             self.connection.row_factory = sqlite3.Row
+            if retired_job(self.connection) is not None:
+                raise RetirementError("recovery job is abandoned; it cannot be resumed")
             self.connection.execute("PRAGMA foreign_keys = ON")
             self.connection.execute("PRAGMA journal_mode = WAL")
             self.connection.execute(f"PRAGMA journal_size_limit = {_JOURNAL_LIMIT_BYTES}")
@@ -631,6 +634,8 @@ class RecoveryCheckpoint:
             except OSError:
                 pass
         except Exception:
+            if hasattr(self, "connection"):
+                self.connection.close()
             fcntl.flock(self._lock_fd, fcntl.LOCK_UN)
             os.close(self._lock_fd)
             _HELD_LOCK_PATHS.discard(self._lock_key)

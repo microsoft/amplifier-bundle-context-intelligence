@@ -871,6 +871,11 @@ Recovery inventory checks both the CLI's standard
 `recovery_state_root`, plus explicit roots. Every source registered in a supported
 recovery V2 ledger is skipped, regardless of delivery state; no byte-offset/cursor
 is reset.
+The sole exception is an explicit, exact-job abandonment recorded by the matching
+[`context-intelligence-recover --retire-job`](modules/tool-context-intelligence-recover/README.md#permanently-abandon-one-catch-up-job)
+command after retiring that job's producer/launchers. This preserves its rows and
+unknown outcomes and prevents current clients resuming it. It releases only that
+job's exclusion, not another job's registration or any writer/age/replay guard.
 Supply every custom state root with repeated `--recovery-state-dir PATH`.
 Unknown, busy, or unreadable state refuses pruning; absent standard state does not
 prove delivery. Stop independent uncoordinated readers/recovery processes too.

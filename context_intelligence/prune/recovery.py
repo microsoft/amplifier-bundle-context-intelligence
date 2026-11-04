@@ -11,9 +11,9 @@ import json
 import os
 import sqlite3
 import stat
+from collections.abc import Callable, Iterator
 from contextlib import ExitStack, contextmanager
 from pathlib import Path
-from typing import Callable, Iterator
 
 from .coordination import PruneError
 
@@ -122,7 +122,7 @@ def _validate_registry(path: Path) -> None:
         connection.close()
 
 
-def _exclude_registered(connection: sqlite3.Connection, source: Path) -> None:
+def _validate_checkpoint_schema(connection: sqlite3.Connection) -> bool:
     columns = {row[1] for row in connection.execute("PRAGMA table_info(artifact)")}
     cursors = {row[1] for row in connection.execute("PRAGMA table_info(cursor)")}
     supported_cursors = (
@@ -136,6 +136,18 @@ def _exclude_registered(connection: sqlite3.Connection, source: Path) -> None:
         raise PruneError("recovery-state-unknown: ambiguous V2 checkpoint schema")
     if cursors not in supported_cursors:
         raise PruneError("recovery-state-unknown: unsupported V2 checkpoint")
+    return historical
+
+
+def _exclude_registered(connection: sqlite3.Connection, source: Path) -> None:
+    from context_intelligence.recovery_retirement import RetirementError, retired_job
+
+    historical = _validate_checkpoint_schema(connection)
+    try:
+        if retired_job(connection) is not None:
+            return
+    except RetirementError as exc:
+        raise PruneError("recovery-state-unknown: invalid job retirement") from exc
     # Both supported producers use absolute(), not resolve(), for this ID.
     artifact_id = hashlib.sha256(str(source.absolute()).encode("utf-8")).hexdigest()
     if connection.execute("SELECT 1 FROM artifact WHERE artifact_id=?", (artifact_id,)).fetchone():
