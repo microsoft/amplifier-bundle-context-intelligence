@@ -48,6 +48,45 @@ def save_config(value, config):
     return path
 
 
+@pytest.mark.parametrize("basename", ["transcript.jsonl", "events.jsonl"])
+@pytest.mark.parametrize("kind", ["dangling", "existing", "regular", "absent"])
+def test_presence_history_scheduled(capture, basename, kind):
+    before = fixtures.prepare_presence_history(capture, basename, kind)
+    config = config_for(capture)
+    assert (config.older_than, config.min_inactive, config.min_idle) == ("60d", "7d", "1h")
+    path = save_config(capture, config)
+    saved = path.read_bytes()
+    result = run_scheduled(path, now=fixtures.NOW)
+    pruned = kind in ("regular", "absent")
+    assert result["state"] == "completed" and result["exit_code"] == 0, result
+    assert result["summary"]["payloads"] == (1 if pruned else 0)
+    assert result["summary"]["changed_files"] == (1 if pruned else 0)
+    # Tree traversal visits both native and CI events.jsonl; unsafe history
+    # refuses both candidates, not just the CI capture whose bytes we protect.
+    assert result["summary"]["skipped_files"] == (0 if pruned else 2)
+    assert path.read_bytes() == saved
+    fixtures.assert_presence_effects(capture, before, pruned=pruned)
+
+
+@pytest.mark.parametrize("timing", ["entry", "after-scan"])
+@pytest.mark.parametrize("kind", ["dangling", "existing", "regular", "absent"])
+def test_presence_fence_scheduled(capture, kind, timing):
+    with fixtures.presence_fence_scan(capture, kind, timing) as before:
+        config = config_for(capture)
+        assert (config.older_than, config.min_inactive, config.min_idle) == ("60d", "7d", "1h")
+        path = save_config(capture, config)
+        saved = path.read_bytes()
+        result = run_scheduled(path, now=fixtures.NOW)
+    pruned = kind == "absent"
+    assert result["state"] == "completed" and result["exit_code"] == 0, result
+    assert result["summary"]["payloads"] == (1 if pruned else 0)
+    assert result["summary"]["changed_files"] == (1 if pruned else 0)
+    expected_skips = 0 if pruned else (2 if timing == "entry" else 1)
+    assert result["summary"]["skipped_files"] == expected_skips
+    assert path.read_bytes() == saved
+    fixtures.assert_presence_effects(capture, before, pruned=pruned)
+
+
 @pytest.mark.parametrize(
     "options,older_than,cutoff,pruned",
     [

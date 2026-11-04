@@ -6,10 +6,15 @@ import os
 import socket
 import tempfile
 import unittest
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import patch
 
+import pytest
+
+from context_intelligence.prune import PruneRequest, prune_file
+from context_intelligence.prune.coordination import receipt_path
 from context_intelligence.prune import storage as core
 from context_intelligence.prune.storage import Policy
 from context_intelligence.prune.inactive import InactiveInventory
@@ -283,6 +288,199 @@ class InactiveTests(unittest.TestCase):
             apply=True,
         )
         self.assertEqual(result.status, "skipped")
+
+
+def prepare_presence_capture(value):
+    """Eligible for the real scheduled 60d/7d/1h policy, without stopped writers."""
+    idle = NOW - timedelta(days=9)
+    released = NOW - timedelta(days=8)
+    value.owner["released_at"] = released.isoformat()
+    value.metadata.update(ended_at=released.isoformat(), last_event_at=released.isoformat())
+    value.write(value.owner_path, value.owner)
+    value.write(value.metadata_path, value.metadata)
+    row = json.loads(value.original)
+    row["timestamp"] = (NOW - timedelta(days=90)).isoformat()
+    value.original = (json.dumps(row) + "\n").encode()
+    value.path.write_bytes(value.original)
+    for name in ("transcript.jsonl", "events.jsonl"):
+        (value.session / name).write_bytes(b'{"synthetic_native_history":"preserve"}\n')
+    for path in (
+        value.path,
+        value.owner_path,
+        value.metadata_path,
+        value.session / "metadata.json",
+        value.session / "transcript.jsonl",
+        value.session / "events.jsonl",
+    ):
+        os.utime(path, (idle.timestamp(), idle.timestamp()))
+    assert not os.path.lexists(receipt_path(value.path))
+
+
+def presence_entry(path):
+    """Read bytes or link text without treating a dangling link as absent."""
+    try:
+        info = path.lstat()
+    except FileNotFoundError:
+        return None
+    identity = (
+        info.st_dev,
+        info.st_ino,
+        info.st_mode,
+        info.st_nlink,
+        info.st_uid,
+        info.st_gid,
+        info.st_size,
+        info.st_mtime_ns,
+        info.st_ctime_ns,
+    )
+    return identity, os.readlink(path) if path.is_symlink() else path.read_bytes()
+
+
+def presence_snapshot(value):
+    return {
+        path: presence_entry(path)
+        for path in (
+            value.path,
+            value.owner_path,
+            value.lock,
+            value.metadata_path,
+            value.session / "metadata.json",
+            value.session / "transcript.jsonl",
+            value.session / "events.jsonl",
+            value.session / "transfer-fence.json",
+            value.root / "presence-target",
+        )
+    }
+
+
+def prepare_presence_history(value, basename, kind):
+    prepare_presence_capture(value)
+    history = value.session / basename
+    target = value.root / "presence-target"
+    if kind != "regular":
+        history.unlink()
+    if kind == "existing":
+        target.write_bytes(b"SYNTHETIC TARGET MUST SURVIVE\n")
+        value.age(target)
+    if kind in ("dangling", "existing"):
+        history.symlink_to(target)
+    return presence_snapshot(value)
+
+
+def prune_presence_capture(value):
+    request = PruneRequest.from_options(
+        value.path,
+        older_than="60d",
+        min_idle="1h",
+        now=NOW,
+        apply=True,
+        inactive_only=True,
+        writers_stopped=False,
+        min_inactive=timedelta(days=7),
+        repeat_pruned=True,
+        state_root=value.root / "state",
+    )
+    return prune_file(value.path, request, now=NOW)
+
+
+def assert_presence_effects(value, before, *, pruned):
+    after = presence_snapshot(value)
+    if pruned:
+        before = {path: entry for path, entry in before.items() if path != value.path}
+        after.pop(value.path)
+        expected = json.loads(value.original)
+        del expected["data"]["raw"]
+        assert json.loads(value.path.read_bytes()) == expected
+        marker = json.loads(receipt_path(value.path).read_bytes())
+        assert marker["source"]["sha256"] == hashlib.sha256(value.original).hexdigest()
+        assert marker["expected"]["sha256"] == hashlib.sha256(value.path.read_bytes()).hexdigest()
+        assert marker["effective_policy"]["inactive_only"] is True
+        assert marker["effective_policy"]["writers_stopped"] is False
+        assert marker["effective_policy"]["repeat_pruned"] is True
+        assert marker["effective_policy"]["min_inactive_seconds"] == 7 * 86400
+    else:
+        assert value.path.read_bytes() == value.original
+        assert not os.path.lexists(receipt_path(value.path))
+    assert after == before
+    for pattern in ("events.jsonl.prune-attempt-*", "*.bak", ".events-prune-*", ".prune-receipt-*"):
+        assert list(value.ci.glob(pattern)) == []
+
+
+@pytest.fixture
+def presence_capture():
+    value = InactiveTests()
+    value.setUp()
+    try:
+        yield value
+    finally:
+        value.doCleanups()
+
+
+@pytest.mark.parametrize("basename", ["transcript.jsonl", "events.jsonl"])
+@pytest.mark.parametrize("kind", ["dangling", "existing", "regular", "absent"])
+def test_presence_history_public_api(presence_capture, basename, kind):
+    before = prepare_presence_history(presence_capture, basename, kind)
+    result = prune_presence_capture(presence_capture)
+    pruned = kind in ("regular", "absent")
+    assert result.status == ("pruned" if pruned else "skipped"), result.reason
+    assert result.payloads == (1 if pruned else 0)
+    assert_presence_effects(presence_capture, before, pruned=pruned)
+
+
+@contextmanager
+def presence_fence_scan(value, kind, timing):
+    """Inject only after the real CI stream, leaving native traversal real too."""
+    prepare_presence_capture(value)
+    marker = value.session / "transfer-fence.json"
+    target = value.root / "presence-target"
+    if kind == "existing":
+        target.write_bytes(b"SYNTHETIC TARGET MUST SURVIVE\n")
+        value.age(target)
+
+    def create_fence():
+        assert not os.path.lexists(marker)
+        if kind == "regular":
+            value.write(marker, {"synthetic_transfer": True})
+        elif kind in ("dangling", "existing"):
+            marker.symlink_to(target)
+
+    if timing == "entry":
+        create_fence()
+    before = presence_snapshot(value)
+    real_stream = core._stream
+    scans = []
+
+    def after_scan(*args):
+        digest = real_stream(*args)
+        if os.path.samestat(os.fstat(args[0].fileno()), value.path.stat()):
+            scans.append(True)
+            assert value.path.read_bytes() == value.original
+            assert not os.path.lexists(receipt_path(value.path))
+            if timing == "after-scan":
+                assert before[marker] is None
+                create_fence()
+                # This entry is the fixture's intentional write, not a pruner
+                # side effect. Its link text/identity/target must now survive.
+                before[marker] = presence_entry(marker)
+        return digest
+
+    with patch.object(core, "_stream", after_scan):
+        yield before
+    if timing == "after-scan" or kind == "absent":
+        assert len(scans) == 1
+
+
+@pytest.mark.parametrize("timing", ["entry", "after-scan"])
+@pytest.mark.parametrize("kind", ["dangling", "existing", "regular", "absent"])
+def test_presence_fence_public_api(presence_capture, kind, timing):
+    with presence_fence_scan(presence_capture, kind, timing) as before:
+        result = prune_presence_capture(presence_capture)
+    pruned = kind == "absent"
+    assert result.status == ("pruned" if pruned else "skipped"), result.reason
+    if not pruned:
+        assert result.reason is not None
+        assert "transfer" in result.reason
+    assert_presence_effects(presence_capture, before, pruned=pruned)
 
 
 if __name__ == "__main__":

@@ -218,12 +218,12 @@ class InactiveInventory:
                 raise InactiveSkip("native session is marked running")
             stamps[native_path] = native_info
             for candidate in (path, session / "transcript.jsonl", session / "events.jsonl"):
-                if candidate.exists():
+                if os.path.lexists(candidate):
                     stamps[candidate] = _regular(candidate)
             for info in stamps.values():
                 if info.st_mtime >= inactive_before.timestamp():
                     raise InactiveSkip("session files changed within the inactivity window")
-            if (session / "transfer-fence.json").exists():
+            if os.path.lexists(session / "transfer-fence.json"):
                 raise InactiveSkip("session has a transfer fence")
 
             def check() -> None:
@@ -235,7 +235,7 @@ class InactiveInventory:
                 for candidate, info in stamps.items():
                     if _signature(candidate.lstat()) != _signature(info):
                         raise InactiveSkip("session metadata/history changed during pruning")
-                if (session / "transfer-fence.json").exists():
+                if os.path.lexists(session / "transfer-fence.json"):
                     raise InactiveSkip("session became transfer-fenced")
 
             check()
