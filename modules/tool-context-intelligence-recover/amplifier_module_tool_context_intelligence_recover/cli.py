@@ -55,7 +55,7 @@ def main(argv: list[str] | None = None) -> None:
         receipt = retire_job(args.state_dir / f"{args.job_id}.v2.sqlite3", reason=args.reason)
         print(json.dumps(receipt, sort_keys=True))
         return
-    if args.reason:
+    if args.reason is not None:
         parser.error("--reason requires --retire-job")
     job_id = args.job_id or "default"
     state_dir = args.state_dir or (
