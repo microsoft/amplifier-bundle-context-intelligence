@@ -93,6 +93,19 @@ This is a bounded text projection, not the CLI's display policy or a new persist
 schema. It neither reconstructs provider continuation state nor certifies a full
 structured message.
 
+Every transcript page independently caps retained typed text blocks at **1,000**
+and consumed physical lines at **1,000**, alongside the existing message and
+content-character budgets. Empty text blocks count toward the block limit, not
+the character budget; strings retain their existing accounting. A whole message
+over the block limit fails with `message_too_many_parts`; otherwise it is deferred
+whole if only the remaining page budget is insufficient. The shared line limit
+also applies to ordinary/configured native reads and counts blank, ignored,
+omitted and malformed lines after the incoming cursor. A page can contain no
+messages and still have `has_more: true`: continue with its returned cursor.
+Only actual capture issues make a page `partial`, not a filled budget.
+The compatible text marker `MORE MESSAGES AVAILABLE` means unread physical
+input remains, not necessarily another eligible user/assistant message.
+
 For scripts outside an active Amplifier session, pass one or more capture directories:
 
 ```bash

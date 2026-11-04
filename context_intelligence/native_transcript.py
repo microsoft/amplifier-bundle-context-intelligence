@@ -23,6 +23,8 @@ from .session_ids import is_safe_session_id
 _SUPPORTED_SCHEMA_VERSION = "1.0.0"
 _MAX_EVENT_BYTES = 1_000_000
 _MAX_METADATA_BYTES = 65_536
+_MAX_RETAINED_TEXT_PARTS_PER_PAGE = 1000
+_MAX_PHYSICAL_LINES_PER_PAGE = 1000
 _CAPTURE_ROOT_PATTERN = re.compile(r"[A-Za-z][A-Za-z0-9_-]{0,63}", re.ASCII)
 _SECURE_OPEN_SUPPORTED = (
     os.name == "posix"
@@ -390,8 +392,8 @@ def read_native_transcript(
 ) -> TranscriptPage:
     """Read one bounded, lossless page of native user and assistant messages.
 
-    A normal page boundary is successful pagination: the next complete message
-    is left for the next call and ``has_more`` is true. A partial status means
+    A normal page boundary is successful pagination: ``has_more`` means more
+    physical input remains, not necessarily another eligible message. A partial status means
     an actual capture problem, never merely that the requested page filled.
     """
     _validate_request(request)
@@ -490,6 +492,8 @@ def _read_transcript_lines(
         )
     omitted_messages = omitted_blocks = 0
     content_chars = 0
+    retained_text_parts = 0
+    consumed_lines = 0
     through_event_line: int | None = request.after_event_line or None
     has_more = False
 
@@ -497,8 +501,16 @@ def _read_transcript_lines(
         for line_number, raw_line in event_lines:
             if line_number <= request.after_event_line:
                 continue
+            # One lookahead establishes whether the exact boundary is EOF. It
+            # belongs to the next page: do not decode it or commit its effects.
+            if consumed_lines >= _MAX_PHYSICAL_LINES_PER_PAGE:
+                has_more = True
+                break
+            line_issues: tuple[TranscriptIssue, ...] = ()
+            line_omitted_messages = line_omitted_blocks = 0
+            message_or_issue: TranscriptMessage | TranscriptIssue | None = None
             if raw_line is None:
-                issues.append(
+                line_issues = (
                     TranscriptIssue(
                         "event_too_large_or_invalid_encoding",
                         line_number,
@@ -507,76 +519,83 @@ def _read_transcript_lines(
                             if persisted
                             else f"event line exceeds {_MAX_EVENT_BYTES} bytes or is not UTF-8"
                         ),
-                    )
+                    ),
                 )
-                through_event_line = line_number
-                continue
-            if line_number <= request.after_event_line or not raw_line.strip():
-                continue
-            try:
-                event = json.loads(raw_line)
-            except (ValueError, RecursionError):
-                issues.append(
-                    TranscriptIssue(
-                        "malformed_json",
-                        line_number,
-                        "invalid JSON transcript line" if persisted else "invalid JSON event line",
+            elif raw_line.strip():
+                try:
+                    event = json.loads(raw_line)
+                except (ValueError, RecursionError):
+                    line_issues = (
+                        TranscriptIssue(
+                            "malformed_json",
+                            line_number,
+                            "invalid JSON transcript line"
+                            if persisted
+                            else "invalid JSON event line",
+                        ),
                     )
-                )
-                through_event_line = line_number
-                continue
-            if not isinstance(event, dict):
-                issues.append(
-                    TranscriptIssue(
-                        "invalid_event_envelope",
-                        line_number,
-                        "transcript line is not an object"
-                        if persisted
-                        else "event line is not an object",
-                    )
-                )
-                through_event_line = line_number
-                continue
-            line_issues: tuple[TranscriptIssue, ...] = ()
-            line_omitted_messages = line_omitted_blocks = 0
-            if persisted:
-                # The adapter is pure; this deferred import avoids a types cycle.
-                from .persisted_transcript import decode_persisted_message
+                else:
+                    if not isinstance(event, dict):
+                        line_issues = (
+                            TranscriptIssue(
+                                "invalid_event_envelope",
+                                line_number,
+                                "transcript line is not an object"
+                                if persisted
+                                else "event line is not an object",
+                            ),
+                        )
+                    elif persisted:
+                        # The adapter is pure; this deferred import avoids a types cycle.
+                        from .persisted_transcript import decode_persisted_message
 
-                projection = decode_persisted_message(event, line_number)
-                message_or_issue = projection.message
-                line_issues = projection.issues
-                line_omitted_messages = projection.omitted_messages
-                line_omitted_blocks = projection.omitted_blocks
-            else:
-                message_or_issue = _message_from_event(event, line_number)
+                        projection = decode_persisted_message(event, line_number)
+                        message_or_issue = projection.message
+                        line_issues = projection.issues
+                        line_omitted_messages = projection.omitted_messages
+                        line_omitted_blocks = projection.omitted_blocks
+                    else:
+                        message_or_issue = _message_from_event(event, line_number)
             if isinstance(message_or_issue, TranscriptIssue):
-                issues.append(message_or_issue)
-                through_event_line = line_number
-                continue
-            if message_or_issue is None:
-                issues.extend(line_issues)
-                omitted_messages += line_omitted_messages
-                omitted_blocks += line_omitted_blocks
-                through_event_line = line_number
-                continue
+                line_issues += (message_or_issue,)
+                message_or_issue = None
 
-            message_size = message_or_issue.content_chars
-            next_size = content_chars + message_size
-            if not messages and message_size > request.max_content_chars:
-                raise NativeTranscriptError(
-                    "message_too_large",
-                    f"event line {line_number} contains {message_size} characters; "
-                    f"increase max_content_chars above {request.max_content_chars}",
+            if message_or_issue is not None:
+                message_parts = (
+                    0
+                    if isinstance(message_or_issue.content, str)
+                    else len(message_or_issue.content)
                 )
-            if len(messages) >= request.max_messages or next_size > request.max_content_chars:
-                has_more = True
-                break
-            messages.append(replace(message_or_issue, sequence=len(messages) + 1))
+                if message_parts > _MAX_RETAINED_TEXT_PARTS_PER_PAGE:
+                    raise NativeTranscriptError(
+                        "message_too_many_parts",
+                        "a transcript message exceeds the 1000 retained text-part limit",
+                    )
+                next_parts = retained_text_parts + message_parts
+                message_size = message_or_issue.content_chars
+                next_size = content_chars + message_size
+                if not messages and message_size > request.max_content_chars:
+                    raise NativeTranscriptError(
+                        "message_too_large",
+                        f"event line {line_number} contains {message_size} characters; "
+                        f"increase max_content_chars above {request.max_content_chars}",
+                    )
+                if (
+                    len(messages) >= request.max_messages
+                    or next_size > request.max_content_chars
+                    or next_parts > _MAX_RETAINED_TEXT_PARTS_PER_PAGE
+                ):
+                    has_more = True
+                    break
+                messages.append(replace(message_or_issue, sequence=len(messages) + 1))
+                content_chars = next_size
+                retained_text_parts = next_parts
+            # Admit a whole physical line atomically, including blank lines.
+            # Deferred messages contribute neither diagnostics nor omissions.
             issues.extend(line_issues)
             omitted_messages += line_omitted_messages
             omitted_blocks += line_omitted_blocks
-            content_chars = next_size
+            consumed_lines += 1
             through_event_line = line_number
     except FileNotFoundError as exc:
         raise NativeTranscriptError(

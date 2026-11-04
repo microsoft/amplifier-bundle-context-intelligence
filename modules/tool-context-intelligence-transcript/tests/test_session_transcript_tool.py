@@ -875,3 +875,156 @@ async def test_format_is_frozen_with_grant_and_cannot_be_selected_by_tool_caller
     assert isinstance(rejected.error, dict)
     assert rejected.error["type"] == "invalid_request"
     assert "capture_format" not in tool.input_schema["properties"]
+
+
+@requires_secure_open
+@pytest.mark.parametrize("output_format", ["json", "text"])
+async def test_retained_part_limit_refuses_30000_empty_blocks_without_payload(
+    tmp_path, output_format
+):
+    entry = _persisted_copy(
+        tmp_path,
+        [{"role": "assistant", "content": [{"type": "text", "text": ""}] * 30_000}],
+    )
+    tool = SessionTranscriptTool(SimpleNamespace(), {"capture_roots": {"copy": entry}})
+    result = await tool.execute(
+        {"capture_root": "copy", "format": output_format, "max_content_chars": 1}
+    )
+    assert not result.success
+    assert result.error == {
+        "type": "message_too_many_parts",
+        "message": "a transcript message exceeds the 1000 retained text-part limit",
+    }
+    assert result.output == "a transcript message exceeds the 1000 retained text-part limit"
+    assert str(tmp_path) not in json.dumps(result.error)
+
+
+@requires_secure_open
+@pytest.mark.parametrize("output_format", ["json", "text"])
+async def test_retained_part_limit_pages_600_plus_600_blocks_losslessly(tmp_path, output_format):
+    entry = _persisted_copy(
+        tmp_path,
+        [
+            {"role": "assistant", "content": [{"type": "text", "text": ""}] * 600},
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "tool_use", "input": "PRIVATE"},
+                    {"type": "UNKNOWN-PRIVATE"},
+                    *[{"type": "text", "text": ""}] * 600,
+                ],
+            },
+        ],
+    )
+    tool = SessionTranscriptTool(SimpleNamespace(), {"capture_roots": {"copy": entry}})
+    request = {"capture_root": "copy", "format": output_format, "max_content_chars": 1}
+    first = await tool.execute(request)
+    assert first.success
+    assert isinstance(first.output, dict)
+    page = first.output["sessions"][0]
+    assert page["has_more"]
+    assert page["next_after_event_line"] == page["through_event_line"] == 1
+    assert page["status"] == "complete"
+    assert page["issues"] == []
+    assert page["projection"] == {"omitted_messages": 0, "omitted_blocks": 0}
+    assert page["content_chars"] == 0
+    second = await tool.execute({**request, "after_event_line": page["next_after_event_line"]})
+    assert second.success
+    assert isinstance(second.output, dict)
+    next_page = second.output["sessions"][0]
+    assert not next_page["has_more"]
+    assert next_page["status"] == "partial"
+    assert next_page["projection"] == {"omitted_messages": 0, "omitted_blocks": 1}
+    assert [issue["code"] for issue in next_page["issues"]] == ["unsupported_content_part"]
+    assert next_page["source"] == page["source"]
+    for current, start in ((page, 0), (next_page, 2)):
+        assert len(current["messages"]) == 1
+        assert current["messages"][0]["content"] == [
+            {"index": index, "text": ""} for index in range(start, start + 600)
+        ]
+    if output_format == "text":
+        assert first.output["text"].count("[TEXT BLOCK ") == 600
+        assert second.output["text"].count("[TEXT BLOCK ") == 600
+        assert "[TEXT BLOCK 2]\n\n[END TEXT BLOCK 2]" in second.output["text"]
+    else:
+        assert "text" not in first.output
+        assert "text" not in second.output
+    assert "PRIVATE" not in json.dumps(second.output)
+
+
+@requires_secure_open
+@pytest.mark.parametrize("output_format", ["json", "text"])
+async def test_physical_line_limit_bounds_unsupported_role_only_tool_pages(tmp_path, output_format):
+    entry = _persisted_copy(tmp_path, [{"role": "UNKNOWN-PRIVATE", "content": "PRIVATE"}] * 1001)
+    tool = SessionTranscriptTool(SimpleNamespace(), {"capture_roots": {"copy": entry}})
+    request = {
+        "capture_root": "copy",
+        "format": output_format,
+        "max_messages": 1,
+        "max_content_chars": 1,
+    }
+    result = await tool.execute(request)
+    assert result.success
+    assert isinstance(result.output, dict)
+    page = result.output["sessions"][0]
+    assert page["status"] == "partial"
+    assert page["messages"] == []
+    assert len(page["issues"]) == 1000
+    assert page["has_more"]
+    assert page["next_after_event_line"] == page["through_event_line"] == 1000
+    resumed = await tool.execute({**request, "after_event_line": page["next_after_event_line"]})
+    assert resumed.success
+    assert isinstance(resumed.output, dict)
+    last = resumed.output["sessions"][0]
+    assert [issue["event_line"] for issue in last["issues"]] == [1001]
+    assert not last["has_more"]
+    assert last["next_after_event_line"] is None
+    assert last["source"] == page["source"]
+    assert "PRIVATE" not in json.dumps(result.output)
+    if output_format == "text":
+        assert "resume with after-event-line=1000" in result.output["text"]
+
+
+@requires_secure_open
+@pytest.mark.parametrize("output_format", ["json", "text"])
+async def test_complete_message_free_scan_pages_continue_through_exact_eof(
+    tmp_path, monkeypatch, output_format
+):
+    monkeypatch.setattr(native, "_MAX_PHYSICAL_LINES_PER_PAGE", 3)
+    entry = _persisted_copy(tmp_path, [])
+    (tmp_path / "transcript.jsonl").write_bytes(
+        b'\n{"role":"system","content":"PRIVATE"}\n'
+        b'{"role":"assistant","content":[{"type":"image","data":"PRIVATE"}]}\n'
+        b' \t\n{"role":"tool","content":"PRIVATE"}\n \t'
+    )
+    tool = SessionTranscriptTool(SimpleNamespace(), {"capture_roots": {"copy": entry}})
+    request = {"capture_root": "copy", "format": output_format, "max_messages": 1}
+    first = await tool.execute(request)
+    assert first.success
+    assert isinstance(first.output, dict)
+    page = first.output["sessions"][0]
+    assert first.output["status"] == page["status"] == "complete"
+    assert page["messages"] == page["issues"] == []
+    assert page["content_chars"] == 0
+    assert page["projection"] == {"omitted_messages": 2, "omitted_blocks": 1}
+    assert page["has_more"]
+    assert page["through_event_line"] == page["next_after_event_line"] == 3
+    second = await tool.execute({**request, "after_event_line": page["next_after_event_line"]})
+    assert second.success
+    assert isinstance(second.output, dict)
+    last = second.output["sessions"][0]
+    assert second.output["status"] == last["status"] == "complete"
+    assert last["messages"] == last["issues"] == []
+    assert last["content_chars"] == 0
+    assert last["projection"] == {"omitted_messages": 1, "omitted_blocks": 0}
+    assert last["through_event_line"] == 6
+    assert not last["has_more"]
+    assert last["next_after_event_line"] is None
+    assert last["source"] == page["source"]
+    assert "PRIVATE" not in json.dumps([first.output, second.output])
+    if output_format == "text":
+        assert "[MORE MESSAGES AVAILABLE | resume with after-event-line=3]" in first.output["text"]
+        assert "[END OF TRANSCRIPT | 0 messages shown]" in second.output["text"]
+    else:
+        assert "text" not in first.output
+        assert "text" not in second.output
