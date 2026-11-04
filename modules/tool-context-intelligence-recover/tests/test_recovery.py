@@ -2,12 +2,18 @@
 
 from __future__ import annotations
 
+import fcntl
 import hashlib
 import json
+import multiprocessing
 import os
+import sqlite3
+import subprocess
+import sys
 import tracemalloc
-from collections.abc import Iterator
-from contextlib import ExitStack, contextmanager
+from collections.abc import Callable, Iterator
+from contextlib import ExitStack, closing, contextmanager
+from multiprocessing.connection import Connection
 from pathlib import Path
 
 import httpx
@@ -114,12 +120,152 @@ def _assert_indexed_next_cursor_plan(runner: RecoveryRunner) -> None:
     assert not any("USE TEMP B-TREE" in detail for detail in details)
 
 
+def _fresh_cli(args: list[str], *, home: Path) -> subprocess.CompletedProcess[str]:
+    """Run the candidate package, without inherited destinations or credentials."""
+    repo = Path(__file__).resolve().parents[3]
+    source_paths = [
+        str(repo),
+        str(repo / "modules/tool-context-intelligence-recover"),
+        str(repo / "modules/hook-context-intelligence"),
+        str(repo / "modules/tool-context-intelligence-query"),
+        str(repo / "modules/tool-context-intelligence-prune"),
+        *filter(None, os.environ.get("PYTHONPATH", "").split(os.pathsep)),
+    ]
+    folders = {
+        "HOME": home,
+        "XDG_CONFIG_HOME": home / "config",
+        "XDG_STATE_HOME": home / "xdg-state",
+        "XDG_CACHE_HOME": home / "cache",
+        "XDG_DATA_HOME": home / "data",
+        "AMPLIFIER_HOME": home / ".amplifier",
+        "TMPDIR": home / "tmp",
+    }
+    for path in folders.values():
+        path.mkdir(parents=True, exist_ok=True)
+    return subprocess.run(
+        [sys.executable, "-m", "amplifier_module_tool_context_intelligence_recover", *args],
+        cwd=home,
+        env={
+            **{name: str(path) for name, path in folders.items()},
+            "PATH": os.defpath,
+            "PYTHONPATH": os.pathsep.join(source_paths),
+            "PYTHONNOUSERSITE": "1",
+            "PYTHONDONTWRITEBYTECODE": "1",
+            "PYTHONUTF8": "1",
+            "LANG": "C.UTF-8",
+        },
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+
+
+@pytest.mark.parametrize(
+    "reason_args",
+    [["--reason", "forgot retirement"], ["--reason", ""], ["--reason="]],
+    ids=["nonempty", "empty-token", "empty-equals"],
+)
+@pytest.mark.parametrize("mode", ["--once", "--watch"])
+def test_reason_without_retire_refuses_before_side_effects(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    reason_args: list[str],
+    mode: str,
+) -> None:
+    source = _capture(tmp_path / "captures")
+    metadata = source.parent / "metadata.json"
+    before = (source.read_bytes(), metadata.read_bytes())
+    state = tmp_path / "state"
+
+    def unexpected_runner(*_args: object, **_kwargs: object) -> None:
+        pytest.fail("RecoveryRunner reached before invalid --reason was rejected")
+
+    def unexpected_retirement(*_args: object, **_kwargs: object) -> None:
+        pytest.fail("retire_job reached before invalid --reason was rejected")
+
+    monkeypatch.setattr(cli, "RecoveryRunner", unexpected_runner)
+    monkeypatch.setattr(cli, "retire_job", unexpected_retirement)
+    with pytest.raises(SystemExit) as exited:
+        cli.main(
+            [
+                mode,
+                "--state-dir",
+                str(state),
+                "--job-id",
+                "invalid-reason",
+                "--path",
+                str(tmp_path / "captures"),
+                *reason_args,
+            ]
+        )
+    assert exited.value.code == 2
+    output = capsys.readouterr()
+    assert "--reason requires --retire-job" in output.err
+    assert output.out == ""
+    assert not state.exists()
+    assert (source.read_bytes(), metadata.read_bytes()) == before
+
+
+@pytest.mark.parametrize(
+    "reason_args", [["--reason", ""], ["--reason="]], ids=["empty-token", "empty-equals"]
+)
+@pytest.mark.parametrize("mode", ["--once", "--watch"])
+def test_reason_without_retire_refuses_in_fresh_entrypoint(
+    tmp_path: Path, configured_roots: None, reason_args: list[str], mode: str
+) -> None:
+    source = _capture(tmp_path / "captures", working_dir=str(tmp_path))
+    state = tmp_path / "state"
+    requests: list[httpx.Request] = []
+    with _server(requests) as client:
+        runner = RecoveryRunner(state_dir=state, job_id="invalid-reason", client=client)
+        try:
+            runner.run([tmp_path / "captures"], dry_run=True)
+            before_rows = _checkpoint_rows(runner)
+            before = {
+                path: (path.read_bytes(), path.stat().st_ino, path.stat().st_mtime_ns)
+                for path in [source, source.parent / "metadata.json", *state.iterdir()]
+                if path.is_file()
+            }
+            # A real held lock bounds even the broken watch path. On the old
+            # guard, the child reaches RecoveryRunner and reports "already locked",
+            # rather than rejecting the administrative option during parsing.
+            process = _fresh_cli(
+                [
+                    mode,
+                    "--state-dir",
+                    str(state),
+                    "--job-id",
+                    "invalid-reason",
+                    "--path",
+                    str(tmp_path / "captures"),
+                    *reason_args,
+                ],
+                home=tmp_path,
+            )
+            assert process.returncode == 2, process.stderr
+            assert "--reason requires --retire-job" in process.stderr
+            assert process.stdout == ""
+            assert _checkpoint_rows(runner) == before_rows
+            assert {
+                path: (path.read_bytes(), path.stat().st_ino, path.stat().st_mtime_ns)
+                for path in before
+            } == before
+            assert {path for path in state.iterdir() if path.is_file()} == {
+                path for path in before if path.parent == state
+            }
+            # Only the parent's dry-run traffic is observed by this mock.
+            # The fresh child's refusal is proven by its stderr and unchanged state.
+            assert not requests
+        finally:
+            runner.close()
+
+
 def test_retired_job_refuses_same_process_and_restarted_entrypoint(
     tmp_path: Path, configured_roots: None
 ) -> None:
     import sqlite3
-    import subprocess
-    import sys
     from contextlib import closing
 
     _capture(tmp_path)
@@ -149,21 +295,15 @@ def test_retired_job_refuses_same_process_and_restarted_entrypoint(
         for _ in range(2):
             with pytest.raises(RetirementError, match="abandoned"):
                 RecoveryRunner(state_dir=state, job_id="retire-me", client=client)
-        process = subprocess.run(
+        process = _fresh_cli(
             [
-                sys.executable,
-                "-m",
-                "amplifier_module_tool_context_intelligence_recover",
                 "--state-dir",
                 str(state),
                 "--job-id",
                 "retire-me",
                 "--once",
             ],
-            check=False,
-            capture_output=True,
-            text=True,
-            timeout=10,
+            home=tmp_path,
         )
         assert process.returncode != 0
         assert "recovery job is abandoned" in process.stderr
@@ -177,6 +317,230 @@ def test_retired_job_refuses_same_process_and_restarted_entrypoint(
             assert requests
         finally:
             ordinary.close()
+
+
+def _checkpoint_rows_from_path(path: Path) -> dict[str, list[tuple]]:
+    """Read committed outcomes and any retirement marker without starting a job."""
+    with closing(sqlite3.connect(path.as_uri() + "?mode=ro", uri=True)) as db:
+        return {
+            table: list(db.execute(f"SELECT * FROM {table} ORDER BY rowid"))
+            for table in ("artifact", "cursor", "recovery_job_retirement")
+            if db.execute("SELECT 1 FROM sqlite_master WHERE name=?", (table,)).fetchone()
+        }
+
+
+def _assert_job_lock_available(ledger: Path) -> None:
+    with Path(str(ledger) + ".lock").open("rb") as lock:
+        fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+
+@pytest.mark.parametrize(
+    ("marker", "refusal"),
+    [
+        ("valid-retired", "recovery job is abandoned"),
+        ("copied-inode", "recovery job retirement identity is invalid"),
+        ("wrong-job", "recovery job retirement identity is invalid"),
+        ("empty-marker", "invalid recovery job retirement record"),
+        ("extra-column", "invalid recovery job retirement schema"),
+    ],
+)
+def test_retirement_markers_refuse_fresh_start_without_changing_checkpoint(
+    tmp_path: Path, configured_roots: None, marker: str, refusal: str
+) -> None:
+    """Missing marker validation must not resume even partially acknowledged work."""
+    root, state, job = tmp_path / "captures", tmp_path / "state", "marker"
+    source = _capture(root, working_dir=str(tmp_path), body=_event("session-1") * 2)
+    metadata = source.parent / "metadata.json"
+    before_source = (source.read_bytes(), metadata.read_bytes())
+    with (
+        _server([]) as client,
+        closing(RecoveryRunner(state_dir=state, job_id=job, client=client)) as runner,
+    ):
+        assert runner.run([root]).delivered == 1
+        ledger = runner.checkpoint.path
+    outcomes = _checkpoint_rows_from_path(ledger)
+    assert len(outcomes["artifact"]) == len(outcomes["cursor"]) == 1
+    retire_job(ledger, reason="Synthetic catch-up abandoned")
+    assert {
+        table: rows
+        for table, rows in _checkpoint_rows_from_path(ledger).items()
+        if table != "recovery_job_retirement"
+    } == outcomes
+    if marker == "copied-inode":
+        original_inode = ledger.stat().st_ino
+        copy = ledger.with_name(ledger.name + ".copy")
+        copy.write_bytes(ledger.read_bytes())
+        copy.chmod(0o600)
+        copy.replace(ledger)
+        assert ledger.stat().st_ino != original_inode
+    elif marker != "valid-retired":
+        with closing(sqlite3.connect(ledger)) as db:
+            if marker == "wrong-job":
+                db.execute("UPDATE recovery_job_retirement SET job_id='some-other-job'")
+            elif marker == "empty-marker":
+                db.execute("DELETE FROM recovery_job_retirement")
+            else:
+                assert marker == "extra-column"
+                db.execute("ALTER TABLE recovery_job_retirement ADD COLUMN unexpected TEXT")
+            db.commit()
+    before = _checkpoint_rows_from_path(ledger)
+    # Repeated constructor refusal must also release the in-process lock registry.
+    for _ in range(2):
+        with pytest.raises(RetirementError, match=refusal):
+            RecoveryRunner(state_dir=state, job_id=job)
+        _assert_job_lock_available(ledger)
+        assert _checkpoint_rows_from_path(ledger) == before
+    process = _fresh_cli(
+        ["--once", "--state-dir", str(state), "--job-id", job, "--path", str(root)],
+        home=tmp_path,
+    )
+    assert process.returncode != 0, process.stdout
+    assert f"RetirementError: {refusal}" in process.stderr, process.stderr
+    assert process.stdout == ""
+    assert _checkpoint_rows_from_path(ledger) == before
+    assert (source.read_bytes(), metadata.read_bytes()) == before_source
+    _assert_job_lock_available(ledger)
+
+
+def _hold_runner(state: Path, job: str, pipe: Connection) -> None:
+    """Own the actual runner lock in a spawned interpreter, not the parent's registry."""
+    try:
+        with closing(RecoveryRunner(state_dir=state, job_id=job)):
+            pipe.send("READY")
+            assert pipe.poll(10), "Parent did not release the runner"
+            assert pipe.recv() == "RELEASE"
+        pipe.send("DONE")
+    finally:
+        pipe.close()
+
+
+def _pause_retirement_after_begin(state: Path, job: str, pipe: Connection) -> None:
+    """Pause only after SQLite has executed BEGIN IMMEDIATE under retire_job's flock."""
+    real_connect = sqlite3.connect
+
+    class PausingConnection(sqlite3.Connection):
+        def execute(self, sql: str, parameters=(), /) -> sqlite3.Cursor:
+            result = super().execute(sql, parameters)
+            if sql == "BEGIN IMMEDIATE":
+                assert self.in_transaction
+                pipe.send("READY")
+                assert pipe.poll(10), "Parent did not release the retirement transaction"
+                assert pipe.recv() == "RELEASE"
+            return result
+
+    def connect(*args, **kwargs) -> sqlite3.Connection:
+        return real_connect(*args, **kwargs, factory=PausingConnection)
+
+    try:
+        with pytest.MonkeyPatch.context() as monkeypatch:
+            monkeypatch.setattr(sqlite3, "connect", connect)
+            receipt = retire_job(
+                state / f"{job}.v2.sqlite3", reason="Synthetic retirement-first catch-up abandoned"
+            )
+        pipe.send(receipt)
+    finally:
+        pipe.close()
+
+
+@contextmanager
+def _spawn_job_process(
+    target: Callable[[Path, str, Connection], None], state: Path, job: str
+) -> Iterator[Connection]:
+    context = multiprocessing.get_context("spawn")
+    parent, child = context.Pipe()
+    process = context.Process(target=target, args=(state, job, child))
+    try:
+        process.start()
+        child.close()
+        assert parent.poll(10), "Child did not reach its real lock/transaction boundary"
+        assert parent.recv() == "READY"
+        yield parent
+        process.join(10)
+        assert not process.is_alive(), "Child did not finish after RELEASE"
+        assert process.exitcode == 0
+    finally:
+        if process.pid is not None:
+            if process.is_alive():
+                process.terminate()
+                process.join(10)
+            if process.is_alive():
+                process.kill()
+                process.join(10)
+            assert not process.is_alive(), "Owned child survived cleanup"
+            process.close()
+        parent.close()
+        child.close()
+
+
+def test_runner_first_blocks_retirement_then_succeeds_after_release(
+    tmp_path: Path, configured_roots: None
+) -> None:
+    """Retirement must take the same OS lock as a runner in another process."""
+    source = _capture(tmp_path / "captures", working_dir=str(tmp_path))
+    before_source = source.read_bytes()
+    state, job = tmp_path / "state", "runner-first"
+    with closing(RecoveryRunner(state_dir=state, job_id=job)) as runner:
+        runner.run([tmp_path / "captures"], dry_run=True)
+        ledger = runner.checkpoint.path
+    before = _checkpoint_rows_from_path(ledger)
+    with _spawn_job_process(_hold_runner, state, job) as pipe:
+        with pytest.raises(RetirementError, match="recovery job is running"):
+            retire_job(ledger, reason="Cannot abandon a live runner")
+        assert _checkpoint_rows_from_path(ledger) == before
+        pipe.send("RELEASE")
+        assert pipe.poll(10), "Runner did not release its lock"
+        assert pipe.recv() == "DONE"
+    _assert_job_lock_available(ledger)
+    receipt = retire_job(ledger, reason="Runner released; synthetic catch-up abandoned")
+    assert receipt["disposition"] == "abandoned"
+    after = _checkpoint_rows_from_path(ledger)
+    assert after["artifact"] == before["artifact"]
+    assert after["cursor"] == before["cursor"]
+    assert len(after["recovery_job_retirement"]) == 1
+    assert source.read_bytes() == before_source
+    _assert_job_lock_available(ledger)
+
+
+def test_retirement_first_blocks_fresh_start_then_reports_abandoned_after_commit(
+    tmp_path: Path, configured_roots: None
+) -> None:
+    """Startup must not slip between retirement's real BEGIN and committed marker."""
+    root, state, job = tmp_path / "captures", tmp_path / "state", "retirement-first"
+    source = _capture(root, working_dir=str(tmp_path))
+    before_source = source.read_bytes()
+    with closing(RecoveryRunner(state_dir=state, job_id=job)) as runner:
+        runner.run([root], dry_run=True)
+        ledger = runner.checkpoint.path
+    before = _checkpoint_rows_from_path(ledger)
+    args = ["--once", "--state-dir", str(state), "--job-id", job, "--path", str(root)]
+    with _spawn_job_process(_pause_retirement_after_begin, state, job) as pipe:
+        # Verify the pause is after a REAL write transaction acquired SQLite's lock.
+        with (
+            closing(sqlite3.connect(ledger, timeout=0)) as db,
+            pytest.raises(sqlite3.OperationalError, match="locked"),
+        ):
+            db.execute("BEGIN IMMEDIATE")
+        process = _fresh_cli(args, home=tmp_path)
+        assert process.returncode != 0, process.stdout
+        assert "recovery job is already locked" in process.stderr, process.stderr
+        assert process.stdout == ""
+        assert _checkpoint_rows_from_path(ledger) == before
+        pipe.send("RELEASE")
+        assert pipe.poll(10), "Retirement did not commit after RELEASE"
+        receipt = pipe.recv()
+        assert receipt["job_id"] == job
+        assert receipt["disposition"] == "abandoned"
+    after = _checkpoint_rows_from_path(ledger)
+    assert after["artifact"] == before["artifact"]
+    assert after["cursor"] == before["cursor"]
+    assert len(after["recovery_job_retirement"]) == 1
+    process = _fresh_cli(args, home=tmp_path)
+    assert process.returncode != 0, process.stdout
+    assert "RetirementError: recovery job is abandoned" in process.stderr, process.stderr
+    assert process.stdout == ""
+    assert _checkpoint_rows_from_path(ledger) == after
+    assert source.read_bytes() == before_source
+    _assert_job_lock_available(ledger)
 
 
 @pytest.mark.parametrize(
