@@ -170,6 +170,7 @@ Treat metadata as legacy-absent only on `lstat()` `FileNotFoundError`, never fol
 Refuse metadata symlinks, including dangling links, before any prepared receipt or source mutation.
 Treat dangling native-history links and transfer fences as present; use non-following presence checks.
 Preserve history type/stamp validation and both transfer-fence checks before pruning or writing a receipt.
+Prove watch retries with `run(refresh=False)` after real capture-lock release, including stale pending cleanup; refresh-only success is not sufficient.
 
 Matching numeric versions do not prove shared-library API compatibility.
 Verify installed CLIs against their declared sources, without `PYTHONPATH`.

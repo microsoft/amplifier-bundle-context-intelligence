@@ -337,7 +337,8 @@ def test_early_job_release_allows_runner_but_capture_ex_prevents_registration(
                 assert report["reads"] == 0 and report["sends"] == []
                 assert report["refusals"] == [str(source)]
                 assert report["artifact_rows"] == report["cursor_rows"] == 0
-                assert report["summary"]["pending"] and report["summary"]["retry_after_s"] == 1
+                assert report["summary"]["pending"]
+                assert 0 < report["summary"]["retry_after_s"] <= 1.0
                 assert _rows(home / "state/a.v2.sqlite3") == ([], [])
                 assert source.read_bytes() == original
                 assert not coordination.receipt_path(source).exists()
@@ -354,6 +355,50 @@ def test_early_job_release_allows_runner_but_capture_ex_prevents_registration(
         "timestamp": "2026-01-01T00:00:00Z",
     }
     assert _rows(home / "state/a.v2.sqlite3") == ([], [])
+
+
+def test_watch_maintenance_capture_ex_then_progress_commit_protects_prune_membership(
+    synthetic_home, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    home, source = synthetic_home
+    original = source.read_bytes()
+    clock = [1000.0]
+    monkeypatch.setattr(producer.time, "monotonic", lambda: clock[0])
+    # resolve_scan_roots also includes its import-time DEFAULT_BASE_PATH.
+    # Confine this in-process test exactly as the subprocess HOME setup does.
+    monkeypatch.setattr(producer, "resolve_scan_roots", lambda _config, explicit: list(explicit))
+    state = home / "state"
+    runner = producer.RecoveryRunner(
+        state_dir=state, job_id="watch-membership", settings_path=home / "settings.yaml"
+    )
+
+    def forbid_send(*_args, **_kwargs):
+        pytest.fail("Dry-run maintenance retry attempted a network operation")
+
+    monkeypatch.setattr(producer.httpx.Client, "send", forbid_send)
+    try:
+        with coordination.capture_lock(source, exclusive=True):
+            summary = runner.run([home / "captures"], dry_run=True)
+            assert summary.pending
+            assert _rows(runner.checkpoint.path) == ([], [])
+            with pytest.raises(RuntimeError, match="already locked"):
+                producer.RecoveryRunner(state_dir=state, job_id="watch-membership")
+        clock[0] += 1
+        summary = runner.run(refresh=False, dry_run=True)
+        artifacts, cursors = _rows(runner.checkpoint.path)
+        assert len(artifacts) == len(cursors) == 1, "Released capture never committed membership"
+        assert summary.inventory == {"eligible": 1}
+        before = artifacts, cursors
+        db = runner.checkpoint.path
+    finally:
+        runner.close()
+        assert source.read_bytes() == original
+        assert not coordination.receipt_path(source).exists()
+    result = prune_file(source, _request(home), now=NOW)
+    assert result.status == "skipped" and (result.reason or "").startswith("skipped-ledger:")
+    assert _rows(db) == before
+    assert source.read_bytes() == original
+    assert not coordination.receipt_path(source).exists()
 
 
 if __name__ == "__main__":

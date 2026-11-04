@@ -81,6 +81,14 @@ elsewhere.
 remains. `--watch` honors `Retry-After` before retrying and re-reads
 configuration on each cycle.
 
+Watch mode keeps its five-minute full-discovery interval. Already-discovered
+captures blocked by a maintenance lock are retried individually on roughly
+one-second intervals, without rescanning the capture tree. After lock release,
+recovery rechecks replay safety and reconciles routing before continuing from
+acknowledged offsets; completed captures stop contributing transient pending
+work. Delivery still honors `Retry-After`; local lock retries do not shorten
+persisted server deferrals or guarantee a one-second completion time.
+
 `--dry-run` (also `--plan`) inventories and evaluates routing without issuing
 any HTTP requests. Recovery scans only exact
 `<project>/sessions/<session>/context-intelligence/events.jsonl` candidates,

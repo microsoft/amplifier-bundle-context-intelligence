@@ -7,7 +7,7 @@ import json
 import os
 import tracemalloc
 from collections.abc import Iterator
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from pathlib import Path
 
 import httpx
@@ -1109,7 +1109,7 @@ def test_busy_scan_preserves_source_changed_quarantine(
                 assert _checkpoint_rows(runner) == before
             assert busy.inventory == {"quarantined": 1}
             assert busy.delivered == 0 and busy.pending is True
-            assert busy.retry_after_s == 1.0
+            assert busy.retry_after_s is not None and 0 < busy.retry_after_s <= 1.0
             released = runner.run([root])
             assert released.inventory == {"quarantined": 1}
             assert released.delivered == 0 and released.pending is True
@@ -1187,7 +1187,8 @@ def test_busy_scan_preserves_existing_identity_routes_and_acknowledged_offsets(
         assert cursor["ordinal"] == 1 and cursor["byte_offset"] > 0
         with capture_lock(path, exclusive=True):
             summary = runner.run([tmp_path], dry_run=True)
-            assert summary.pending and summary.retry_after_s == 1
+            assert summary.pending
+            assert summary.retry_after_s is not None and 0 < summary.retry_after_s <= 1.0
             assert (
                 dict(runner.checkpoint.connection.execute("SELECT * FROM artifact").fetchone())
                 == artifact
@@ -1319,3 +1320,536 @@ def test_prune_keeps_current_cli_default_job_with_alternate_authority(
     assert path.read_bytes() == body and not receipt_path(path).exists()
     assert rows() == before_rows
     assert [(p.read_bytes(), p.stat().st_ino, p.stat().st_mtime_ns) for p in (db, lock)] == before
+
+
+@pytest.fixture
+def watch_maintenance_clock(monkeypatch: pytest.MonkeyPatch) -> list[float]:
+    """Advance local retry time without waiting or changing persisted HTTP time."""
+    clock = [1000.0]
+    monkeypatch.setattr(recovery.time, "monotonic", lambda: clock[0])
+    return clock
+
+
+def _watch_no_discovery(*_args: object) -> Iterator[Path]:
+    pytest.fail("Watch progress must not rediscover the capture tree")
+
+
+def _watch_posts(requests: list[httpx.Request]) -> list[dict]:
+    return [
+        json.loads(request.content)
+        for request in requests
+        if request.url.path == "/recovery/events"
+    ]
+
+
+def test_watch_maintenance_shared_capture_lock_does_not_defer_registration(
+    tmp_path: Path, configured_roots: None, watch_maintenance_clock: list[float]
+) -> None:
+    from context_intelligence.prune.coordination import capture_lock
+
+    path = _capture(tmp_path)
+    source = path.read_bytes()
+    requests: list[httpx.Request] = []
+    with _server(requests) as client:
+        runner = RecoveryRunner(state_dir=tmp_path / "state", job_id="watch-shared", client=client)
+        try:
+            with capture_lock(path):
+                summary = runner.run([tmp_path])
+            assert summary.delivered == 1 and summary.pending is False
+            assert summary.retry_after_s is None and not runner._maintenance_busy
+            assert _checkpoint_rows(runner)[1][0]["byte_offset"] == len(source)
+            assert path.read_bytes() == source
+        finally:
+            runner.close()
+
+
+@pytest.mark.parametrize("append", [False, True], ids=["unchanged", "appended"])
+def test_watch_maintenance_new_capture_retries_without_discovery(
+    tmp_path: Path,
+    configured_roots: None,
+    monkeypatch: pytest.MonkeyPatch,
+    watch_maintenance_clock: list[float],
+    append: bool,
+) -> None:
+    from context_intelligence.prune.coordination import capture_lock
+
+    path = _capture(tmp_path)
+    original = path.read_bytes()
+    stamp = path.stat().st_mtime_ns
+    metadata = (path.parent / "metadata.json").read_bytes()
+    requests: list[httpx.Request] = []
+    with _server(requests) as client:
+        runner = RecoveryRunner(state_dir=tmp_path / "state", job_id="watch-new", client=client)
+        try:
+            with capture_lock(path, exclusive=True):
+                initial = runner.run([tmp_path])
+                assert initial.pending and initial.delivered == 0
+                assert list(runner.checkpoint.connection.execute("SELECT * FROM artifact")) == []
+                assert list(runner.checkpoint.connection.execute("SELECT * FROM cursor")) == []
+                assert requests == []
+                if append:
+                    with path.open("ab") as handle:
+                        handle.write(_event("session-1", "2026-09-15T00:00:01Z"))
+            expected = path.read_bytes()
+            if not append:
+                assert path.stat().st_mtime_ns == stamp and expected == original
+            monkeypatch.setattr(recovery, "discover_native_artifacts", _watch_no_discovery)
+            watch_maintenance_clock[0] += 1.0
+            resumed = runner.run(refresh=False)
+            assert resumed.delivered == 1, (
+                "Released, previously unregistered capture was not scanned"
+            )
+            if append:
+                resumed = runner.run(refresh=False)
+                assert resumed.delivered == 1
+            assert resumed.pending is False and resumed.retry_after_s is None
+            artifact, cursors = _checkpoint_rows(runner)
+            assert artifact["state"] == "accepted"
+            assert artifact["record_count"] == (2 if append else 1)
+            assert cursors[0]["byte_offset"] == len(expected)
+            assert [post["origin"]["ordinal"] for post in _watch_posts(requests)] == (
+                [0, 1] if append else [0]
+            )
+            assert path.read_bytes() == expected
+            assert (path.parent / "metadata.json").read_bytes() == metadata
+        finally:
+            runner.close()
+
+
+@pytest.mark.parametrize("accepted", [False, True], ids=["partial-ack", "already-accepted"])
+def test_watch_maintenance_registered_capture_clears_pending_without_reposting(
+    tmp_path: Path,
+    configured_roots: None,
+    watch_maintenance_clock: list[float],
+    accepted: bool,
+) -> None:
+    from context_intelligence.prune.coordination import capture_lock
+
+    first = _event("session-1")
+    body = first if accepted else first + _event("session-1", "2026-09-15T00:00:01Z")
+    path = _capture(tmp_path, body=body)
+    requests: list[httpx.Request] = []
+    with _server(requests) as client:
+        runner = RecoveryRunner(state_dir=tmp_path / "state", job_id="watch-ack", client=client)
+        try:
+            assert runner.run([tmp_path]).delivered == 1
+            before_artifact, before_cursors = _checkpoint_rows(runner)
+            assert before_cursors[0]["ordinal"] == 1
+            assert before_cursors[0]["byte_offset"] == len(first)
+            with capture_lock(path, exclusive=True):
+                assert runner.run([tmp_path], dry_run=True).pending
+                assert _checkpoint_rows(runner) == (before_artifact, before_cursors)
+            watch_maintenance_clock[0] += 1
+            resumed = runner.run(refresh=False)
+            after_artifact, after_cursors = _checkpoint_rows(runner)
+            assert resumed.delivered == (0 if accepted else 1)
+            assert after_cursors[0]["byte_offset"] == len(body)
+            for field in ("artifact_id", "session_id", "working_dir", "source_sha256"):
+                assert after_artifact[field] == before_artifact[field]
+            for field in ("destination", "target_fingerprint", "policy_fingerprint"):
+                assert after_cursors[0][field] == before_cursors[0][field]
+            assert [post["origin"]["ordinal"] for post in _watch_posts(requests)] == (
+                [0] if accepted else [0, 1]
+            )
+            assert resumed.pending is False, "Accepted cursor still has stale maintenance pending"
+            assert resumed.retry_after_s is None
+            assert path.read_bytes() == body
+        finally:
+            runner.close()
+
+
+def test_watch_maintenance_due_scans_are_targeted_and_healthy_work_is_not_starved(
+    tmp_path: Path,
+    configured_roots: None,
+    monkeypatch: pytest.MonkeyPatch,
+    watch_maintenance_clock: list[float],
+) -> None:
+    from context_intelligence.prune.coordination import capture_lock
+
+    busy = _capture(tmp_path, "busy")
+    healthy = _capture(tmp_path, "healthy", body=_event("healthy") * 3)
+    requests: list[httpx.Request] = []
+    scans: list[tuple[Path, float]] = []
+    hashes: list[Path] = []
+    busy_reads: list[Path] = []
+    real_hash = recovery._stream_fingerprint
+    real_open = Path.open
+
+    def open_file(path: Path, mode: str = "r", *args, **kwargs):
+        if path in (busy, busy.parent / "metadata.json") and "r" in mode:
+            busy_reads.append(path)
+        return real_open(path, mode, *args, **kwargs)
+
+    def fingerprint(path: Path, metadata: dict[str, object]) -> tuple[int, str, str, str | None]:
+        hashes.append(path)
+        return real_hash(path, metadata)
+
+    monkeypatch.setattr(recovery, "_stream_fingerprint", fingerprint)
+    monkeypatch.setattr(Path, "open", open_file)
+    with _server(requests) as client:
+        runner = RecoveryRunner(state_dir=tmp_path / "state", job_id="watch-due", client=client)
+        real_scan = runner._scan_artifact
+
+        def scan(path: Path) -> None:
+            scans.append((path, watch_maintenance_clock[0]))
+            real_scan(path)
+
+        monkeypatch.setattr(runner, "_scan_artifact", scan)
+        try:
+            with capture_lock(busy, exclusive=True):
+                assert runner.run([tmp_path]).delivered == 1
+                monkeypatch.setattr(recovery, "discover_native_artifacts", _watch_no_discovery)
+                watch_maintenance_clock[0] = 1000.25
+                assert runner.run(refresh=False).delivered == 1
+                assert [t for p, t in scans if p == busy] == [1000.0]
+                watch_maintenance_clock[0] = 1001.0
+                assert runner.run(refresh=False).delivered == 1
+                watch_maintenance_clock[0] = 1001.25
+                assert runner.run(refresh=False).delivered == 0
+                watch_maintenance_clock[0] = 1002.0
+                assert runner.run(refresh=False).delivered == 0
+                assert hashes == [healthy], "Locked capture bytes must not be fingerprinted"
+                assert busy_reads == [], "No source or metadata read is allowed under capture EX"
+                assert [post["origin"]["session_id"] for post in _watch_posts(requests)] == [
+                    "healthy",
+                    "healthy",
+                    "healthy",
+                ]
+                assert [t for p, t in scans if p == busy] == [1000.0, 1001.0, 1002.0]
+            watch_maintenance_clock[0] = 1003.0
+            done = runner.run(refresh=False)
+            assert done.delivered == 1 and done.pending is False
+            assert hashes == [healthy, busy]
+            assert [p for p, _t in scans].count(healthy) == 1
+        finally:
+            runner.close()
+
+
+@pytest.mark.parametrize("mutation", ["events", "metadata"])
+def test_watch_maintenance_changed_registered_snapshot_is_quarantined_before_post(
+    tmp_path: Path,
+    configured_roots: None,
+    watch_maintenance_clock: list[float],
+    mutation: str,
+) -> None:
+    from context_intelligence.prune.coordination import capture_lock
+
+    path = _capture(tmp_path, body=_event("session-1") * 2)
+    requests: list[httpx.Request] = []
+    with _server(requests) as client:
+        runner = RecoveryRunner(state_dir=tmp_path / "state", job_id="watch-change", client=client)
+        try:
+            assert runner.run([tmp_path]).delivered == 1
+            _, cursors = _checkpoint_rows(runner)
+            with capture_lock(path, exclusive=True):
+                runner.run([tmp_path], dry_run=True)
+                changed_path = path if mutation == "events" else path.parent / "metadata.json"
+                original = changed_path.read_bytes()
+                changed_path.write_bytes(original.replace(b"00:00", b"00:01"))
+                assert changed_path.read_bytes() != original
+            watch_maintenance_clock[0] += 1
+            # A scan must diagnose even an accepted or dry-run cursor, not rely on POST revalidation.
+            summary = runner.run(refresh=False, dry_run=True)
+            artifact, after = _checkpoint_rows(runner)
+            assert summary.inventory == {"quarantined": 1}
+            assert artifact["reason"] == "source-changed"
+            assert (after[0]["ordinal"], after[0]["byte_offset"]) == (
+                cursors[0]["ordinal"],
+                cursors[0]["byte_offset"],
+            )
+            assert summary.pending is True and summary.retry_after_s is None
+            assert runner.run(refresh=False).delivered == 0
+            assert len(_watch_posts(requests)) == 1
+        finally:
+            runner.close()
+
+
+def test_watch_maintenance_permanent_quarantine_survives_retry_and_full_refresh(
+    tmp_path: Path,
+    configured_roots: None,
+    watch_maintenance_clock: list[float],
+) -> None:
+    from context_intelligence.prune.coordination import capture_lock
+
+    requests: list[httpx.Request] = []
+    with _seed_only_server(requests) as client:
+        runner = RecoveryRunner(
+            state_dir=tmp_path / "state", job_id="watch-permanent", client=client
+        )
+        try:
+            path = _seed_source_changed(runner, tmp_path, "events")
+            before = _checkpoint_rows(runner)
+            with capture_lock(path, exclusive=True):
+                assert runner.run([tmp_path]).pending
+            watch_maintenance_clock[0] += 1
+            summary = runner.run(refresh=False)
+            assert summary.inventory == {"quarantined": 1} and summary.pending
+            assert _checkpoint_rows(runner) == before
+            assert summary.retry_after_s is None, "Permanent refusal retained a transient busy wake"
+            assert runner.run([tmp_path]).inventory == {"quarantined": 1}
+            assert _checkpoint_rows(runner) == before
+        finally:
+            runner.close()
+
+
+@pytest.mark.parametrize("registered", [False, True], ids=["new", "registered"])
+@pytest.mark.parametrize("marker", ["malformed", "dangling"])
+def test_watch_maintenance_receipt_during_contention_refuses_replay(
+    tmp_path: Path,
+    configured_roots: None,
+    watch_maintenance_clock: list[float],
+    registered: bool,
+    marker: str,
+) -> None:
+    from context_intelligence.prune.coordination import capture_lock, receipt_path
+
+    path = _capture(tmp_path, body=_event("session-1") * 2)
+    source = path.read_bytes()
+    requests: list[httpx.Request] = []
+    with _server(requests) as client:
+        runner = RecoveryRunner(state_dir=tmp_path / "state", job_id="watch-receipt", client=client)
+        try:
+            if registered:
+                runner.run([tmp_path])
+            before_posts = len(_watch_posts(requests))
+            before_cursors = [
+                (row["ordinal"], row["byte_offset"])
+                for row in runner.checkpoint.connection.execute("SELECT * FROM cursor")
+            ]
+            with capture_lock(path, exclusive=True):
+                runner.run([tmp_path], dry_run=True)
+                receipt = receipt_path(path)
+                if marker == "malformed":
+                    receipt.write_bytes(b"not-json")
+                else:
+                    receipt.symlink_to(path.parent / "absent-receipt-target")
+                    assert not receipt.exists() and receipt.is_symlink()
+            watch_maintenance_clock[0] += 1
+            summary = runner.run(refresh=False, dry_run=True)
+            assert summary.inventory == {"quarantined": 1}
+            artifact, cursors = _checkpoint_rows(runner)
+            assert str(artifact["reason"]).startswith("pruned-capture:")
+            assert [(row["ordinal"], row["byte_offset"]) for row in cursors] == before_cursors
+            assert summary.pending and summary.retry_after_s is None
+            assert not runner._maintenance_busy
+            assert runner.run(refresh=False).delivered == 0
+            assert len(_watch_posts(requests)) == before_posts
+            assert path.read_bytes() == source
+        finally:
+            runner.close()
+
+
+def test_watch_maintenance_resolved_parent_is_planned_before_child_delivery(
+    tmp_path: Path,
+    configured_roots: None,
+    watch_maintenance_clock: list[float],
+) -> None:
+    from context_intelligence.prune.coordination import capture_lock
+
+    parent = _capture(tmp_path, "z-parent")
+    child = _capture(tmp_path, "a-child", parent_id="z-parent")
+    requests: list[httpx.Request] = []
+    with _server(requests) as client:
+        runner = RecoveryRunner(state_dir=tmp_path / "state", job_id="watch-parent", client=client)
+        try:
+            with ExitStack() as locks:
+                locks.enter_context(capture_lock(parent, exclusive=True))
+                locks.enter_context(capture_lock(child, exclusive=True))
+                assert runner.run([tmp_path]).delivered == 0
+            watch_maintenance_clock[0] += 1
+            first = runner.run(refresh=False)
+            second = runner.run(refresh=False)
+            assert (first.delivered, second.delivered) == (1, 1)
+            assert [post["origin"]["session_id"] for post in _watch_posts(requests)] == [
+                "z-parent",
+                "a-child",
+            ]
+            assert second.inventory == {"accepted": 2} and second.pending is False
+        finally:
+            runner.close()
+
+
+def test_watch_maintenance_resolved_collision_is_quarantined_before_any_post(
+    tmp_path: Path,
+    configured_roots: None,
+    watch_maintenance_clock: list[float],
+) -> None:
+    from context_intelligence.prune.coordination import capture_lock
+
+    paths = [_capture(tmp_path / root, "same") for root in ("one", "two")]
+    requests: list[httpx.Request] = []
+    with _server(requests) as client:
+        runner = RecoveryRunner(
+            state_dir=tmp_path / "state", job_id="watch-collision", client=client
+        )
+        try:
+            with ExitStack() as locks:
+                for path in paths:
+                    locks.enter_context(capture_lock(path, exclusive=True))
+                runner.run([tmp_path / "one", tmp_path / "two"])
+            watch_maintenance_clock[0] += 1
+            summary = runner.run(refresh=False)
+            assert summary.inventory == {"quarantined": 2}
+            assert summary.pending and summary.retry_after_s is None
+            assert summary.delivered == 0 and requests == []
+            assert {
+                row["reason"]
+                for row in runner.checkpoint.connection.execute("SELECT * FROM artifact")
+            } == {"session-id-collision"}
+        finally:
+            runner.close()
+
+
+def test_watch_maintenance_new_destination_rebuilds_delivery_and_inventory_caches(
+    tmp_path: Path,
+    configured_roots: None,
+    monkeypatch: pytest.MonkeyPatch,
+    watch_maintenance_clock: list[float],
+) -> None:
+    from context_intelligence.prune.coordination import capture_lock
+
+    _capture(tmp_path, "healthy", working_dir="/workspace/healthy")
+    busy = _capture(tmp_path, "busy", working_dir="/workspace/busy")
+    one = Destination("one", "https://one.example", "key", ("**",), ())
+    two = Destination("two", "https://two.example", "key", ("**",), ())
+    monkeypatch.setattr(
+        recovery,
+        "load_effective_destination_config",
+        lambda working_dir, _settings: (_config(two if "busy" in working_dir else one), None),
+    )
+    requests: list[httpx.Request] = []
+    with _server(requests) as client:
+        runner = RecoveryRunner(state_dir=tmp_path / "state", job_id="watch-route", client=client)
+        try:
+            with capture_lock(busy, exclusive=True):
+                assert runner.run([tmp_path]).delivered == 1
+            watch_maintenance_clock[0] += 1
+            summary = runner.run(refresh=False)
+            assert summary.delivered == 1
+            assert summary.inventory == {"accepted": 2} and summary.pending is False
+            assert [
+                (request.url.host, json.loads(request.content)["origin"]["session_id"])
+                for request in requests
+                if request.url.path == "/recovery/events"
+            ] == [("one.example", "healthy"), ("two.example", "busy")]
+        finally:
+            runner.close()
+
+
+def test_watch_maintenance_retry_delay_uses_monotonic_not_http_wall_clock(
+    tmp_path: Path,
+    configured_roots: None,
+    monkeypatch: pytest.MonkeyPatch,
+    watch_maintenance_clock: list[float],
+) -> None:
+    from context_intelligence.prune.coordination import capture_lock
+
+    busy = _capture(tmp_path, "busy")
+    _capture(tmp_path, "healthy")
+    wall = [5000.0]
+    monkeypatch.setattr(recovery.time, "time", lambda: wall[0])
+    requests: list[httpx.Request] = []
+    throttle = [True]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        if request.url.path == "/version":
+            return httpx.Response(200, json={"capabilities": ["native-recovery"]})
+        if json.loads(request.content)["origin"]["session_id"] == "healthy" and throttle[0]:
+            throttle[0] = False
+            return httpx.Response(429, headers={"Retry-After": "7"})
+        return httpx.Response(202)
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        runner = RecoveryRunner(state_dir=tmp_path / "state", job_id="watch-clocks", client=client)
+        try:
+            with capture_lock(busy, exclusive=True):
+                assert runner.run([tmp_path]).retry_after_s == 1
+                deferred = runner.checkpoint.connection.execute(
+                    "SELECT retry_at FROM cursor"
+                ).fetchone()
+                assert deferred["retry_at"] == 5007.0
+                watch_maintenance_clock[0] += 0.25
+                wait = runner.run(refresh=False)
+                assert wait.retry_after_s == pytest.approx(0.75)
+            watch_maintenance_clock[0] = 1001.0
+            assert runner.run(refresh=False).delivered == 1
+            assert (
+                runner.checkpoint.connection.execute(
+                    "SELECT retry_at FROM cursor WHERE state='deferred'"
+                ).fetchone()["retry_at"]
+                == 5007.0
+            )
+            watch_maintenance_clock[0] = 9000.0
+            assert runner.run(refresh=False).delivered == 0
+            wall[0] = 5007.0
+            done = runner.run(refresh=False)
+            assert done.delivered == 1 and done.pending is False
+            assert [post["origin"]["session_id"] for post in _watch_posts(requests)] == [
+                "healthy",
+                "busy",
+                "healthy",
+            ]
+        finally:
+            runner.close()
+
+
+@pytest.mark.parametrize("accepted", [False, True], ids=["new", "already-accepted"])
+def test_watch_maintenance_cli_finishes_before_full_refresh_and_releases_job_lock(
+    tmp_path: Path,
+    configured_roots: None,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    watch_maintenance_clock: list[float],
+    accepted: bool,
+) -> None:
+    from context_intelligence.prune.coordination import capture_lock
+
+    path = _capture(tmp_path)
+    requests: list[httpx.Request] = []
+    client = _server(requests)
+    state, job = tmp_path / "state", "watch-cli"
+    if accepted:
+        seed = RecoveryRunner(state_dir=state, job_id=job, client=client)
+        try:
+            assert seed.run([tmp_path]).delivered == 1
+        finally:
+            seed.close()
+    # Only HTTP construction is replaced; CLI constructs and closes the real runner.
+    monkeypatch.setattr(recovery.httpx, "Client", lambda **_kwargs: client)
+    refreshes: list[bool] = []
+    real_run = RecoveryRunner.run
+
+    def run(self: RecoveryRunner, *args, **kwargs):
+        refreshes.append(kwargs.get("refresh", True))
+        return real_run(self, *args, **kwargs)
+
+    monkeypatch.setattr(RecoveryRunner, "run", run)
+    sleeps: list[float] = []
+    with ExitStack() as locks:
+        locks.enter_context(capture_lock(path, exclusive=True))
+
+        def sleep(delay: float) -> None:
+            sleeps.append(delay)
+            locks.close()
+            watch_maintenance_clock[0] += delay
+            assert len(sleeps) <= 4, (
+                "Watch remained pending after lock release without a full refresh"
+            )
+
+        monkeypatch.setattr(cli.time, "sleep", sleep)
+        try:
+            with pytest.raises(SystemExit) as exited:
+                cli.main(
+                    ["--watch", "--path", str(tmp_path), "--state-dir", str(state), "--job-id", job]
+                )
+            assert exited.value.code == 0
+            reports = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+            assert reports[0]["pending"] is True and reports[-1]["pending"] is False
+            assert refreshes == [True, False]
+            assert watch_maintenance_clock[0] < 1300.0
+            assert [post["origin"]["ordinal"] for post in _watch_posts(requests)] == [0]
+        finally:
+            assert client.is_closed
+            reopened = RecoveryRunner(state_dir=state, job_id=job, client=client)
+            reopened.close()

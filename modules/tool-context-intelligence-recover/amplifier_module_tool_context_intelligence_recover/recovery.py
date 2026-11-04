@@ -1113,7 +1113,7 @@ class RecoveryRunner:
         self._inventory_cache: dict[str, int] = {}
         self._artifact_state_cache: dict[str, str] = {}
         self._unrouted_pending = False
-        self._maintenance_busy: set[str] = set()
+        self._maintenance_busy: dict[str, tuple[Path, float]] = {}
         self._routing_config_cache: (
             dict[str, tuple[DestinationConfig | None, str | None]] | None
         ) = None
@@ -1144,32 +1144,11 @@ class RecoveryRunner:
                 scan_config = DestinationConfig({}, (), DEFAULT_BASE_PATH)
             for path in discover_native_artifacts(resolve_scan_roots(scan_config, explicit_paths)):
                 self._scan_artifact(path)
-            self.checkpoint.quarantine_collisions_and_cycles()
-            self._routing_config_cache = {}
-            try:
-                for row in self.checkpoint.connection.execute(
-                    """SELECT artifact_id,working_dir FROM artifact
-                       WHERE state IN (
-                         'eligible','accepted','filtered','not-required-by-current-policy','blocked'
-                       )"""
-                ):
-                    if str(row["artifact_id"]) not in self._maintenance_busy:
-                        self._route(str(row["artifact_id"]), str(row["working_dir"]))
-            finally:
-                self._routing_config_cache = None
-            self.checkpoint.defer_children_pending_parent()
-            self.checkpoint.quarantine_collisions_and_cycles()
-            self._refresh_artifact_states()
-            self.checkpoint.commit()
-            self._target_cache = set(self.checkpoint.targets_with_work())
-            self._inventory_cache = self.checkpoint.counts()
-            self._artifact_state_cache = {
-                str(row["artifact_id"]): str(row["state"])
-                for row in self.checkpoint.connection.execute(
-                    "SELECT artifact_id,state FROM artifact"
-                )
-            }
-            self._unrouted_pending = self.checkpoint.has_unrouted_work()
+            self._reconcile_plan()
+        else:
+            resolved = self._retry_maintenance_scans()
+            if resolved:
+                self._reconcile_plan(resolved)
 
         delivered = 0
         retry_after: float | None = None
@@ -1197,7 +1176,11 @@ class RecoveryRunner:
                     wait = retry_at - time.time()
                     retry_after = wait if retry_after is None else min(retry_after, wait)
         if self._maintenance_busy:
-            retry_after = 1.0 if retry_after is None else min(retry_after, 1.0)
+            wait = max(
+                0.0,
+                min(due for _path, due in self._maintenance_busy.values()) - time.monotonic(),
+            )
+            retry_after = wait if retry_after is None else min(retry_after, wait)
         pending = bool(self._target_cache) or self._unrouted_pending or bool(self._maintenance_busy)
         return RecoverySummary(
             self._inventory_cache,
@@ -1207,9 +1190,65 @@ class RecoveryRunner:
             self.checkpoint.legacy_checkpoint_present,
         )
 
+    def _retry_maintenance_scans(self) -> list[str]:
+        """Retry only due, already-discovered paths without refreshing the whole plan."""
+
+        now = time.monotonic()
+        resolved: list[str] = []
+        for artifact_id, (path, due) in tuple(self._maintenance_busy.items()):
+            if due > now:
+                continue
+            self._scan_artifact(path)
+            if artifact_id not in self._maintenance_busy:
+                resolved.append(artifact_id)
+        return resolved
+
+    def _reconcile_plan(self, artifact_ids: Iterable[str] | None = None) -> None:
+        """Normalize scanned facts and rebuild delivery caches from the committed plan."""
+
+        self.checkpoint.quarantine_collisions_and_cycles()
+        routable = {"eligible", "accepted", "filtered", "not-required-by-current-policy", "blocked"}
+        self._routing_config_cache = {}
+        try:
+            rows: Iterable[sqlite3.Row]
+            if artifact_ids is None:
+                rows = self.checkpoint.connection.execute(
+                    """SELECT artifact_id,working_dir,state FROM artifact
+                       WHERE state IN (
+                         'eligible','accepted','filtered','not-required-by-current-policy','blocked'
+                       )"""
+                )
+            else:
+                rows = (
+                    row
+                    for artifact_id in artifact_ids
+                    if (row := self.checkpoint.prior(artifact_id)) is not None
+                )
+            for row in rows:
+                if (
+                    str(row["artifact_id"]) not in self._maintenance_busy
+                    and row["state"] in routable
+                ):
+                    self._route(str(row["artifact_id"]), str(row["working_dir"]))
+        finally:
+            self._routing_config_cache = None
+        self.checkpoint.defer_children_pending_parent()
+        self.checkpoint.quarantine_collisions_and_cycles()
+        self._refresh_artifact_states()
+        self.checkpoint.commit()
+        self._target_cache = set(self.checkpoint.targets_with_work())
+        self._inventory_cache = self.checkpoint.counts()
+        self._artifact_state_cache = {
+            str(row["artifact_id"]): str(row["state"])
+            for row in self.checkpoint.connection.execute("SELECT artifact_id,state FROM artifact")
+        }
+        self._unrouted_pending = self.checkpoint.has_unrouted_work()
+
     def _scan_artifact(self, path: Path) -> None:
         from context_intelligence.prune.coordination import CaptureBusy, PruneError, replay_guard
 
+        artifact_id = _artifact_id(path)
+        self._maintenance_busy.pop(artifact_id, None)
         # Preserve the existing storage boundary before opening any sidecar.
         if _target_is_outside_owner_home(path):
             self.checkpoint.save_artifact(
@@ -1222,7 +1261,7 @@ class RecoveryRunner:
         except CaptureBusy:
             # Contention is not a new snapshot. Never erase validated identity,
             # reroute from an empty working_dir, or reset acknowledged offsets.
-            self._maintenance_busy.add(_artifact_id(path))
+            self._maintenance_busy[artifact_id] = (path, time.monotonic() + 1.0)
         except (PruneError, OSError) as exc:
             artifact_id = _artifact_id(path)
             updated = self.checkpoint.connection.execute(
