@@ -290,6 +290,61 @@ def test_unsupported_native_metadata_refuses(tmp_path: Path) -> None:
     assert not receipt_path(path).exists()
 
 
+@pytest.mark.parametrize("target_exists", [False, True], ids=["dangling", "existing-target"])
+def test_metadata_symlink_refuses_without_mutation(tmp_path: Path, target_exists: bool) -> None:
+    path = tmp_path / "events.jsonl"
+    original = line(raw="synthetic", usage={"tokens": 4})
+    path.write_bytes(original)
+    metadata = tmp_path / "metadata.json"
+    target = tmp_path / "metadata-target.json"
+    target_bytes = b'{"format":"context-intelligence","version":"1.0.0"}'
+    if target_exists:
+        target.write_bytes(target_bytes)
+    metadata.symlink_to(target)
+    link_before = metadata.lstat()
+
+    result = prune_file(path, request(tmp_path), now=NOW)
+
+    assert result.status == "error", result
+    assert "unsafe" in (result.reason or "") or "unsupported" in (result.reason or "")
+    assert result.payloads == 0 and result.bytes_saved == 0
+    assert path.read_bytes() == original
+    assert not os.path.lexists(receipt_path(path))
+    assert metadata.is_symlink() and metadata.readlink() == target
+    link_after = metadata.lstat()
+    assert (link_after.st_dev, link_after.st_ino, link_after.st_mode) == (
+        link_before.st_dev,
+        link_before.st_ino,
+        link_before.st_mode,
+    )
+    if target_exists:
+        assert target.read_bytes() == target_bytes
+    else:
+        assert not os.path.lexists(target)
+
+
+@pytest.mark.parametrize("metadata_present", [False, True], ids=["absent-legacy", "valid-regular"])
+def test_supported_metadata_states_still_prune(tmp_path: Path, metadata_present: bool) -> None:
+    path = tmp_path / "events.jsonl"
+    path.write_bytes(line(raw="synthetic", usage={"tokens": 4}))
+    metadata = tmp_path / "metadata.json"
+    metadata_bytes = b'{"format":"context-intelligence","version":"1.0.0"}'
+    if metadata_present:
+        metadata.write_bytes(metadata_bytes)
+
+    result = prune_file(path, request(tmp_path), now=NOW)
+
+    assert result.status == "pruned", result.reason
+    assert result.payloads == 1 and result.bytes_saved > 0
+    assert json.loads(path.read_bytes())["data"] == {"usage": {"tokens": 4}}
+    assert receipt_path(path).is_file()
+    if metadata_present:
+        assert metadata.is_file() and not metadata.is_symlink()
+        assert metadata.read_bytes() == metadata_bytes
+    else:
+        assert not os.path.lexists(metadata)
+
+
 def test_linked_alias_cannot_bypass_target_receipt(tmp_path: Path) -> None:
     from context_intelligence.prune.coordination import PruneError, open_capture
 

@@ -9,6 +9,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from click.testing import CliRunner
+from context_intelligence.prune.coordination import receipt_path
 
 from amplifier_module_tool_context_intelligence_prune.cli import main
 
@@ -89,6 +90,83 @@ class CliTests(Fixture):
         self.assertEqual(result.exit_code, 0, result.output)
         self.assertEqual(json.loads(result.output.splitlines()[-1])["mode"], "apply")
         self.assertNotIn("raw", json.loads(self.path.read_bytes())["data"])
+
+    def test_apply_refuses_metadata_symlinks_without_mutation(self):
+        base = self.root
+        for case, target_exists in (("dangling", False), ("existing-target", True)):
+            with self.subTest(metadata=case):
+                self.root = base / case
+                self.path = self.root / "events.jsonl"
+                original = encoded(event())
+                self.put(original)
+                metadata = self.root / "metadata.json"
+                target = self.root / "metadata-target.json"
+                target_bytes = b'{"format":"context-intelligence","version":"1.0.0"}'
+                if target_exists:
+                    target.write_bytes(target_bytes)
+                metadata.symlink_to(target)
+                link_before = metadata.lstat()
+
+                result = self.run_cli(
+                    "--apply", "--writers-stopped", "--older-than", "14d", "--json"
+                )
+
+                self.assertEqual(result.exit_code, 1, result.output)
+                row, summary = [json.loads(line) for line in result.output.splitlines()]
+                self.assertEqual(row["status"], "error")
+                self.assertRegex(row["reason"], "unsafe|unsupported")
+                self.assertEqual(row["payloads"], 0)
+                self.assertEqual(summary["errors"], 1)
+                self.assertEqual(summary["changed_files"], 0)
+                self.assertEqual(summary["payloads"], 0)
+                self.assertEqual(summary["bytes_saved"], 0)
+                self.assertEqual(self.path.read_bytes(), original)
+                self.assertFalse(os.path.lexists(receipt_path(self.path)))
+                self.assertTrue(metadata.is_symlink())
+                self.assertEqual(metadata.readlink(), target)
+                link_after = metadata.lstat()
+                self.assertEqual(
+                    (link_after.st_dev, link_after.st_ino, link_after.st_mode),
+                    (link_before.st_dev, link_before.st_ino, link_before.st_mode),
+                )
+                if target_exists:
+                    self.assertEqual(target.read_bytes(), target_bytes)
+                else:
+                    self.assertFalse(os.path.lexists(target))
+
+    def test_apply_accepts_absent_legacy_and_regular_metadata(self):
+        base = self.root
+        for case, metadata_present in (("absent-legacy", False), ("valid-regular", True)):
+            with self.subTest(metadata=case):
+                self.root = base / case
+                self.path = self.root / "events.jsonl"
+                self.put(encoded(event()))
+                metadata = self.root / "metadata.json"
+                metadata_bytes = b'{"format":"context-intelligence","version":"1.0.0"}'
+                if metadata_present:
+                    metadata.write_bytes(metadata_bytes)
+
+                result = self.run_cli(
+                    "--apply", "--writers-stopped", "--older-than", "14d", "--json"
+                )
+
+                self.assertEqual(result.exit_code, 0, result.output)
+                row, summary = [json.loads(line) for line in result.output.splitlines()]
+                self.assertEqual(row["status"], "pruned")
+                self.assertEqual(summary["errors"], 0)
+                self.assertEqual(summary["changed_files"], 1)
+                self.assertEqual(summary["payloads"], 1)
+                self.assertGreater(summary["bytes_saved"], 0)
+                expected = event()
+                del expected["data"]["raw"]
+                self.assertEqual(json.loads(self.path.read_bytes()), expected)
+                self.assertTrue(receipt_path(self.path).is_file())
+                if metadata_present:
+                    self.assertTrue(metadata.is_file())
+                    self.assertFalse(metadata.is_symlink())
+                    self.assertEqual(metadata.read_bytes(), metadata_bytes)
+                else:
+                    self.assertFalse(os.path.lexists(metadata))
 
     def test_invalid_options_cannot_write(self):
         original = encoded(event())

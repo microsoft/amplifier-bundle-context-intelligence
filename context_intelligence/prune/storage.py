@@ -237,9 +237,10 @@ def _sync_directory(path: Path) -> None:
 def _capture_schema(path: Path) -> tuple[Path, tuple[int, ...]] | None:
     """Validate explicit native versions without requiring metadata for legacy logs."""
     metadata = path.with_name("metadata.json")
-    if not metadata.exists():
+    try:
+        info = metadata.lstat()
+    except FileNotFoundError:
         return None
-    info = metadata.lstat()
     if not stat.S_ISREG(info.st_mode) or info.st_size > 32 * 1024 * 1024:
         raise PruneError("unsupported or unsafe capture metadata")
     try:

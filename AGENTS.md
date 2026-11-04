@@ -166,6 +166,8 @@ forgiving settings readers. `prune.recovery.recovery_guard()` combines that
 authority with standard CLI state and explicit roots; `prune.operations.prune_file()`
 owns the mandatory guards for every caller. See the README's pruning and scheduling
 sections for the refusal and installed-policy contracts.
+Treat metadata as legacy-absent only on `lstat()` `FileNotFoundError`, never following `exists()`.
+Refuse metadata symlinks, including dangling links, before any prepared receipt or source mutation.
 
 Matching numeric versions do not prove shared-library API compatibility.
 Verify installed CLIs against their declared sources, without `PYTHONPATH`.
