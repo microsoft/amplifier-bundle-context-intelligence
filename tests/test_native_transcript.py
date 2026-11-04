@@ -830,3 +830,524 @@ def test_persisted_renderer_preserves_available_timestamps_without_inventing_mis
     for timestamp in timestamps:
         if timestamp is not None:
             assert "@ " + timestamp in rendered
+
+
+def _persisted_capture(tmp_path, records):
+    locator = _capture(tmp_path, [])
+    grant = _grant(locator, "amplifier-transcript")
+    (locator.metadata_path.parent / "transcript.jsonl").write_text(
+        "\n".join(json.dumps(record, ensure_ascii=False) for record in records),
+        encoding="utf-8",
+    )
+    return grant
+
+
+@requires_secure_open
+@pytest.mark.parametrize("part_count", [1000, 1001, 30_000])
+def test_retained_part_limit_is_independent_of_empty_text_characters(tmp_path, part_count):
+    grant = _persisted_capture(
+        tmp_path,
+        [{"role": "assistant", "content": [{"type": "text", "text": ""}] * part_count}],
+    )
+    request = TranscriptRequest(max_content_chars=1)
+    if part_count > 1000:
+        with pytest.raises(NativeTranscriptError) as error:
+            read_configured_capture(grant, request)
+        assert error.value.code == "message_too_many_parts"
+        assert str(error.value) == "a transcript message exceeds the 1000 retained text-part limit"
+        assert str(tmp_path) not in str(error.value)
+    else:
+        page = read_configured_capture(grant, request)
+        assert page.status == "complete"
+        assert page.content_chars == 0
+        assert not page.has_more
+        assert page.as_dict()["messages"][0]["content"] == [
+            {"index": index, "text": ""} for index in range(1000)
+        ]
+
+
+@requires_secure_open
+@pytest.mark.parametrize("max_messages", [1, 50])
+def test_retained_part_limit_refuses_an_examined_later_whole_message(tmp_path, max_messages):
+    grant = _persisted_capture(
+        tmp_path,
+        [
+            {"role": "user", "content": "first"},
+            {"role": "assistant", "content": [{"type": "text", "text": ""}] * 1001},
+        ],
+    )
+    with pytest.raises(NativeTranscriptError) as error:
+        read_configured_capture(grant, TranscriptRequest(max_messages=max_messages))
+    assert error.value.code == "message_too_many_parts"
+
+
+@requires_secure_open
+def test_retained_part_page_limit_defers_whole_message_and_its_effects(tmp_path):
+    first_parts = [{"type": "text", "text": ""}] * 600
+    second_parts = [
+        {"type": "thinking", "thinking": "PRIVATE"},
+        {"type": "UNKNOWN-PRIVATE"},
+        *[{"type": "text", "text": ""}] * 600,
+    ]
+    grant = _persisted_capture(
+        tmp_path,
+        [
+            {"role": "user", "content": first_parts},
+            {"role": "assistant", "content": second_parts, "metadata": {"persisted": "PRIVATE"}},
+        ],
+    )
+    first = read_configured_capture(grant, TranscriptRequest(max_content_chars=1))
+    assert first.status == "complete"
+    assert first.issues == ()
+    assert first.omitted_messages == first.omitted_blocks == first.content_chars == 0
+    assert first.through_event_line == first.next_after_event_line == 1
+    assert first.has_more
+    assert len(first.messages) == 1
+    assert first.next_after_event_line is not None
+    second = read_configured_capture(
+        grant, TranscriptRequest(after_event_line=first.next_after_event_line, max_content_chars=1)
+    )
+    assert not second.has_more
+    assert second.through_event_line == 2
+    assert second.content_chars == 0
+    assert second.status == "partial"
+    assert [(issue.code, issue.event_line) for issue in second.issues] == [
+        ("invalid_context_flags", 2),
+        ("unsupported_content_part", 2),
+    ]
+    assert second.omitted_messages == 0
+    assert second.omitted_blocks == 1
+    assert [m.sequence for m in first.messages + second.messages] == [1, 1]
+    assert first.as_dict()["messages"][0]["content"] == [
+        {"index": index, "text": ""} for index in range(600)
+    ]
+    assert second.as_dict()["messages"][0]["content"] == [
+        {"index": index, "text": ""} for index in range(2, 602)
+    ]
+    assert "PRIVATE" not in json.dumps(second.as_dict())
+
+
+@requires_secure_open
+def test_retained_part_budget_counts_only_valid_typed_text_not_strings_or_omissions(tmp_path):
+    grant = _persisted_capture(
+        tmp_path,
+        [
+            {"role": "user", "content": ""},
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "thinking"},
+                    {"type": "text", "text": 7},
+                    *[{"type": "text", "text": ""}] * 1000,
+                ],
+            },
+            {"role": "user", "content": " \n界 "},
+        ],
+    )
+    page = read_configured_capture(grant)
+    assert not page.has_more
+    assert [m.event_line for m in page.messages] == [1, 2, 3]
+    assert page.messages[0].content == ""
+    assert page.messages[2].content == " \n界 "
+    assert page.content_chars == 4
+    assert page.omitted_blocks == 1
+    assert [issue.code for issue in page.issues] == ["invalid_text_part"]
+    assert page.as_dict()["messages"][1]["content"] == [
+        {"index": index, "text": ""} for index in range(2, 1002)
+    ]
+
+
+def _physical_line_reader(tmp_path, data, mode):
+    locator = _capture(tmp_path, [])
+    if mode == "ordinary":
+        locator.events_path.write_bytes(data)
+        return lambda request: read_native_transcript(locator, request)
+    if not native._SECURE_OPEN_SUPPORTED:
+        pytest.skip("configured reads require descriptor-relative no-follow operations")
+    grant = _grant(
+        locator, "amplifier-transcript" if mode == "persisted" else "context-intelligence"
+    )
+    path = (
+        locator.metadata_path.parent / "transcript.jsonl"
+        if mode == "persisted"
+        else locator.events_path
+    )
+    path.write_bytes(data)
+    return lambda request: read_configured_capture(grant, request)
+
+
+@requires_secure_open
+def test_physical_line_limit_bounds_default_unsupported_role_diagnostics(tmp_path):
+    read = _physical_line_reader(
+        tmp_path, b'{"role":"PRIVATE","content":"PRIVATE"}\n' * 1001, "persisted"
+    )
+    first = read(TranscriptRequest(max_messages=1, max_content_chars=1))
+    assert len(first.issues) == 1000
+    assert first.status == "partial"
+    assert first.messages == ()
+    assert first.through_event_line == first.next_after_event_line == 1000
+    assert first.has_more
+    assert [issue.event_line for issue in first.issues] == list(range(1, 1001))
+    second = read(TranscriptRequest(after_event_line=1000, max_messages=1, max_content_chars=1))
+    assert [issue.event_line for issue in second.issues] == [1001]
+    assert not second.has_more
+    assert second.next_after_event_line is None
+    assert "PRIVATE" not in json.dumps(first.as_dict())
+
+
+@requires_secure_open
+@pytest.mark.parametrize(
+    "line,code,omitted_messages,omitted_blocks",
+    [
+        (b"\n", None, 0, 0),
+        (b" \t\r\n", None, 0, 0),
+        (b"\xff\n", "event_too_large_or_invalid_encoding", 0, 0),
+        (b"x" * 1_000_001 + b"\n", "event_too_large_or_invalid_encoding", 0, 0),
+        (b"{PRIVATE\n", "malformed_json", 0, 0),
+        (b"null\n", "invalid_event_envelope", 0, 0),
+        (b"{}\n", "invalid_message_role", 0, 0),
+        (b'{"role":"PRIVATE"}\n', "unsupported_message_role", 0, 0),
+        (b'{"role":"user","content":7}\n', "invalid_message_content", 0, 0),
+        (b'{"role":"system","content":"PRIVATE"}\n', None, 1, 0),
+        (b'{"role":"assistant","content":[{"type":"thinking"}]}\n', None, 1, 1),
+        (b'{"role":"assistant","content":[]}\n', None, 1, 0),
+        (b'{"role":"assistant","tool_calls":[{}]}\n', None, 1, 0),
+        (
+            b'{"role":"assistant","content":[{"type":"UNKNOWN-PRIVATE"},{"type":"image"}]}\n',
+            "unsupported_content_part",
+            1,
+            1,
+        ),
+    ],
+    ids=[
+        "blank",
+        "whitespace",
+        "encoding",
+        "oversized",
+        "malformed",
+        "nonobject",
+        "missing-role",
+        "unknown-role",
+        "invalid-content",
+        "omitted-role",
+        "omitted-blocks",
+        "empty-list",
+        "tool-only",
+        "issues-and-omissions",
+    ],
+)
+def test_physical_line_limit_counts_every_persisted_nonmessage_branch(
+    tmp_path, monkeypatch, line, code, omitted_messages, omitted_blocks
+):
+    monkeypatch.setattr(native, "_MAX_PHYSICAL_LINES_PER_PAGE", 2, raising=False)
+    read = _physical_line_reader(
+        tmp_path, line * 3 + b'{"role":"assistant","content":"sentinel"}', "persisted"
+    )
+    first = read(TranscriptRequest())
+    assert first.has_more
+    assert first.through_event_line == first.next_after_event_line == 2
+    assert first.messages == ()
+    assert first.status == ("partial" if code else "complete")
+    assert [(issue.code, issue.event_line) for issue in first.issues] == (
+        [(code, 1), (code, 2)] if code else []
+    )
+    assert first.omitted_messages == 2 * omitted_messages
+    assert first.omitted_blocks == 2 * omitted_blocks
+    second = read(TranscriptRequest(after_event_line=2))
+    assert [message.content for message in second.messages] == ["sentinel"]
+    assert second.messages[0].event_line == 4
+    assert second.through_event_line == 4
+    assert not second.has_more
+    assert second.next_after_event_line is None
+    assert [(issue.code, issue.event_line) for issue in second.issues] == (
+        [(code, 3)] if code else []
+    )
+    assert second.omitted_messages == omitted_messages
+    assert second.omitted_blocks == omitted_blocks
+    assert "PRIVATE" not in json.dumps(first.as_dict())
+
+
+@pytest.mark.parametrize("mode", ["ordinary", "configured"])
+@pytest.mark.parametrize(
+    "line,code",
+    [
+        (b"\n", None),
+        (b'{"event":"llm:response","data":{"raw":"PRIVATE"}}\n', None),
+        (b"{PRIVATE\n", "malformed_json"),
+        (b"\xff\n", "event_too_large_or_invalid_encoding"),
+        (b"x" * 1_000_001 + b"\n", "event_too_large_or_invalid_encoding"),
+        (b"[]\n", "invalid_event_envelope"),
+        (b'{"event":"prompt:submit"}\n', "invalid_event_envelope"),
+        (
+            b'{"event":"prompt:complete","timestamp":"t","data":{}}\n',
+            "missing_message_field",
+        ),
+        (
+            b'{"event":"prompt:submit","timestamp":"t","data":{"prompt":"verbatim"}}\n',
+            None,
+        ),
+    ],
+    ids=[
+        "blank",
+        "unrelated",
+        "malformed",
+        "encoding",
+        "oversized",
+        "nonobject",
+        "invalid-envelope",
+        "missing-field",
+        "message",
+    ],
+)
+def test_physical_line_limit_is_shared_by_ordinary_and_configured_native(
+    tmp_path, monkeypatch, mode, line, code
+):
+    monkeypatch.setattr(native, "_MAX_PHYSICAL_LINES_PER_PAGE", 2, raising=False)
+    read = _physical_line_reader(tmp_path, line * 3, mode)
+    first = read(TranscriptRequest())
+    assert first.has_more
+    assert first.through_event_line == first.next_after_event_line == 2
+    assert first.status == ("partial" if code else "complete")
+    assert [(issue.code, issue.event_line) for issue in first.issues] == (
+        [(code, 1), (code, 2)] if code else []
+    )
+    expected_messages = ["verbatim", "verbatim"] if b"verbatim" in line else []
+    assert [message.content for message in first.messages] == expected_messages
+    second = read(TranscriptRequest(after_event_line=2))
+    assert second.through_event_line == 3
+    assert not second.has_more
+    assert second.next_after_event_line is None
+    assert "PRIVATE" not in json.dumps(first.as_dict())
+
+
+@pytest.mark.parametrize("mode", ["ordinary", "configured", "persisted"])
+@pytest.mark.parametrize("line_count", [2, 3, 4])
+@pytest.mark.parametrize("final_newline", [False, True])
+def test_physical_line_boundary_has_truthful_eof_after_nonzero_cursor(
+    tmp_path, monkeypatch, mode, line_count, final_newline
+):
+    monkeypatch.setattr(native, "_MAX_PHYSICAL_LINES_PER_PAGE", 3, raising=False)
+    line = b'{"role":"system"}' if mode == "persisted" else b'{"event":"unrelated"}'
+    data = b"{ignored-prefix\n" * 5 + b"\n".join([line] * line_count)
+    if final_newline:
+        data += b"\n"
+    read = _physical_line_reader(tmp_path, data, mode)
+    page = read(TranscriptRequest(after_event_line=5))
+    assert page.status == "complete"
+    assert page.issues == ()
+    assert page.through_event_line == 5 + min(line_count, 3)
+    assert page.has_more is (line_count == 4)
+    assert page.next_after_event_line == (8 if line_count == 4 else None)
+    assert page.omitted_messages == (min(line_count, 3) if mode == "persisted" else 0)
+
+
+@requires_secure_open
+@pytest.mark.parametrize("boundary", ["messages", "characters", "parts"])
+def test_physical_blank_lines_are_consumed_before_a_deferred_message(tmp_path, boundary):
+    first = [{"type": "text", "text": ""}] * 600 if boundary == "parts" else "a"
+    second = (
+        [{"type": "text", "text": ""}] * 600
+        if boundary == "parts"
+        else [{"type": "text", "text": "b"}]
+    )
+    data = (
+        json.dumps({"role": "user", "content": first}).encode()
+        + b"\n \t\n"
+        + json.dumps(
+            {"role": "assistant", "content": second + [{"type": "UNKNOWN-PRIVATE"}]}
+        ).encode()
+    )
+    read = _physical_line_reader(tmp_path, data, "persisted")
+    bounds = {
+        "messages": {"max_messages": 1},
+        "characters": {"max_content_chars": 1},
+        "parts": {},
+    }[boundary]
+    page = read(TranscriptRequest(**bounds))
+    assert page.has_more
+    assert page.through_event_line == page.next_after_event_line == 2
+    assert page.status == "complete"
+    assert page.issues == ()
+    assert len(page.messages) == 1
+    resumed = read(TranscriptRequest(after_event_line=2, **bounds))
+    assert resumed.status == "partial"
+    assert [(issue.code, issue.event_line) for issue in resumed.issues] == [
+        ("unsupported_content_part", 3)
+    ]
+    assert resumed.messages[0].event_line == 3
+    assert not resumed.has_more
+
+
+@requires_secure_open
+def test_physical_line_lookahead_does_not_decode_or_commit_next_record(tmp_path, monkeypatch):
+    monkeypatch.setattr(native, "_MAX_PHYSICAL_LINES_PER_PAGE", 1, raising=False)
+    data = (
+        b'{"role":"user","content":"first"}\n'
+        b'{"role":"assistant","content":['
+        + b'{"type":"text","text":""},' * 1001
+        + b'{"type":"thinking"},{"type":"UNKNOWN-PRIVATE"}]}'
+    )
+    read = _physical_line_reader(tmp_path, data, "persisted")
+    first = read(TranscriptRequest())
+    assert first.status == "complete"
+    assert first.issues == ()
+    assert first.omitted_messages == first.omitted_blocks == 0
+    assert first.has_more
+    assert first.next_after_event_line == first.through_event_line == 1
+    with pytest.raises(NativeTranscriptError) as error:
+        read(TranscriptRequest(after_event_line=1))
+    assert error.value.code == "message_too_many_parts"
+
+
+@requires_secure_open
+def test_physical_line_multipage_walk_accounts_for_each_consumed_effect_once(tmp_path, monkeypatch):
+    monkeypatch.setattr(native, "_MAX_PHYSICAL_LINES_PER_PAGE", 2, raising=False)
+    read = _physical_line_reader(
+        tmp_path,
+        b'\n{"role":"system"}\n{PRIVATE\n'
+        b'{"role":"assistant","content":[{"type":"image"}]}\n'
+        b'{"role":"user","content":" \xe7\x95\x8c\\n "}\n'
+        b'{"role":"PRIVATE"}\n{"role":"assistant","content":'
+        b'[{"type":"thinking"},{"type":"text","text":""}]}\n \t\n'
+        b'{"role":"assistant","content":"last"}',
+        "persisted",
+    )
+    pages = []
+    cursor = 0
+    for _ in range(6):
+        page = read(TranscriptRequest(after_event_line=cursor))
+        pages.append(page)
+        if not page.has_more:
+            break
+        assert page.next_after_event_line is not None
+        assert page.next_after_event_line > cursor
+        cursor = page.next_after_event_line
+    else:
+        pytest.fail("pagination did not terminate")
+    assert [page.through_event_line for page in pages] == [2, 4, 6, 8, 9]
+    assert [page.status for page in pages] == [
+        "complete",
+        "partial",
+        "partial",
+        "complete",
+        "complete",
+    ]
+    assert [(m.event_line, m.as_dict()["content"]) for p in pages for m in p.messages] == [
+        (5, " 界\n "),
+        (7, [{"index": 1, "text": ""}]),
+        (9, "last"),
+    ]
+    assert [(i.code, i.event_line) for p in pages for i in p.issues] == [
+        ("malformed_json", 3),
+        ("unsupported_message_role", 6),
+    ]
+    assert sum(page.omitted_messages for page in pages) == 2
+    assert sum(page.omitted_blocks for page in pages) == 2
+    assert sum(page.content_chars for page in pages) == 8
+    assert pages[-1].next_after_event_line is None
+
+
+@requires_secure_open
+def test_retained_part_aggregate_exact_boundary_defers_only_the_1001st_part(tmp_path):
+    grant = _persisted_capture(
+        tmp_path,
+        [
+            {"role": "assistant", "content": [{"type": "text", "text": ""}] * count}
+            for count in (600, 400, 1)
+        ],
+    )
+    first = read_configured_capture(grant, TranscriptRequest(max_content_chars=1))
+    assert first.status == "complete"
+    assert first.issues == ()
+    assert first.content_chars == first.omitted_messages == first.omitted_blocks == 0
+    assert [len(message.content) for message in first.messages] == [600, 400]
+    assert [message.event_line for message in first.messages] == [1, 2]
+    assert first.has_more
+    assert first.next_after_event_line == first.through_event_line == 2
+    second = read_configured_capture(
+        grant, TranscriptRequest(after_event_line=2, max_content_chars=1)
+    )
+    assert second.status == "complete"
+    assert second.as_dict()["messages"][0]["content"] == [{"index": 0, "text": ""}]
+    assert second.messages[0].event_line == second.through_event_line == 3
+    assert not second.has_more
+    assert second.next_after_event_line is None
+
+
+def test_physical_line_guard_allows_only_one_unprojected_lookahead(tmp_path, monkeypatch):
+    from context_intelligence import persisted_transcript
+
+    monkeypatch.setattr(native, "_MAX_PHYSICAL_LINES_PER_PAGE", 3)
+    projected = []
+    original_decode = persisted_transcript.decode_persisted_message
+
+    def tracked_decode(record, line):
+        projected.append(line)
+        return original_decode(record, line)
+
+    monkeypatch.setattr(persisted_transcript, "decode_persisted_message", tracked_decode)
+    yielded = []
+
+    def guarded_lines():
+        lines = [
+            "{ignored prefix",
+            "{ignored prefix",
+            '{"role":"user","content":"a"}',
+            '{"role":"system","content":"PRIVATE"}',
+            " \t\n",
+            '{"role":"assistant","content":[{"type":"text","text":"PRIVATE"},'
+            '{"type":"thinking"},{"type":"UNKNOWN-PRIVATE"}]}',
+        ]
+        for number, line in enumerate(lines, 1):
+            yielded.append(number)
+            yield number, line
+        pytest.fail("reader requested a second lookahead")
+
+    page = native._read_transcript_lines(
+        CaptureLocator.from_session_dir(tmp_path),
+        {"session_id": "session-123"},
+        TranscriptRequest(after_event_line=2),
+        guarded_lines(),
+        "amplifier-transcript",
+    )
+    assert yielded == [1, 2, 3, 4, 5, 6]
+    assert projected == [3, 4]
+    assert page.status == "complete"
+    assert page.issues == ()
+    assert [message.content for message in page.messages] == ["a"]
+    assert page.content_chars == 1
+    assert page.omitted_messages == 1
+    assert page.omitted_blocks == 0
+    assert page.has_more
+    assert page.next_after_event_line == page.through_event_line == 5
+    assert "PRIVATE" not in json.dumps(page.as_dict())
+
+
+@pytest.mark.parametrize("mode", ["ordinary", "configured", "persisted"])
+@pytest.mark.parametrize("eligible_tail", [False, True])
+def test_full_message_budget_still_bounds_a_long_diagnostic_stretch(tmp_path, mode, eligible_tail):
+    message = (
+        b'{"role":"user","content":"a"}\n'
+        if mode == "persisted"
+        else b'{"event":"prompt:submit","timestamp":"t","data":{"prompt":"a"}}\n'
+    )
+    data = message + b"{PRIVATE\n" * 1001 + (message if eligible_tail else b"")
+    read = _physical_line_reader(tmp_path, data, mode)
+    first = read(TranscriptRequest(max_messages=1))
+    assert [m.event_line for m in first.messages] == [1]
+    assert first.status == "partial"
+    assert [(issue.code, issue.event_line) for issue in first.issues] == [
+        ("malformed_json", line) for line in range(2, 1001)
+    ]
+    assert first.has_more
+    assert first.next_after_event_line == first.through_event_line == 1000
+    second = read(TranscriptRequest(after_event_line=1000, max_messages=1))
+    assert [m.event_line for m in second.messages] == ([1003] if eligible_tail else [])
+    assert [(issue.code, issue.event_line) for issue in second.issues] == [
+        ("malformed_json", 1001),
+        ("malformed_json", 1002),
+    ]
+    assert second.status == "partial"
+    assert second.through_event_line == (1003 if eligible_tail else 1002)
+    assert not second.has_more
+    assert second.next_after_event_line is None

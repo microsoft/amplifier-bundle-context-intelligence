@@ -53,8 +53,9 @@ register copies in a host store, or fall back to another resolver. The opt-in
 route requires POSIX descriptor-relative `os.open`, `O_DIRECTORY`, `O_NOFOLLOW`,
 and `O_NONBLOCK`. On unsupported platforms (including Windows), nonempty config
 or an existing configured read fails closed with `configured_capture_unsupported`.
-Ordinary current-session, ID/prefix, custom-host resolver and hook resolver reads
-remain unchanged. No Windows secure-open backend is provided.
+Ordinary current-session, ID/prefix, custom-host resolver and hook resolver
+selection and native decoding remain unchanged; their pages share the new
+physical-line bound described below. No Windows secure-open backend is provided.
 
 ## Directed reads and pagination
 
@@ -88,6 +89,27 @@ Malformed or oversized event lines produce explicit `partial` pages with issues;
 a filled page alone is normal successful pagination. Both JSON and text preserve
 the original message strings. Provider-raw and tool payloads are not replayed.
 
+Each capture page also has independent fixed limits of **1,000 retained typed
+text parts** and **1,000 consumed physical lines**. These are not public settings.
+The part limit is aggregate across the page, including valid empty text blocks;
+string content uses no typed-part slots. A whole message over 1,000 retained
+parts fails with `message_too_many_parts`, even when it is a later examined
+message. A message that fits an empty page but not its remaining part budget is
+deferred intact, including all its diagnostics and omission counts.
+
+The shared physical-line limit applies to persisted, ordinary native and
+configured native reads. Every consumed line counts, including blank, ignored,
+omitted, malformed, oversized and invalid-encoding lines; the prefix at or before
+the incoming cursor does not. One lookahead determines whether more lines exist,
+without decoding or consuming that line. At exact EOF, `has_more` is false.
+`through_event_line` includes consumed blank lines but excludes a deferred
+message or lookahead line. A message-free page with `has_more: true` is valid:
+resume with the returned cursor. Hitting a limit does not itself cause `partial`;
+only actual issues do.
+For compatibility, text output retains the `MORE MESSAGES AVAILABLE` marker.
+Like `has_more`, it means unread physical input remains, not that another
+eligible user/assistant message is guaranteed.
+
 ## Persisted conversation text projection
 
 The `amplifier-transcript` profile reads bounded JSONL message objects with stored
@@ -104,7 +126,8 @@ exactly. For ordered typed text blocks, JSON `content` is a list of safe
 `{"index":0,"text":"original string"}` parts, retaining each original zero-based
 block index. No semantic join is invented. Text rendering labels each block
 boundary outside the unchanged stored string. Character budgets count the sum
-of all returned text parts. Pagination is between **entire stored messages**, not
+of all returned text parts; empty text contributes zero characters but still uses
+a retained-part slot. Pagination is between **entire stored messages**, not
 individual blocks. The tool still caps content at 100,000 characters per call.
 
 Each persisted page adds payload-free `projection.omitted_messages` and
@@ -143,9 +166,14 @@ metadata values, alias input or event fragments. Relevant error types:
 | `configured_capture_changed` / `configured_capture_identity_mismatch` | Directory identity changed since mount or metadata differs from the expected full ID. |
 | `configured_capture_unavailable` / `configured_capture_unsafe` | Missing, denied, unreadable, symlinked or nonregular capture files/directories. |
 | `metadata_unavailable` / `unsupported_capture_format` / `unsupported_schema_version` | Metadata exceeds 64 KiB, is not UTF-8 JSON with required fields, or is not native format/version `1.0.0`. |
+| `message_too_many_parts` | A whole message exceeds 1,000 retained text parts; fixed message: `a transcript message exceeds the 1000 retained text-part limit`. No blocks are silently dropped. |
 
 Metadata identity and the selected profile are validated **before** opening content. No configured
 read writes files or contacts a server. Descriptor safety prevents path retargeting;
 it does not make maliciously writable backing files immutable or certify their
 contents. Captures are stored and replayed verbatim, not redacted. Authorize only
 captures the tool's caller may read; do not assume results are safe to share.
+Page limits bound retained structure and consumed records, not elapsed time or
+total bytes read: rescanning an incoming prefix and draining an oversized physical
+line remain existing work costs. They do not protect against in-place mutation
+or hard-linked contents in a trusted writable capture directory.

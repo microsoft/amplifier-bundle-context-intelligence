@@ -151,6 +151,16 @@ The bar, from this repo's own history: the cost/token aggregation patterns were 
 with a negative control, **before** a single line was written into the skill. Ship queries you have
 watched return the right answer on real data — nothing less.
 
+## Transcript reader bounds
+
+Character budgets do not bound empty text blocks or message-free records. Keep
+independent aggregate retained-part and consumed-physical-line limits in the shared
+native/persisted reader. Admit each line's message, issues, omissions and cursor
+atomically; a deferred/lookahead line owns no effects on the current page. Test
+blank-line cursor progress, exact-boundary EOF and message-free continuation pages.
+Guard the iterator against a second lookahead and test aggregate exact-fit parts;
+ordinary native bounds must remain testable without configured secure-open support.
+
 ## Architecture note
 
 This bundle ships **layered, composable behaviours** — `context-intelligence-navigation` ⊂
