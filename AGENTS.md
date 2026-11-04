@@ -161,6 +161,24 @@ This bundle ships **layered, composable behaviours** — `context-intelligence-n
 carries its own leading no-server guidance block — there is **no runtime skill fetching, syncing,
 or configuration knob**. See the README.
 
+Destructive retention uses `config.strict_global_recovery_state_root()`, not the
+forgiving settings readers. `prune.recovery.recovery_guard()` combines that
+authority with standard CLI state and explicit roots; `prune.operations.prune_file()`
+owns the mandatory guards for every caller. See the README's pruning and scheduling
+sections for the refusal and installed-policy contracts.
+Treat metadata as legacy-absent only on `lstat()` `FileNotFoundError`, never following `exists()`.
+Refuse metadata symlinks, including dangling links, before any prepared receipt or source mutation.
+Treat dangling native-history links and transfer fences as present; use non-following presence checks.
+Preserve history type/stamp validation and both transfer-fence checks before pruning or writing a receipt.
+Prove watch retries with `run(refresh=False)` after real capture-lock release, including stale pending cleanup; refresh-only success is not sufficient.
+
+Matching numeric versions do not prove shared-library API compatibility.
+Verify installed CLIs against their declared sources, without `PYTHONPATH`.
+Distinguish editable checkout project resolution from non-editable wheels and
+standalone installs, whose production requirements still select Git `@main`.
+Before merge, pin candidate CLIs and their shared library to the same revision;
+recovery also needs the matching hook. See each CLI's installation guidance.
+
 ## Seam Awareness
 
 This bundle has **seams** — integration boundaries where one module's wiring touches the rest of

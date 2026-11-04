@@ -19,11 +19,13 @@ import random
 import socket
 import ssl
 import time
+from contextlib import ExitStack, closing
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Generator, Iterator
 
 import httpx
 from amplifier_module_hook_context_intelligence.upload import build_payload
+from context_intelligence.prune.coordination import PruneError, open_capture, replay_guard
 
 from .logging_hook_format import SkipLine
 
@@ -116,7 +118,7 @@ def _workspace_from_path(session_dir: Path) -> str:
 def _count_lines(file_path: Path) -> int:
     """Count the number of non-blank lines in *file_path*."""
     count = 0
-    with file_path.open(encoding="utf-8") as fh:
+    with open_capture(file_path) as fh:
         for raw_line in fh:
             if raw_line.strip():
                 count += 1
@@ -219,6 +221,53 @@ def run_upload(
     timeout_s: float | None = None,
     parse_fn: ParseFn | None = None,
 ) -> UploadResult:
+    """Hold one capture's shared guard through its count/read/HTTP/retries.
+
+    A sweep uses bounded file descriptors, not one lock per selected session.
+    Explicitly close the iterator on early return so its current guard is released.
+    """
+    with closing(_guarded_sessions(sessions)) as guarded:
+        return _run_upload(
+            guarded,
+            server_url,
+            api_key,
+            tracker,
+            event_delay_s,
+            auth_strategy=auth_strategy,
+            replay=replay,
+            max_retries=max_retries,
+            timeout_s=timeout_s,
+            parse_fn=parse_fn,
+        )
+
+
+def _guarded_sessions(
+    sessions: list[tuple[Path, dict[str, Any]]],
+) -> Generator[tuple[Path, dict[str, Any], str | None], None, None]:
+    for directory, metadata in sessions:
+        with ExitStack() as stack:
+            try:
+                stack.enter_context(replay_guard(directory / "events.jsonl"))
+            except (PruneError, OSError) as exc:
+                yield directory, metadata, str(exc)
+                return
+            # The consumer completes this session before requesting the next.
+            yield directory, metadata, None
+
+
+def _run_upload(
+    sessions: Iterator[tuple[Path, dict[str, Any], str | None]],
+    server_url: str,
+    api_key: str,
+    tracker: ProgressTracker,
+    event_delay_s: float = 0.0,
+    *,
+    auth_strategy: AuthStrategy | None = None,
+    replay: bool = True,
+    max_retries: int = _DEFAULT_MAX_RETRIES,
+    timeout_s: float | None = None,
+    parse_fn: ParseFn | None = None,
+) -> UploadResult:
     """Replay all events from *sessions* to the server.
 
     Parameters
@@ -288,8 +337,24 @@ def run_upload(
     # (not baked into the client here), so a long run that crosses the Entra
     # token-expiry boundary transparently picks up a refreshed bearer token.
     with httpx.Client(timeout=timeout) as client:
-        for session_dir, metadata in sessions:
+        for session_dir, metadata, guard_error in sessions:
             session_id: str = metadata["session_id"]
+            if guard_error is not None:
+                tracker.mark_failed(
+                    session_id=session_id, event_index=0, http_status=0, error=guard_error
+                )
+                return UploadResult(
+                    success=False,
+                    sessions_uploaded=total_sessions_uploaded,
+                    events_uploaded=total_events_uploaded,
+                    events_skipped=total_events_malformed + total_events_unreadable,
+                    events_unmapped=total_events_unmapped,
+                    events_malformed=total_events_malformed,
+                    events_unreadable=total_events_unreadable,
+                    retries=total_retries,
+                    error=guard_error,
+                    failed_at={"session_id": session_id, "event_index": 0, "http_status": 0},
+                )
             # working_dir is session-invariant (unlike workspace, which is read
             # per-event from the parsed record) -- read it once per session from
             # the same metadata dict that carries session_id. Both --format
@@ -311,7 +376,7 @@ def run_upload(
 
             event_index = 0
 
-            with events_file.open(encoding="utf-8") as fh:
+            with open_capture(events_file) as fh:
                 for raw_line in fh:
                     line = raw_line.strip()
                     if not line:

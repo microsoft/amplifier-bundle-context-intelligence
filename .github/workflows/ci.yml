@@ -62,6 +62,10 @@ jobs:
 
       - name: Run tests
         # Skip tests/dtu — those require live Digital Twin Universe infrastructure
+        # Lifecycle tests launch the local scheduler module in a subprocess.
+        # Expose that module without installing unpublished dependencies.
+        env:
+          PYTHONPATH: ${{ github.workspace }}:${{ github.workspace }}/modules/tool-context-intelligence-prune
         run: uv run pytest tests/ -q --tb=short --ignore=tests/dtu
 
   # ──────────────────────────────────────────────────────────────────────────
@@ -83,6 +87,7 @@ jobs:
           - hook-context-intelligence
           - hook-server-data-ops-lockdown
           - tool-context-intelligence-query
+          - tool-context-intelligence-prune
           - tool-context-intelligence-recover
           - tool-context-intelligence-transcript
           - tool-context-intelligence-upload

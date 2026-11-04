@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import NamedTuple
 
 from amplifier_module_hook_context_intelligence.config_resolver import Destination
+from context_intelligence.prune.coordination import PruneError
 
 from .destinations import DestinationSelectionError, read_destinations, select_destination
 from .formats import FORMATS
@@ -778,6 +779,14 @@ def _count_total_events(sessions: list[tuple[Path, dict]]) -> int:
 
 def main() -> None:
     """CLI entry point — synchronous, exits with an appropriate code."""
+    try:
+        _main()
+    except PruneError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        sys.exit(1)
+
+
+def _main() -> None:
     parser = _build_parser()
     args = parser.parse_args()
 
@@ -1057,8 +1066,20 @@ def main() -> None:
     # not a data-integrity signal -- and the failure block below already
     # reports what was sent before the failure. Printing the mismatch
     # warning too would stack two alarming messages on top of one problem.
-    read_total = _count_total_events(sessions)
-    if upload_result.success and read_total != upload_result.events_uploaded:
+    # The delivery guards have been released. A maintenance transaction may
+    # now prevent this diagnostic reread; that must not hide actual delivery
+    # results or imply that independently measured counts still agree.
+    read_total: int | None = None
+    if upload_result.success:
+        try:
+            read_total = _count_total_events(sessions)
+        except (PruneError, OSError) as exc:
+            print(
+                f"warning: reconciliation unavailable -- {exc}; "
+                "source counts not verified; delivery results are unchanged.",
+                file=sys.stderr,
+            )
+    if read_total is not None and read_total != upload_result.events_uploaded:
         print(
             "warning: reconciliation mismatch -- "
             + reconciliation_summary(

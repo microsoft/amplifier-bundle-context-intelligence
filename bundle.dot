@@ -8,7 +8,7 @@ digraph context_intelligence {
     nodesep=0.6
     ranksep=0.7
     bgcolor="white"
-    source_hash="e2f7810a4d98ce280e62440a0b6b39a6da14ae6d77e9f6fdb25035100e9e4ab1"
+    source_hash="b9c38953f7b43b7efd510b3104261b994a5b2e5086a184c216027891e8d614e9"
 
     node [fontname="Helvetica", fontsize=11, style="filled,rounded"]
     edge [fontname="Helvetica", fontsize=9]
@@ -50,6 +50,7 @@ digraph context_intelligence {
 
         mod_hook_context_intelligence [label="hook-context-intelligence", shape=box, fillcolor="#bbdefb", style="filled,rounded"]
         mod_hook_server_data_ops_lockdown [label="hook-server-data-ops-lockdown", shape=box, fillcolor="#bbdefb", style="filled,rounded"]
+        mod_tool_context_intelligence_prune [label="tool-context-intelligence-prune", shape=box, fillcolor="#bbdefb", style="filled,rounded"]
         mod_tool_context_intelligence_query [label="tool-context-intelligence-query", shape=box, fillcolor="#bbdefb", style="filled,rounded"]
         mod_tool_context_intelligence_recover [label="tool-context-intelligence-recover", shape=box, fillcolor="#bbdefb", style="filled,rounded"]
         mod_tool_context_intelligence_set_filters [label="tool-context-intelligence-set-filters", shape=box, fillcolor="#bbdefb", style="filled,rounded"]

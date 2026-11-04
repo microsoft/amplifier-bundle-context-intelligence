@@ -6,6 +6,10 @@ An Amplifier tool module that replays context-intelligence session events to the
 
 ## Installation
 
+The `@main` commands below are the normal channel once the CLI and shared-library
+changes have merged together. An unmerged candidate must use the pinned channel
+below; installing its CLI alone while leaving the library on `@main` is not sufficient.
+
 Install as a standalone command-line tool using `uv`:
 
 ```bash
@@ -20,6 +24,27 @@ uv pip install "amplifier-module-tool-context-intelligence-upload @ git+https://
 ```
 
 After installation, the `context-intelligence-upload` command is available in your shell.
+
+### Checkout and unmerged candidates
+
+Checkout project resolution (`uv sync --frozen` from this module) uses the declared
+editable repository-root library. Its package-only uv override replaces conflicting
+direct/transitive Git requirements for that library; this is not gated by `--dev`.
+The hook remains Git-sourced. Standalone `pip` / `uv tool install` and non-editable
+wheels do not apply these checkout project settings; their production dependencies
+still reference Git `@main`.
+
+For an unmerged candidate, replace the placeholder with its full published revision
+and pin both the CLI and shared library to that same revision:
+
+```bash
+REV='<full-40-character-PR-revision>'
+printf '%s\n' \
+  "amplifier-bundle-context-intelligence @ git+https://github.com/microsoft/amplifier-bundle-context-intelligence@${REV}" \
+  > ci-candidate-overrides.txt
+uv tool install --overrides ci-candidate-overrides.txt \
+  "amplifier-module-tool-context-intelligence-upload @ git+https://github.com/microsoft/amplifier-bundle-context-intelligence@${REV}#subdirectory=modules/tool-context-intelligence-upload"
+```
 
 > This module is CLI-only — it ships the standalone `context-intelligence-upload` console script and no in-session Amplifier tools: there is no `mount()` and no `amplifier.modules` entry point.
 

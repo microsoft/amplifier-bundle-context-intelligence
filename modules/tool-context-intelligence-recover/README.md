@@ -13,8 +13,32 @@ and the adjacent native metadata. It never uses the ordinary event endpoint.
 
 ## Install
 
+The `@main` command is the normal channel once the CLI, hook, and shared-library
+changes have merged together. It does not select an unmerged candidate.
+
 ```bash
 uv tool install "amplifier-module-tool-context-intelligence-recover @ git+https://github.com/microsoft/amplifier-bundle-context-intelligence@main#subdirectory=modules/tool-context-intelligence-recover"
+```
+
+Checkout project resolution (`uv sync --frozen` from this module) uses the declared
+editable repository-root library and sibling hook. Its package-only uv override
+replaces conflicting direct/transitive Git requirements for the library, whether
+or not `--dev` is selected. Standalone `pip` / `uv tool install` and non-editable
+wheels do not apply these checkout project settings; their production dependencies
+still reference Git `@main`.
+
+For an unmerged candidate, pin the CLI, shared library, and hook to the same full
+published revision, matching the checkout. A candidate CLI with the library left
+on `@main` is not sufficient:
+
+```bash
+REV='<full-40-character-PR-revision>'
+printf '%s\n' \
+  "amplifier-bundle-context-intelligence @ git+https://github.com/microsoft/amplifier-bundle-context-intelligence@${REV}" \
+  "amplifier-module-hook-context-intelligence @ git+https://github.com/microsoft/amplifier-bundle-context-intelligence@${REV}#subdirectory=modules/hook-context-intelligence" \
+  > ci-candidate-overrides.txt
+uv tool install --overrides ci-candidate-overrides.txt \
+  "amplifier-module-tool-context-intelligence-recover @ git+https://github.com/microsoft/amplifier-bundle-context-intelligence@${REV}#subdirectory=modules/tool-context-intelligence-recover"
 ```
 
 ## Use
@@ -56,6 +80,14 @@ elsewhere.
 `--once` returns nonzero whenever deferred, blocked, or quarantined work
 remains. `--watch` honors `Retry-After` before retrying and re-reads
 configuration on each cycle.
+
+Watch mode keeps its five-minute full-discovery interval. Already-discovered
+captures blocked by a maintenance lock are retried individually on roughly
+one-second intervals, without rescanning the capture tree. After lock release,
+recovery rechecks replay safety and reconciles routing before continuing from
+acknowledged offsets; completed captures stop contributing transient pending
+work. Delivery still honors `Retry-After`; local lock retries do not shorten
+persisted server deferrals or guarantee a one-second completion time.
 
 `--dry-run` (also `--plan`) inventories and evaluates routing without issuing
 any HTTP requests. Recovery scans only exact

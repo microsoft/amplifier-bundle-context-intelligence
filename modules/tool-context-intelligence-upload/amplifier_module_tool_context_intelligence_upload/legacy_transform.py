@@ -235,6 +235,13 @@ def unslug_approximate(slug: str) -> str:
 
 
 def read_working_dir(session_dir: Path, legacy_events: Path) -> str:
+    from context_intelligence.prune.coordination import replay_guard
+
+    with replay_guard(legacy_events):
+        return _read_working_dir(session_dir, legacy_events)
+
+
+def _read_working_dir(session_dir: Path, legacy_events: Path) -> str:
     """Return the working directory for a session.
 
     Lookup order:
@@ -256,7 +263,11 @@ def read_working_dir(session_dir: Path, legacy_events: Path) -> str:
     # 2. Legacy events.jsonl session:start
     if legacy_events.exists():
         try:
-            for line in legacy_events.read_text(encoding="utf-8").splitlines():
+            from context_intelligence.prune.coordination import open_capture
+
+            with open_capture(legacy_events) as source:
+                text = source.read()
+            for line in text.splitlines():
                 line = line.strip()
                 if not line:
                     continue
@@ -399,6 +410,27 @@ def build_metadata(
 
 
 def transform_session(
+    legacy_events: Path,
+    ci_dir: Path,
+    *,
+    workspace: str | None = None,
+    working_dir: str | None = None,
+    session_dir: Path | None = None,
+) -> tuple[Path, Path]:
+    """Refuse retention-marked sources and lock through conversion publication."""
+    from context_intelligence.prune.coordination import replay_guard
+
+    with replay_guard(legacy_events):
+        return _transform_unmarked_session(
+            legacy_events,
+            ci_dir,
+            workspace=workspace,
+            working_dir=working_dir,
+            session_dir=session_dir,
+        )
+
+
+def _transform_unmarked_session(
     legacy_events: Path,
     ci_dir: Path,
     *,
