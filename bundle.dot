@@ -8,7 +8,7 @@ digraph context_intelligence {
     nodesep=0.6
     ranksep=0.7
     bgcolor="white"
-    source_hash="b9c38953f7b43b7efd510b3104261b994a5b2e5086a184c216027891e8d614e9"
+    source_hash="5946f265e47e9b63a0744969196a2911c91ade519ecd79528c34748d838658fb"
 
     node [fontname="Helvetica", fontsize=11, style="filled,rounded"]
     edge [fontname="Helvetica", fontsize=9]
@@ -24,8 +24,9 @@ digraph context_intelligence {
         beh_context_intelligence_analysis_behavior [label="context-intelligence-analysis-behavior\n1 tools\n~359 tok", shape=box, fillcolor="#e0f2f1", style="filled,rounded"]
         beh_context_intelligence_design_behavior [label="context-intelligence-design-behavior\n1 tools\n~331 tok", shape=box, fillcolor="#e0f2f1", style="filled,rounded"]
         beh_context_intelligence_logging_behavior [label="context-intelligence-logging-behavior\n2 tools\n~1761 tok", shape=box, fillcolor="#e0f2f1", style="filled,rounded"]
-        beh_context_intelligence_navigation_behavior [label="context-intelligence-navigation-behavior\n3 tools\n~905 tok", shape=box, fillcolor="#e0f2f1", style="filled,rounded"]
-        beh_context_intelligence_transcript_behavior [label="context-intelligence-transcript-behavior\n2 tools\n~215 tok", shape=box, fillcolor="#e0f2f1", style="filled,rounded"]
+        beh_context_intelligence_navigation_behavior [label="context-intelligence-navigation-behavior\n2 tools\n~765 tok", shape=box, fillcolor="#e0f2f1", style="filled,rounded"]
+        beh_context_intelligence_transcript_read_behavior [label="context-intelligence-transcript-read-behavior\n1 tools\n~94 tok", shape=box, fillcolor="#e0f2f1", style="filled,rounded"]
+        beh_context_intelligence_transcript_behavior [label="context-intelligence-transcript-behavior\n1 tools\n~186 tok", shape=box, fillcolor="#e0f2f1", style="filled,rounded"]
         beh_context_intelligence_behavior [label="context-intelligence-behavior\n~249 tok", shape=box, fillcolor="#e0f2f1", style="filled,rounded"]
     }
 
@@ -38,7 +39,7 @@ digraph context_intelligence {
         agt_context_intelligence_design_facilitator [label="context-intelligence-design-facilitator\n~149 tok desc", shape=box, fillcolor="#c8e6c9", style="filled,rounded"]
         agt_context_intelligence_tool_designer [label="context-intelligence-tool-designer\n~149 tok desc", shape=box, fillcolor="#c8e6c9", style="filled,rounded"]
         agt_graph_analyst [label="graph-analyst\n~131 tok desc", shape=box, fillcolor="#c8e6c9", style="filled,rounded"]
-        agt_server_data_ops [label="server-data-ops\n~270 tok desc", shape=box, fillcolor="#c8e6c9", style="filled,rounded"]
+        agt_server_data_ops [label="server-data-ops\n~147 tok desc", shape=box, fillcolor="#c8e6c9", style="filled,rounded"]
         agt_session_navigator [label="session-navigator\n~143 tok desc", shape=box, fillcolor="#c8e6c9", style="filled,rounded"]
     }
 
@@ -88,12 +89,13 @@ digraph context_intelligence {
     beh_context_intelligence_design_behavior -> beh_context_intelligence_analysis_behavior [label="composes"]
     beh_context_intelligence_logging_behavior -> mod_tool_context_intelligence_set_filters [label="uses", penwidth=0.8]
     beh_context_intelligence_logging_behavior -> mod_hook_context_intelligence [label="uses", penwidth=0.8]
+    beh_context_intelligence_navigation_behavior -> beh_context_intelligence_transcript_read_behavior [label="composes"]
     beh_context_intelligence_navigation_behavior -> agt_graph_analyst [label="owns"]
     beh_context_intelligence_navigation_behavior -> agt_session_navigator [label="owns"]
     beh_context_intelligence_navigation_behavior -> agt_server_data_ops [label="owns"]
-    beh_context_intelligence_navigation_behavior -> mod_tool_context_intelligence_transcript [label="uses", penwidth=0.8]
+    beh_context_intelligence_transcript_read_behavior -> mod_tool_context_intelligence_transcript [label="uses", penwidth=0.8]
     beh_context_intelligence_transcript_behavior -> beh_context_intelligence_logging_behavior [label="composes"]
-    beh_context_intelligence_transcript_behavior -> mod_tool_context_intelligence_transcript [label="uses", penwidth=0.8]
+    beh_context_intelligence_transcript_behavior -> beh_context_intelligence_transcript_read_behavior [label="composes"]
     beh_context_intelligence_behavior -> beh_context_intelligence_design_behavior [label="composes"]
     beh_context_intelligence_behavior -> beh_context_intelligence_logging_behavior [label="composes"]
 }

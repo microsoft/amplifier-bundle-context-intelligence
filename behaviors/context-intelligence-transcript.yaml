@@ -8,10 +8,9 @@ bundle:
 
 includes:
   - bundle: context-intelligence:behaviors/context-intelligence-logging
+  - bundle: context-intelligence:behaviors/context-intelligence-transcript-read
 
 tools:
-  - module: tool-context-intelligence-transcript
-    source: git+https://github.com/microsoft/amplifier-bundle-context-intelligence@main#subdirectory=modules/tool-context-intelligence-transcript
   - module: tool-skills
     source: git+https://github.com/microsoft/amplifier-bundle-skills@main#subdirectory=modules/tool-skills
     config:

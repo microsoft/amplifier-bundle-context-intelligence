@@ -1,0 +1,8 @@
+bundle:
+  name: context-intelligence-transcript-read-behavior
+  version: 0.1.0
+  description: Bounded native transcript reader; capture and skill policy belong to consumers.
+
+tools:
+  - module: tool-context-intelligence-transcript
+    source: git+https://github.com/microsoft/amplifier-bundle-context-intelligence@main#subdirectory=modules/tool-context-intelligence-transcript

@@ -4,10 +4,13 @@ bundle:
   description: >
     LAYER 1 of 3 (innermost). The single home for the three context-intelligence
     agents (graph-analyst, session-navigator, server-data-ops); the analysis
-    behavior imports this one rather than listing them again. Imports nothing
-    itself. session-navigator owns native transcript retrieval and reads raw
+    behavior imports this one rather than listing them again. Includes the shared
+    capture-independent transcript reader. session-navigator owns native transcript retrieval and reads raw
     session JSONL on disk with no graph server; use for local/offline
     navigation plus graph analysis and session data operations.
+
+includes:
+  - bundle: context-intelligence:behaviors/context-intelligence-transcript-read
 
 agents:
   include:
@@ -18,8 +21,6 @@ agents:
 tools:
   - module: tool-delegate
     source: git+https://github.com/microsoft/amplifier-foundation@main#subdirectory=modules/tool-delegate
-  - module: tool-context-intelligence-transcript
-    source: git+https://github.com/microsoft/amplifier-bundle-context-intelligence@main#subdirectory=modules/tool-context-intelligence-transcript
   - module: tool-skills
     source: git+https://github.com/microsoft/amplifier-bundle-skills@main#subdirectory=modules/tool-skills
     config:
