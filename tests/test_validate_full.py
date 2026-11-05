@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import stat
@@ -10,6 +11,7 @@ import sys
 from pathlib import Path
 
 import pytest
+import yaml
 
 REPO_ROOT = Path(__file__).parent.parent
 SCRIPT_PATH = REPO_ROOT / "scripts" / "validate-full.sh"
@@ -384,6 +386,134 @@ def test_requires_unambiguous_recipe_before_any_install(tmp_path: Path, recipe_c
     assert not Path(environment["FAKE_UV_ARGS"]).exists()
     assert not Path(environment["FAKE_CLI_PATH"]).exists()
     assert not Path(environment["FAKE_HOST_CLI_SENTINEL"]).exists()
+
+
+def test_transcript_behavior_layout() -> None:
+    """Two consumers share a reader without moving root recall behind an agent."""
+    reader_path = REPO_ROOT / "behaviors/context-intelligence-transcript-read.yaml"
+    assert reader_path.is_file(), "The shared capture-independent reader must exist"
+    reader = yaml.safe_load(reader_path.read_text())
+    transcript_tool = {
+        "module": "tool-context-intelligence-transcript",
+        "source": (
+            "git+https://github.com/microsoft/amplifier-bundle-context-intelligence@main"
+            "#subdirectory=modules/tool-context-intelligence-transcript"
+        ),
+    }
+    assert reader == {
+        "bundle": {
+            "name": "context-intelligence-transcript-read-behavior",
+            "version": "0.1.0",
+            "description": (
+                "Bounded native transcript reader; capture and skill policy belong to consumers."
+            ),
+        },
+        "tools": [transcript_tool],
+    }
+    reader_include = {
+        "bundle": "context-intelligence:behaviors/context-intelligence-transcript-read"
+    }
+    navigation = yaml.safe_load(
+        (REPO_ROOT / "behaviors/context-intelligence-navigation.yaml").read_text()
+    )
+    standalone = yaml.safe_load(
+        (REPO_ROOT / "behaviors/context-intelligence-transcript.yaml").read_text()
+    )
+    skill_prefix = (
+        "git+https://github.com/microsoft/amplifier-bundle-context-intelligence@main"
+        "#subdirectory=skills/"
+    )
+    skills_tool = {
+        "module": "tool-skills",
+        "source": (
+            "git+https://github.com/microsoft/amplifier-bundle-skills@main"
+            "#subdirectory=modules/tool-skills"
+        ),
+        "config": {
+            "skills": [
+                skill_prefix + "context-intelligence-session-navigation",
+                skill_prefix + "transcript",
+            ]
+        },
+    }
+    assert navigation["includes"] == [reader_include]
+    assert navigation["tools"] == [
+        {
+            "module": "tool-delegate",
+            "source": (
+                "git+https://github.com/microsoft/amplifier-foundation@main"
+                "#subdirectory=modules/tool-delegate"
+            ),
+        },
+        skills_tool,
+    ]
+    assert navigation["agents"] == {
+        "include": [
+            "context-intelligence:graph-analyst",
+            "context-intelligence:session-navigator",
+            "context-intelligence:server-data-ops",
+        ]
+    }
+    assert set(navigation) == {"bundle", "includes", "agents", "tools"}
+    assert "Imports nothing" not in navigation["bundle"]["description"]
+    assert standalone["includes"] == [
+        {"bundle": "context-intelligence:behaviors/context-intelligence-logging"},
+        reader_include,
+    ]
+    assert standalone["tools"] == [
+        {**skills_tool, "config": {"skills": [skill_prefix + "transcript"]}}
+    ]
+    assert set(standalone) == {"bundle", "includes", "tools"}
+    navigator = yaml.safe_load(
+        (REPO_ROOT / "agents/session-navigator.md").read_text().split("---", 2)[1]
+    )
+    assert [t for t in navigator["tools"] if t["module"] == transcript_tool["module"]] == [
+        transcript_tool
+    ]
+
+
+def test_server_data_ops_description_fidelity() -> None:
+    """Short routing metadata retains all deletion scopes and safety decisions."""
+    agent_bytes = (REPO_ROOT / "agents/server-data-ops.md").read_bytes()
+    agent = yaml.safe_load(agent_bytes.decode().split("---", 2)[1])
+    description = agent["meta"]["description"]
+    assert len(description) <= 600
+    assert description == (
+        "MUST be used when a user wants to delete Context Intelligence session data from a server. "
+        "Drives find -> preview -> confirm -> delete; always previews before deletion and requires "
+        "explicit confirmation. Handles the current session, all sessions pushed from the current "
+        "working directory, sessions found by topic, date, workspace or server, and another owner's "
+        "sessions. Warns when the current user is not the owner and requires an additional explicit "
+        "confirmation. With multiple configured servers, asks which to use. "
+        "Use for delete, remove or clear requests, including folder-wide cleanup.\n"
+    )
+    assert len(description) == 591
+    for routing_fact in (
+        "MUST be used",
+        "find -> preview -> confirm -> delete",
+        "always previews before deletion",
+        "requires explicit confirmation",
+        "current session",
+        "all sessions pushed from the current working directory",
+        "topic, date, workspace or server",
+        "another owner's sessions",
+        "current user is not the owner",
+        "additional explicit confirmation",
+        "multiple configured servers, asks which to use",
+        "delete, remove or clear",
+        "folder-wide cleanup",
+    ):
+        assert routing_fact in description
+    prefix, marker, rest = agent_bytes.partition(
+        b"\nmeta:\n  name: server-data-ops\n  description:"
+    )
+    _, end_marker, suffix = rest.partition(b"\nmodel_role:")
+    assert marker and end_marker
+    # Baseline 672744d: every byte outside meta.description, including the safety
+    # body, lockdown hook, delegate exclusions, tool sources and model role.
+    assert hashlib.sha256(prefix + marker + end_marker + suffix).hexdigest() == (
+        "db2857f56e85d21e426d5a4b55a74cda62856ac030d6046a8f28d1bb1ccf0922"
+    )
 
 
 @pytest.mark.parametrize("cached_recipe_count", [0, 2])

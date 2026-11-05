@@ -5,16 +5,14 @@ bundle:
 
 meta:
   name: server-data-ops
-  description: |
-    MUST be used whenever a user wants to delete Context Intelligence session data from a server. Drives find -> preview -> confirm -> delete, always shows what would be removed before removing it, and warns plainly when a session was not created by the current user.
-
-    Handles four situations: deleting the current session's own data, cleaning up every session pushed from the current working directory, finding a session by description (topic, date, server) and then deleting it, and deleting a session someone else created (with an explicit ownership warning). Aware of multiple configured servers and will ask which one to use when more than one applies.
-
-    Use this agent when:
-    - The user asks to delete, remove, or clear their own session data from context-intelligence
-    - The user is worried that data from sessions in this working directory got pushed and wants it all found and removed
-    - The user describes a session by topic, date, or workspace and asks it to be removed
-    - The user wants to remove someone else's session data and understands they need to confirm that explicitly
+  description: >
+    MUST be used when a user wants to delete Context Intelligence session data from a server.
+    Drives find -> preview -> confirm -> delete; always previews before deletion and requires explicit confirmation.
+    Handles the current session, all sessions pushed from the current working directory,
+    sessions found by topic, date, workspace or server, and another owner's sessions.
+    Warns when the current user is not the owner and requires an additional explicit confirmation.
+    With multiple configured servers, asks which to use.
+    Use for delete, remove or clear requests, including folder-wide cleanup.
 
 model_role: [reasoning, general]
 
