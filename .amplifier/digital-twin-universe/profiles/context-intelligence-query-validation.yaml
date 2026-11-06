@@ -46,12 +46,33 @@
 #     --var gitea_host=http://localhost:10110 \
 #     --var server_url=http://<incus-gateway-ip>:38000 \
 #     --var server_token=<token> \
-#     --var workspace=ci-query
+#     --var workspace=ci-query \
+#     --var BUNDLE_REF=<exact-40-lowercase-hex-snapshot-SHA> \
+#     --var EXPECTED_QUERY_SHA256=<graph_query_tool.py-sha256> \
+#     --var EXPECTED_BLOB_SHA256=<blob_read_tool.py-sha256> \
+#     --var EXPECTED_SKILL_SHA256=<graph-query-SKILL.md-sha256> \
+#     --var EXPECTED_AGENT_SHA256=<graph-analyst.md-sha256>
+#   All expected hashes are non-secret inputs computed from the tested snapshot,
+#   not from the guest being checked. A dirty source export needs its own exact
+#   snapshot identity; baseline HEAD is not changed-source provenance.
+#   These five inputs travel only as user.ci.* instance metadata. The guest must
+#   permit reads through /dev/incus/sock; unavailable guest API fails closed.
+#   This profile does not enable a disabled guest API policy. Raw identity values
+#   are validated before use, never substituted into executable shell strings.
+#   Other profile variables are outside this input-safety guarantee.
+#
+# PROVENANCE BOUNDARY
+#   Readiness below verifies ONE cached snapshot's effective remote, exact revision
+#   and file hashes. It does NOT prove which module/skill a session actually loads.
+#   Nested @main bundle/module/static-skill references must resolve to the same
+#   tested arm and loaded paths/hashes must be captured by the live controller.
+#   Do not use this stock profile alone as the final loaded-source identity gate.
+#   manual_validation_steps are NOT executed automatically on launch.
 #
 # WHAT IS PROVEN
 #   STRUCTURAL (readiness gates, deterministic, no LLM):
-#     * bundle installed via the CLI, resolved to the MIRROR; graph-analyst agent present;
-#       the query-tool module (graph_query + blob_read) is in the loaded bundle.
+#     * CLI install requested an exact snapshot; ONE mirror cache has that revision
+#       and expected graph-analyst/query/blob/static-skill bytes (not loaded-path proof).
 #     * the server is reachable from the DTU (neo4j_connected:true).
 #   BEHAVIOURAL (real session, real key; exec steps below):
 #     * graph_query returns >=1 row for a workspace-filtered Cypher query, and the tool
@@ -68,6 +89,12 @@ description: >
 
 base:
   image: ubuntu:24.04
+  config:
+    user.ci.bundle-ref: "${BUNDLE_REF}"
+    user.ci.query-sha256: "${EXPECTED_QUERY_SHA256}"
+    user.ci.blob-sha256: "${EXPECTED_BLOB_SHA256}"
+    user.ci.skill-sha256: "${EXPECTED_SKILL_SHA256}"
+    user.ci.agent-sha256: "${EXPECTED_AGENT_SHA256}"
 
 passthrough:
   allow_external: true
@@ -110,8 +137,25 @@ provision:
       EOF
 
     - |
+      set -euo pipefail
+      export LC_ALL=C
+      ci_hex() {
+        local ci_raw
+        ci_raw=$(curl --fail --silent --show-error --noproxy '*' \
+          --connect-timeout 2 --max-time 5 --unix-socket /dev/incus/sock \
+          "http://localhost/1.0/config/$1" && printf x) || return 1
+        # Preserve trailing newlines so invalid raw metadata cannot be normalized.
+        ci_raw=${ci_raw%x}
+        [[ "$ci_raw" =~ ^[0-9a-f]+$ && "${#ci_raw}" -eq "$2" ]] || return 1
+        printf '%s' "$ci_raw"
+      }
+      ci_bundle_ref=$(ci_hex user.ci.bundle-ref 40) || exit 1
+      ci_query_sha256=$(ci_hex user.ci.query-sha256 64) || exit 1
+      ci_blob_sha256=$(ci_hex user.ci.blob-sha256 64) || exit 1
+      ci_skill_sha256=$(ci_hex user.ci.skill-sha256 64) || exit 1
+      ci_agent_sha256=$(ci_hex user.ci.agent-sha256 64) || exit 1
       amplifier bundle add \
-        git+https://github.com/microsoft/amplifier-bundle-context-intelligence@main#subdirectory=behaviors/context-intelligence.yaml \
+        "git+https://github.com/microsoft/amplifier-bundle-context-intelligence@$ci_bundle_ref#subdirectory=behaviors/context-intelligence.yaml" \
         --app
 
     # Wire the read tools (and the write hook) to the server via the single-server env path.
@@ -133,22 +177,48 @@ readiness:
   - name: amplifier-usable
     command: "amplifier --version"
 
-  - name: bundle-loaded-from-mirror
-    command: >
-      C=$(find /root/.amplifier/cache -maxdepth 1 -type d -name 'amplifier-bundle-context-intelligence-*' | head -1);
-      git -C "$C" remote -v | grep -q "${gitea_host}/microsoft/amplifier-bundle-context-intelligence"
-      && git -C "$C" log -1 --pretty=%s | grep -qi "docs/contributing-and-pr-template"
-      && echo "ready: bundle resolved from mirror @ branch snapshot"
-
-  - name: graph-analyst-and-query-tools-loaded
-    # The read path is the graph-analyst agent; its module wiring must include the query tool
-    # (graph_query + blob_read) from the loaded (mirror) bundle.
-    command: >
-      C=$(find /root/.amplifier/cache -maxdepth 1 -type d -name 'amplifier-bundle-context-intelligence-*' | head -1);
-      test -f "$C/agents/graph-analyst.md"
-      && test -f "$C/modules/tool-context-intelligence-query/amplifier_module_tool_context_intelligence_query/graph_query_tool.py"
-      && test -f "$C/modules/tool-context-intelligence-query/amplifier_module_tool_context_intelligence_query/blob_read_tool.py"
-      && echo "ready: graph-analyst + graph_query + blob_read present in loaded bundle"
+  - name: bundle-snapshot-from-mirror
+    command: |
+      set -euo pipefail
+      export LC_ALL=C
+      ci_hex() {
+        local ci_raw
+        ci_raw=$(curl --fail --silent --show-error --noproxy '*' \
+          --connect-timeout 2 --max-time 5 --unix-socket /dev/incus/sock \
+          "http://localhost/1.0/config/$1" && printf x) || return 1
+        # Preserve trailing newlines so invalid raw metadata cannot be normalized.
+        ci_raw=${ci_raw%x}
+        [[ "$ci_raw" =~ ^[0-9a-f]+$ && "${#ci_raw}" -eq "$2" ]] || return 1
+        printf '%s' "$ci_raw"
+      }
+      ci_bundle_ref=$(ci_hex user.ci.bundle-ref 40) || exit 1
+      ci_query_sha256=$(ci_hex user.ci.query-sha256 64) || exit 1
+      ci_blob_sha256=$(ci_hex user.ci.blob-sha256 64) || exit 1
+      ci_skill_sha256=$(ci_hex user.ci.skill-sha256 64) || exit 1
+      ci_agent_sha256=$(ci_hex user.ci.agent-sha256 64) || exit 1
+      shopt -s nullglob
+      candidates=("$HOME"/.amplifier/cache/amplifier-bundle-context-intelligence-*/)
+      if [ "${#candidates[@]}" -ne 1 ]; then
+        echo "Expected exactly one bundle cache candidate; refusing missing/ambiguous identity" >&2
+        exit 1
+      fi
+      C="${candidates[0]%/}"
+      git -C "$C" rev-parse --verify HEAD | {
+        IFS= read -r actual
+        [ "$actual" = "$ci_bundle_ref" ]
+      }
+      git -C "$C" remote get-url origin | {
+        IFS= read -r actual
+        expected="${gitea_host}/microsoft/amplifier-bundle-context-intelligence"
+        [ "${actual%.git}" = "$expected" ]
+      }
+      # Verify snapshot file content
+      printf '%s  %s\n' \
+        "$ci_query_sha256" "$C/modules/tool-context-intelligence-query/amplifier_module_tool_context_intelligence_query/graph_query_tool.py" \
+        "$ci_blob_sha256" "$C/modules/tool-context-intelligence-query/amplifier_module_tool_context_intelligence_query/blob_read_tool.py" \
+        "$ci_skill_sha256" "$C/skills/context-intelligence-graph-query/SKILL.md" \
+        "$ci_agent_sha256" "$C/agents/graph-analyst.md" | sha256sum --check --strict
+      echo "ready: exact mirror snapshot/file hashes; loaded-path provenance still requires live proof"
 
   - name: server-reachable-from-dtu
     command: >

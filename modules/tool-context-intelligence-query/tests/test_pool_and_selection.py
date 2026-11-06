@@ -335,6 +335,99 @@ class TestResolvedOrigin:
 
 
 class TestRequestTimeout:
+    @pytest.fixture(autouse=True)
+    def _clear_timeout_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("AMPLIFIER_CONTEXT_INTELLIGENCE_QUERY_TIMEOUT", raising=False)
+
+    def test_query_timeout_defaults_are_isolated(self) -> None:
+        resolver = _tool_resolver({})
+        assert (resolver.query_request_timeout, resolver.request_timeout) == (120.0, 30.0)
+
+    @pytest.mark.parametrize(
+        ("tool", "coordinator", "env", "expected"),
+        [
+            ({"request_timeout": 45}, {"request_timeout": 60}, "75", (45.0, 45.0)),
+            ({"request_timeout": None}, {"request_timeout": 60}, "75", (60.0, 60.0)),
+            ({}, {"request_timeout": 60}, "75", (60.0, 60.0)),
+            ({"request_timeout": None}, {"request_timeout": None}, "75", (75.0, 75.0)),
+            ({}, {}, "75", (75.0, 75.0)),
+            ({}, {"request_timeout": None}, "75", (75.0, 75.0)),
+            ({"request_timeout": None}, {}, "75", (75.0, 75.0)),
+            ({}, {}, None, (120.0, 30.0)),
+            ({"request_timeout": None}, {}, None, (120.0, 30.0)),
+            ({}, {"request_timeout": None}, None, (120.0, 30.0)),
+            ({"request_timeout": None}, {"request_timeout": None}, None, (120.0, 30.0)),
+            ({"request_timeout": "45.5"}, {"request_timeout": 60}, "75", (45.5, 45.5)),
+            ({}, {"request_timeout": "60.5"}, "75", (60.5, 60.5)),
+            ({}, {}, "75.5", (75.5, 75.5)),
+            *[
+                case
+                for invalid in ("", "bad", float("nan"), float("inf"), float("-inf"))
+                for case in (
+                    ({"request_timeout": invalid}, {"request_timeout": 60}, "75", (120.0, 30.0)),
+                    ({}, {"request_timeout": invalid}, "75", (120.0, 30.0)),
+                    ({}, {}, str(invalid), (120.0, 30.0)),
+                )
+            ],
+            *[
+                case
+                for small in (0, -5, 0.05)
+                for case in (
+                    ({"request_timeout": small}, {"request_timeout": 60}, "75", (0.1, 0.1)),
+                    ({}, {"request_timeout": small}, "75", (0.1, 0.1)),
+                    ({}, {}, str(small), (0.1, 0.1)),
+                )
+            ],
+        ],
+    )
+    def test_query_timeout_precedence_and_coercion(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tool: dict[str, Any],
+        coordinator: dict[str, Any],
+        env: str | None,
+        expected: tuple[float, float],
+    ) -> None:
+        from context_intelligence.tool_resolver import ToolConfigResolver
+
+        if env is not None:
+            monkeypatch.setenv("AMPLIFIER_CONTEXT_INTELLIGENCE_QUERY_TIMEOUT", env)
+        resolver = ToolConfigResolver(tool, _make_coordinator(config=coordinator))
+        assert (resolver.query_request_timeout, resolver.request_timeout) == expected
+
+    def test_query_timeout_access_is_uncached(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from context_intelligence.tool_resolver import ToolConfigResolver
+
+        config: dict[str, Any] = {}
+        coordinator_config: dict[str, Any] = {}
+        coordinator = _make_coordinator(config=coordinator_config)
+        resolver = ToolConfigResolver(config, coordinator)
+        assert resolver.query_request_timeout == 120.0
+
+        config["request_timeout"] = 45
+        assert resolver.request_timeout == 45.0
+        config["request_timeout"] = 60
+        assert resolver.query_request_timeout == 60.0
+
+        config["request_timeout"] = None
+        coordinator_config["request_timeout"] = 75
+        assert resolver.request_timeout == 75.0
+        coordinator.config = {"request_timeout": "90"}
+        assert resolver.query_request_timeout == 90.0
+
+        coordinator.config["request_timeout"] = None
+        monkeypatch.setenv("AMPLIFIER_CONTEXT_INTELLIGENCE_QUERY_TIMEOUT", "105")
+        assert resolver.request_timeout == 105.0
+        monkeypatch.setenv("AMPLIFIER_CONTEXT_INTELLIGENCE_QUERY_TIMEOUT", "115")
+        assert resolver.query_request_timeout == 115.0
+        monkeypatch.setenv("AMPLIFIER_CONTEXT_INTELLIGENCE_QUERY_TIMEOUT", "bad")
+        assert resolver.request_timeout == 30.0
+        assert resolver.query_request_timeout == 120.0
+
+        monkeypatch.delenv("AMPLIFIER_CONTEXT_INTELLIGENCE_QUERY_TIMEOUT")
+        assert resolver.request_timeout == 30.0
+        assert resolver.query_request_timeout == 120.0
+
     def test_p11_default_when_absent(self) -> None:
         assert _tool_resolver({}).request_timeout == 30.0
 

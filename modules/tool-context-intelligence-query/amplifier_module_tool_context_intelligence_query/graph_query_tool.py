@@ -32,6 +32,7 @@ path, logging handler, destination dispatcher). It only reads
 
 from __future__ import annotations
 
+import math
 from typing import Any
 
 from context_intelligence.client import AsyncCIClient, CIClientError
@@ -68,9 +69,16 @@ class GraphQueryTool:
         return (
             "Execute a Cypher query against the context-intelligence property graph. "
             "Use this to explore session history, relationships between entities, "
-            "and metadata stored in the graph. The workspace is automatically injected "
-            "to scope results to the current session namespace. Every result names the "
-            "`source` (name/url/origin) that answered -- ALWAYS state it in your answer."
+            "and metadata stored in the graph. The workspace is bound as a query parameter; "
+            "scoping results requires explicit workspace predicates in your query. Every result names the "
+            "`source` (name/url/origin) that answered -- ALWAYS state it in your answer. "
+            "Use scoped anchors, bounded paths, projections, and pagination; LIMIT bounds output, "
+            "not database work. The graph-only fallback HTTP timeout is 120 seconds. A top-level "
+            "positive finite request_timeout overrides it for one call (not a Cypher param). "
+            "On timeout, report the effective error.request_timeout and inspect the query first. "
+            "At most one deliberate safe retry of an intentionally complex query may use an "
+            "explicit larger value; no automatic retries. This is not a database or total-query "
+            "deadline, and prior work may continue. A timeout alone does not prove server-down."
         )
 
     @property
@@ -82,7 +90,8 @@ class GraphQueryTool:
                     "type": "string",
                     "description": (
                         "Cypher query string to execute against the context-intelligence graph. "
-                        'Example: "MATCH (n:Session) RETURN n LIMIT 10". Required unless '
+                        'Example: "MATCH (s:Session {workspace: $workspace}) '
+                        'RETURN s.node_id AS session_id ORDER BY session_id LIMIT 25". Required unless '
                         "list_sources=true."
                     ),
                 },
@@ -103,6 +112,18 @@ class GraphQueryTool:
                     "description": (
                         "Optional workspace override. Omit to use the configured workspace value. "
                         'Pass "*" to query across all workspaces.'
+                    ),
+                },
+                "request_timeout": {
+                    "type": "number",
+                    "exclusiveMinimum": 0,
+                    "description": (
+                        "Optional positive finite HTTP operation timeout in seconds for this "
+                        "invocation only. Use a shorter or longer timeout without changing "
+                        "configuration. Omit to use the configured query timeout (120 seconds "
+                        "fallback). For a deliberate retry, inspect query scope, projections, "
+                        "and pagination first, and retry only when safe. This is not a database "
+                        "execution or total query deadline; prior work may still be running."
                     ),
                 },
                 "source": {
@@ -221,11 +242,35 @@ class GraphQueryTool:
         else:
             params = raw_params
 
+        effective_request_timeout: float
+        if "request_timeout" not in input:
+            effective_request_timeout = self._tool_resolver.query_request_timeout
+        else:
+            raw_timeout = input["request_timeout"]
+            try:
+                effective_request_timeout = (
+                    float(raw_timeout) if type(raw_timeout) in (int, float) else math.nan
+                )
+            except OverflowError:
+                effective_request_timeout = math.nan
+            if not math.isfinite(effective_request_timeout) or effective_request_timeout <= 0:
+                return ToolResult(
+                    success=False,
+                    error={
+                        "message": (
+                            "request_timeout must be a positive finite JSON number of seconds; "
+                            "omit it to use the configured query timeout."
+                        ),
+                        "type": "validation_error",
+                        "source": _origin_dict(conn.origin),
+                    },
+                )
+
         async_client = AsyncCIClient(
             server_url=conn.url,
             api_key=conn.api_key or "",
             auth_strategy=conn.auth_strategy,
-            timeout=self._tool_resolver.request_timeout,
+            timeout=effective_request_timeout,
         )
         try:
             result = await async_client.cypher(query, effective_workspace, params=params)
@@ -235,15 +280,27 @@ class GraphQueryTool:
             # also set output= here or that back-fill is suppressed (matches the
             # SourceSelectionError/ValueError handlers above).
             origin_name = conn.origin.name if conn.origin and conn.origin.name else conn.url
-            return ToolResult(
-                success=False,
-                error={
-                    "message": f"query failed against {origin_name}: {exc}",
-                    "type": exc.error_type,  # connection_error|timeout|http_status|decode_error
-                    "source": _origin_dict(conn.origin),
-                    **({"status_code": exc.status_code} if exc.status_code is not None else {}),
-                },
-            )
+            error: dict[str, Any] = {
+                "message": f"query failed against {origin_name}: {exc}",
+                "type": exc.error_type,  # connection_error|timeout|http_status|decode_error
+                "source": _origin_dict(conn.origin),
+                **({"status_code": exc.status_code} if exc.status_code is not None else {}),
+            }
+            if exc.error_type == "timeout":
+                retry_hint = (
+                    "The tool does not retry automatically. Inspect query scope, projections, "
+                    "and pagination first. If an intentionally complex query still needs more "
+                    "time and retrying is safe, retry with a larger top-level request_timeout "
+                    "in seconds. A client timeout is not a database deadline; prior work may "
+                    "still be running."
+                )
+                error["request_timeout"] = effective_request_timeout
+                error["retry_hint"] = retry_hint
+                error["message"] += (
+                    f" Effective HTTP request_timeout={effective_request_timeout:g} seconds. "
+                    f"{retry_hint}"
+                )
+            return ToolResult(success=False, error=error)
         return ToolResult(
             success=True,
             output={"source": _origin_dict(conn.origin), "rows": result},
