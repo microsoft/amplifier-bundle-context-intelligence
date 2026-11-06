@@ -187,6 +187,11 @@ Preserve history type/stamp validation and both transfer-fence checks before pru
 Prove watch retries with `run(refresh=False)` after real capture-lock release, including stale pending cleanup; refresh-only success is not sufficient.
 Validate administrative CLI options by presence (`is not None`), not truthiness.
 Reject invalid combinations before constructing runners, creating state, or making network requests.
+Before trusting absent nonretired recovery membership, validate cursor-to-artifact
+references and canonical lowercase source IDs read-only. Keep this semantic check
+separate from schema-only retirement: explicit abandonment must not repair outcomes.
+Keep JSON/status refusals local to each capture. A parser failure must not erase
+validated snapshot facts, acknowledged offsets, or permanent `source-changed` quarantine.
 
 Matching numeric versions do not prove shared-library API compatibility.
 Verify installed CLIs against their declared sources, without `PYTHONPATH`.

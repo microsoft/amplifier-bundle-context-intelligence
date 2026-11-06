@@ -6,10 +6,12 @@ import hashlib
 import json
 import os
 import sqlite3
+from contextlib import closing
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
+from test_prune_ledger_resources import _mutation_stat
 
 from context_intelligence.prune import Policy, PruneRequest, prune_file
 from context_intelligence.prune.coordination import receipt_path
@@ -254,10 +256,12 @@ def test_full_historical_schema_identity_and_exact_classification(tmp_path, kind
     db, _ = make_ledger(tmp_path / "recovery", registered)
     with sqlite3.connect(db) as writer:
         if kind == "mismatched":
+            identity = hashlib.sha256(str(path.absolute()).encode()).hexdigest()
             writer.execute(
                 "UPDATE artifact SET artifact_id=?",
-                (hashlib.sha256(str(path.absolute()).encode()).hexdigest(),),
+                (identity,),
             )
+            writer.execute("UPDATE cursor SET artifact_id=?", (identity,))
         elif kind == "unknown-superset":
             writer.execute("ALTER TABLE artifact ADD COLUMN future_identity TEXT")
     db_before = db.read_bytes()
@@ -288,3 +292,72 @@ def test_pathless_inode_alias_excludes_without_native_metadata(tmp_path):
         assert path.read_bytes() == before and not receipt_path(path).exists()
     finally:
         writer.close()
+
+
+def _assert_unknown_membership(path, db, req, reason):
+    """Unknown membership must refuse before publishing any retention receipt."""
+    original, info = path.read_bytes(), path.stat()
+    db_before, db_info = db.read_bytes(), db.stat()
+    with closing(sqlite3.connect(db)) as reader:
+        rows = {
+            table: list(reader.execute(f"SELECT * FROM {table}"))
+            for table in ("artifact", "cursor")
+        }
+        assert reader.execute("PRAGMA quick_check").fetchone() == ("ok",)
+    result = prune_file(path, req, now=NOW)
+    assert result.status == "error" and (result.reason or "").startswith(
+        "recovery-state-unknown: " + reason
+    ), result
+    assert result.payloads == 0 and result.bytes_before == result.bytes_after
+    assert path.read_bytes() == original and _mutation_stat(path.stat()) == _mutation_stat(info)
+    assert db.read_bytes() == db_before and _mutation_stat(db.stat()) == _mutation_stat(db_info)
+    with closing(sqlite3.connect(db)) as reader:
+        assert {table: list(reader.execute(f"SELECT * FROM {table}")) for table in rows} == rows
+    assert not receipt_path(path).exists()
+    assert not list(path.parent.glob("*prune*"))
+
+
+@pytest.mark.parametrize("historical", [False, True])
+def test_orphan_pending_cursor_refuses_even_without_foreign_keys(tmp_path, historical):
+    path = source(tmp_path)
+    if historical:
+        from test_prune_ledger_resources import _SCHEMA, _ledger
+
+        db = _ledger(tmp_path / "recovery", 0, tmp_path / "other")
+        with closing(sqlite3.connect(db)) as writer:
+            # Historical producers need not have declared a foreign key.
+            writer.execute("DROP TABLE cursor")
+            writer.executescript(
+                _SCHEMA[
+                    _SCHEMA.index("CREATE TABLE cursor") : _SCHEMA.index("CREATE INDEX")
+                ].replace(" REFERENCES artifact(artifact_id)", "")
+            )
+            writer.execute(
+                "INSERT INTO cursor(artifact_id,destination,target_fingerprint,"
+                "policy_fingerprint,state) VALUES(?, 'default', 'target', 'policy', 'pending')",
+                ("a" * 64,),
+            )
+            writer.commit()
+            assert not list(writer.execute("PRAGMA foreign_key_check"))
+    else:
+        db, writer = ledger(tmp_path, tmp_path / "other", "eligible")
+        writer.execute("DELETE FROM artifact")
+        writer.execute("UPDATE cursor SET state='pending'")
+        writer.commit()
+        writer.close()
+    _assert_unknown_membership(path, db, request(tmp_path), "orphan recovery cursor")
+
+
+@pytest.mark.parametrize("identity", [None, b"a" * 64, "", "a" * 63, "g" * 64, "A" * 64])
+def test_noncanonical_source_identity_refuses_without_orphan_masking(tmp_path, identity):
+    path = source(tmp_path)
+    db, writer = ledger(tmp_path, tmp_path / "other", "eligible")
+    writer.execute("UPDATE artifact SET artifact_id=?", (identity,))
+    if identity is None:
+        # NULL has no matching SQL identity; no orphan should mask artifact validation.
+        writer.execute("DELETE FROM cursor")
+    else:
+        writer.execute("UPDATE cursor SET artifact_id=?", (identity,))
+    writer.commit()
+    writer.close()
+    _assert_unknown_membership(path, db, request(tmp_path), "invalid source identity")

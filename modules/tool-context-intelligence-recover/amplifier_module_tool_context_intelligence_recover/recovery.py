@@ -463,7 +463,7 @@ def _validate_raw_record(raw_line: bytes, metadata: dict[str, Any]) -> str | Non
         return "malformed-line"
     try:
         parsed = json.loads(body.decode("utf-8"))
-    except (UnicodeDecodeError, json.JSONDecodeError):
+    except (UnicodeDecodeError, ValueError):
         return "malformed-line"
     if not isinstance(parsed, dict):
         return "malformed-line"
@@ -498,7 +498,7 @@ def _read_metadata(
     digest = hashlib.sha256(raw).hexdigest()
     try:
         metadata = json.loads(raw.decode("utf-8"))
-    except (UnicodeDecodeError, json.JSONDecodeError):
+    except (UnicodeDecodeError, ValueError):
         return None, digest, "", "corrupt-metadata"
     if not isinstance(metadata, dict):
         return None, digest, "", "corrupt-metadata"
@@ -508,8 +508,11 @@ def _read_metadata(
         return None, digest, "", "inconsistent-session-id"
     if metadata.get("workspace") != project_dir or not project_dir:
         return None, digest, "", "inconsistent-workspace"
+    status = metadata.get("status")
+    if status is not None and not isinstance(status, str):
+        return None, digest, "", "invalid-native-metadata"
     if (
-        metadata.get("status") not in _TERMINAL_STATUSES
+        status not in _TERMINAL_STATUSES
         or not isinstance(metadata.get("ended_at"), str)
         or not metadata["ended_at"]
     ):
@@ -1282,6 +1285,16 @@ class RecoveryRunner:
 
     def _scan_unmarked_artifact(self, path: Path) -> None:
         artifact_id = _artifact_id(path)
+        prior = self.checkpoint.prior(artifact_id)
+        if (
+            prior is not None
+            and prior["state"] == "quarantined"
+            and prior["reason"] == "source-changed"
+        ):
+            return
+        prior_validated = prior is not None and all(
+            prior[column] for column in ("source_stream_sha256", "source_sha256", "metadata_sha256")
+        )
         if _target_is_outside_owner_home(path):
             self.checkpoint.save_artifact(
                 ArtifactFact(artifact_id, path, "quarantined", "target-outside-owner-home")
@@ -1305,7 +1318,6 @@ class RecoveryRunner:
                 ArtifactFact(artifact_id, path, "quarantined", "target-outside-owner-home")
             )
             return
-        prior = self.checkpoint.prior(artifact_id)
         if (
             prior is not None
             and prior["state"]
@@ -1335,6 +1347,9 @@ class RecoveryRunner:
             path.parent.parent.parent.parent.name,
         )
         if metadata_error is not None or metadata is None:
+            if prior_validated:
+                self.checkpoint.quarantine_artifact(artifact_id, "source-changed")
+                return
             state = (
                 "deferred"
                 if metadata_error in {"missing-metadata", "session-incomplete"}
@@ -1345,6 +1360,9 @@ class RecoveryRunner:
             )
             return
         record_count, stream_sha, source_sha, stream_error = _stream_fingerprint(path, metadata)
+        if stream_error is not None and prior_validated:
+            self.checkpoint.quarantine_artifact(artifact_id, "source-changed")
+            return
         metadata_size, metadata_mtime_ns, metadata_inode = _stat_facts(metadata_path)
         source_after = _stat_facts(path)
         if source_after != _stat_facts_from_result(source_stat) or (
@@ -1375,12 +1393,7 @@ class RecoveryRunner:
             prior["source_sha256"] not in {"", source_sha}
             or prior["metadata_sha256"] not in {"", metadata_sha}
         )
-        permanently_changed = (
-            prior is not None
-            and prior["state"] == "quarantined"
-            and prior["reason"] == "source-changed"
-        )
-        if changed or permanently_changed:
+        if changed:
             self.checkpoint.save_artifact(
                 ArtifactFact(
                     artifact_id,
@@ -1701,7 +1714,7 @@ class RecoveryRunner:
             return None, 0, error
         try:
             parsed = json.loads(raw_line.rstrip(b"\r\n").decode("utf-8"))
-        except (UnicodeDecodeError, json.JSONDecodeError):
+        except (UnicodeDecodeError, ValueError):
             return None, 0, "malformed-line"
         data = dict(parsed["data"])
         data.setdefault("session_id", metadata["session_id"])

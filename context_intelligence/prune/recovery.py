@@ -139,6 +139,22 @@ def _validate_checkpoint_schema(connection: sqlite3.Connection) -> bool:
     return historical
 
 
+def _validate_checkpoint_membership(connection: sqlite3.Connection) -> None:
+    """Refuse unknown membership without changing any checkpoint or cursor."""
+    if connection.execute(
+        "SELECT 1 FROM cursor c WHERE NOT EXISTS "
+        "(SELECT 1 FROM artifact a WHERE a.artifact_id=c.artifact_id) LIMIT 1"
+    ).fetchone():
+        raise PruneError("recovery-state-unknown: orphan recovery cursor")
+    for (artifact_id,) in connection.execute("SELECT artifact_id FROM artifact"):
+        if (
+            not isinstance(artifact_id, str)
+            or len(artifact_id) != 64
+            or any(character not in "0123456789abcdef" for character in artifact_id)
+        ):
+            raise PruneError("recovery-state-unknown: invalid source identity")
+
+
 def _exclude_registered(connection: sqlite3.Connection, source: Path) -> None:
     from context_intelligence.recovery_retirement import RetirementError, retired_job
 
@@ -148,6 +164,7 @@ def _exclude_registered(connection: sqlite3.Connection, source: Path) -> None:
             return
     except RetirementError as exc:
         raise PruneError("recovery-state-unknown: invalid job retirement") from exc
+    _validate_checkpoint_membership(connection)
     # Both supported producers use absolute(), not resolve(), for this ID.
     artifact_id = hashlib.sha256(str(source.absolute()).encode("utf-8")).hexdigest()
     if connection.execute("SELECT 1 FROM artifact WHERE artifact_id=?", (artifact_id,)).fetchone():

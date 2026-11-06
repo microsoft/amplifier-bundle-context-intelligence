@@ -16,7 +16,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from test_prune_ledger_resources import _SCHEMA, BODY, NOW, _ledger, _request
+from test_prune_ledger_resources import _SCHEMA, BODY, NOW, _ledger, _mutation_stat, _request
 
 from context_intelligence import config
 from context_intelligence.prune import prune_file
@@ -128,6 +128,41 @@ def test_other_job_still_protects_same_capture(owned: Path) -> None:
     assert source.read_bytes() == BODY and not receipt_path(source).exists()
     with closing(sqlite3.connect(second)) as db:
         assert retired_job(db) is None
+
+
+def test_semantic_damage_can_be_explicitly_abandoned_without_repair(owned: Path) -> None:
+    source = owned / "events.jsonl"
+    source.write_bytes(BODY)
+    info = source.stat()
+    first = _ledger(owned / "recovery", 0, source)
+    with closing(sqlite3.connect(first)) as db:
+        db.execute("PRAGMA foreign_keys=OFF")
+        db.execute("DELETE FROM artifact")
+        db.execute("UPDATE cursor SET state='pending'")
+        db.commit()
+        assert db.execute("PRAGMA quick_check").fetchone() == ("ok",)
+    rows = _rows(first)
+    refusal = prune_file(source, _request(owned), now=NOW)
+    assert refusal.status == "error"
+    assert (refusal.reason or "").startswith("recovery-state-unknown: orphan recovery cursor")
+    assert source.read_bytes() == BODY and _mutation_stat(source.stat()) == _mutation_stat(info)
+    assert not receipt_path(source).exists()
+    assert not list(owned.rglob("*prune*"))
+    assert _rows(first) == rows
+    receipt = retire_job(
+        first, reason="Abandon damaged synthetic catch-up, without repairing outcomes"
+    )
+    assert receipt["disposition"] == "abandoned"
+    assert _rows(first) == rows
+    assert retire_job(first, reason="Repeat explicit abandonment") == receipt
+    second = _ledger(owned / "recovery", 1, source)
+    protected = prune_file(source, _request(owned), now=NOW)
+    assert protected.status == "skipped" and "skipped-ledger:" in (protected.reason or "")
+    assert source.read_bytes() == BODY and _mutation_stat(source.stat()) == _mutation_stat(info)
+    assert not receipt_path(source).exists()
+    retire_job(second, reason="Abandon only the remaining synthetic job")
+    assert prune_file(source, _request(owned), now=NOW).status == "pruned"
+    assert _rows(first) == rows
 
 
 def test_running_job_cannot_be_retired(owned: Path) -> None:
