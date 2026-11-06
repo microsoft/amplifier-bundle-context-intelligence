@@ -2298,3 +2298,421 @@ def test_watch_maintenance_cli_finishes_before_full_refresh_and_releases_job_loc
             assert client.is_closed
             reopened = RecoveryRunner(state_dir=state, job_id=job, client=client)
             reopened.close()
+
+
+def _source_observation(path: Path) -> tuple[bytes, tuple[int, ...]]:
+    body, info = path.read_bytes(), path.stat()
+    # Reading may update atime; inode/content/ownership and modification facts
+    # must not change on refusal.
+    return body, (
+        info.st_dev,
+        info.st_ino,
+        info.st_mode,
+        info.st_nlink,
+        info.st_uid,
+        info.st_gid,
+        info.st_size,
+        info.st_mtime_ns,
+        info.st_ctime_ns,
+    )
+
+
+def _damage_native_capture(path: Path, damage: str) -> None:
+    """Write malformed source bytes, never constructing an oversized Python int."""
+    metadata = path.parent / "metadata.json"
+    if damage.startswith("status-"):
+        value = {
+            "list": [],
+            "dict": {},
+            "number": 3,
+            "bool": True,
+            "null": None,
+            "running": "running",
+        }
+        document = json.loads(metadata.read_bytes())
+        if damage == "status-missing":
+            document.pop("status")
+        else:
+            document["status"] = value[damage.removeprefix("status-")]
+        metadata.write_text(json.dumps(document), encoding="utf-8")
+    else:
+        target = metadata if damage.startswith("metadata-") else path
+        if damage.endswith("-integer"):
+            assert sys.get_int_max_str_digits() == 4300
+            original = target.read_bytes().rstrip()
+            raw = original[:-1] + b',"oversized":' + b"1" * 4301 + b"}\n"
+            assert len(raw) < recovery._MAX_SOURCE_LINE_BYTES
+            target.write_bytes(raw)
+        elif damage.endswith("-utf8"):
+            target.write_bytes(b"\xff\n")
+        else:
+            assert damage.endswith("-json")
+            target.write_bytes(b"{not-json}\n")
+
+
+@pytest.mark.parametrize("healthy_first", [False, True])
+@pytest.mark.parametrize(
+    ("damage", "state", "reason"),
+    [
+        ("status-list", "quarantined", "invalid-native-metadata"),
+        ("status-dict", "quarantined", "invalid-native-metadata"),
+        ("status-number", "quarantined", "invalid-native-metadata"),
+        ("status-bool", "quarantined", "invalid-native-metadata"),
+        ("status-null", "blocked", "no-valid-destinations"),
+        ("status-missing", "blocked", "no-valid-destinations"),
+        ("status-running", "blocked", "no-valid-destinations"),
+        ("metadata-integer", "quarantined", "corrupt-metadata"),
+        ("metadata-json", "quarantined", "corrupt-metadata"),
+        ("metadata-utf8", "quarantined", "corrupt-metadata"),
+        ("events-integer", "quarantined", "malformed-line"),
+        ("events-json", "quarantined", "malformed-line"),
+        ("events-utf8", "quarantined", "malformed-line"),
+    ],
+)
+def test_bad_capture_is_local_and_healthy_sibling_is_inventoried(
+    tmp_path: Path,
+    configured_roots: None,
+    damage: str,
+    state: str,
+    reason: str,
+    healthy_first: bool,
+) -> None:
+    bad = _capture(tmp_path / "captures", "bad")
+    healthy = _capture(tmp_path / "captures", "healthy")
+    _damage_native_capture(bad, damage)
+    if damage in {"status-null", "status-missing", "status-running"}:
+        # Preserve the existing parser classification, not the unrelated
+        # reconciliation diagnostic priority for an artifact without cursors.
+        assert recovery._read_metadata(bad.parent / "metadata.json", "bad", "project")[3] == (
+            "session-incomplete"
+        )
+    paths = [healthy, bad] if healthy_first else [bad, healthy]
+    before = {
+        p: _source_observation(p)
+        for source in paths
+        for p in (source, source.parent / "metadata.json")
+    }
+    requests: list[httpx.Request] = []
+    with (
+        _server(requests) as client,
+        closing(
+            RecoveryRunner(state_dir=tmp_path / "state", job_id="local", client=client)
+        ) as runner,
+    ):
+        summary = runner.run(paths, dry_run=True)
+        assert summary.delivered == 0
+        assert summary.inventory == {state: 1, "eligible": 1}
+        rows = {
+            row["path"]: dict(row)
+            for row in runner.checkpoint.connection.execute("SELECT * FROM artifact")
+        }
+        assert rows[str(bad)]["reason"] == reason
+        assert rows[str(healthy)]["state"] == "eligible"
+        assert not requests
+    assert {p: _source_observation(p) for p in before} == before
+
+
+@pytest.mark.parametrize("mode", ["refresh-pending", "refresh-complete", "delivery"])
+@pytest.mark.parametrize(
+    "damage",
+    [
+        "status-list",
+        "status-dict",
+        "metadata-integer",
+        "events-integer",
+        "metadata-json",
+        "metadata-utf8",
+        "events-json",
+        "events-utf8",
+    ],
+)
+def test_malformed_changed_snapshot_preserves_ack_and_facts_after_repair_and_reopen(
+    tmp_path: Path,
+    configured_roots: None,
+    mode: str,
+    damage: str,
+) -> None:
+    from context_intelligence.prune.coordination import capture_lock
+
+    root, state, job = tmp_path / "captures", tmp_path / "state", "snapshot"
+    first = _event("bad")
+    bad = _capture(root, "bad", body=first if mode == "refresh-complete" else first * 2)
+    metadata = bad.parent / "metadata.json"
+    original = {bad: bad.read_bytes(), metadata: metadata.read_bytes()}
+    requests: list[httpx.Request] = []
+    fd_root = Path("/proc/self/fd")
+    with _server(requests) as client:
+        closed_baseline = len(list(fd_root.iterdir())) if fd_root.is_dir() else None
+        with closing(RecoveryRunner(state_dir=state, job_id=job, client=client)) as runner:
+            assert runner.run([bad]).delivered == 1
+            fact, cursors = _checkpoint_rows(runner)
+            assert (cursors[0]["ordinal"], cursors[0]["byte_offset"]) == (1, len(first))
+            healthy = _capture(root, "healthy")
+            runner.run([bad, healthy], dry_run=True)
+            _damage_native_capture(bad, damage)
+            damaged = {p: _source_observation(p) for p in original}
+            requests.clear()
+            baseline = len(list(fd_root.iterdir())) if fd_root.is_dir() else None
+            for cycle in range(4):
+                runner.run([bad, healthy], refresh=mode != "delivery")
+                row = dict(
+                    runner.checkpoint.connection.execute(
+                        "SELECT * FROM artifact WHERE path=?", (str(bad),)
+                    ).fetchone()
+                )
+                if row["state"] == "quarantined":
+                    break
+            assert (row["state"], row["reason"]) == ("quarantined", "source-changed")
+            assert {key: row[key] for key in fact if key not in {"state", "reason"}} == {
+                key: value for key, value in fact.items() if key not in {"state", "reason"}
+            }
+            cursor = dict(
+                runner.checkpoint.connection.execute(
+                    "SELECT * FROM cursor WHERE artifact_id=?", (fact["artifact_id"],)
+                ).fetchone()
+            )
+            assert (cursor["ordinal"], cursor["byte_offset"]) == (1, len(first))
+            if mode == "refresh-complete":
+                assert cursor == cursors[0]
+            assert {p: _source_observation(p) for p in damaged} == damaged
+            assert not [
+                r
+                for r in requests
+                if r.method == "POST" and json.loads(r.content)["origin"]["session_id"] == "bad"
+            ]
+            ledger = runner.checkpoint.path
+            for _ in range(3):
+                runner.run([bad, healthy])
+                current = dict(
+                    runner.checkpoint.connection.execute(
+                        "SELECT * FROM artifact WHERE path=?", (str(bad),)
+                    ).fetchone()
+                )
+                assert current == row
+                with capture_lock(bad, exclusive=True):
+                    pass
+                if baseline is not None:
+                    assert len(list(fd_root.iterdir())) == baseline
+            assert {p: _source_observation(p) for p in damaged} == damaged
+            assert any(
+                r.method == "POST" and json.loads(r.content)["origin"]["session_id"] == "healthy"
+                for r in requests
+            )
+        _assert_job_lock_available(ledger)
+        if closed_baseline is not None:
+            assert len(list(fd_root.iterdir())) == closed_baseline
+        for _ in range(2):
+            with closing(RecoveryRunner(state_dir=state, job_id=job, client=client)) as reopened:
+                reopened.run([bad, healthy])
+                assert (
+                    dict(
+                        reopened.checkpoint.connection.execute(
+                            "SELECT * FROM artifact WHERE path=?", (str(bad),)
+                        ).fetchone()
+                    )
+                    == row
+                )
+                assert (
+                    dict(
+                        reopened.checkpoint.connection.execute(
+                            "SELECT * FROM cursor WHERE artifact_id=?", (fact["artifact_id"],)
+                        ).fetchone()
+                    )
+                    == cursor
+                )
+                # First reopen still sees malformed source bytes. Repair only
+                # after proving the committed quarantine survives that reopen.
+                for p, body in original.items():
+                    p.write_bytes(body)
+                reopened.run([bad, healthy])
+                assert (
+                    dict(
+                        reopened.checkpoint.connection.execute(
+                            "SELECT * FROM artifact WHERE path=?", (str(bad),)
+                        ).fetchone()
+                    )
+                    == row
+                )
+            _assert_job_lock_available(ledger)
+            if closed_baseline is not None:
+                assert len(list(fd_root.iterdir())) == closed_baseline
+        assert not [
+            r
+            for r in requests
+            if r.method == "POST" and json.loads(r.content)["origin"]["session_id"] == "bad"
+        ]
+
+
+@pytest.mark.parametrize(
+    "damage", ["status-list", "metadata-integer", "events-integer", "events-json"]
+)
+def test_permanent_source_changed_is_not_replaced_by_parser_refusal(
+    tmp_path: Path,
+    configured_roots: None,
+    damage: str,
+) -> None:
+    requests: list[httpx.Request] = []
+    with (
+        _server(requests) as client,
+        closing(
+            RecoveryRunner(state_dir=tmp_path / "state", job_id="permanent", client=client)
+        ) as runner,
+    ):
+        path = _seed_source_changed(runner, tmp_path, "events")
+        before = _checkpoint_rows(runner)
+        _damage_native_capture(path, damage)
+        requests.clear()
+        for _ in range(3):
+            runner.run([path])
+            assert _checkpoint_rows(runner) == before
+        assert not requests
+
+
+def test_producer_foreign_keys_prevent_orphan_but_controlled_damage_still_refuses_prune(
+    tmp_path: Path,
+    configured_roots: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from datetime import UTC, datetime, timedelta
+    from context_intelligence.prune import PruneRequest, prune_file
+    from context_intelligence.prune.coordination import receipt_path
+
+    path = _capture(
+        tmp_path,
+        body=(
+            b'{"event":"llm:request","workspace":"project","data":{"session_id":"session-1",'
+            b'"timestamp":"2026-01-01T00:00:00Z","raw":"synthetic"}}\n'
+        ),
+    )
+    state = tmp_path / "state"
+    with (
+        _server([]) as client,
+        closing(RecoveryRunner(state_dir=state, job_id="damage", client=client)) as runner,
+    ):
+        runner.run([path], dry_run=True)
+        db = runner.checkpoint.connection
+        assert db.execute("PRAGMA foreign_keys").fetchone()[0] == 1
+        with pytest.raises(sqlite3.IntegrityError):
+            db.execute("DELETE FROM artifact")
+        db.rollback()
+        ledger = runner.checkpoint.path
+    monkeypatch.setattr("context_intelligence.prune.recovery.default_recovery_root", lambda: state)
+    monkeypatch.setattr(
+        "context_intelligence.config.DEFAULT_RECOVERY_STATE_ROOT", tmp_path / "standard-recovery"
+    )
+    before = {p: _source_observation(p) for p in (path, path.parent / "metadata.json")}
+    request = PruneRequest(tmp_path, apply=True, writers_stopped=True, min_idle=timedelta(0))
+    assert prune_file(path, request, now=datetime.now(UTC)).status == "skipped"
+    with closing(sqlite3.connect(ledger)) as db:
+        db.execute("PRAGMA foreign_keys=OFF")
+        db.execute("DELETE FROM artifact")
+        db.commit()
+        assert db.execute("PRAGMA quick_check").fetchone() == ("ok",)
+    rows = _checkpoint_rows_from_path(ledger)
+    db_before = _source_observation(ledger)
+    result = prune_file(path, request, now=datetime.now(UTC))
+    assert result.status == "error"
+    assert (result.reason or "").startswith("recovery-state-unknown: orphan recovery cursor")
+    assert result.payloads == 0 and result.bytes_before == result.bytes_after
+    assert {p: _source_observation(p) for p in before} == before
+    assert _source_observation(ledger) == db_before
+    assert _checkpoint_rows_from_path(ledger) == rows
+    assert not receipt_path(path).exists()
+    assert not list(tmp_path.rglob("*prune*"))
+
+
+def test_unrelated_real_producer_early_refusal_defaults_do_not_block_prune(
+    tmp_path: Path,
+    configured_roots: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from datetime import UTC, datetime, timedelta
+    from context_intelligence.prune import PruneRequest, prune_file
+
+    unrelated = _capture(tmp_path, "unrelated")
+    (unrelated.parent / "metadata.json").unlink()
+    state = tmp_path / "state"
+    requests: list[httpx.Request] = []
+    with (
+        _server(requests) as client,
+        closing(RecoveryRunner(state_dir=state, job_id="defaults", client=client)) as runner,
+    ):
+        runner.run([unrelated], dry_run=True)
+        fact, cursors = _checkpoint_rows(runner)
+        assert not cursors
+        assert all(
+            fact[key] == ""
+            for key in (
+                "session_id",
+                "workspace",
+                "source_sha256",
+                "source_stream_sha256",
+                "metadata_sha256",
+            )
+        )
+        assert fact["source_inode"] == fact["source_size"] == 0
+        ledger = runner.checkpoint.path
+    source = _capture(
+        tmp_path,
+        "prunable",
+        body=(
+            b'{"event":"llm:request","timestamp":"2026-01-01T00:00:00Z",'
+            b'"data":{"raw":"synthetic"}}\n'
+        ),
+    )
+    monkeypatch.setattr("context_intelligence.prune.recovery.default_recovery_root", lambda: state)
+    monkeypatch.setattr(
+        "context_intelligence.config.DEFAULT_RECOVERY_STATE_ROOT", tmp_path / "standard-recovery"
+    )
+    before = _checkpoint_rows_from_path(ledger)
+    result = prune_file(
+        source,
+        PruneRequest(tmp_path, apply=True, writers_stopped=True, min_idle=timedelta(0)),
+        now=datetime.now(UTC),
+    )
+    assert result.status == "pruned" and result.payloads == 1
+    assert _checkpoint_rows_from_path(ledger) == before
+    assert not requests
+
+
+def test_second_decode_refusal_quarantines_without_post_or_ack_advance(
+    tmp_path: Path,
+    configured_roots: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = _capture(tmp_path)
+    raw = source.read_bytes().rstrip(b"\r\n").decode("utf-8")
+    real_loads = json.loads
+    decodes = 0
+
+    def loads(value, **kwargs):
+        nonlocal decodes
+        if value == raw:
+            decodes += 1
+            if decodes == 2:
+                # The decoder can refuse at either boundary. Trigger an actual
+                # integer-limit ValueError only at the second boundary.
+                assert sys.get_int_max_str_digits() == 4300
+                return real_loads(b'{"number":' + b"1" * 4301 + b"}")
+        return real_loads(value, **kwargs)
+
+    requests: list[httpx.Request] = []
+    with (
+        _server(requests) as client,
+        closing(
+            RecoveryRunner(state_dir=tmp_path / "state", job_id="decode", client=client)
+        ) as runner,
+    ):
+        runner.run([source], dry_run=True)
+        before_fact, before_cursors = _checkpoint_rows(runner)
+        monkeypatch.setattr(recovery.json, "loads", loads)
+        summary = runner.run(refresh=False)
+        assert decodes == 2 and summary.delivered == 0
+        fact, cursors = _checkpoint_rows(runner)
+        assert (fact["state"], fact["reason"]) == ("quarantined", "malformed-line")
+        assert fact["source_sha256"] == before_fact["source_sha256"]
+        assert (cursors[0]["ordinal"], cursors[0]["byte_offset"]) == (
+            before_cursors[0]["ordinal"],
+            before_cursors[0]["byte_offset"],
+        )
+        assert not [r for r in requests if r.method == "POST"]

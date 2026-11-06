@@ -99,6 +99,21 @@ def _fd_count() -> int:
     return len(os.listdir("/proc/self/fd"))
 
 
+def _mutation_stat(info: os.stat_result) -> tuple[int, ...]:
+    """Read-only checks exclude atime, which an ordinary read may update."""
+    return (
+        info.st_dev,
+        info.st_ino,
+        info.st_uid,
+        info.st_gid,
+        info.st_mode,
+        info.st_nlink,
+        info.st_size,
+        info.st_mtime_ns,
+        info.st_ctime_ns,
+    )
+
+
 def _resource_child(home: Path, case: str) -> None:
     # This entry runs in a fresh interpreter, not a fork inheriting pytest's FDs,
     # SQLite handles or an already-imported config with the operator's HOME.
@@ -121,6 +136,41 @@ def _resource_child(home: Path, case: str) -> None:
     visited: list[str] = []
     peaks: list[int] = []
     real_exclude = recovery._exclude_registered
+    real_connect, real_close = sqlite3.connect, os.close
+    closed: list[str] = []
+    released: list[str] = []
+
+    class ObservedConnection(sqlite3.Connection):
+        def close(self) -> None:
+            path = Path(self.execute("PRAGMA database_list").fetchone()[2])
+            # Observe the real lock: a second descriptor cannot own EX yet.
+            with Path(str(path) + ".lock").open("rb") as lock:
+                with pytest.raises(BlockingIOError):
+                    fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            super().close()
+            with pytest.raises(sqlite3.ProgrammingError):
+                self.execute("SELECT 1")
+            closed.append(path.name)
+
+    def connect(*args, **kwargs) -> sqlite3.Connection:
+        return real_connect(*args, **kwargs, factory=ObservedConnection)
+
+    def close(fd: int) -> None:
+        path = Path(os.readlink(f"/proc/self/fd/{fd}"))
+        if path.name.endswith(".v2.sqlite3.lock"):
+            name = path.name.removesuffix(".lock")
+            if case == "busy" and name == ledgers[-1].name:
+                # This descriptor failed flock before a ledger could be opened.
+                assert closed == released and len(closed) == 129
+                real_close(fd)
+                return
+            assert closed == [*released, name], (closed, released, name)
+            real_close(fd)
+            with path.open("rb") as lock:
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            released.append(name)
+        else:
+            real_close(fd)
 
     def observe(connection: sqlite3.Connection, source: Path) -> None:
         # Outbound observation only: execute the real membership/schema queries.
@@ -141,10 +191,15 @@ def _resource_child(home: Path, case: str) -> None:
             ),
             patch.object(recovery, "default_recovery_root", lambda: state),
             patch.object(recovery, "_exclude_registered", observe),
+            patch.object(sqlite3, "connect", connect),
+            patch.object(os, "close", close),
         ):
             for iteration in range(4):
                 source = home / f"source-{iteration if case == 'success' else 0}" / "events.jsonl"
                 visited.clear()
+                closed.clear()
+                released.clear()
+                source_info = source.stat()
                 result = prune_file(source, _request(home), now=NOW)
                 expected = {"success": "pruned", "member": "skipped"}.get(case, "error")
                 assert result.status == expected, result
@@ -157,7 +212,14 @@ def _resource_child(home: Path, case: str) -> None:
                     prefix = "skipped-ledger:" if case == "member" else "recovery-state-"
                     assert (result.reason or "").startswith(prefix), result
                     assert source.read_bytes() == BODY
+                    assert _mutation_stat(source.stat()) == _mutation_stat(source_info)
+                    assert result.payloads == 0 and result.bytes_before == result.bytes_after
                     assert not receipt_path(source).exists()
+                assert (
+                    closed
+                    == released
+                    == [path.name for path in ledgers[: 129 if case == "busy" else 130]]
+                )
                 assert not list(home.rglob(".events-prune-*"))
                 assert not list(home.rglob(".prune-receipt-*"))
                 after.append(_fd_count())
@@ -174,11 +236,23 @@ def _resource_child(home: Path, case: str) -> None:
     for db in ledgers:
         with Path(str(db) + ".lock").open("rb") as lock:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    print(json.dumps({"case": case, "ledgers": 130, "limit": 64, "fds": after, "peak": max(peaks)}))
+    print(
+        json.dumps(
+            {
+                "case": case,
+                "ledgers": 130,
+                "limit": 64,
+                "fds": after,
+                "peak": max(peaks),
+                "connections_closed": len(closed),
+                "locks_released": len(released),
+            }
+        )
+    )
 
 
 @pytest.mark.skipif(not Path("/proc/self/fd").is_dir(), reason="Linux FD-limit regression")
-@pytest.mark.parametrize("case", ["success", "member", "busy", "corrupt"])
+@pytest.mark.parametrize("case", ["success", "member", "busy", "corrupt", "orphan", "invalid-id"])
 def test_130_real_ledgers_under_64_fds(tmp_path: Path, case: str) -> None:
     home = tmp_path / "home"
     home.mkdir()
@@ -198,6 +272,16 @@ def test_130_real_ledgers_under_64_fds(tmp_path: Path, case: str) -> None:
     ]
     if case == "corrupt":
         ledgers[-1].write_bytes(b"synthetic: not a SQLite database")
+    elif case in {"orphan", "invalid-id"}:
+        with closing(sqlite3.connect(ledgers[-1])) as db:
+            if case == "orphan":
+                db.execute("DELETE FROM artifact")
+                db.execute("UPDATE cursor SET state='pending'")
+            else:
+                db.execute("UPDATE artifact SET artifact_id=?", ("Z" * 64,))
+                db.execute("UPDATE cursor SET artifact_id=?", ("Z" * 64,))
+            db.commit()
+            assert db.execute("PRAGMA quick_check").fetchone() == ("ok",)
     original = {db: (db.read_bytes(), db.stat().st_mtime_ns) for db in ledgers}
     env = {k: v for k, v in os.environ.items() if not k.startswith("AMPLIFIER_")}
     env.update(HOME=str(home), XDG_STATE_HOME=str(home / ".local/state"))
@@ -214,6 +298,9 @@ def test_130_real_ledgers_under_64_fds(tmp_path: Path, case: str) -> None:
     assert completed.returncode == 0, completed.stdout + completed.stderr
     report = json.loads(completed.stdout)
     assert report["ledgers"] == 130 and report["limit"] == 64
+    assert (
+        report["connections_closed"] == report["locks_released"] == (129 if case == "busy" else 130)
+    )
     assert len(set(report["fds"])) == 1
     print("ledger-resource-proof:", json.dumps(report, sort_keys=True))
     for db, before in original.items():
