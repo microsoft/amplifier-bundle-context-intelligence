@@ -343,6 +343,7 @@ class _DestinationDispatcher:
             maxsize=self._queue_capacity
         )
         self._worker_task: asyncio.Task[None] | None = None
+        self._close_task: asyncio.Task[None] | None = None
         self._consecutive_failures = 0  # backoff driver only — never disables
         self._degraded_warned = False
         # Wall-clock start (time.monotonic()) of the CURRENT sustained-degraded
@@ -473,7 +474,7 @@ class _DestinationDispatcher:
         """Enqueue an event for dispatch. HOT PATH — zero awaits, zero I/O.
 
         Returns ``True`` if the event was queued for delivery, ``False`` if it
-        was dropped because the queue is full. The caller uses this to tell
+        was dropped because the queue is full or closing. The caller uses this to tell
         "delivered to the server pipeline" apart from "dropped" — which, when
         the disk is ALSO full, is the difference between a stale local log and
         outright permanent data loss.
@@ -488,6 +489,10 @@ class _DestinationDispatcher:
         the event. Any mutation would silently change the idempotency key and
         defeat server-side dedup.
         """
+        # Cleanup is terminal. Events emitted or callbacks resumed after
+        # close() must not recreate a worker or HTTP client.
+        if self._close_task is not None:
+            return False
         self._ensure_worker()
         try:
             self._queue.put_nowait((event, data))
@@ -1255,6 +1260,19 @@ class _DestinationDispatcher:
         return _classify_http_outcome(response.status_code)
 
     async def close(self) -> None:
+        """Stop admission and await one bounded cleanup, even across callers.
+
+        Cancelling a caller does not cancel cleanup. A later close() joins the
+        same operation; it cannot reopen the dispatcher or double-close a client.
+        """
+        if self._close_task is None:
+            self._close_task = asyncio.create_task(self._drain_and_close())
+            self._close_task.add_done_callback(
+                partial(_retrieve_task_exception, context=f"{self._name} dispatcher close")
+            )
+        await asyncio.shield(self._close_task)
+
+    async def _drain_and_close(self) -> None:
         """Drain, cancel worker, close client.
 
         Emits a loud WARNING when shutting down with undelivered events or in a
@@ -1399,6 +1417,7 @@ class LoggingHandler:
         self._parent_id: str = getattr(resolver, "parent_id", "") or ""
         self._resolve_instance_id: str = getattr(resolver, "resolve_instance_id", "") or ""
         self._dispatchers: list[_DestinationDispatcher] = []
+        self._closed = False
         # Disk-pressure circuit breaker state (see _DISK_* constants).
         # _disk_backoff_seconds == 0.0 means healthy; > 0.0 means the breaker is
         # open and this is the current cooldown length. _disk_retry_at is the
@@ -1440,6 +1459,12 @@ class LoggingHandler:
         and the carry-forward is a best-effort enhancement that must not raise
         for those -- it simply no-ops when the attributes aren't present.
         """
+        # A ready/filter callback that resumes after final cleanup must not
+        # install new destinations. Close its candidates and fail explicitly
+        # so the caller cannot report them as active.
+        if self._closed:
+            await asyncio.gather(*(d.close() for d in dispatchers), return_exceptions=True)
+            raise RuntimeError("LoggingHandler is closed")
         old = self._dispatchers
         old_heartbeats_by_name: dict[str, bool] = {}
         for d in old:
@@ -1853,6 +1878,7 @@ class LoggingHandler:
     # -- lifecycle management ------------------------------------------------
     async def close(self) -> None:
         """Close all destination dispatchers concurrently."""
+        self._closed = True
         await asyncio.gather(*(d.close() for d in self._dispatchers), return_exceptions=True)
 
     # -- metadata freshness update ------------------------------------------
