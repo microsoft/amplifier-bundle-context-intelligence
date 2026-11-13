@@ -33,6 +33,8 @@ Key risk that would break the handoff without these checks:
 import yaml
 from pathlib import Path
 
+import pytest
+
 PASS = "\033[32mPASS\033[0m"
 FAIL = "\033[31mFAIL\033[0m"
 
@@ -205,6 +207,69 @@ def test_tool_delegate_composition():
         )
 
     assert not failures, "Group D tool-composition failures: " + ", ".join(failures)
+
+
+def _local_manifests(path: Path, ancestors: tuple[Path, ...] = ()):
+    """Walk local include declarations without pretending to be BundleRegistry.
+
+    This is a static wiring check only: external Foundation includes are not
+    resolved, and no agent is loaded or model behavior evaluated.
+    """
+    assert path not in ancestors, f"Include cycle: {ancestors} -> {path}"
+    text = path.read_text()
+    manifest = yaml.safe_load(text.split("---", 2)[1] if text.startswith("---") else text)
+    yield manifest
+    for include in manifest.get("includes", []):
+        ref = include["bundle"]
+        if ref.startswith("context-intelligence:"):
+            child = BUNDLE_ROOT / (ref.split(":", 1)[1] + ".yaml")
+            yield from _local_manifests(child, (*ancestors, path))
+
+
+@pytest.mark.parametrize(
+    ("entry", "expected"),
+    [
+        ("bundle.md", 1),
+        ("behaviors/context-intelligence-navigation.yaml", 1),
+        ("behaviors/context-intelligence-analysis.yaml", 1),
+        ("behaviors/context-intelligence-design.yaml", 1),
+        ("behaviors/context-intelligence-logging.yaml", 0),
+        ("behaviors/context-intelligence-transcript-read.yaml", 0),
+    ],
+)
+def test_session_evidence_orientation_local_include_wiring(entry, expected):
+    """The shared orientation belongs once to navigation, never logging-only."""
+    refs = [
+        ref
+        for manifest in _local_manifests(BUNDLE_ROOT / entry)
+        for ref in manifest.get("context", {}).get("include", [])
+    ]
+    assert refs.count("context-intelligence:context/session-evidence.md") == expected
+    if expected:
+        assert (BUNDLE_ROOT / "context/session-evidence.md").is_file()
+
+
+@pytest.mark.parametrize(
+    ("agent", "required", "absent"),
+    [
+        (
+            "session-navigator",
+            {"tool-context-intelligence-transcript", "tool-bash", "tool-search", "tool-skills"},
+            {"tool-context-intelligence-query", "tool-delegate"},
+        ),
+        (
+            "graph-analyst",
+            {"tool-context-intelligence-query", "tool-delegate", "tool-skills"},
+            {"tool-context-intelligence-transcript"},
+        ),
+    ],
+)
+def test_session_evidence_specialist_tool_declarations(agent, required, absent):
+    """Check declared tool ownership, not runtime availability or routing behavior."""
+    manifest, _ = _load_frontmatter(f"agents/{agent}.md")
+    modules = {tool["module"] for tool in manifest["tools"]}
+    assert required <= modules
+    assert not modules & absent
 
 
 if __name__ == "__main__":

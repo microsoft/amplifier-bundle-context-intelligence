@@ -12,6 +12,10 @@ bundle:
 includes:
   - bundle: context-intelligence:behaviors/context-intelligence-transcript-read
 
+context:
+  include:
+    - context-intelligence:context/session-evidence.md
+
 agents:
   include:
     - context-intelligence:graph-analyst

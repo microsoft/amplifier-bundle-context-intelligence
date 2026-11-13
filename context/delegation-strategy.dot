@@ -1,7 +1,7 @@
 // Delegation Strategy — Agent Delegation Chain
 // Context-Intelligence Bundle
 //
-// Shows the delegation flow: graph-analyst → session-navigator → external session-data-analysis-capable agent
+// Routes graph and local evidence independently; fallbacks require permission and sufficient evidence.
 //
 // Render: dot -Tsvg delegation-strategy.dot -o delegation-strategy.svg
 
@@ -37,7 +37,7 @@ digraph delegation_strategy {
     ];
 
     navigator [
-        label="session-navigator\ntools: filesystem / search / bash / skills",
+        label="session-navigator\ntools: session_transcript / filesystem / search / bash / skills",
         shape=box,
         style=filled,
         fillcolor="#7AB648",
@@ -77,7 +77,8 @@ digraph delegation_strategy {
 
     // --- Edges ---
 
-    caller -> graph_analyst [label="always delegate here first", fontsize=10];
+    caller -> graph_analyst [label="graph relationships / aggregates / blobs", fontsize=10];
+    caller -> navigator [label="local evidence / transcript when tool not mounted\nif delegation permitted and available", fontsize=10];
     graph_analyst -> server_check;
     server_check -> graph_analyst [
         label="yes",
@@ -87,7 +88,7 @@ digraph delegation_strategy {
         style=bold
     ];
     server_check -> navigator [
-        label="no — server unreachable or no relevant data",
+        label="graph failure / missing coverage — only if permitted,\navailable, authorized local evidence is sufficient",
         fontsize=9
     ];
     navigator -> local_check;
@@ -99,7 +100,7 @@ digraph delegation_strategy {
         style=bold
     ];
     local_check -> session_analyst [
-        label="no — can't resolve locally",
+        label="present but hard to process — only if permitted and available;\nabsent evidence returns a gap, never another delegation",
         fontsize=9
     ];
 
@@ -114,7 +115,7 @@ digraph delegation_strategy {
         fontsize=10;
 
         legend_primary [
-            label="Primary entry point",
+            label="Graph specialist",
             shape=box,
             style=filled,
             fillcolor="#4A90D9",
@@ -124,7 +125,7 @@ digraph delegation_strategy {
         ];
 
         legend_local [
-            label="Local fallback",
+            label="Local specialist / conditional fallback",
             shape=box,
             style=filled,
             fillcolor="#7AB648",
