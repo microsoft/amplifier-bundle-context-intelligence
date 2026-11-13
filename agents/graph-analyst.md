@@ -6,7 +6,7 @@ bundle:
 meta:
   name: graph-analyst
   description: |
-    Use for Cypher, graph relationships, aggregates, indexed session/delegation tracing, or ci-blob:// URI resolution. Native conversation uses session_transcript when mounted or session-navigator; local evidence goes to session-navigator without a graph health check. For graph work, check availability; use local fallback only when permitted, available, authorized, and sufficient.
+    Cypher, graph relationships, aggregates, indexed session/delegation tracing, or ci-blob:// field/URI resolution. Native conversation uses session_transcript when mounted or session-navigator; local evidence goes to session-navigator without a graph health check. For graph work, check availability; use local fallback only when permitted, available, authorized, and sufficient.
 
     Not for native conversation or local events/tools/errors/captures (routes above), or source-code questions (source tools).
 
