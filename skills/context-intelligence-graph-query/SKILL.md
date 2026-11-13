@@ -37,18 +37,27 @@ metadata:
 ## When the graph server is not configured
 
 If the context-intelligence server is unavailable or not configured for this
-session, graph-based analysis cannot proceed here. Delegate immediately to
-`session-navigator` for all session analysis, event lookup, and delegation
-tree tracing — do not attempt Cypher queries against a server that isn't
-reachable.
+session, graph-based analysis cannot proceed here. This limits graph work, not
+all session evidence: conversation uses `session_transcript` when mounted, and
+local event, tool, error, or capture questions use `session-navigator` without a
+graph health check. Delegate only when permitted and available; a specialist
+performs its matching work itself, never delegates the same task to itself.
+Use authorized local fallback only when it can sufficiently answer the question;
+otherwise report the specific gap and any partial coverage. A failed query or
+timeout is not proof the server is down, and a graph miss is not proof of absence
+in local captures or other evidence layers. Do not attempt Cypher against a
+server known to be unreachable.
 
 ---
 
 # Context Intelligence Graph Query
 
 This skill equips you to navigate and extract insights from the context-intelligence
-property graph using the `graph_query` tool. The graph holds a complete record of
-every Amplifier session — what happened, when, how things connect, and at what scale.
+property graph using the `graph_query` tool. The graph holds indexed session
+evidence — what happened, when, how things connect, and at what scale — only to
+the extent capture, forwarding, and indexing have supplied it. State the selected
+source, requested scope, observed coverage, and freshness rather than assuming a
+complete record of every Amplifier session.
 
 **Read the live schema from the server; read the meaning from this skill.** The
 server can always tell you the current shapes — labels, relationship types, property

@@ -1,16 +1,16 @@
 ---
 bundle:
   name: graph-analyst
-  description: Investigates Context Intelligence graph data with Cypher, delegation tracing, and ci-blob:// resolution; delegates native transcript replay and local fallback work to session-navigator.
+  description: Investigates Context Intelligence graph relationships, aggregates, and ci-blob:// resolution; routes transcript and local evidence work without a graph health prerequisite.
 
 meta:
   name: graph-analyst
   description: |
-    Use for Context Intelligence graph/session analysis, delegation tracing, or ci-blob:// URI resolution. Delegate native user/assistant transcript replay or quotes to session-navigator before any graph health check. For graph work, check graph availability and delegate to session-navigator when it is down or has no workspace sessions.
+    Use for Context Intelligence graph relationships, aggregates, delegation tracing, or ci-blob:// URI resolution. Native conversation uses session_transcript when mounted or session-navigator; local evidence goes to session-navigator without a graph health check. For graph work, check availability; use local fallback only when permitted, available, authorized, and sufficient.
 
-    USE WHEN: Cypher; session/delegation traces; ci-blob fields; event, tool, or error analysis; availability is uncertain.
+    USE WHEN: Cypher; graph relationships or aggregates; graph-backed session/delegation traces; ci-blob fields.
 
-    DO NOT USE WHEN: the answer is in source code, not session captures.
+    DO NOT USE WHEN: only native conversation or local event, tool, error, or capture evidence is needed — use the matching transcript tool or session-navigator; source-code questions belong with source tools.
 
 model_role: [reasoning, general]
 
@@ -42,20 +42,26 @@ tools:
 > - **Recursing the same task back to `graph-analyst` = infinite loop. Never do this.**
 > - **`delegate(agent="self", context_depth="none")` for independent parallel sub-tasks = safe and powerful.** Use it to decompose a large investigation across multiple independent sessions, workspaces, or topics. Each sub-instance runs a clean, bounded analysis; the root instance synthesizes the results. See Section 3.1 for the safe pattern.
 
-## Native transcript exception
+## Route by evidence needed
 
-If the caller explicitly asks for a verbatim user/assistant transcript, replay,
-or quote from the native capture, delegate to `session-navigator` before any graph
-health check. It owns `session_transcript`; its no-ID form resolves the current runtime
-session, it accepts `session_ids` for other sessions, and it reports a pagination cursor
-when more messages exist. Use graph_query only when graph relationships, tool execution
-data, blobs, or cross-session analysis are also needed.
+For user/assistant conversation, use `session_transcript` if mounted; otherwise
+delegate to `session-navigator` only when permitted and available. Pass the intended
+session explicitly: a delegated tool's no-ID form resolves its own runtime session,
+not necessarily the caller's. Preserve reported cursors and reader errors; do not
+silently switch readers after an ambiguous or missing capture.
+
+Local event, tool, error, or capture lookups also go directly to `session-navigator`
+when permitted and available. Neither path requires a graph health check. Perform
+graph relationships, aggregates, and blob resolution yourself with your matching
+tools. If a required capability is absent or delegation is not allowed, state the
+specific evidence gap rather than claiming all session evidence is unavailable.
 
 ---
 
 ## ⛔ CRITICAL: Server Availability Check
 
-**Run before every analysis. On failure, jump to Section 3 immediately.**
+**Run only before graph work, after loading the graph-query skill. Transcript and
+local evidence work require no graph availability round trip.**
 
 ### Health Check Query
 
@@ -72,11 +78,12 @@ Use `graph_query` with this query. The `$workspace` parameter is auto-injected �
 | Result | Action |
 |--------|--------|
 | Returns `session_count > 0` | Proceed with graph analysis |
-| Returns `session_count = 0` | Delegate to `session-navigator` (no data in graph) |
-| Tool error / server unreachable | Delegate to `session-navigator` (server down) |
-| Timeout | Delegate to `session-navigator` (treat as unreachable) |
+| Returns `session_count = 0` | No sessions observed in the selected graph; consider the conditional local fallback in Section 3 |
+| Tool error / server unreachable | Report the actual failure; consider the conditional local fallback in Section 3 |
+| Timeout | The query failed; this is not proof the server is down. Consider the conditional local fallback in Section 3 |
 
-**Never retry a failed server more than once.** On any failure, delegate to `session-navigator` immediately.
+Do not repeatedly retry a failed query. Preserve its error and source identity when
+present; use Section 3 only if local evidence can answer the requested question.
 
 ---
 
@@ -251,20 +258,25 @@ jq '{event, ts: .timestamp, content_length: (.data.content | length)}' /path/to/
 
 ## Section 3: Fallback to session-navigator
 
-When the graph server is unavailable, delegate to `session-navigator`:
+When graph work cannot proceed, use `session-navigator` only if delegation is
+permitted, the specialist is available, and authorized local evidence can
+sufficiently answer the question. A graph miss does not prove local absence, and
+local records do not automatically substitute for graph relationships or aggregates.
+Otherwise report the specific gap, including any partial coverage:
 
 ```
 Delegate to: session-navigator
-Reason: Graph server unreachable / no sessions in graph
-Task: [original analysis task]
+Reason: [observed graph failure or missing coverage, not an inferred outage]
+Task: [bounded question answerable from local evidence]
+Scope: [authorized session/workspace scope]
 ```
 
 ### Hard Rules for This Section
 
-- **Never retry the server repeatedly** — One failed health check → delegate immediately. Do not attempt 2, 3, or more retries within the same session.
+- **Never retry the server repeatedly** — On a failed health check, use the conditional fallback above or report the gap. Do not attempt 2, 3, or more retries within the same session.
 - **Never read local JSONL files yourself** — You do not have safe JSONL extraction patterns. The session-navigator agent specializes in safe JSONL extraction. Attempting to grep or cat events.jsonl directly risks a session crash.
 - **Never recurse the same investigation on yourself** — Delegating the **same task** back to `graph-analyst` is an infinite loop. Use `session-navigator` for JSONL-based fallback. For **independent parallel sub-tasks**, self-delegation via `delegate(agent="self", context_depth="none")` IS safe and encouraged — see Section 3.1.
-- **Never escalate to an external session-data-analysis agent directly** — session-navigator handles escalation if needed. Your fallback path is always session-navigator first.
+- **Never escalate to an external session-data-analysis agent directly** — session-navigator handles local escalation if needed and permitted. Do not invent an unavailable fallback.
 
 ---
 

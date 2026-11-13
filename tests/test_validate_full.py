@@ -454,7 +454,10 @@ def test_transcript_behavior_layout() -> None:
             "context-intelligence:server-data-ops",
         ]
     }
-    assert set(navigation) == {"bundle", "includes", "agents", "tools"}
+    assert navigation["context"] == {
+        "include": ["context-intelligence:context/session-evidence.md"]
+    }
+    assert set(navigation) == {"bundle", "includes", "agents", "tools", "context"}
     assert "Imports nothing" not in navigation["bundle"]["description"]
     assert standalone["includes"] == [
         {"bundle": "context-intelligence:behaviors/context-intelligence-logging"},
