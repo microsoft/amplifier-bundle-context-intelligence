@@ -75,17 +75,6 @@ def _markers(projection: dict[str, Any], value: Any) -> dict[str, dict[str, Any]
 def _data(index: Index, data: int, output: BinaryIO, selected: dict[str, dict[str, Any]]) -> None:
     """Copy unknown key/value spans unchanged; reconstruct only punctuation."""
     expired_node = index.child(data, "provider_payloads_expired")
-    expired = index.bounded_value(expired_node, 16384)
-    if expired is not None and not isinstance(expired, dict):
-        raise FormatError("unsupported diagnostic expiration metadata")
-    expired = expired or {}
-    for field in selected:
-        if field in expired and expired[field] != selected[field]:
-            raise FormatError("conflicting prior diagnostic expiration marker")
-    expired = {**expired, **selected}
-    encoded = json.dumps(expired, ensure_ascii=True, allow_nan=False).encode()
-    if len(encoded) > 16384:
-        raise FormatError("oversized diagnostic expiration metadata")
     output.write(b"{")
     comma = False
     for key, start, end, node in index.db.execute(
@@ -113,7 +102,29 @@ def _data(index: Index, data: int, output: BinaryIO, selected: dict[str, dict[st
             _copy(index.source, output, start, end)
     if comma:
         output.write(b",")
-    output.write(b'"provider_payloads_expired":' + encoded + b"}")
+    output.write(b'"provider_payloads_expired":{')
+    inner_comma = False
+    # Unknown prior entries remain exact: do not round opaque JSON numbers or
+    # normalize owner-specific strings while adding an unrelated tombstone.
+    for field, member, finish in index.db.execute(
+        "SELECT key,member_start,end FROM node WHERE parent=? ORDER BY start", (expired_node,)
+    ):
+        if field in selected:
+            continue
+        if inner_comma:
+            output.write(b",")
+        _copy(index.source, output, member, finish)
+        inner_comma = True
+    for field, marker in selected.items():
+        if inner_comma:
+            output.write(b",")
+        output.write(
+            json.dumps(field).encode()
+            + b":"
+            + json.dumps(marker, ensure_ascii=True, allow_nan=False).encode()
+        )
+        inner_comma = True
+    output.write(b"}}")
 
 
 def rewrite_diagnostics(

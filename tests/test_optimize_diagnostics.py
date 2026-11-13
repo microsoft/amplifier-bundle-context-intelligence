@@ -88,6 +88,18 @@ def test_unknown_numerical_text_and_non_target_spans_copied_verbatim() -> None:
     assert b'"usage" : [1.234567890123456789e123]' in output.getvalue()
 
 
+def test_unselected_prior_expiration_members_are_exact_spans() -> None:
+    fragment = b'"future" : {"number":1.234567890123456789,"opaque":"\\u0061"}'
+    original = record(provider_payloads_expired={"replace": True}).replace(
+        b'{"replace": true}', b"{" + fragment + b"}"
+    )
+    output = io.BytesIO()
+    rewrite_diagnostics(
+        BoundedBytes(original), output, session_id="s1", expire=lambda _: {"raw": marker()}
+    )
+    assert fragment in output.getvalue()
+
+
 @pytest.mark.parametrize(
     "changes",
     [
