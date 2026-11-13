@@ -27,6 +27,12 @@ from .coordination import PruneError, receipt_path
 from .inactive import state_root
 from .operations import PruneRequest, PruneSummary, iter_prune_tree
 from .policy import parse_duration
+from .storage import FileResult
+
+
+ERROR_DETAIL_LIMIT = 32
+ERROR_DETAIL_BYTES_LIMIT = 8192
+_STATUSES = frozenset(("unchanged", "pruned", "would-prune", "skipped", "error"))
 
 
 class ScheduleError(PruneError):
@@ -68,6 +74,7 @@ def checked_config_path(path: Path, *, unit_paths: tuple[Path, ...] = ()) -> Pat
                 "last-run.json",
                 "last-success.json",
                 "admission.lock",
+                "runs",
             )
         ),
         *unit_paths,
@@ -138,6 +145,53 @@ def atomic_json(path: Path, value: dict[str, Any]) -> None:
             os.close(directory)
     finally:
         temporary.unlink(missing_ok=True)
+
+
+def _sync_directory(path: Path) -> None:
+    fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
+def _run_directory(config_path: Path, run_id: str) -> Path:
+    """Reserve a private, never-reused evidence namespace before traversal."""
+    runs = checked_path(config_path.parent / "runs")
+    runs.mkdir(mode=0o700, exist_ok=True)
+    info = runs.lstat()
+    if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077:
+        raise ScheduleError("unsafe_run_receipt_directory")
+    directory = runs / run_id
+    directory.mkdir(mode=0o700)  # A collision refuses; never reuse or replace evidence.
+    _sync_directory(runs)
+    _sync_directory(config_path.parent)
+    return directory
+
+
+def _immutable_json(path: Path, value: dict[str, Any]) -> None:
+    """Publish a fully synced receipt exclusively, without a partial final file.
+
+    Immutability is our no-overwrite protocol, not protection against the owner
+    changing its own files. A failed sync may leave a published receipt. A hard
+    kill between link/unlink can leave two links, refused by read_json; retain
+    both as unconfirmed evidence, never automatically repair or replay them.
+    """
+    path = checked_path(path)
+    raw = json.dumps(value, sort_keys=True, ensure_ascii=True, allow_nan=False) + "\n"
+    if len(raw.encode("ascii")) > 65536:
+        raise ScheduleError("run_receipt_size_limit")
+    fd, name = tempfile.mkstemp(prefix=".local-prune-", dir=path.parent)
+    temporary = Path(name)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as stream:
+            stream.write(raw)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.link(temporary, path, follow_symlinks=False)  # Exclusive even for dangling links.
+    finally:
+        temporary.unlink(missing_ok=True)
+    _sync_directory(path.parent)
 
 
 @contextmanager
@@ -261,6 +315,90 @@ def _reason(reason: str | None) -> str:
     return "safety_refusal"
 
 
+def _report_duration(value: str) -> str:
+    """Keep normal policy spellings; normalize oversized valid spellings only.
+
+    Policy/config identity is unchanged. Report the exact effective timedelta,
+    not a truncated string or a new rounded float, within the reader byte limit.
+    """
+    if len(value) <= 64:
+        return value
+    duration = parse_duration(value)
+    seconds = duration.days * 86400 + duration.seconds
+    fractional = f".{duration.microseconds:06d}".rstrip("0") if duration.microseconds else ""
+    return f"{seconds}{fractional}s"
+
+
+@dataclass
+class _Attribution:
+    """Bounded projections only; never retain a FileResult or exception message."""
+
+    status_by_reason: dict[str, Counter[str]] = field(default_factory=dict)
+    error_details: list[dict[str, Any]] = field(default_factory=list)
+    error_count: int = 0
+    detail_bytes: int = 2  # Include the JSON array brackets and separators.
+    held_known_bytes: int = 0
+    held_known_files: int = 0
+    held_unknown_files: int = 0
+
+    def add(self, result: FileResult, ordinal: int) -> None:
+        status = result.status if result.status in _STATUSES else "unknown"
+        code = _reason(result.reason) if result.reason or status in ("skipped", "error") else "none"
+        self.status_by_reason.setdefault(status, Counter())[code] += 1
+        if status in ("skipped", "error"):
+            # No body reads, no link following, no estimate of removable payloads.
+            # A traversal-level error can refer to a directory, not a source file.
+            try:
+                info = checked_path(result.path).lstat()
+                if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+                    raise ScheduleError("held_size_unknown")
+            except (OSError, PruneError, ValueError):
+                self.held_unknown_files += 1
+            else:
+                self.held_known_files += 1
+                self.held_known_bytes += info.st_size
+        if status != "error" and not (status == "pruned" and result.reason):
+            return
+        self.error_count += 1  # Same predicate as PruneSummary.errors.
+        if len(self.error_details) >= ERROR_DETAIL_LIMIT:
+            return
+        row = {
+            "ordinal": ordinal,
+            "path_sha256": hashlib.sha256(os.fsencode(result.path)).hexdigest(),
+            "status": status,
+            "code": code,
+            # Current FileResult does not preserve exception type, phase or errno.
+            # Do not guess them by extracting values from potentially private text.
+            "phase": None,
+            "errno": None,
+        }
+        size = len(json.dumps(row, sort_keys=True, ensure_ascii=True).encode("ascii"))
+        size += 2 if self.error_details else 0
+        if self.detail_bytes + size <= ERROR_DETAIL_BYTES_LIMIT:
+            self.error_details.append(row)
+            self.detail_bytes += size
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "status_by_reason": {
+                status: dict(codes) for status, codes in self.status_by_reason.items()
+            },
+            "error_details": self.error_details,
+            "error_details_limit": ERROR_DETAIL_LIMIT,
+            "error_details_bytes_limit": ERROR_DETAIL_BYTES_LIMIT,
+            "error_details_omitted": self.error_count - len(self.error_details),
+            "held_source_bytes": {
+                "basis": "lstat_regular_single_link_source_file_size_not_reclaimable_bytes",
+                "known_bytes": self.held_known_bytes,
+                "known_files": self.held_known_files,
+                "unknown_files": self.held_unknown_files,
+                "coverage": "observed_skipped_and_error_results_only",
+                "reclaimable_bytes": None,
+                "sidecar_bytes": None,
+            },
+        }
+
+
 def run_scheduled(
     config_path: Path, *, dry_run: bool | None = None, now: datetime | None = None
 ) -> dict[str, Any]:
@@ -335,9 +473,9 @@ def run_scheduled(
                 "cutoff": request.policy.cutoff.isoformat() if request.policy.cutoff else None,
                 "dry_run": preview,
                 "effective_policy": {
-                    "older_than": config.older_than,
-                    "min_inactive": config.min_inactive,
-                    "min_idle": config.min_idle,
+                    "older_than": _report_duration(config.older_than),
+                    "min_inactive": _report_duration(config.min_inactive),
+                    "min_idle": _report_duration(config.min_idle),
                     "repeat_pruned": True,
                     "inactive_only": True,
                     "writers_stopped": False,
@@ -346,9 +484,13 @@ def run_scheduled(
                 },
             }
             last = config_path.parent / "last-run.json"
+            directory = _run_directory(config_path, report["run_id"])
+            report["run_receipt"] = f"runs/{report['run_id']}/result.json"
+            _immutable_json(directory / "started.json", report)
             atomic_json(last, report)
             summary = PruneSummary()
             reasons: Counter[str] = Counter()
+            attribution = _Attribution()
             fenced = 0
             unconfirmed = 0
             old_handlers: dict[int, Any] = {}
@@ -361,6 +503,7 @@ def run_scheduled(
                     old_handlers[sig] = signal.signal(sig, interrupted)
                 for result in iter_prune_tree(request, now=now):
                     summary.add(result)
+                    attribution.add(result, summary.files)
                     # Presence is enough for observability, not repeat authority.
                     has_fence = os.path.lexists(receipt_path(result.path))
                     fenced += int(has_fence)
@@ -383,12 +526,14 @@ def run_scheduled(
             finally:
                 report.update(
                     summary=summary.to_dict(),
+                    **attribution.to_dict(),
                     reasons=dict(reasons),
                     fenced_captures=fenced,
                     prior_attempts_unconfirmed=unconfirmed,
                     finished_at=datetime.now().astimezone().isoformat(),
                 )
                 try:
+                    _immutable_json(directory / "result.json", report)
                     atomic_json(last, report)
                     if report["exit_code"] == 0:
                         atomic_json(
