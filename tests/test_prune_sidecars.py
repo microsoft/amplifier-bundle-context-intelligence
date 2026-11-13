@@ -380,3 +380,66 @@ def test_record_map_is_complete_before_replace_and_preserves_identity(tmp_path):
         new_offset += len(new)
     manifest = tmp_path / result.diagnostic_manifest
     assert hashlib.sha256(manifest.read_bytes()).hexdigest() == result.diagnostic_manifest_sha256
+
+
+@pytest.mark.parametrize("marker", [None, [], {"raw": {"v": True}}, {"future": {"v": 9}}])
+def test_malformed_existing_expiry_markers_pin_without_overwrite(tmp_path, marker):
+    pixel, ref = asset(tmp_path)
+    row = event(ref)
+    row["data"]["provider_payloads_expired"] = marker
+    path = source(tmp_path, [row])
+    result = operations.prune_file(path, request(path), now=NOW)
+    assert result.asset_files_unlinked == 0 and pixel.exists()
+    assert json.loads(path.read_text())["data"]["provider_payloads_expired"] == marker
+
+
+def test_source_drift_after_manifest_does_not_commit_or_unlink(tmp_path):
+    pixel, ref = asset(tmp_path)
+    path = source(tmp_path, [event(ref)])
+    real_publish = storage._publish_receipt
+
+    def publish(*args, **kwargs):
+        real_publish(*args, **kwargs)
+        with path.open("ab") as handle:
+            handle.write(b"\n")
+
+    with patch.object(storage, "_publish_receipt", side_effect=publish):
+        result = operations.prune_file(path, request(path), now=NOW)
+    assert result.status == "error" and pixel.exists()
+    assert "provider_payloads" in json.loads(path.read_text())["data"]
+
+
+def test_inactive_owner_lock_and_aftercommit_guard_cover_unlink(tmp_path):
+    from test_prune_inactive import InactiveTests, NOW as FIXTURE_NOW
+    import fcntl
+
+    fixture = InactiveTests()
+    fixture.setUp()
+    try:
+        pixel, ref = asset(fixture.ci)
+        source(fixture.ci, [event(ref, stamp="2026-01-01T00:00:00Z")])
+        fixture.age(fixture.path)
+        req = operations.PruneRequest(
+            fixture.path,
+            Policy(FIXTURE_NOW - timedelta(days=14), diagnostic_sidecars=True),
+            apply=True,
+            inactive_only=True,
+            state_root=fixture.root / "state",
+        )
+        real_unlink = os.unlink
+        observed = []
+
+        def unlink(target, *args, **kwargs):
+            if Path(target) == pixel:
+                with fixture.lock.open("rb") as contender:
+                    with pytest.raises(BlockingIOError):
+                        fcntl.flock(contender, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                observed.append("execution-held")
+            return real_unlink(target, *args, **kwargs)
+
+        with patch.object(os, "unlink", side_effect=unlink):
+            result = operations.prune_file(fixture.path, req, now=FIXTURE_NOW)
+        assert result.status == "pruned", result.reason
+        assert observed == ["execution-held"] and not pixel.exists()
+    finally:
+        fixture.doCleanups()
