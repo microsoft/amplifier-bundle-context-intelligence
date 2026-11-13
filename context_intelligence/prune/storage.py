@@ -23,6 +23,7 @@ from typing import Any, BinaryIO, Callable, Iterator
 
 from .coordination import PruneError, assert_replayable, receipt_path
 from .policy import Policy, prune_record
+from .sidecars import Sidecars
 
 
 @dataclass
@@ -38,6 +39,12 @@ class FileResult:
     reason: str | None = None
     fenced: bool = False
     prior_attempt_unconfirmed: bool = False
+    asset_files_planned: int = 0
+    asset_bytes_planned: int = 0
+    asset_files_unlinked: int = 0
+    asset_bytes_unlinked: int = 0
+    asset_durability_unknown: bool = False
+    diagnostic_manifest: str | None = None
 
     @property
     def bytes_saved(self) -> int:
@@ -144,6 +151,8 @@ def _stream(
     policy: Policy,
     result: FileResult,
     poll: Callable[[], None] | None = None,
+    sidecars: Sidecars | None = None,
+    observe: bool = False,
 ) -> str:
     digest = hashlib.sha256()
     for number, line in enumerate(source, 1):
@@ -179,7 +188,12 @@ def _stream(
                     raise PruneError(
                         f"unsupported event schema at line {number}; file left unchanged"
                     )
-            replacement, undated = prune_record(record, policy)
+            if observe and sidecars is not None:
+                sidecars.observe(record)
+            if sidecars is not None and not observe:
+                replacement, undated = prune_record(record, policy, sidecars=sidecars)
+            else:
+                replacement, undated = prune_record(record, policy)
             result.missing_timestamps += int(undated)
             if replacement is not record:
                 ending = (
@@ -355,6 +369,7 @@ def prune_file(
     fence: _RepeatFence | None = None,
     audit_policy: dict[str, Any] | None = None,
     during_scan: Callable[[], None] | None = None,
+    after_commit: Callable[[], None] | None = None,
 ) -> FileResult:
     """Inspect or atomically replace one log, raising PruneError on unsafe input.
 
@@ -399,18 +414,39 @@ def prune_file(
     flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
     fd = os.open(path, flags)
     temporary: Path | None = None
+    sidecars: Sidecars | None = None
     try:
         with os.fdopen(fd, "rb") as source, _lock(source, apply):
             _assert_unchanged(path, source, initial)
             check_schema()
             if before_commit is not None:
                 before_commit()
+            sidecar_source_hash: str | None = None
+            if policy.diagnostic_sidecars:
+                # Explicit owner-local coverage, indexed on disk rather than a
+                # corpus-sized in-memory digest set. No directory orphan sweep.
+                sidecars = Sidecars(path, policy, number_type=_JSONNumber, now=now)
+                sidecars.blocked = sidecars.blocked or backup
+                sidecar_source_hash = _stream(
+                    source,
+                    None,
+                    policy,
+                    FileResult(path),
+                    during_scan,
+                    sidecars=sidecars,
+                    observe=True,
+                )
+                _assert_unchanged(path, source, initial)
+                sidecars.qualify(during_scan)
+                result.asset_files_planned = sidecars.planned_files
+                result.asset_bytes_planned = sidecars.planned_bytes
+                source.seek(0)
             result.bytes_after = 0
             if apply:
                 temp_fd, temp_name = tempfile.mkstemp(prefix=".events-prune-", dir=path.parent)
                 temporary = Path(temp_name)
                 with os.fdopen(temp_fd, "wb") as output:
-                    digest = _stream(source, output, policy, result, during_scan)
+                    digest = _stream(source, output, policy, result, during_scan, sidecars)
                     output.flush()
                     if hasattr(os, "fchown"):
                         os.fchown(output.fileno(), initial.st_uid, initial.st_gid)
@@ -419,7 +455,9 @@ def prune_file(
                     os.utime(temporary, ns=(initial.st_atime_ns, initial.st_mtime_ns))
                     os.fsync(output.fileno())
             else:
-                digest = _stream(source, None, policy, result, during_scan)
+                digest = _stream(source, None, policy, result, during_scan, sidecars)
+            if sidecar_source_hash is not None and sidecar_source_hash != digest:
+                raise PruneError("source content changed between diagnostic scans")
             _assert_unchanged(path, source, initial)
             if before_commit is not None:
                 before_commit()
@@ -441,6 +479,20 @@ def prune_file(
             assert temporary is not None
             with temporary.open("rb") as prepared:
                 after_hash = hashlib.file_digest(prepared, "sha256").hexdigest()
+            manifest: dict[str, Any] | None = None
+            if sidecars is not None and sidecars.planned_files:
+                manifest_path = path.with_name(f".diagnostic-retention-{uuid.uuid4()}.sqlite3")
+                manifest_hash = sidecars.publish_manifest(manifest_path)
+                _sync_directory(path.parent)
+                result.diagnostic_manifest = manifest_path.name
+                manifest = {
+                    "name": manifest_path.name,
+                    "sha256": manifest_hash,
+                    "owner": "provider_payloads-v1",
+                    "files": sidecars.planned_files,
+                    "bytes": sidecars.planned_bytes,
+                    "notice": "Intent only. Metadata must be durably expired before unlink.",
+                }
             _publish_receipt(
                 path,
                 {
@@ -456,6 +508,7 @@ def prune_file(
                     "lines": result.lines,
                     "repeat_pruned": bool(audit_policy and audit_policy.get("repeat_pruned")),
                     "base_receipt_sha256": fence.sha256 if fence else None,
+                    "diagnostic_manifest": manifest,
                     "effective_policy": audit_policy
                     or {
                         "include_responses": policy.include_responses,
@@ -469,6 +522,8 @@ def prune_file(
                 else None,
             )
             # Receipt durability is necessary, but does not waive final source checks.
+            if sidecars is not None:
+                sidecars.check_consumers()
             _assert_unchanged(path, source, initial)
             check_schema()
             if before_commit is not None:
@@ -481,7 +536,42 @@ def prune_file(
             except OSError:
                 # Replacement happened. Do not misreport an uncommitted failure.
                 result.reason = "replacement completed, but directory fsync failed"
+                # Reference removal is not confirmed durable: never unlink.
+                return result
+            if sidecars is not None and sidecars.planned_files:
+                try:
+                    committed = path.lstat()
+                except OSError:
+                    result.reason = "replacement completed, but committed source identity unavailable"
+                    result.asset_durability_unknown = True
+                    return result
+
+                def check_assets() -> None:
+                    if after_commit is not None:
+                        after_commit()
+                    if _signature(path.lstat()) != _signature(committed):
+                        raise PruneError("committed diagnostic source changed before unlink")
+                    check_schema()
+                    # Recheck exact source bytes before destructive effects.
+                    with path.open("rb") as handle:
+                        if hashlib.file_digest(handle, "sha256").hexdigest() != after_hash:
+                            raise PruneError("committed diagnostic content changed before unlink")
+
+                def unlinked(size: int) -> None:
+                    result.asset_files_unlinked += 1
+                    result.asset_bytes_unlinked += size
+
+                try:
+                    sidecars.unlink(check=check_assets, outcome=unlinked)
+                    _sync_directory(path.parent)
+                except (OSError, PruneError):
+                    result.reason = (
+                        "replacement completed, but diagnostic unlink incomplete or unknown"
+                    )
+                    result.asset_durability_unknown = True
             return result
     finally:
+        if sidecars is not None:
+            sidecars.close()
         if temporary is not None:
             temporary.unlink(missing_ok=True)

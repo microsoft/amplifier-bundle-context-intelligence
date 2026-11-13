@@ -78,6 +78,10 @@ class PruneSummary:
     payloads: int = 0
     kept_undated: int = 0
     bytes_saved: int = 0
+    asset_files_unlinked: int = 0
+    asset_bytes_unlinked: int = 0
+    asset_files_planned: int = 0
+    asset_bytes_planned: int = 0
 
     def add(self, result: FileResult) -> None:
         self.files += 1
@@ -90,6 +94,10 @@ class PruneSummary:
         self.payloads += result.payloads if changed else 0
         self.kept_undated += result.missing_timestamps
         self.bytes_saved += result.bytes_saved if changed else 0
+        self.asset_files_unlinked += result.asset_files_unlinked
+        self.asset_bytes_unlinked += result.asset_bytes_unlinked
+        self.asset_files_planned += result.asset_files_planned if changed else 0
+        self.asset_bytes_planned += result.asset_bytes_planned if changed else 0
 
     @property
     def exit_code(self) -> int:
@@ -161,6 +169,7 @@ def _prune_file(
                     repeat_pruned=request.repeat_pruned,
                     before_commit=check_commit,
                     _check_runtime=check_runtime,
+                    after_commit=check_commit,
                 )
             else:
                 result = _transaction(
@@ -172,6 +181,7 @@ def _prune_file(
                     min_idle=request.min_idle,
                     before_commit=check_commit,
                     during_scan=check_runtime,
+                    after_commit=check_commit,
                 )
         return result
     except PruneError as exc:
