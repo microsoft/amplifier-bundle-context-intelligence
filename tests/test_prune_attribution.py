@@ -72,6 +72,10 @@ def test_mixed_status_same_code_and_committed_warning(capture):
         "payloads": 3,
         "kept_undated": 0,
         "bytes_saved": 18,
+        "asset_files_planned": 0,
+        "asset_bytes_planned": 0,
+        "asset_files_unlinked": 0,
+        "asset_bytes_unlinked": 0,
     }
     assert result["reasons"] == {"identity_mismatch": 2, "safety_refusal": 1}
     assert result["status_by_reason"] == {

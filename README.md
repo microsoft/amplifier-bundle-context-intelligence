@@ -930,6 +930,48 @@ for result in iter_prune_tree(request):
 print(summary.to_dict())
 ```
 
+#### Explicit diagnostic sidecar owner API
+
+The Python API has a separate, opt-in `Policy(diagnostic_sidecars=True)`.
+It recognizes only direct `raw`/`raw_request` on `llm:request`, and, when
+`include_responses=True`, direct `raw`/`raw_response` on `llm:response`.
+`response_cutoff` selects a separate response age and requires response opt-in.
+The manual CLI and saved schedules do not silently enable this extension or
+change an installed request-only policy.
+
+The only recognized sidecar convention is
+`data.provider_payloads.<raw|raw_request|raw_response>` with `sha256`, `bytes`,
+`redacted`, `truncated`, and optional `limit_chars`, bound to **that exact
+`events.jsonl` parent** and `provider-payloads/<sha256>.json`.
+This is not `$blob_ref`, a media-session ref, or an invitation to traverse
+arbitrary similarly named JSON. All references in that owner must qualify.
+Recent, undated, response-protected, malformed, unknown, size-conflicting and
+generic-blob references pin assets. Unknown coverage protects the whole owner;
+known neighboring transcript, backup and recovery consumers also pin reclamation.
+No-reference assets are never automatically classified as orphans.
+
+Use the public `PruneRequest`/`prune_file` safety path, not storage internals.
+The same maintenance, recovery, execution, writer and inactivity guards remain.
+The adapter validates type, links, owner, digest, size and unchanged source.
+Reference metadata expires durably **before** unlink, with an explicit
+`data.provider_payloads_expired.<field>` marker:
+`{v:1,sha256,bytes,expired_at:<UTC timestamp>,reason:"retention"}`.
+Readers must recognize this exact marker; absence alone does not mean expired.
+
+An immutable `.diagnostic-retention-UUID.sqlite3` manifest is synced before
+replacement and bound by SHA-256 in the deny-replay receipt. Its
+`record_map(ordinal,old_offset,old_bytes,old_sha256,new_offset,new_bytes,new_sha256)`
+maps **every physical line**, including blanks and line endings, without event
+bodies. An owning host must qualify its maintenance/index handoff to preserve
+record IDs and deliveries rather than deleting/re-enrolling history. This library
+does not authorize historical ingestion or network backfill.
+
+`FileResult` separates event `bytes_saved`, asset files/bytes **planned**, and
+asset files/bytes actually **unlinked**. Manifests and journals add storage;
+logical counts are not observed filesystem reclamation. Post-replacement failure
+retains committed event accounting with incomplete/unknown asset durability.
+Crashes may leak extra bytes, never justify automatic replay or clearing fences.
+
 #### Opt-in nightly local retention (Linux)
 
 The same CLI package also installs `context-intelligence-prune-schedule`.
@@ -1035,6 +1077,18 @@ include effective policy, cutoff, counts, fixed refusal categories, and timestam
 without raw payloads. Zero exit can mean completion, preview, or a busy skip,
 not necessarily bytes reclaimed. Disabled timers do not cancel a running job.
 Uninstall retains configuration, stable locks, and last-run evidence.
+Each run additionally reserves private, immutable
+`runs/<run_id>/{started,result}.json` evidence so the next `last-run.json`
+overwrite does not erase attribution. A started receipt alone means interrupted
+or unknown, not resumable success. Run reports retain status-by-reason counts and
+at most 32 sanitized error rows within an 8 KiB aggregate detail budget, plus an
+exact omitted count. Rows contain ordinal, lexical path SHA-256, status and fixed
+code; unavailable phase/errno are explicit `null`, never extracted from private
+exception text. Held-byte observations use only regular single-link source
+`lstat` sizes, with unknown coverage explicit. They are neither reclaimable-byte
+estimates nor sidecar accounting. Guard skips, genuine errors, partial state and
+nonzero exit semantics are unchanged. New reporting cannot reconstruct detailed
+causes already discarded by an older scheduler.
 The runtime limit is cooperative: it is checked between records, files, and
 before commitment. Parsing one large record or blocked filesystem I/O can delay
 that check. The systemd service supplies a separate outer termination budget.
