@@ -45,6 +45,7 @@ class FileResult:
     asset_bytes_unlinked: int = 0
     asset_durability_unknown: bool = False
     diagnostic_manifest: str | None = None
+    diagnostic_manifest_sha256: str | None = None
 
     @property
     def bytes_saved(self) -> int:
@@ -155,6 +156,7 @@ def _stream(
     observe: bool = False,
 ) -> str:
     digest = hashlib.sha256()
+    old_offset = 0
     for number, line in enumerate(source, 1):
         if poll is not None:
             poll()
@@ -208,6 +210,9 @@ def _stream(
                 result.payloads += 1
         if poll is not None:
             poll()
+        if sidecars is not None and not observe:
+            sidecars.record(number, old_offset, line, result.bytes_after, new_line)
+        old_offset += len(line)
         result.bytes_after += len(new_line)
         if output is not None:
             output.write(new_line)
@@ -480,11 +485,12 @@ def prune_file(
             with temporary.open("rb") as prepared:
                 after_hash = hashlib.file_digest(prepared, "sha256").hexdigest()
             manifest: dict[str, Any] | None = None
-            if sidecars is not None and sidecars.planned_files:
+            if sidecars is not None:
                 manifest_path = path.with_name(f".diagnostic-retention-{uuid.uuid4()}.sqlite3")
                 manifest_hash = sidecars.publish_manifest(manifest_path)
                 _sync_directory(path.parent)
                 result.diagnostic_manifest = manifest_path.name
+                result.diagnostic_manifest_sha256 = manifest_hash
                 manifest = {
                     "name": manifest_path.name,
                     "sha256": manifest_hash,
@@ -542,7 +548,9 @@ def prune_file(
                 try:
                     committed = path.lstat()
                 except OSError:
-                    result.reason = "replacement completed, but committed source identity unavailable"
+                    result.reason = (
+                        "replacement completed, but committed source identity unavailable"
+                    )
                     result.asset_durability_unknown = True
                     return result
 

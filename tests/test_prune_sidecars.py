@@ -3,6 +3,7 @@
 import hashlib
 import json
 import os
+import sqlite3
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import patch
@@ -346,3 +347,36 @@ def test_distinct_exact_parents_do_not_share_digest_accounting(tmp_path):
         assert result.status == "pruned" and not pixel.exists()
         total += result.asset_bytes_unlinked
     assert total == 2 * ref["bytes"]
+
+
+def test_record_map_is_complete_before_replace_and_preserves_identity(tmp_path):
+    pixel, ref = asset(tmp_path)
+    path = source(tmp_path, [event(ref), event(ref)])
+    original = path.read_bytes().splitlines(keepends=True)
+    path.write_bytes(original[0] + b"\r\n" + original[1].rstrip(b"\n"))
+    old_lines = path.read_bytes().splitlines(keepends=True)
+    real_replace = os.replace
+    observed = []
+
+    def replace(candidate, target):
+        manifests = list(tmp_path.glob(".diagnostic-retention-*.sqlite3"))
+        assert len(manifests) == 1
+        with sqlite3.connect(manifests[0]) as db:
+            rows = db.execute("SELECT * FROM record_map ORDER BY ordinal").fetchall()
+        assert len(rows) == 3
+        observed.extend(rows)
+        real_replace(candidate, target)
+
+    with patch.object(storage.os, "replace", side_effect=replace):
+        result = operations.prune_file(path, request(path), now=NOW)
+    assert result.status == "pruned" and not pixel.exists()
+    old_offset = new_offset = 0
+    for row, old, new in zip(observed, old_lines, path.read_bytes().splitlines(keepends=True)):
+        ordinal, old_start, old_size, old_hash, new_start, new_size, new_hash = row
+        assert ordinal > 0 and old_start == old_offset and new_start == new_offset
+        assert old_size == len(old) and old_hash == hashlib.sha256(old).hexdigest()
+        assert new_size == len(new) and new_hash == hashlib.sha256(new).hexdigest()
+        old_offset += len(old)
+        new_offset += len(new)
+    manifest = tmp_path / result.diagnostic_manifest
+    assert hashlib.sha256(manifest.read_bytes()).hexdigest() == result.diagnostic_manifest_sha256

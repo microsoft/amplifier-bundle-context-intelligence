@@ -62,6 +62,12 @@ class Sidecars:
             "CREATE TABLE asset (digest TEXT PRIMARY KEY, size INTEGER NOT NULL,"
             " pinned INTEGER NOT NULL, signature TEXT)"
         )
+        self.db.execute(
+            "CREATE TABLE record_map (ordinal INTEGER PRIMARY KEY,old_offset INTEGER,"
+            "old_bytes INTEGER,old_sha256 TEXT,new_offset INTEGER,new_bytes INTEGER,new_sha256 TEXT)"
+        )
+        self.db.execute("CREATE TABLE format (name TEXT,version INTEGER)")
+        self.db.execute("INSERT INTO format VALUES('ci-diagnostic-retention',1)")
         self.blocked = False
         self.directory_identity: tuple[int, int] | None = None
         self.manifest: Path | None = None
@@ -131,6 +137,9 @@ class Sidecars:
             for key, marker in expired.items():
                 if not self._tombstone_valid(key, marker):
                     self.blocked = True
+        for key in ("raw", "raw_request", "raw_response"):
+            if isinstance(data.get(key), dict) and "$blob_ref" in data[key]:
+                self.blocked = True
         refs = data.get("provider_payloads")
         if refs is None:
             return
@@ -139,6 +148,8 @@ class Sidecars:
             return
         fields, _ = diagnostic_fields(record, self.policy)
         for key, value in refs.items():
+            if isinstance(expired, dict) and key in expired:
+                self.blocked = True
             descriptor = self.descriptor(value)
             if key not in ("raw", "raw_request", "raw_response") or descriptor is None:
                 self.blocked = True
@@ -149,6 +160,23 @@ class Sidecars:
                 " pinned=max(pinned,excluded.pinned,asset.size != excluded.size)",
                 (digest, size, int(key not in fields)),
             )
+
+    def record(
+        self, ordinal: int, old_offset: int, old: bytes, new_offset: int, new: bytes
+    ) -> None:
+        """Exact 1:1 physical-line identity map, including blanks and line endings."""
+        self.db.execute(
+            "INSERT INTO record_map VALUES(?,?,?,?,?,?,?)",
+            (
+                ordinal,
+                old_offset,
+                len(old),
+                hashlib.sha256(old).hexdigest(),
+                new_offset,
+                len(new),
+                hashlib.sha256(new).hexdigest(),
+            ),
+        )
 
     def _asset(self, digest: str, size: int) -> tuple[int, ...]:
         # Every ancestor is non-following; a dangling directory link is unsafe too.
