@@ -1,12 +1,6 @@
 ---
 name: context-intelligence-derived-metrics
-description: >
-  Use when a graph query returns structurally-identical rows hiding different
-  intent — many delegations all "none/conversation", look-alike sessions,
-  identical tool calls. Derives an INTERPRETIVE metric by joining a second graph
-  layer onto the blanket shape (flagship: transport × sub-session skill payload =
-  "flavour"). Complements graph-query (READ the graph) by making blanket reads
-  MEAN something.
+description: 'Structurally alike rows, differing intent: interpretive joins, e.g. transport × child skills.'
 license: MIT
 metadata:
   version: "1.0.0"
