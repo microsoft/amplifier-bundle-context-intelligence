@@ -181,21 +181,31 @@ def iter_capture_projection(
     """
     with Index(source, poll) as index:
         for ordinal, root in index.roots():
-            event, data = _envelope(index, root, session_id)
-            result: dict[str, Any] = {"ordinal": ordinal, "event": event}
-            for field in ("id", "event_id", "ts", "timestamp", "session_id", "idempotency_key"):
-                result[field] = index.bounded_value(index.child(root, field))
-            result["schema"] = index.bounded_value(index.child(root, "schema"))
-            result["data_timestamp"] = index.bounded_value(index.child(data, "timestamp"))
-            result["expired"] = index.bounded_value(index.child(data, "expired"), 16384)
-            result["provider_payloads"] = index.bounded_value(
-                index.child(data, "provider_payloads"), 16384
-            )
-            result["opaque_fields"] = {
-                field: index.kind(index.child(data, field))
-                for field in ("raw", "raw_request", "raw_response", "result")
-            }
-            yield result
+            yield _projection(index, ordinal, root, session_id)
+
+
+def _projection(index: Index, ordinal: int, root: int, session_id: str) -> dict[str, Any]:
+    event, data = _envelope(index, root, session_id)
+    result: dict[str, Any] = {"ordinal": ordinal, "event": event}
+    for field in ("id", "event_id", "ts", "timestamp", "session_id", "idempotency_key"):
+        result[field] = index.bounded_value(index.child(root, field))
+    result["schema"] = index.bounded_value(index.child(root, "schema"))
+    result["data_timestamp"] = index.bounded_value(index.child(data, "timestamp"))
+    result["expired"] = index.bounded_value(index.child(data, "expired"), 16384)
+    result["provider_payloads"] = index.bounded_value(index.child(data, "provider_payloads"), 16384)
+    result["provider_payloads_expired"] = index.bounded_value(
+        index.child(data, "provider_payloads_expired"), 16384
+    )
+    result["opaque_fields"] = {
+        field: index.kind(index.child(data, field))
+        for field in ("raw", "raw_request", "raw_response", "result")
+    }
+    result["blob_ref_fields"] = [
+        field
+        for field in ("raw", "raw_request", "raw_response")
+        if index.child(index.child(data, field), "$blob_ref") is not None
+    ]
+    return result
 
 
 def _copy(source: BinaryIO, output: BinaryIO, start: int, end: int) -> None:

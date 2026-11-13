@@ -140,7 +140,7 @@ class Index:
         self.db.execute("PRAGMA cache_size=-1024")
         self.db.execute(
             "CREATE TABLE node(id INTEGER PRIMARY KEY,parent INTEGER,key TEXT,"
-            "kind TEXT,start INTEGER,end INTEGER,small TEXT,UNIQUE(parent,key))"
+            "kind TEXT,start INTEGER,end INTEGER,small TEXT,member_start INTEGER,UNIQUE(parent,key))"
         )
         self.db.execute(
             "CREATE TABLE record(ordinal INTEGER PRIMARY KEY,node INTEGER,start INTEGER,end INTEGER)"
@@ -191,7 +191,9 @@ class Index:
                 value.extend(part)
         return None if oversized else value.decode("utf-8")
 
-    def _value(self, parent: int | None, key: str | None, depth: int) -> int:
+    def _value(
+        self, parent: int | None, key: str | None, depth: int, member_start: int | None = None
+    ) -> int:
         if depth > 64:
             raise FormatError("JSON nesting exceeds supported capture depth")
         self.reader.whitespace()
@@ -200,8 +202,8 @@ class Index:
         kind = {b"{": "object", b"[": "array", b'"': "string"}.get(token, "scalar")
         try:
             cursor = self.db.execute(
-                "INSERT INTO node(parent,key,kind,start) VALUES(?,?,?,?)",
-                (parent, key, kind, start),
+                "INSERT INTO node(parent,key,kind,start,member_start) VALUES(?,?,?,?,?)",
+                (parent, key, kind, start, member_start),
             )
         except sqlite3.IntegrityError as exc:
             raise FormatError("duplicate JSON object key") from exc
@@ -215,6 +217,7 @@ class Index:
             ordinal = 0
             if self.reader.peek() != ending:
                 while True:
+                    member = self.reader.offset
                     if kind == "object":
                         label = self._label()
                         if label is None:
@@ -224,7 +227,7 @@ class Index:
                             raise FormatError("expected JSON colon")
                     else:
                         label = str(ordinal)
-                    self._value(node, label, depth + 1)
+                    self._value(node, label, depth + 1, member)
                     ordinal += 1
                     self.reader.whitespace()
                     if self.reader.peek() == ending:

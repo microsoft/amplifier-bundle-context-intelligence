@@ -8,6 +8,7 @@ from .capture import (
     write_record_mapping,
 )
 from .operations import apply, preview, resume, stage
+from .diagnostics import rewrite_diagnostics
 
 __all__ = [
     "ImageOwner",
@@ -17,6 +18,7 @@ __all__ = [
     "preview",
     "resume",
     "rewrite_capture",
+    "rewrite_diagnostics",
     "stage",
     "write_record_mapping",
 ]
