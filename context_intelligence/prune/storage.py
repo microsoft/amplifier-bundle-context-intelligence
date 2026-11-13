@@ -155,8 +155,11 @@ def _stream(
     sidecars: Sidecars | None = None,
     observe: bool = False,
 ) -> str:
+    if sidecars is not None:
+        from .bounded import stream
+
+        return stream(source, output, policy, result, poll, sidecars, observe)
     digest = hashlib.sha256()
-    old_offset = 0
     for number, line in enumerate(source, 1):
         if poll is not None:
             poll()
@@ -190,12 +193,7 @@ def _stream(
                     raise PruneError(
                         f"unsupported event schema at line {number}; file left unchanged"
                     )
-            if observe and sidecars is not None:
-                sidecars.observe(record)
-            if sidecars is not None and not observe:
-                replacement, undated = prune_record(record, policy, sidecars=sidecars)
-            else:
-                replacement, undated = prune_record(record, policy)
+            replacement, undated = prune_record(record, policy)
             result.missing_timestamps += int(undated)
             if replacement is not record:
                 ending = (
@@ -210,9 +208,6 @@ def _stream(
                 result.payloads += 1
         if poll is not None:
             poll()
-        if sidecars is not None and not observe:
-            sidecars.record(number, old_offset, line, result.bytes_after, new_line)
-        old_offset += len(line)
         result.bytes_after += len(new_line)
         if output is not None:
             output.write(new_line)
@@ -415,6 +410,8 @@ def prune_file(
             metadata, signature = capture_schema
             if _signature(metadata.lstat()) != signature:
                 raise PruneError("capture metadata changed; original not replaced")
+        elif os.path.lexists(path.with_name("metadata.json")):
+            raise PruneError("capture metadata appeared; original not replaced")
 
     flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
     fd = os.open(path, flags)
@@ -483,7 +480,10 @@ def prune_file(
                 before_commit()
             assert temporary is not None
             with temporary.open("rb") as prepared:
+                prepared_signature = _signature(os.fstat(prepared.fileno()))
                 after_hash = hashlib.file_digest(prepared, "sha256").hexdigest()
+                if _signature(os.fstat(prepared.fileno())) != prepared_signature:
+                    raise PruneError("prepared diagnostic candidate changed")
             manifest: dict[str, Any] | None = None
             if sidecars is not None:
                 manifest_path = path.with_name(f".diagnostic-retention-{uuid.uuid4()}.sqlite3")
@@ -534,6 +534,8 @@ def prune_file(
             check_schema()
             if before_commit is not None:
                 before_commit()
+            if _signature(temporary.lstat()) != prepared_signature:
+                raise PruneError("prepared diagnostic candidate changed before replacement")
             os.replace(temporary, path)
             temporary = None
             result.status = "pruned"

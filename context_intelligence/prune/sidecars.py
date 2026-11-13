@@ -161,20 +161,16 @@ class Sidecars:
                 (digest, size, int(key not in fields)),
             )
 
-    def record(
-        self, ordinal: int, old_offset: int, old: bytes, new_offset: int, new: bytes
+    def record_fact(
+        self, ordinal: int, old: tuple[int, int, str], new: tuple[int, int, str]
     ) -> None:
         """Exact 1:1 physical-line identity map, including blanks and line endings."""
         self.db.execute(
             "INSERT INTO record_map VALUES(?,?,?,?,?,?,?)",
             (
                 ordinal,
-                old_offset,
-                len(old),
-                hashlib.sha256(old).hexdigest(),
-                new_offset,
-                len(new),
-                hashlib.sha256(new).hexdigest(),
+                *old,
+                *new,
             ),
         )
 

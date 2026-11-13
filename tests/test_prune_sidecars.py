@@ -443,3 +443,51 @@ def test_inactive_owner_lock_and_aftercommit_guard_cover_unlink(tmp_path):
         assert observed == ["execution-held"] and not pixel.exists()
     finally:
         fixture.doCleanups()
+
+
+def test_huge_single_record_and_string_retention_is_bounded(tmp_path):
+    import tracemalloc
+
+    pixel, ref = asset(tmp_path)
+    path = tmp_path / "events.jsonl"
+    # Disposable known raw field, not arbitrary JSON-in-string image promotion.
+    with path.open("wb") as output:
+        output.write(b'{"event":"llm:request","timestamp":"' + OLD.encode() + b'","data":{"raw":"')
+        for _ in range(512):
+            output.write(b'\\"synthetic\\":' + b"x" * 65536)
+        output.write(
+            b'","provider_payloads":{"raw":' + json.dumps(ref).encode() + b'},"keep":1.000}}\n'
+        )
+    tracemalloc.start()
+    try:
+        result = operations.prune_file(path, request(path), now=NOW)
+        _, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+    assert result.status == "pruned", result.reason
+    assert result.bytes_before > 32 * 1024**2
+    assert result.bytes_after < 1024 and peak < 8 * 1024**2
+    assert not pixel.exists()
+    assert b'"keep":1.000' in path.read_bytes()
+
+
+@pytest.mark.parametrize("fault", ["candidate", "metadata"])
+def test_post_manifest_substitution_or_metadata_appearance_refuses(tmp_path, fault):
+    pixel, ref = asset(tmp_path)
+    path = source(tmp_path, [event(ref)])
+    original = path.read_bytes()
+    publish = storage._publish_receipt
+
+    def changed(*args, **kwargs):
+        publish(*args, **kwargs)
+        if fault == "candidate":
+            candidate = next(tmp_path.glob(".events-prune-*"))
+            replacement = tmp_path / "substituted"
+            replacement.write_bytes(candidate.read_bytes())
+            replacement.replace(candidate)
+        else:
+            (tmp_path / "metadata.json").write_text("{}")
+
+    with patch.object(storage, "_publish_receipt", side_effect=changed):
+        result = operations.prune_file(path, request(path), now=NOW)
+    assert result.status == "error" and pixel.exists() and path.read_bytes() == original
