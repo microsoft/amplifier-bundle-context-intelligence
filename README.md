@@ -930,6 +930,46 @@ for result in iter_prune_tree(request):
 print(summary.to_dict())
 ```
 
+#### Historical capture optimization API
+
+`context_intelligence.optimize` exposes `preview(path, session_id=...)`,
+`stage(path, new_operation_dir, session_id=..., media=owner,
+writers_stopped=True, ...)`, and `apply`/`resume(operation_dir, media=owner,
+writers_stopped=True, ...)`. This is an explicit owner API, not a scheduled
+conversion, runtime hook, or automatic upgrade. Each file has independent state;
+there is no false whole-session/corpus atomicity.
+
+The CI adapter visits known structured Core PNG/JPEG image blocks in tool results
+and canonical raw message content. Its disk-backed span reader handles enormous
+single JSONL records and escaped strings without loading an entire line. It
+copies non-target spans, preserving opaque numeric spellings and unknown fields.
+Arbitrary JSON-looking tool/raw strings are protected: current loop producers do
+not establish that those strings are serialized rich-content envelopes. Streaming
+string decoding is not authority to promote arbitrary text or vendor formats.
+
+The injected `ImageOwner` owns actual pixel validation, original provenance/expiry,
+private diagnostic storage, reference-only replacement and reader compatibility.
+CI never imports Foundation/app code, manufactures acceptance from a digest,
+hydrates pixels for history/search, or calls historical ingestion. Unknown source
+policy must refuse; original screenshot TTL must never renew on conversion.
+Qualify the actual owner implementation before enabling a host conversion.
+
+Stage preserves an exact original generation, candidate, paged asset manifest and
+old/new record-address mapping in a private sibling operation directory. Apply
+requires explicit stopped writers, existing capture/recovery guards and unchanged
+source/metadata. Assets are published/fsynced first, then a durable replacement
+intent precedes per-file replacement and readback. Resume reconciles saved hashes
+and journal states instead of repeating an unknown rename. Recovery originals are
+retained; `reclaimed_bytes` remains zero while those originals exist. Conversion,
+asset/reference/journal bytes and actual filesystem reclamation are distinct.
+POSIX durability is the qualified platform scope; no Windows parity is inferred.
+
+The permanent capture fence continues to deny network upload/recovery of converted
+history. Host indexes must update existing IDs and delivery state in place from
+the exact mapping, under their own maintenance fence; they may not delete/re-enroll
+records to manufacture a clean state. Ordinary native text projection remains
+reference-only and does not treat a media label/digest as evidence of seeing pixels.
+
 #### Explicit diagnostic sidecar owner API
 
 The Python API has a separate, opt-in `Policy(diagnostic_sidecars=True)`.
