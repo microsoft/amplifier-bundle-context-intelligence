@@ -1,9 +1,36 @@
 """Record installed server identity in the isolated volume, then exec the real server."""
 
 import json
+import hashlib
 from pathlib import Path
 
 from provenance import verify_group, join_loaded
+
+
+def save_receipt(path, value):
+    """Preserve earlier verified bootstrap generations on this owned volume."""
+    if path.is_symlink():
+        raise ValueError("redirected server receipt")
+    encoded = json.dumps(value).encode()
+    if path.exists():
+        with path.open("rb") as source:
+            previous = source.read(1024 * 1024 + 1)
+        if len(previous) > 1024 * 1024:
+            raise ValueError("oversized server receipt")
+        if previous == encoded:
+            return
+        archive = path.with_name(
+            "qualification-server-" + hashlib.sha256(previous).hexdigest() + ".json"
+        )
+        if archive.exists() or archive.is_symlink():
+            if archive.is_symlink() or archive.read_bytes() != previous:
+                raise ValueError("server receipt archive conflict")
+            path.unlink()
+        else:
+            path.rename(archive)
+    with path.open("xb") as stream:
+        stream.write(encoded)
+    path.chmod(0o644)
 
 
 def main():
@@ -23,9 +50,7 @@ def main():
     )
     provenance.update(proof)
     path = Path("/state/qualification-server.json")
-    with path.open("x") as stream:
-        json.dump(provenance, stream)
-    path.chmod(0o644)
+    save_receipt(path, provenance)
     context_intelligence_server.cli.main([])
 
 

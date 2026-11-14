@@ -49,6 +49,12 @@ def test_real_core_two_png_literal_oracle():
     assert len(pixels) == 2 and pixels[0] != pixels[1]
     assert all(p.startswith(b"\x89PNG\r\n\x1a\n") for p in pixels)
     expected = qualification.expected_projection(event)
+    # Core can drop unsupported ImageBlock extras before the event boundary.
+    original_blocks = event["result"].model_dump()["content"]
+    for index in (1, 2):
+        assert ("visibility" in expected["result"]["content"][index]) == (
+            "visibility" in original_blocks[index]
+        )
     qualification.assert_private(json.dumps(expected).encode(), pixels)
     assert expected["status"] == event["status"]
     assert expected["usage"] == event["usage"]
@@ -316,3 +322,27 @@ def test_frozen_harness_manifest_and_build_argument_wiring():
         )
     ]
     assert required and all(arg in dockerfile for arg in required)
+
+
+def test_server_bootstrap_preserves_previous_generation(tmp_path, monkeypatch):
+    monkeypatch.setitem(sys.modules, "provenance", provenance)
+    bootstrap_spec = importlib.util.spec_from_file_location(
+        "bootstrap", PROFILE / "start_server.py"
+    )
+    assert bootstrap_spec and bootstrap_spec.loader
+    bootstrap = importlib.util.module_from_spec(bootstrap_spec)
+    bootstrap_spec.loader.exec_module(bootstrap)
+    path = tmp_path / "qualification-server.json"
+    bootstrap.save_receipt(path, {"generation": 1})
+    original = path.read_bytes()
+    identity = path.stat().st_ino
+    bootstrap.save_receipt(path, {"generation": 1})
+    assert path.stat().st_ino == identity
+    bootstrap.save_receipt(path, {"generation": 2})
+    archive = path.with_name("qualification-server-" + provenance.digest(original) + ".json")
+    assert archive.read_bytes() == original
+    assert json.loads(path.read_bytes()) == {"generation": 2}
+    path.unlink()
+    path.symlink_to(tmp_path / "absent")
+    with pytest.raises(ValueError, match="redirected"):
+        bootstrap.save_receipt(path, {"generation": 3})

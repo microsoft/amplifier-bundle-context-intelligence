@@ -970,6 +970,28 @@ Publication of a complete group does not acknowledge all its members as installe
 the diagnostic checkpoint verifier must join each selected reference to its exact
 installed position and acknowledge only that verified reachability.
 
+`context_intelligence.optimize.positions.capture_image_verifier` provides that
+CI-format position lookup without a host-owned JSON parser. Its context borrows
+the original and installed **seekable binary streams**, with `session_id`,
+`source_sha256`, `installed_sha256` and optional `poll`. The returned
+`read_selected(exact_original_snapshot)` admits only an original canonical image
+position and returns `{status, value, path}`; `value` is bounded to16KiB and
+`path` contains structural string keys/integer indices. JSON null is **present**.
+`absent` means only that the whole addressed raw direction field was removed;
+it is not proof of expiry. Missing tool slots, changed record identities, array
+cardinality or canonical roles refuse. The caller must still join the actual
+diagnostic reference to its selected manifest, maps, media closure and policy.
+An unchanged inline image is not a committed reference. These source-format
+checks neither establish original provenance nor authorize historical upload.
+
+Do not wrap stage/apply in another CI capture maintenance lock: it is
+nonreentrant, and each guarded operation owns that lock/recovery check itself.
+The host's real stopped-writer/flush boundary and exact original stream must
+span its conversion/checkpoint lifetime. Resume obtains the verified saved
+original generation, not a newly opened converted pathname. Separate stages
+recheck source identities and refuse intervening drift rather than claiming
+one atomic session-wide transaction.
+
 Stage preserves an exact original generation, candidate, paged asset manifest and
 old/new record-address mapping in a private sibling operation directory. Apply
 requires explicit stopped writers, existing capture/recovery guards and unchanged

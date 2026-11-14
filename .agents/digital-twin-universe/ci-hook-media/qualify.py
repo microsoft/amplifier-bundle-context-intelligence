@@ -162,9 +162,14 @@ def expected_projection(event: dict) -> dict:
     expected = deepcopy(event)
     result = event["result"].model_dump()
     for index in (1, 2):
+        original_block = result["content"][index]
         result["content"][index] = {
             "type": "text",
-            "visibility": "user",
+            **(
+                {"visibility": original_block["visibility"]}
+                if "visibility" in original_block
+                else {}
+            ),
             "text": OMISSION,
             "context_intelligence.media": {
                 "v": 1,

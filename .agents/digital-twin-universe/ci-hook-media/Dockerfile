@@ -3,7 +3,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends git ca-certific
     && rm -rf /var/lib/apt/lists/*
 COPY *.py /build-input/
 COPY harness-manifest.json /harness-manifest.json
-RUN echo '9277fb53e1c6adff58b25dd9376f758b463b6cc25076c988375a2d761292676b  /harness-manifest.json' \
+RUN echo '7d83a0c5a15c04cfc67ea47e58d4411c1c6f07c891529583a717c392ad3acb3f  /harness-manifest.json' \
     | sha256sum --check --strict
 # Independent inputs: full-SHA Git archives, plus wheel ZIPs downloaded BEFORE
 # installation. This stage never imports installed candidate packages.
