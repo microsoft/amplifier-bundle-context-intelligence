@@ -1012,6 +1012,29 @@ logical counts are not observed filesystem reclamation. Post-replacement failure
 retains committed event accounting with incomplete/unknown asset durability.
 Crashes may leak extra bytes, never justify automatic replay or clearing fences.
 
+For an explicitly selected image-extraction **then** raw-expiry operation, the
+offline public request can set `verified_optimize=Path(<operation-directory>)`.
+This narrowly accepts only the exact verified Optimize journal, permanent fence,
+candidate source hash, metadata identity, original, asset manifest and record map.
+It requires `diagnostic_sidecars=True` and `writers_stopped=True`, not inactive
+or repeat scheduling. It does not accept an arbitrary preexisting prune receipt.
+
+The permanent fence remains byte-identical. Before the second per-file rewrite,
+an exclusive generation-bound attempt receipt is synced beside the source.
+`optimize_retention_receipt(path, fence_sha256)` returns that public receipt path,
+using SHA-256 of the exact permanent fence bytes. A stale operation-directory copy
+cannot evade this source-bound attempt; any existing attempt requires
+reconciliation, not replay. The second `FileResult.diagnostic_manifest` maps
+post-extraction to post-expiry bytes for the owning index's next in-place update.
+These are two recoverable stages, not one falsely atomic cross-file operation.
+
+The exact original recovery generation is still a consumer: its diagnostic
+assets remain held, reported in `asset_files_held_recovery` and
+`asset_bytes_held_recovery`, not planned or actual reclamation. Newly extracted
+assets made unreachable by selected raw expiry are likewise not automatically
+deleted. Zero physical savings during protected recovery is an honest result,
+not permission to discard original generations or repair unknown outcomes.
+
 #### Opt-in nightly local retention (Linux)
 
 The same CLI package also installs `context-intelligence-prune-schedule`.
