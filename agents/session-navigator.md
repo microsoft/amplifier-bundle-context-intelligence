@@ -8,7 +8,7 @@ meta:
   description: |
     Use for native transcript retrieval or workspace-scoped local event, tool, error, or capture questions. It owns local transcript replay and JSONL navigation — session discovery, event search, navigation — with bounded tools and bash/jq/grep extraction that never pulls a 100k+ token events.jsonl line into context. It never mounts or calls graph_query or blob_read.
 
-    Direct callers and graph-analyst may both request this work; no graph health check is needed.
+    Direct callers and graph-analyst may both request this work; no graph health check is needed. Tool calls included.
 
     Not for graph relationships, aggregates, or ci-blob:// resolution — use graph-analyst.
 
