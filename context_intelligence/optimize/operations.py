@@ -348,6 +348,10 @@ def _fence(path: Path, journal: dict[str, Any]) -> None:
     if os.path.lexists(marker):
         if _json(marker) != expected:
             raise PruneError("foreign capture replay fence; optimize refused")
+        # An earlier publication may have linked the receipt and then failed
+        # before syncing its parent. Presence is not durability. Establish it
+        # again BEFORE any source replacement, including old-source resume.
+        _sync_directory(path.parent)
     else:
         _publish_receipt(path, expected)
 

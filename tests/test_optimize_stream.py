@@ -15,6 +15,7 @@ import pytest
 from context_intelligence.optimize import iter_capture_projection, rewrite_capture
 from context_intelligence.optimize._json import CHUNK, FormatError, Index, Reader, string_chunks
 from context_intelligence.optimize.capture import _decoded_image
+from context_intelligence.optimize import write_record_mapping
 
 
 def image(data: bytes = b"synthetic-png") -> dict[str, Any]:
@@ -203,3 +204,49 @@ def test_base64_chunk_boundary_hash() -> None:
         digest, size = _decoded_image(index, node, output)
         assert digest == hashlib.sha256(value).hexdigest()
         assert size == len(value) and output.getvalue() == value
+
+
+@pytest.mark.parametrize("field", ["timestamp", "ts", "event_id", "id", "idempotency_key"])
+@pytest.mark.parametrize(
+    "token",
+    [
+        b"1.234567890123456789",
+        b"true",
+        b'{"opaque":"identity"}',
+        b'["identity"]',
+    ],
+)
+def test_mapping_refuses_unsupported_identity_types_without_rounding(
+    field: str, token: bytes
+) -> None:
+    original = (
+        b'{"event":"tool:post","session_id":"s1","data":{},"'
+        + field.encode()
+        + b'":'
+        + token
+        + b"}\n"
+    )
+    # Identical nonstandard identity tokens must not become rounded mapping facts.
+    with pytest.raises(FormatError, match="identity"):
+        write_record_mapping(
+            BoundedBytes(original), BoundedBytes(original), io.BytesIO(), session_id="s1"
+        )
+
+
+def test_mapping_preserves_string_and_null_identity_fields() -> None:
+    original = (
+        b'{"event":"tool:post","session_id":"s1","data":{},'
+        b'"timestamp":null,"ts":"2025-01-01T00:00:00.123456789Z",'
+        b'"event_id":"123456789012345678901234567890","id":null}\n'
+    )
+    output = io.BytesIO()
+    assert (
+        write_record_mapping(
+            BoundedBytes(original), BoundedBytes(original), output, session_id="s1"
+        )
+        == 1
+    )
+    row = json.loads(output.getvalue().splitlines()[1])
+    assert row["eventId"] == "123456789012345678901234567890"
+    assert row["timestamp"] is None and row["id"] is None
+    assert row["ts"] == "2025-01-01T00:00:00.123456789Z"

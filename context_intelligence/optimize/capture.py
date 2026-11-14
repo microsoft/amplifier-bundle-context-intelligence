@@ -255,6 +255,16 @@ def write_record_mapping(
     def emit(value: dict[str, Any]) -> None:
         output.write(json.dumps(value, ensure_ascii=True, allow_nan=False).encode() + b"\n")
 
+    def identity(index: Index, root: int, key: str) -> str | None:
+        node = index.child(root, key)
+        if node is None or (index.kind(node) == "scalar" and index.small(node) == "null"):
+            return None
+        if index.kind(node) != "string":
+            # Unknown producer types stay protected. json.loads on a floating
+            # identity would round its lexeme before facts reached an index.
+            raise FormatError("unsupported capture identity field type")
+        return index.bounded_value(node)
+
     old.seek(0, 2)
     old_size = old.tell()
     new.seek(0, 2)
@@ -291,8 +301,8 @@ def write_record_mapping(
                 ("id", "id"),
                 ("idempotency_key", "idempotency_key"),
             ):
-                value = before.bounded_value(before.child(root, key))
-                if value != after.bounded_value(after.child(new_root, key)):
+                value = identity(before, root, key)
+                if value != identity(after, new_root, key):
                     raise FormatError("conversion changed event identity fields")
                 facts[output_key] = value
             facts["old"] = _range_fact(old, *before.record_span(ordinal), poll)

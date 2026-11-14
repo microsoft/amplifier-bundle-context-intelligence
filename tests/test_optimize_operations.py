@@ -257,6 +257,44 @@ def test_lost_rename_reply_resyncs_parent_before_ack(
     assert path.parent in seen and operation in seen
 
 
+def test_existing_fence_after_interrupted_publication_is_synced_before_replace(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from context_intelligence.prune import storage
+
+    path, operation, owner = setup(tmp_path)
+    prepare(path, operation, owner)
+    original = path.read_bytes()
+    storage_sync = storage._sync_directory
+
+    def fail_publication_sync(directory: Path) -> None:
+        if directory == path.parent:
+            raise OSError("synthetic receipt link published, directory sync interrupted")
+        storage_sync(directory)
+
+    monkeypatch.setattr(storage, "_sync_directory", fail_publication_sync)
+    with pytest.raises(OSError, match="receipt link"):
+        apply(operation, media=owner, writers_stopped=True)
+    assert receipt_path(path).is_file() and path.read_bytes() == original
+    assert json.loads((operation / "journal.json").read_bytes())["state"] == "assets-published"
+    monkeypatch.setattr(storage, "_sync_directory", storage_sync)
+    seen: list[Path] = []
+    sync = operations._sync_directory
+    replace = operations._replace_candidate
+
+    def track(directory: Path) -> None:
+        sync(directory)
+        seen.append(directory)
+
+    def checked_replace(*args: Any) -> None:
+        assert path.parent in seen, "matching fence must be durable BEFORE source replacement"
+        replace(*args)
+
+    monkeypatch.setattr(operations, "_sync_directory", track)
+    monkeypatch.setattr(operations, "_replace_candidate", checked_replace)
+    assert resume(operation, media=owner, writers_stopped=True)["state"] == "verified"
+
+
 @pytest.mark.parametrize("kind", ["candidate", "metadata", "metadata-link"])
 def test_owner_callback_races_refuse_before_replacement(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, kind: str
