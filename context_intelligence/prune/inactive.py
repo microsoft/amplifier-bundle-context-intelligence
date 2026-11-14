@@ -97,6 +97,7 @@ class InactiveInventory:
         repeat_pruned: bool = False,
         before_commit: Callable[[], None] | None = None,
         _check_runtime: Callable[[], None] | None = None,
+        after_commit: Callable[[], None] | None = None,
     ) -> FileResult:
         """Acquire a matching existing execution lock, or return a safety skip."""
         now = now or datetime.now(timezone.utc)
@@ -115,6 +116,7 @@ class InactiveInventory:
                 repeat_pruned=repeat_pruned,
                 before_commit=before_commit,
                 _check_runtime=_check_runtime,
+                after_commit=after_commit,
             )
         except (InactiveSkip, FileNotFoundError) as exc:
             return FileResult(path, status="skipped", reason=str(exc))
@@ -132,6 +134,7 @@ class InactiveInventory:
         repeat_pruned: bool,
         before_commit: Callable[[], None] | None,
         _check_runtime: Callable[[], None] | None = None,
+        after_commit: Callable[[], None] | None = None,
     ) -> FileResult:
         import fcntl
 
@@ -226,17 +229,28 @@ class InactiveInventory:
             if os.path.lexists(session / "transfer-fence.json"):
                 raise InactiveSkip("session has a transfer fence")
 
-            def check() -> None:
-                if before_commit is not None:
-                    before_commit()
+            def check_ownership(*, committed: bool = False) -> None:
+                callback = after_commit if committed else before_commit
+                if callback is not None:
+                    callback()
                 # The stable execution lock remains held THROUGH replacement.
                 if _signature(lock_path.lstat()) != _signature(lock_info):
                     raise InactiveSkip("execution-lock identity changed")
                 for candidate, info in stamps.items():
+                    if committed and candidate == path:
+                        # Storage verifies the exact newly committed hash/inode.
+                        # Only this transaction's replaced source is excluded.
+                        continue
                     if _signature(candidate.lstat()) != _signature(info):
                         raise InactiveSkip("session metadata/history changed during pruning")
                 if os.path.lexists(session / "transfer-fence.json"):
                     raise InactiveSkip("session became transfer-fenced")
+
+            def check() -> None:
+                check_ownership()
+
+            def check_after() -> None:
+                check_ownership(committed=True)
 
             check()
             return prune_file(
@@ -248,6 +262,7 @@ class InactiveInventory:
                 min_idle=min_idle,
                 before_commit=check,
                 during_scan=_check_runtime if _check_runtime is not None else before_commit,
+                after_commit=check_after,
                 fence=repeat_fence(path) if repeat_pruned else None,
                 audit_policy={
                     "inactive_only": True,

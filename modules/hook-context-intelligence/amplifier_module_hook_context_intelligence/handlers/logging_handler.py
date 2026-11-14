@@ -22,6 +22,8 @@ from typing import Any
 import httpx
 from amplifier_core.models import HookResult
 
+from context_intelligence.capture_media import project_capture_media
+
 from amplifier_module_hook_context_intelligence.upload import (
     _canonical_json,
     _compute_idempotency_key,  # noqa: F401 — re-exported for test imports
@@ -1458,7 +1460,17 @@ class LoggingHandler:
         return self._resolver.session_dir(session_id)
 
     async def __call__(self, event: str, data: dict[str, Any]) -> HookResult:
-        sanitized_data = _sanitize_for_json(data)
+        try:
+            # One diagnostic COPY for both sinks. Never modify the hook's
+            # effective result, hydrate refs, or retain fallback image bytes.
+            # Producers still must project before hooks.emit: this boundary is
+            # too late to avoid Core/Rust's initial event serialization.
+            sanitized_data = project_capture_media(_sanitize_for_json(data))
+        except Exception:
+            # A failed projection must not leak the original event via either
+            # sink or a traceback/exception message containing pixel payloads.
+            logger.warning("LoggingHandler media projection failed; event not captured")
+            return HookResult(action="continue")
         session_id = sanitized_data.get("session_id")
         if not session_id:
             return HookResult(action="continue")
