@@ -28,6 +28,7 @@ class PruneRequest:
     min_inactive: timedelta | None = None
     repeat_pruned: bool = False
     before_commit: Callable[[], None] | None = None
+    verified_optimize: Path | None = None
 
     def __post_init__(self) -> None:
         for name in ("apply", "writers_stopped", "inactive_only", "backup", "repeat_pruned"):
@@ -43,6 +44,16 @@ class PruneRequest:
             raise ValueError("min_inactive must be at least one day")
         if self.repeat_pruned and (not self.inactive_only or self.writers_stopped):
             raise ValueError("repeat pruning requires inactive_only without writers_stopped")
+        if self.verified_optimize is not None and (
+            not isinstance(self.verified_optimize, Path)
+            or not self.writers_stopped
+            or self.inactive_only
+            or self.repeat_pruned
+            or not self.policy.diagnostic_sidecars
+        ):
+            raise ValueError(
+                "verified_optimize requires diagnostic sidecars and explicit offline stopped writers"
+            )
 
     @classmethod
     def from_options(
@@ -144,6 +155,11 @@ def _prune_file(
             capture_lock(path, exclusive=True),
             recovery_guard(path, request.recovery_roots) as check_recovery,
         ):
+            continuation = None
+            if request.verified_optimize is not None:
+                from .compound import verified_optimize
+
+                continuation = verified_optimize(path, request.verified_optimize)
 
             def check_runtime() -> None:
                 if request.before_commit is not None:
@@ -152,8 +168,10 @@ def _prune_file(
             def check_commit() -> None:
                 check_runtime()
                 check_recovery()
+                if continuation is not None:
+                    continuation.check()
 
-            if not request.repeat_pruned:
+            if not request.repeat_pruned and continuation is None:
                 assert_replayable(path)
             if request.inactive_only:
                 if inventory is None:
@@ -182,6 +200,8 @@ def _prune_file(
                     before_commit=check_commit,
                     during_scan=check_runtime,
                     after_commit=check_commit,
+                    fence=continuation.fence if continuation is not None else None,
+                    continuation_attempt=continuation.attempt if continuation is not None else None,
                 )
         return result
     except PruneError as exc:

@@ -44,6 +44,8 @@ class FileResult:
     asset_files_unlinked: int = 0
     asset_bytes_unlinked: int = 0
     asset_durability_unknown: bool = False
+    asset_files_held_recovery: int = 0
+    asset_bytes_held_recovery: int = 0
     diagnostic_manifest: str | None = None
     diagnostic_manifest_sha256: str | None = None
 
@@ -353,6 +355,8 @@ def _publish_receipt(path: Path, body: dict[str, Any], *, destination: Path | No
         os.link(temporary, destination or receipt_path(path), follow_symlinks=False)
         temporary.unlink()
         _sync_directory(path.parent)
+        if destination is not None and destination.parent != path.parent:
+            _sync_directory(destination.parent)
     finally:
         temporary.unlink(missing_ok=True)
 
@@ -370,6 +374,7 @@ def prune_file(
     audit_policy: dict[str, Any] | None = None,
     during_scan: Callable[[], None] | None = None,
     after_commit: Callable[[], None] | None = None,
+    continuation_attempt: Path | None = None,
 ) -> FileResult:
     """Inspect or atomically replace one log, raising PruneError on unsafe input.
 
@@ -429,6 +434,10 @@ def prune_file(
                 # corpus-sized in-memory digest set. No directory orphan sweep.
                 sidecars = Sidecars(path, policy, number_type=_JSONNumber, now=now)
                 sidecars.blocked = sidecars.blocked or backup
+                if continuation_attempt is not None:
+                    # The verified Optimize original is a real recovery consumer.
+                    # Expire current diagnostic refs without unlinking its bytes.
+                    sidecars.retain_assets = True
                 sidecar_source_hash = _stream(
                     source,
                     None,
@@ -442,6 +451,10 @@ def prune_file(
                 sidecars.qualify(during_scan)
                 result.asset_files_planned = sidecars.planned_files
                 result.asset_bytes_planned = sidecars.planned_bytes
+                if sidecars.retain_assets:
+                    result.asset_files_held_recovery = sidecars.planned_files
+                    result.asset_bytes_held_recovery = sidecars.planned_bytes
+                    result.asset_files_planned = result.asset_bytes_planned = 0
                 source.seek(0)
             result.bytes_after = 0
             if apply:
@@ -498,6 +511,7 @@ def prune_file(
                     "files": sidecars.planned_files,
                     "bytes": sidecars.planned_bytes,
                     "notice": "Intent only. Metadata must be durably expired before unlink.",
+                    "retained_recovery": sidecars.retain_assets,
                 }
             _publish_receipt(
                 path,
@@ -523,9 +537,13 @@ def prune_file(
                     "notice": "Raw content may be permanently lost. Every present receipt blocks replay. "
                     "Prepared is not proof that source replacement completed.",
                 },
-                destination=path.with_name(path.name + f".prune-attempt-{uuid.uuid4()}.json")
-                if fence is not None
-                else None,
+                destination=(
+                    continuation_attempt
+                    if continuation_attempt is not None
+                    else path.with_name(path.name + f".prune-attempt-{uuid.uuid4()}.json")
+                    if fence is not None
+                    else None
+                ),
             )
             # Receipt durability is necessary, but does not waive final source checks.
             if sidecars is not None:

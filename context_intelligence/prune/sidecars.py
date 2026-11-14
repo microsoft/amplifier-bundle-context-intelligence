@@ -73,6 +73,7 @@ class Sidecars:
         self.manifest: Path | None = None
         self.planned_bytes = 0
         self.planned_files = 0
+        self.retain_assets = False
         # This adapter does not claim coverage over another canonical/recovery
         # consumer next to the events. Such owners require a separate inventory.
         self.protected = (
@@ -275,6 +276,8 @@ class Sidecars:
         """Metadata is already durable. A failure leaks bytes, never retries."""
         if self.manifest is None:
             raise PruneError("diagnostic manifest is not durable")
+        if self.retain_assets:
+            return  # Exact preserved Optimize original still reaches these bytes.
         log = self.manifest.with_suffix(".outcomes.jsonl")
         fd = os.open(log, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
         with os.fdopen(fd, "w", encoding="ascii") as journal:
