@@ -10,6 +10,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import importlib.metadata
+import importlib
 import io
 import json
 import os
@@ -31,12 +32,16 @@ pytestmark = pytest.mark.skipif(
 
 @pytest.fixture
 def actual(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[dict[str, Any]]:
-    from PIL import Image
-    from amplifier_foundation.session.media import MediaPolicy, SessionMediaStore
-    from amplifier_foundation.session.media_conversion_owner import (
-        BINDING,
-        CaptureMediaOwner,
-        diagnostic_image_ref,
+    # Optional candidate integration is deliberately not a production/dev
+    # dependency. Enabling this gate requires the exact real imports to succeed.
+    Image = importlib.import_module("PIL.Image")
+    media = importlib.import_module("amplifier_foundation.session.media")
+    conversion = importlib.import_module("amplifier_foundation.session.media_conversion_owner")
+    MediaPolicy, SessionMediaStore = media.MediaPolicy, media.SessionMediaStore
+    BINDING = conversion.BINDING
+    CaptureMediaOwner, diagnostic_image_ref = (
+        conversion.CaptureMediaOwner,
+        conversion.diagnostic_image_ref,
     )
 
     direct = json.loads(
@@ -174,7 +179,7 @@ def actual(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[dict[str
 
 
 def test_actual_store_ci_preview_stage_apply_resume(actual: dict[str, Any]) -> None:
-    from amplifier_foundation.session.media import MediaRefusal
+    MediaRefusal = importlib.import_module("amplifier_foundation.session.media").MediaRefusal
 
     path, operation, binding = actual["path"], actual["operation"], actual["binding"]
     assert preview(path, session_id="s1")["images"] == 1
@@ -211,7 +216,9 @@ def test_actual_store_ci_preview_stage_apply_resume(actual: dict[str, Any]) -> N
 def test_actual_binding_refuses_unqualified_reader_or_unknown_policy(
     actual: dict[str, Any], gate: str
 ) -> None:
-    from amplifier_foundation.session.media_conversion import Unsupported  # pyright: ignore[reportPrivateImportUsage]
+    Unsupported = importlib.import_module(
+        "amplifier_foundation.session.media_conversion"
+    ).Unsupported
 
     binding = actual["binding"]
     if gate == "reader":
