@@ -990,15 +990,21 @@ single-pass iterator of the same strict, bounded results in input order (includi
 duplicates). It reuses the outer two disk indexes and hashes both descriptors once
 at batch entry and once at normal batch exit after **full iterator exhaustion**,
 not per row; the outer context's normal final hash checks remain. Results are
-**provisional** until that batch context exits successfully. Under its existing
-stopped/flush and FD/path custody the host must spool bounded facts, then validate
-the whole batch before **any ACK**; it must not ACK while iterating. A caught
+**provisional** until **both the batch and outer verifier contexts exit normally
+with their final checks successful**. Under its existing stopped/flush and FD/path
+custody the host must spool bounded facts and complete its own final proof checks
+before **any ACK**; it must not ACK inside either context. A caught
 iteration failure, early normal exit, or iterator `close()` refuses the batch.
 Saved iterators cannot be used after batch/outer closure. Single lookups, nested
 batches and recursive iteration cannot reenter an active operation, including
 through `poll` or input-iterable callbacks. Empty input is valid only after it is
 exhausted and the final checks pass; it grants no expiry/ACK authority. No extra
 capture lock, owner import, receipt authority or group reachability is added.
+One verifier and its contexts/iterators belong to one thread. The same-thread
+nonreentrancy checks are not a thread-safety guarantee. Generation hashes do not
+replace stopped-writer custody or prove that a concurrent writer did not modify
+and restore bytes between checks. Finite memory/throughput samples are not fleet
+or asymptotic-performance guarantees.
 
 Do not wrap stage/apply in another CI capture maintenance lock: it is
 nonreentrant, and each guarded operation owns that lock/recovery check itself.
