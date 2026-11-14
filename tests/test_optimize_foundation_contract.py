@@ -28,7 +28,9 @@ from context_intelligence.optimize.capture import (
 )
 from context_intelligence.prune.coordination import PruneError, replay_guard
 
-FOUNDATION = "87d257e4057865688e9d0294ba170fe4ad1d1cec"
+# Selected owner integration candidate (Foundation PR484), not moving main or
+# upstream acceptance. Prior 87d group results remain attributed to that input.
+FOUNDATION = "496adcd887cc55d1e79a7539dd6235926ac737e7"
 pytestmark = pytest.mark.skipif(
     os.environ.get("CI_OPTIMIZE_FOUNDATION_CONTRACT") != "1",
     reason="requires explicitly installed exact Foundation candidate",
