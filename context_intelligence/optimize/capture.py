@@ -12,10 +12,11 @@ import copy
 import hashlib
 import json
 import tempfile
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Generator, Iterator
+from contextlib import AbstractContextManager, contextmanager
 from dataclasses import dataclass
-from pathlib import Path
 from itertools import zip_longest
+from pathlib import Path
 from typing import Any, BinaryIO, Protocol
 
 from ._json import CHUNK, FormatError, Index
@@ -48,6 +49,187 @@ class ImageOwner(Protocol):
     def acknowledge(self, manifest: Path, *, source: Path, sha256: str) -> None:
         """Reconcile local historical-file commit; NOT historical ingestion replay."""
         ...
+
+
+def _image_origin(
+    index: Index,
+    ordinal: int,
+    root: int,
+    image: int,
+    session_id: str,
+    source_sha256: str,
+    digest: str,
+    size: int,
+) -> dict[str, Any]:
+    event, data = _envelope(index, root, session_id)
+    return {
+        "session_id": session_id,
+        "source_sha256": source_sha256,
+        "ordinal": ordinal,
+        "event": event,
+        "image_offset": index.span(image)[0],
+        "sha256": digest,
+        "bytes": size,
+        "timestamp": index.bounded_value(index.child(root, "timestamp")),
+        "ts": index.bounded_value(index.child(root, "ts")),
+        "tool_call_id": index.bounded_value(index.child(data, "tool_call_id")),
+        "id": index.bounded_value(index.child(root, "id")),
+        "event_id": index.bounded_value(index.child(root, "event_id")),
+    }
+
+
+def _metadata(value: Any) -> str:
+    encoded = json.dumps(
+        value, sort_keys=True, ensure_ascii=True, allow_nan=False, separators=(",", ":")
+    )
+    if len(encoded) > 16384:
+        raise FormatError("oversized group source metadata")
+    return encoded
+
+
+@contextmanager
+def capture_group_sources(
+    source: BinaryIO,
+    *,
+    session_id: str,
+    source_sha256: str,
+    origin_for: Callable[[dict[str, Any]], dict[str, Any]],
+    complete_group_for: Callable[[dict[str, Any], dict[str, Any]], bool],
+    poll: Callable[[], None] | None = None,
+) -> Iterator[
+    Callable[[dict[str, Any], dict[str, Any]], AbstractContextManager[Iterator[dict[str, Any]]]]
+]:
+    """Bind complete known-Core image groups to one exact fenced CI generation.
+
+    The host owns the open descriptor, stopped-writer/recovery fence and explicit
+    original policy via ``origin_for`` (the SAME admission used by its injected
+    ImageOwner). ``complete_group_for`` must attest that this capture contains
+    the COMPLETE true original group, not just every image visible in this file.
+    No timestamps, expiry or group IDs are inferred here. Admission
+    is required for every known image: unknown policy/unsupported image refuses
+    the enumeration, not a silently incomplete group.
+
+    Positions/facts live in a private disk index, never a full-record/pixel list.
+    The returned ``group_sources_for(snapshot, original)`` context manager yields
+    one decoded temporary stream per advance, in original capture order. It must
+    be exhausted inside its context. It has no authority after this outer scope.
+    This is not a canonical/vendor parser, reader qualification or writer fence.
+    """
+
+    def check() -> None:
+        if poll:
+            poll()
+        source.seek(0)
+        digest = hashlib.sha256()
+        while block := source.read(CHUNK):
+            if poll:
+                poll()
+            digest.update(block)
+        if digest.hexdigest() != source_sha256:
+            raise FormatError("group source generation changed")
+
+    check()
+    source.seek(0)
+    with Index(source, poll) as index:
+        index.db.execute(
+            "CREATE TABLE group_source(position INTEGER PRIMARY KEY,encoded INTEGER,"
+            "mime TEXT,snapshot TEXT,original TEXT)"
+        )
+        for ordinal, root in index.roots():
+            for image in _images(index, root, session_id):
+                selected = _source(index, image)
+                if selected is None:
+                    raise FormatError("unsupported image prevents complete group enumeration")
+                mime, encoded = selected
+                digest, size = _decoded_image(index, encoded, None)
+                snapshot = _image_origin(
+                    index, ordinal, root, image, session_id, source_sha256, digest, size
+                )
+                original = origin_for(copy.deepcopy(snapshot))
+                if not isinstance(original, dict) or set(original) != {
+                    "kind",
+                    "session_id",
+                    "id",
+                    "created_at",
+                    "expires_at",
+                }:
+                    raise FormatError("complete original group policy is required")
+                index.db.execute(
+                    "INSERT INTO group_source VALUES(?,?,?,?,?)",
+                    (
+                        snapshot["image_offset"],
+                        encoded,
+                        mime,
+                        _metadata(snapshot),
+                        _metadata(original),
+                    ),
+                )
+        index.db.execute("CREATE INDEX original_group ON group_source(original,position)")
+        check()
+        active = True
+        busy = False
+
+        @contextmanager
+        def group_sources_for(
+            snapshot: dict[str, Any], original: dict[str, Any]
+        ) -> Iterator[Iterator[dict[str, Any]]]:
+            nonlocal busy
+            if not active or busy:
+                raise FormatError("group source context is inactive or already in use")
+            if (
+                not isinstance(snapshot, dict)
+                or not isinstance(original, dict)
+                or type(snapshot.get("image_offset")) is not int
+                or snapshot["image_offset"] < 0
+            ):
+                raise FormatError("selected image is not an exact CI position")
+            expected, group = _metadata(snapshot), _metadata(original)
+            if not index.db.execute(
+                "SELECT 1 FROM group_source WHERE position=? AND snapshot=? AND original=?",
+                (snapshot.get("image_offset"), expected, group),
+            ).fetchone():
+                raise FormatError("selected image is not in the exact admitted CI group")
+            if complete_group_for(copy.deepcopy(snapshot), copy.deepcopy(original)) is not True:
+                raise FormatError("complete original group is not attested by its owner")
+            check()
+            busy = True
+            exhausted = False
+
+            def members() -> Generator[dict[str, Any], None, None]:
+                nonlocal exhausted
+                for encoded, mime, encoded_snapshot in index.db.execute(
+                    "SELECT encoded,mime,snapshot FROM group_source WHERE original=? "
+                    "ORDER BY position",
+                    (group,),
+                ):
+                    if not active:
+                        raise FormatError("group source context is inactive")
+                    if poll:
+                        poll()
+                    item = json.loads(encoded_snapshot)
+                    with tempfile.TemporaryFile() as decoded:
+                        digest, size = _decoded_image(index, encoded, decoded)
+                        if (digest, size) != (item["sha256"], item["bytes"]):
+                            raise FormatError("group image changed during enumeration")
+                        decoded.seek(0)
+                        yield {"stream": decoded, "mime": mime, "origin": item}
+                exhausted = True
+
+            values = members()
+            try:
+                yield values
+                if not exhausted:
+                    raise FormatError("complete group enumeration was not consumed")
+                check()
+            finally:
+                values.close()
+                busy = False
+
+        try:
+            yield group_sources_for
+            check()
+        finally:
+            active = False
 
 
 def _envelope(index: Index, root: int, session_id: str) -> tuple[str, int]:
@@ -332,19 +514,19 @@ def rewrite_capture(
     """
     if media is not None and (manifest is None or output is None):
         raise ValueError("staging requires an output and manifest")
-    counts = dict(
-        records=0,
-        images=0,
-        unsupported=0,
-        protected_strings=0,
-        inline_bytes=0,
-        decoded_bytes=0,
-        new_asset_bytes=0,
-    )
+    counts = {
+        "records": 0,
+        "images": 0,
+        "unsupported": 0,
+        "protected_strings": 0,
+        "inline_bytes": 0,
+        "decoded_bytes": 0,
+        "new_asset_bytes": 0,
+    }
     with Index(source, poll) as index:
         index.db.execute("CREATE TABLE replacement(start INTEGER,end INTEGER,value BLOB)")
         for ordinal, root in index.roots():
-            event, data = _envelope(index, root, session_id)
+            _event, data = _envelope(index, root, session_id)
             counts["records"] += 1
             for field in ("raw", "raw_request", "raw_response", "result"):
                 if index.kind(index.child(data, field)) == "string":
@@ -364,20 +546,9 @@ def rewrite_capture(
                     if media is None:
                         continue
                     decoded.seek(0)
-                    origin = {
-                        "session_id": session_id,
-                        "source_sha256": source_sha256,
-                        "ordinal": ordinal,
-                        "event": event,
-                        "image_offset": start,
-                        "sha256": digest,
-                        "bytes": size,
-                        "timestamp": index.bounded_value(index.child(root, "timestamp")),
-                        "ts": index.bounded_value(index.child(root, "ts")),
-                        "tool_call_id": index.bounded_value(index.child(data, "tool_call_id")),
-                        "id": index.bounded_value(index.child(root, "id")),
-                        "event_id": index.bounded_value(index.child(root, "event_id")),
-                    }
+                    origin = _image_origin(
+                        index, ordinal, root, image, session_id, source_sha256, digest, size
+                    )
                     visibility = index.child(image, "visibility")
                     visibility_value = index.bounded_value(visibility)
                     staged = media.stage_image(decoded, mime=mime, origin=copy.deepcopy(origin))
