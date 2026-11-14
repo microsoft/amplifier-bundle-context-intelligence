@@ -18,7 +18,7 @@ import pytest
 
 from context_intelligence.optimize._json import CHUNK, FormatError
 from context_intelligence.optimize.capture import StagedImage, rewrite_capture, write_record_mapping
-from context_intelligence.optimize.positions import capture_image_verifier
+from context_intelligence.optimize.positions import CaptureImageVerifier, capture_image_verifier
 
 
 def png(red: int) -> bytes:
@@ -129,9 +129,7 @@ def stage(original: Path, installed: Path) -> OwnerSpy:
 
 
 @contextmanager
-def verifier(
-    original: Path, installed: Path, **kwargs: Any
-) -> Iterator[Callable[[dict[str, Any]], dict[str, Any]]]:
+def verifier(original: Path, installed: Path, **kwargs: Any) -> Iterator[CaptureImageVerifier]:
     with (
         original.open("rb") as before,
         installed.open("rb") as after,
@@ -569,4 +567,445 @@ def test_huge_original_and_protected_string_peak_below_four_mib(tmp_path: Path) 
     finally:
         tracemalloc.stop()
     print(f"position verifier peak: {peak} bytes")
+    assert peak < 4 * 1024 * 1024, peak
+
+
+@pytest.mark.parametrize("count", [0, 1, 64])
+def test_batch_hashes_constant_indexes_once_and_consumes_input_once(
+    captures: tuple[Path, Path, OwnerSpy], monkeypatch: pytest.MonkeyPatch, count: int
+) -> None:
+    from context_intelligence.optimize import positions
+
+    original, installed, owner = captures
+    hashes, indexes = [], []
+    actual_hash, actual_index = positions._check_hash, positions.Index
+
+    def counted_hash(source: BinaryIO, *args: Any) -> None:
+        hashes.append(source)
+        actual_hash(source, *args)
+
+    class CountingIndex(actual_index):
+        def __init__(self, source: BinaryIO, poll: Callable[[], None] | None = None):
+            indexes.append(source)
+            super().__init__(source, poll)
+
+    class Once:
+        def __init__(self) -> None:
+            self.iterations = 0
+            self.produced = 0
+
+        def __iter__(self) -> Iterator[dict[str, Any]]:
+            self.iterations += 1
+            assert self.iterations == 1
+            return self.generate()
+
+        def generate(self) -> Iterator[dict[str, Any]]:
+            for number in range(count):
+                # Each input is pulled only as the corresponding result is read.
+                assert self.produced == number
+                self.produced += 1
+                yield owner.origins[number % len(owner.origins)]
+
+    monkeypatch.setattr(positions, "_check_hash", counted_hash)
+    monkeypatch.setattr(positions, "Index", CountingIndex)
+    inputs = Once()
+    with verifier(original, installed) as read_selected:
+        assert isinstance(read_selected, CaptureImageVerifier)
+        assert len(hashes) == 4  # before + after indexing, both descriptors
+        with read_selected.read_many(inputs) as results:
+            assert inputs.produced == 0
+            assert len(hashes) == 6
+            for number in range(count):
+                result = next(results)
+                assert inputs.produced == number + 1
+                assert result["value"] == owner.replacements[number % len(owner.origins)]
+                # Result mutation must not mutate the file or the next result.
+                result["value"]["text"] = "caller-owned"
+            with pytest.raises(StopIteration):
+                next(results)
+            assert len(hashes) == 6  # no per-row checks, including input EOF
+        assert len(hashes) == 8  # final batch check, before any host ACK
+    assert len(hashes) == 10  # usual outer check
+    assert len(indexes) == 2
+    assert inputs.iterations == 1 and inputs.produced == count
+    assert hashes[::2] == [indexes[0]] * 5
+    assert hashes[1::2] == [indexes[1]] * 5
+
+
+def test_batch_reordered_duplicate_positions_null_absent_and_inline_are_not_ack_authority(
+    captures: tuple[Path, Path, OwnerSpy],
+) -> None:
+    original, installed, owner = captures
+    rows, old = read_rows(installed), read_rows(original)
+    rows[0]["data"]["result"]["content"][0] = None
+    rows[0]["data"]["result"]["content"][2] = old[0]["data"]["result"]["content"][2]
+    del rows[1]["data"]["raw_request"]
+    write_rows(installed, rows)
+    order = (3, 0, 2, 1, 0, 2)
+    with verifier(original, installed) as read_selected:
+        expected = [read_selected(owner.origins[position]) for position in order]
+        with read_selected.read_many(owner.origins[position] for position in order) as results:
+            for position, value in zip(order, expected, strict=True):
+                selected = next(results)
+                assert selected == value
+                assert set(selected) == {"status", "value", "path"}  # no ACK/expiry seal
+                if position == 3:
+                    assert selected["status"] == "absent"
+                elif position == 0:
+                    assert selected["status"] == "present" and selected["value"] is None
+                elif position == 1:
+                    assert selected["status"] == "present"
+                    assert selected["value"]["type"] == "image"  # not a diagnostic ref
+            with pytest.raises(StopIteration):
+                next(results)
+        # Batch exit does not consume the callable or change single-call semantics.
+        assert read_selected(owner.origins[0]) == expected[1]
+        with pytest.raises(FormatError, match="inactive"):
+            next(results)
+
+
+@pytest.mark.parametrize(
+    "when", ["unstarted", "partial", "last-without-eof", "close", "close-at-eof"]
+)
+def test_batch_early_normal_exit_or_close_never_certifies_exhaustion_and_clears_busy(
+    captures: tuple[Path, Path, OwnerSpy], when: str
+) -> None:
+    original, installed, owner = captures
+    with verifier(original, installed) as read_selected:
+        with pytest.raises(FormatError, match="fully exhausted|closed"):
+            with read_selected.read_many(iter(owner.origins)) as results:
+                if when == "partial":
+                    next(results)
+                elif when == "last-without-eof":
+                    for _ in owner.origins:
+                        next(results)
+                elif when == "close-at-eof":
+                    for _ in results:
+                        pass
+                    getattr(results, "close")()
+                elif when == "close":
+                    next(results)
+                    getattr(results, "close")()
+                    with pytest.raises(FormatError, match="closed"):
+                        next(results)
+        with pytest.raises(FormatError, match="inactive"):
+            next(results)
+        assert read_selected(owner.origins[0])["status"] == "present"
+        with read_selected.read_many(owner.origins[:1]) as again:
+            assert len(list(again)) == 1
+
+
+@pytest.mark.parametrize("fault", ["snapshot", "generator", "poll"])
+def test_batch_caught_late_failure_poisons_normal_exit(
+    captures: tuple[Path, Path, OwnerSpy], fault: str
+) -> None:
+    original, installed, owner = captures
+    armed = False
+
+    def poll() -> None:
+        if armed and fault == "poll":
+            raise RuntimeError("synthetic cancellation")
+
+    def snapshots() -> Iterator[dict[str, Any]]:
+        yield owner.origins[0]
+        if fault == "generator":
+            raise RuntimeError("synthetic input failure")
+        yield {**owner.origins[1], "sha256": "0" * 64} if fault == "snapshot" else owner.origins[1]
+
+    with verifier(original, installed, poll=poll) as read_selected:
+        with pytest.raises(FormatError, match="failed"):
+            with read_selected.read_many(snapshots()) as results:
+                assert next(results)["status"] == "present"
+                armed = True
+                with pytest.raises((FormatError, RuntimeError)):
+                    next(results)
+                armed = False
+                # A closed/failed input generator must not look like successful EOF.
+                with pytest.raises(FormatError, match="failed"):
+                    next(results)
+        armed = False
+        assert read_selected(owner.origins[0])["status"] == "present"
+
+
+@pytest.mark.parametrize("which", [0, 1])
+@pytest.mark.parametrize("when", ["entry", "iter", "middle", "last-read", "exhausted", "empty"])
+def test_batch_generation_drift_refuses_before_acceptance(
+    captures: tuple[Path, Path, OwnerSpy], which: int, when: str
+) -> None:
+    original, installed, owner = captures
+
+    def mutate() -> None:
+        with (original, installed)[which].open("ab") as changed:
+            changed.write(b" ")
+
+    class Inputs:
+        def __iter__(self) -> Iterator[dict[str, Any]]:
+            if when == "iter":
+                mutate()
+            return iter([] if when == "empty" else owner.origins)
+
+    accepted = False
+    with pytest.raises(FormatError, match="generation changed"):
+        with verifier(original, installed) as read_selected:
+            if when == "entry":
+                mutate()
+            with read_selected.read_many(Inputs()) as results:
+                if when == "middle":
+                    next(results)
+                    mutate()
+                if when == "last-read":
+                    for _ in owner.origins:
+                        next(results)
+                    mutate()
+                list(results)
+                if when in ("exhausted", "empty"):
+                    mutate()
+            accepted = True  # host may start considering ACK only here
+    assert not accepted
+
+
+@pytest.mark.parametrize("operation", ["single", "batch"])
+@pytest.mark.parametrize("boundary", ["iter", "next", "poll", "exit-poll"])
+def test_batch_reentrancy_refuses_and_cleanup_allows_reuse(
+    captures: tuple[Path, Path, OwnerSpy], operation: str, boundary: str
+) -> None:
+    original, installed, owner = captures
+    callback: Callable[[], None] | None = None
+
+    def poll() -> None:
+        if callback:
+            callback()
+
+    with verifier(original, installed, poll=poll) as read_selected:
+
+        def reenter() -> None:
+            if operation == "single":
+                read_selected(owner.origins[0])
+            else:
+                with read_selected.read_many([]):
+                    pytest.fail("reentrant batch admitted")
+
+        class Inputs:
+            def __iter__(self) -> Iterator[dict[str, Any]]:
+                if boundary == "iter":
+                    reenter()
+                return self.generate()
+
+            def generate(self) -> Iterator[dict[str, Any]]:
+                if boundary == "next":
+                    reenter()
+                yield owner.origins[0]
+
+        if boundary == "poll":
+            callback = reenter
+        with pytest.raises(FormatError, match="already in use"):
+            with read_selected.read_many(Inputs()) as results:
+                list(results)
+                if boundary == "exit-poll":
+                    callback = reenter
+        callback = None
+        assert read_selected(owner.origins[0])["status"] == "present"
+        with read_selected.read_many([]) as empty:
+            assert list(empty) == []
+
+
+@pytest.mark.parametrize("boundary", ["next", "poll"])
+def test_recursive_batch_next_caught_in_callback_still_poisons(
+    captures: tuple[Path, Path, OwnerSpy], boundary: str
+) -> None:
+    original, installed, owner = captures
+    callback: Callable[[], None] | None = None
+
+    def poll() -> None:
+        if callback:
+            callback()
+
+    def snapshots() -> Iterator[dict[str, Any]]:
+        if boundary == "next":
+            reenter()
+        yield owner.origins[0]
+
+    def reenter() -> None:
+        with pytest.raises(FormatError, match="already in use"):
+            next(results)
+
+    with verifier(original, installed, poll=poll) as read_selected:
+        with pytest.raises(FormatError, match="failed"):
+            with read_selected.read_many(snapshots()) as results:
+                if boundary == "poll":
+                    callback = reenter
+                with pytest.raises(FormatError, match="failed"):
+                    next(results)
+                callback = None
+        assert read_selected(owner.origins[0])["status"] == "present"
+
+
+def test_snapshot_is_canonical_before_poll_mutates_caller_dict_in_single_and_batch(
+    captures: tuple[Path, Path, OwnerSpy],
+) -> None:
+    original, installed, owner = captures
+    selected: dict[str, Any] | None = None
+
+    def poll() -> None:
+        if selected is not None:
+            selected.update(owner.origins[1])
+
+    with verifier(original, installed, poll=poll) as read_selected:
+        selected = dict(owner.origins[0])
+        assert read_selected(selected)["value"] == owner.replacements[0]
+        selected = dict(owner.origins[0])
+        with read_selected.read_many([selected]) as results:
+            # Entry hashing can mutate the dict: reset before the iterator reads it.
+            selected.update(owner.origins[0])
+            assert next(results)["value"] == owner.replacements[0]
+            with pytest.raises(StopIteration):
+                next(results)
+        selected = None
+
+
+def test_outer_exit_invalidates_escaped_batch_and_refuses_active_batch(
+    captures: tuple[Path, Path, OwnerSpy],
+) -> None:
+    original, installed, owner = captures
+    outer = verifier(original, installed)
+    read_selected = outer.__enter__()
+    scope = read_selected.read_many(owner.origins)
+    results = scope.__enter__()
+    assert next(results)["status"] == "present"
+    with pytest.raises(FormatError, match="already in use"):
+        outer.__exit__(None, None, None)
+    with pytest.raises(FormatError, match="inactive"):
+        next(results)
+    with pytest.raises(FormatError, match="inactive"):
+        scope.__exit__(None, None, None)
+    with pytest.raises(FormatError, match="inactive"):
+        with read_selected.read_many([]):
+            pytest.fail("closed outer verifier admitted batch")
+
+
+def test_batch_exception_exit_preserves_original_error_and_expires_iterator(
+    captures: tuple[Path, Path, OwnerSpy],
+) -> None:
+    original, installed, owner = captures
+    with verifier(original, installed) as read_selected:
+        with pytest.raises(RuntimeError, match="caller failure"):
+            with read_selected.read_many(owner.origins) as results:
+                next(results)
+                raise RuntimeError("caller failure")
+        with pytest.raises(FormatError, match="inactive"):
+            next(results)
+        assert read_selected(owner.origins[0])["status"] == "present"
+
+
+def test_single_lookup_poll_cannot_enter_batch_and_busy_clears(
+    captures: tuple[Path, Path, OwnerSpy],
+) -> None:
+    original, installed, owner = captures
+    callback: Callable[[], None] | None = None
+
+    def poll() -> None:
+        if callback:
+            callback()
+
+    with verifier(original, installed, poll=poll) as read_selected:
+
+        def reenter() -> None:
+            with read_selected.read_many([]):
+                pytest.fail("single lookup admitted a batch")
+
+        callback = reenter
+        with pytest.raises(FormatError, match="already in use"):
+            read_selected(owner.origins[0])
+        callback = None
+        with read_selected.read_many(owner.origins) as results:
+            assert len(list(results)) == len(owner.origins)
+
+
+def test_callback_stop_iteration_is_not_input_exhaustion(
+    captures: tuple[Path, Path, OwnerSpy],
+) -> None:
+    original, installed, owner = captures
+    armed = False
+
+    def poll() -> None:
+        if armed:
+            raise StopIteration
+
+    with verifier(original, installed, poll=poll) as read_selected:
+        with pytest.raises(FormatError, match="failed"):
+            with read_selected.read_many(owner.origins) as results:
+                next(results)
+                armed = True
+                # A consuming for-loop sees StopIteration as EOF. It is still
+                # not real input EOF and cannot validate the provisional batch.
+                assert list(results) == []
+                armed = False
+        assert read_selected(owner.origins[0])["status"] == "present"
+
+
+@pytest.mark.parametrize("hash_poll", [2, 3], ids=["original-hash", "installed-hash"])
+@pytest.mark.parametrize("empty", [False, True], ids=["selected", "empty"])
+def test_close_during_final_hash_poll_refuses_exhausted_batch(
+    captures: tuple[Path, Path, OwnerSpy], hash_poll: int, empty: bool
+) -> None:
+    original, installed, owner = captures
+    # Each actual descriptor hash has one chunk/poll, preceded by check()'s poll.
+    assert 0 < original.stat().st_size < CHUNK
+    assert 0 < installed.stat().st_size < CHUNK
+    armed, accepted = False, False
+    polls, closes = 0, 0
+
+    def poll() -> None:
+        nonlocal polls, closes
+        if not armed:
+            return
+        polls += 1
+        if polls == hash_poll:
+            getattr(results, "close")()
+            closes += 1
+            # Final hashing must keep the iterator inactive and owner busy.
+            with pytest.raises(FormatError, match="inactive"):
+                next(results)
+            with pytest.raises(FormatError, match="already in use"):
+                read_selected(owner.origins[0])
+
+    with verifier(original, installed, poll=poll) as read_selected:
+        with pytest.raises(FormatError, match="failed|closed"):
+            with read_selected.read_many([] if empty else owner.origins) as results:
+                assert len(list(results)) == (0 if empty else len(owner.origins))
+                armed = True
+            accepted = True  # no host ACK may become eligible after cancellation
+        armed = False
+        assert closes == 1 and polls == 3
+        assert not accepted
+        with pytest.raises(FormatError, match="inactive"):
+            next(results)
+        assert read_selected(owner.origins[0])["status"] == "present"
+
+
+def test_large_many_image_batch_streams_below_four_mib(tmp_path: Path) -> None:
+    original, installed = tmp_path / "original", tmp_path / "installed"
+    count = 1024
+    # Many actual canonical positions plus large protected strings: neither the
+    # batch nor either index may retain full records or all the returned nodes.
+    with original.open("wb") as output:
+        for number in range(count):
+            row = record(image(png(number % 256)), event_id=str(number))
+            row["data"]["result"]["output"] = "z" * 8192
+            output.write(json.dumps(row).encode() + b"\n")
+    owner = stage(original, installed)
+    assert len(owner.origins) == count
+    tracemalloc.start()
+    try:
+        with verifier(original, installed) as read_selected:
+            with read_selected.read_many(snapshot for snapshot in owner.origins) as results:
+                seen = 0
+                for selected in results:
+                    assert selected["value"] == owner.replacements[seen]
+                    seen += 1
+                assert seen == count
+        _, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+    print(f"batch position verifier peak ({count} images): {peak} bytes")
     assert peak < 4 * 1024 * 1024, peak

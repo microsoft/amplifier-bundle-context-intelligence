@@ -984,6 +984,22 @@ diagnostic reference to its selected manifest, maps, media closure and policy.
 An unchanged inline image is not a committed reference. These source-format
 checks neither establish original provenance nor authorize historical upload.
 
+The callable is a `CaptureImageVerifier`. For multiple selected manifest rows,
+`with read_selected.read_many(exact_original_snapshots) as results:` yields a
+single-pass iterator of the same strict, bounded results in input order (including
+duplicates). It reuses the outer two disk indexes and hashes both descriptors once
+at batch entry and once at normal batch exit after **full iterator exhaustion**,
+not per row; the outer context's normal final hash checks remain. Results are
+**provisional** until that batch context exits successfully. Under its existing
+stopped/flush and FD/path custody the host must spool bounded facts, then validate
+the whole batch before **any ACK**; it must not ACK while iterating. A caught
+iteration failure, early normal exit, or iterator `close()` refuses the batch.
+Saved iterators cannot be used after batch/outer closure. Single lookups, nested
+batches and recursive iteration cannot reenter an active operation, including
+through `poll` or input-iterable callbacks. Empty input is valid only after it is
+exhausted and the final checks pass; it grants no expiry/ACK authority. No extra
+capture lock, owner import, receipt authority or group reachability is added.
+
 Do not wrap stage/apply in another CI capture maintenance lock: it is
 nonreentrant, and each guarded operation owns that lock/recovery check itself.
 The host's real stopped-writer/flush boundary and exact original stream must

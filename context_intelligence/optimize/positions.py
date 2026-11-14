@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import re
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterable, Iterator
 from contextlib import contextmanager
 from itertools import zip_longest
 from typing import Any, BinaryIO
@@ -96,8 +96,14 @@ def _path(index: Index, root: int, image: int) -> tuple[str | int, ...]:
     return tuple(reversed(parts))
 
 
-def _validate_snapshot(snapshot: dict[str, Any], session_id: str, source_sha256: str) -> str:
-    if not isinstance(snapshot, dict) or set(snapshot) != _SNAPSHOT_FIELDS:
+def _validate_snapshot(
+    snapshot: dict[str, Any], session_id: str, source_sha256: str
+) -> tuple[int, str]:
+    if not isinstance(snapshot, dict):
+        raise FormatError("selected image is not an exact CI snapshot")
+    # Retain canonical scalar facts, not a caller-owned dict across poll callbacks.
+    snapshot = dict(snapshot)
+    if set(snapshot) != _SNAPSHOT_FIELDS:
         raise FormatError("selected image is not an exact CI snapshot")
     for key in ("ordinal", "image_offset", "bytes"):
         minimum = 0 if key == "image_offset" else 1
@@ -109,7 +115,7 @@ def _validate_snapshot(snapshot: dict[str, Any], session_id: str, source_sha256:
             raise FormatError("selected image is not an exact CI snapshot")
     if snapshot["session_id"] != session_id or snapshot["source_sha256"] != source_sha256:
         raise FormatError("selected image is not in this CI generation")
-    return _metadata(snapshot)
+    return snapshot["image_offset"], _metadata(snapshot)
 
 
 def _installed_value(
@@ -147,6 +153,159 @@ def _installed_value(
     return {"status": "present", "value": after.bounded_value(new, _LIMIT), "path": path}
 
 
+class _ImageBatch(Iterator[dict[str, Any]]):
+    """One bounded provisional result at a time; only input EOF means exhaustion."""
+
+    def __init__(self, owner: CaptureImageVerifier, snapshots: Iterator[dict[str, Any]]) -> None:
+        self._owner = owner
+        self._snapshots = snapshots
+        self._active = True
+        self._advancing = False
+        self._exhausted = False
+        self._failed = False
+
+    def __iter__(self) -> _ImageBatch:
+        return self
+
+    def _healthy(self) -> None:
+        if not self._active or not self._owner._active:
+            raise FormatError("image batch context is inactive")
+        if self._failed:
+            raise FormatError("image batch failed or was closed")
+
+    def __next__(self) -> dict[str, Any]:
+        self._healthy()
+        if self._advancing:
+            self._failed = True
+            raise FormatError("image batch iterator is already in use")
+        if self._exhausted:
+            raise StopIteration
+        self._advancing = True
+        try:
+            try:
+                snapshot = next(self._snapshots)
+            except StopIteration:
+                self._healthy()
+                self._exhausted = True
+            else:
+                position, expected = _validate_snapshot(
+                    snapshot, self._owner._session_id, self._owner._source_sha256
+                )
+                if self._owner._poll:
+                    self._owner._poll()
+                self._healthy()
+                result = self._owner._lookup(position, expected)
+                self._healthy()
+                return result
+        except BaseException:
+            # Catching a failed next() in the caller cannot accept a partial batch.
+            self._failed = True
+            raise
+        finally:
+            self._advancing = False
+        raise StopIteration
+
+    def close(self) -> None:
+        """Cancel, never certify exhaustion, even if the caller catches errors."""
+        self._failed = True
+
+    def _finish(self) -> None:
+        self._healthy()
+        if not self._exhausted:
+            raise FormatError("image batch iterator was not fully exhausted")
+
+
+class CaptureImageVerifier:
+    """Scoped callable yielded by :func:`capture_image_verifier`.
+
+    ``verifier(snapshot)`` retains per-lookup generation checks.
+    ``with verifier.read_many(snapshots) as results`` amortizes those checks.
+    Neither operation supplies diagnostic-reference, expiry or ACK authority.
+    """
+
+    def __init__(
+        self,
+        before: Index,
+        after: Index,
+        session_id: str,
+        source_sha256: str,
+        check: Callable[[], None],
+        poll: Callable[[], None] | None,
+    ) -> None:
+        self._before = before
+        self._after = after
+        self._session_id = session_id
+        self._source_sha256 = source_sha256
+        self._check = check
+        self._poll = poll
+        self._active = True
+        self._busy = False
+
+    def _acquire(self) -> None:
+        if not self._active or self._busy:
+            raise FormatError("image verifier context is inactive or already in use")
+        self._busy = True
+
+    def _lookup(self, position: int, expected: str) -> dict[str, Any]:
+        row = self._before.db.execute(
+            "SELECT ordinal,root,image FROM image_position WHERE position=? AND snapshot=?",
+            (position, expected),
+        ).fetchone()
+        if row is None:
+            raise FormatError("selected image is not an exact admitted CI image")
+        ordinal, root, image = row
+        new_root = self._after.db.execute(
+            "SELECT node FROM record WHERE ordinal=?", (ordinal,)
+        ).fetchone()[0]
+        return _installed_value(
+            self._before, self._after, root, new_root, _path(self._before, root, image)
+        )
+
+    def __call__(self, snapshot: dict[str, Any]) -> dict[str, Any]:
+        self._acquire()
+        try:
+            position, expected = _validate_snapshot(snapshot, self._session_id, self._source_sha256)
+            self._check()
+            result = self._lookup(position, expected)
+            self._check()
+            return result
+        finally:
+            self._busy = False
+
+    @contextmanager
+    def read_many(self, snapshots: Iterable[dict[str, Any]]) -> Iterator[Iterator[dict[str, Any]]]:
+        """Stream ordered results, PROVISIONAL until this context exits normally.
+
+        The host must retain its stopped/flush and FD/path custody, spool bounded
+        facts and perform NO ACK until the iterator is fully exhausted AND this
+        context exits normally after its final generation check. Both descriptors
+        are hashed once on entry and once on successful exit, never per item.
+        Empty input is valid only when exhausted; it supplies no expiry authority.
+
+        A failed next(), even if caught, poisons the batch. Early normal exit or
+        close() refuses rather than certifying exhaustion. Saved iterators expire
+        on batch/outer exit. No input/result list or additional lock is retained.
+        """
+        self._acquire()
+        batch = None
+        try:
+            self._check()
+            # iter() itself can invoke caller code: it too runs under busy custody.
+            batch = _ImageBatch(self, iter(snapshots))
+            yield batch
+            batch._finish()
+            batch._active = False
+            self._check()
+            # A final hash poll may cancel through the public close() method.
+            # Keep iteration inactive, but never accept that cancelled batch.
+            if batch._failed:
+                raise FormatError("image batch failed or was closed")
+        finally:
+            if batch is not None:
+                batch._active = False
+            self._busy = False
+
+
 @contextmanager
 def capture_image_verifier(
     original: BinaryIO,
@@ -156,7 +315,7 @@ def capture_image_verifier(
     source_sha256: str,
     installed_sha256: str,
     poll: Callable[[], None] | None = None,
-) -> Iterator[Callable[[dict[str, Any]], dict[str, Any]]]:
+) -> Iterator[CaptureImageVerifier]:
     """Yield ``read_selected(exact_original_origin)`` for one fenced generation.
 
     An origin is the EXACT snapshot emitted by ``rewrite_capture`` /
@@ -181,8 +340,13 @@ def capture_image_verifier(
 
     Two disk indexes are opened once per context; image bytes are hashed one at
     a time without full-record/string/pixel lists. Both descriptor hashes are
-    checked before/after indexing, each lookup and normal context exit. The host
-    owns FD/path binding and writer exclusion; hash checks do not replace them.
+    checked before/after indexing, each single lookup and normal context exit.
+    ``read_selected.read_many(snapshots)`` instead checks once at batch entry and
+    once after full exhaustion on normal batch exit. Its ordered bounded results
+    are PROVISIONAL until that exit succeeds; spool facts, never ACK while inside
+    the batch. See ``CaptureImageVerifier.read_many`` for cancellation/failure
+    semantics. The host owns FD/path binding and writer exclusion; hashes do not
+    replace them.
     Descriptors are borrowed, seeked and never closed. The callable expires with
     this scope and is nonreentrant (including through ``poll``).
     """
@@ -229,34 +393,13 @@ def capture_image_verifier(
                     (snapshot["image_offset"], ordinal, root, image, _metadata(snapshot)),
                 )
         check()
-        active, busy = True, False
-
-        def read_selected(snapshot: dict[str, Any]) -> dict[str, Any]:
-            nonlocal busy
-            if not active or busy:
-                raise FormatError("image verifier context is inactive or already in use")
-            busy = True
-            try:
-                expected = _validate_snapshot(snapshot, session_id, source_sha256)
-                check()
-                row = before.db.execute(
-                    "SELECT ordinal,root,image FROM image_position WHERE position=? AND snapshot=?",
-                    (snapshot["image_offset"], expected),
-                ).fetchone()
-                if row is None:
-                    raise FormatError("selected image is not an exact admitted CI image")
-                ordinal, root, image = row
-                new_root = after.db.execute(
-                    "SELECT node FROM record WHERE ordinal=?", (ordinal,)
-                ).fetchone()[0]
-                result = _installed_value(before, after, root, new_root, _path(before, root, image))
-                check()
-                return result
-            finally:
-                busy = False
-
+        read_selected = CaptureImageVerifier(before, after, session_id, source_sha256, check, poll)
         try:
             yield read_selected
-            check()
+            read_selected._acquire()
+            try:
+                check()
+            finally:
+                read_selected._busy = False
         finally:
-            active = False
+            read_selected._active = False
