@@ -1,6 +1,6 @@
 ---
 name: context-intelligence-derived-metrics
-description: 'Structurally alike rows, differing intent: interpretive joins, e.g. transport × child skills.'
+description: 'Use when a graph query returns structurally-identical rows hiding different intent — many delegations all "none/conversation", look-alike sessions, identical tool calls.'
 license: MIT
 metadata:
   version: "1.0.0"

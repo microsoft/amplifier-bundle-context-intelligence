@@ -1,6 +1,6 @@
 ---
 name: context-intelligence-session-navigation
-description: 'Workspace-local JSONL discovery/events/tools/errors/captures; no graph prerequisite.'
+description: 'Use for workspace-scoped local session discovery and event, tool, error, or capture inspection in JSONL files, independent of graph availability.'
 version: 0.2.0
 license: MIT
 ---

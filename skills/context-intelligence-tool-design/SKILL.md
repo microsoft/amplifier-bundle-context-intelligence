@@ -1,7 +1,7 @@
 ---
 name: context-intelligence-tool-design
 version: 1.0.0
-description: 'Cheapest sufficient signal strategy/primitive: deterministic/probabilistic/LLM/hybrid.'
+description: 'Use when selecting a detection strategy and implementation primitive for a context-intelligence signal.'
 user-invocable: false
 allowed-tools: read_file, glob, grep, delegate, load_skill, todo
 model_role: reasoning

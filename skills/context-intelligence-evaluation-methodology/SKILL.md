@@ -1,7 +1,7 @@
 ---
 name: context-intelligence-evaluation-methodology
 version: 1.0.0
-description: 'Signal metrics: quality/efficiency/efficacy, precursors not artifact metrics, A/B, statistical N, data fidelity.'
+description: 'Use when deciding how to measure a context-intelligence tool signal.'
 user-invocable: false
 allowed-tools: read_file, glob, grep, delegate, load_skill, todo
 model_role: reasoning
