@@ -50,26 +50,31 @@ if not __debug__:
 
 
 def installed(name: str, revision: str | None = None) -> dict:
-    """Verify noneditable installation; retain actual installed bytes, not a claimed SHA."""
-    dist = metadata.distribution(name)
-    direct = json.loads(dist.read_text("direct_url.json") or "{}")
+    """Require independent build references and RECORD joins, not self-inventory."""
+    from provenance import installed as verify_installed, load_reference
+
+    reference, _ = load_reference()
     if revision is not None:
-        assert direct.get("vcs_info", {}).get("commit_id") == revision
-        assert not direct.get("dir_info", {}).get("editable")
-    files = {}
-    for item in dist.files or []:
-        if str(item).endswith((".py", ".so", ".pyd")):
-            path = Path(dist.locate_file(item))
-            files[str(item)] = hashlib.sha256(path.read_bytes()).hexdigest()
-    assert files
-    return {"package": name, "version": dist.version, "direct_url": direct, "files": files}
+        assert reference["distributions"][name]["revision"] == revision
+    return verify_installed(name, reference)
 
 
 def preflight() -> dict:
-    hook = installed("amplifier-module-hook-context-intelligence", CI_REVISION)
-    library = installed("amplifier-bundle-context-intelligence", CI_REVISION)
-    core = installed("amplifier-core")
-    pillow = installed("Pillow")
+    from provenance import verify_group, join_loaded
+
+    verified, proof = verify_group(
+        [
+            "amplifier-module-hook-context-intelligence",
+            "amplifier-bundle-context-intelligence",
+            "amplifier-core",
+            "Pillow",
+        ]
+    )
+    hook = verified["amplifier-module-hook-context-intelligence"]
+    library = verified["amplifier-bundle-context-intelligence"]
+    core, pillow = verified["amplifier-core"], verified["Pillow"]
+    assert hook["direct_url"]["vcs_info"]["commit_id"] == CI_REVISION
+    assert library["direct_url"]["vcs_info"]["commit_id"] == CI_REVISION
     assert core["version"] == "2.0.2" and pillow["version"] == "13.0.0"
     # These are not dependencies of the hook. Do not silently qualify with a host CLI.
     for name in ("amplifier-foundation", "amplifier-app-cli"):
@@ -80,15 +85,31 @@ def preflight() -> dict:
         raise ValueError("unexpected host application dependency")
     from amplifier_core.models import ToolResult
     from amplifier_core import _engine
+    import amplifier_module_hook_context_intelligence
+    from amplifier_module_hook_context_intelligence.handlers import logging_handler
+    import context_intelligence.capture_media
+    import PIL.Image
 
     assert "content" in ToolResult.model_fields
     assert _engine.__version__ == "2.0.2"
+    proof["loaded_modules"] = join_loaded(
+        list(verified.values()),
+        [
+            "amplifier_core.models",
+            "amplifier_core._engine",
+            PIL.Image.__name__,
+            amplifier_module_hook_context_intelligence.__name__,
+            logging_handler.__name__,
+            context_intelligence.capture_media.__name__,
+        ],
+    )
     return {
         "hook": hook,
         "library": library,
         "core": core,
         "pillow": pillow,
         "native_core_version": _engine.__version__,
+        "proof": proof,
     }
 
 
@@ -331,7 +352,10 @@ async def hook_case(name: str, root: Path, token: str) -> dict:
         for e in metadata.entry_points(group="amplifier.modules")
         if e.name == "hook-context-intelligence"
     )
-    cleanup = await entry.load()(coordinator, config)
+    assert entry.value == "amplifier_module_hook_context_intelligence:mount"
+    loaded_mount = entry.load()
+    assert loaded_mount is module.mount
+    cleanup = await loaded_mount(coordinator, config)
     requests, responses, outcomes, queued = [], [], [], []
     capture = LogCapture(pixels, (token,))
     logger = logging.getLogger(module.__name__)
@@ -431,8 +455,24 @@ async def evaluate(root: Path, report: dict, token: str) -> None:
     report["installed"] = preflight()
     server = json.loads(Path("/backend-state/qualification-server.json").read_bytes())
     assert server["direct_url"]["vcs_info"]["commit_id"] == SERVER_REVISION
+    from provenance import load_reference, join_loaded
+
+    reference, reference_hash = load_reference()
+    expected = reference["distributions"]["context-intelligence-server"]
+    # Twin independently derived this server source manifest in the build's
+    # reference stage; server runtime receipt must join that same payload.
+    assert server["reference_sha256"] == reference_hash
+    assert server["files"] == expected["files"]
+    assert server["record_verified"] and server["independent_payload_verified"]
+    assert server["reference_input_sha256"] == expected["input_sha256"]
+    assert server["harness"] == reference["harness"]
+    assert "context_intelligence_server.main" in server["loaded_modules"]
+    for module in server["loaded_modules"].values():
+        relative = str(Path(module["file"]).relative_to(server["site_root"]))
+        assert expected["files"][relative] == module["sha256"]
     report["server_installation"] = server
-    checks["installed_sources"] = True
+    # Remains false until the actual hook path has executed and loaded modules
+    # have been rejoined to verified payloads below.
     async with httpx.AsyncClient(
         base_url=SERVER, timeout=5, trust_env=False, headers={"Authorization": "Bearer " + token}
     ) as client:
@@ -590,6 +630,16 @@ async def evaluate(root: Path, report: dict, token: str) -> None:
         report["local_state_hashes"] = scan(root, pixels, (token,))
         report["backend_state_hashes"] = scan(Path("/backend-state"), pixels, (token,))
         checks["payload_free_diagnostics"] = True
+        final = preflight()
+        report["final_loaded_modules"] = join_loaded(
+            [final[key] for key in ("hook", "library", "core", "pillow")],
+            [
+                "amplifier_module_hook_context_intelligence.handlers.logging_handler",
+                "context_intelligence.capture_media",
+                "amplifier_core._engine",
+            ],
+        )
+        checks["installed_sources"] = True
 
 
 def parser() -> argparse.ArgumentParser:
@@ -640,6 +690,7 @@ def main(argv=None) -> int:
         ],
     }
     try:
+        preflight()  # verify before any Core/Pillow fixture imports or emission
         report["core_wire_probe"] = asyncio.run(core_wire_probe())
         asyncio.run(asyncio.wait_for(evaluate(root, report, token), timeout=90))
         report["execution"] = "completed"
