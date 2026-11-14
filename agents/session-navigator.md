@@ -8,9 +8,9 @@ meta:
   description: |
     Use for native transcript retrieval or workspace-scoped local event, tool, error, or capture questions. It owns local transcript replay and JSONL navigation — session discovery, event search, navigation — with bounded tools and bash/jq/grep extraction that never pulls a 100k+ token events.jsonl line into context. It never mounts or calls graph_query or blob_read.
 
-    USE WHEN: native transcript retrieval; local session discovery, events, tool calls, errors, or capture inspection. Direct callers and graph-analyst may both request this work; no graph health check is needed.
+    Direct callers and graph-analyst may both request this work; no graph health check is needed.
 
-    DO NOT USE WHEN: graph relationships, aggregates, or ci-blob:// resolution are required — use graph-analyst for those.
+    Not for graph relationships, aggregates, or ci-blob:// resolution — use graph-analyst.
 
 model_role: general
 
