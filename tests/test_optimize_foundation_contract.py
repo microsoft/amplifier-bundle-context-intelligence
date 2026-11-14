@@ -297,6 +297,57 @@ def test_actual_binding_refuses_unqualified_reader_or_unknown_policy(
     assert actual["path"].read_bytes() == actual["original"]
 
 
+@pytest.mark.parametrize("acknowledged", [False, True])
+def test_actual_group_resume_after_interrupted_checkpoint(
+    actual: dict[str, Any], monkeypatch: pytest.MonkeyPatch, acknowledged: bool
+) -> None:
+    """Reconcile real replacement with pre-/post-ACK uncertainty, without renaming again."""
+    operations = importlib.import_module("context_intelligence.optimize.operations")
+    path, operation, binding = actual["path"], actual["operation"], actual["binding"]
+    stage(path, operation, session_id="s1", media=binding, writers_stopped=True)
+    acknowledge = binding.acknowledge
+
+    def interrupted(manifest: Path, *, source: Path, sha256: str) -> None:
+        if acknowledged:
+            acknowledge(manifest, source=source, sha256=sha256)
+        raise OSError("synthetic checkpoint acknowledgement interrupted")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(binding, "acknowledge", interrupted)
+        with pytest.raises(OSError, match="acknowledgement interrupted"):
+            apply(operation, media=binding, writers_stopped=True)
+    installed = path.read_bytes()
+    identity = path.stat()
+    assert installed != actual["original"]
+    assert json.loads((operation / "journal.json").read_bytes())["state"] == "replaced"
+    assert len(actual["checkpoint_calls"]) == int(acknowledged)
+    permanent = path.with_name(path.name + ".prune-receipt.json").read_bytes()
+    manifest_before = (operation / "assets.jsonl").read_bytes()
+    mapping_before = (operation / "records.jsonl").read_bytes()
+
+    def no_second_replace(*_args: Any, **_kwargs: Any) -> None:
+        pytest.fail("resumed checkpoint must not replay source replacement")
+
+    monkeypatch.setattr(operations, "_replace_candidate", no_second_replace)
+    result = resume(operation, media=binding, writers_stopped=True)
+    assert result["state"] == "verified"
+    assert len(actual["checkpoint_calls"]) == int(acknowledged) + 1
+    assert path.stat().st_ino == identity.st_ino and path.read_bytes() == installed
+    assert path.with_name(path.name + ".prune-receipt.json").read_bytes() == permanent
+    assert (operation / "original").read_bytes() == actual["original"]
+    assert (operation / "assets.jsonl").read_bytes() == manifest_before
+    assert (operation / "records.jsonl").read_bytes() == mapping_before
+    for block, pixels in zip(
+        json.loads(installed)["data"]["result"]["content"],
+        (actual["pixels"], actual["second_pixels"]),
+        strict=True,
+    ):
+        ref = actual["read_ref"](block)
+        assert ref["provenance"]["expires_at"] == actual["expires_at"]
+        with actual["store"].resolve_ref(ref) as binary:
+            assert binary.read() == pixels
+
+
 def test_actual_checkpoint_acknowledges_selected_installed_refs_only(
     actual: dict[str, Any],
 ) -> None:

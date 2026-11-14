@@ -954,6 +954,22 @@ hydrates pixels for history/search, or calls historical ingestion. Unknown sourc
 policy must refuse; original screenshot TTL must never renew on conversion.
 Qualify the actual owner implementation before enabling a host conversion.
 
+For a multi-image original, `capture_group_sources` in
+`context_intelligence.optimize.capture` supplies a bounded
+`group_sources_for(snapshot, original)` callback to the injected group owner.
+Its open descriptor and `source_sha256` must identify the exact fenced original
+generation. The host supplies the same explicit `origin_for(snapshot)` policy to
+both adapters, plus `complete_group_for(snapshot, original)` attesting the
+**complete original group**, not merely all images visible in that capture.
+Equal original provenance selects known structured images across records in
+source-position order; no call identity, expiry, echo deduplication or missing
+group membership is inferred. Unknown policy or unsupported members refuse.
+The callback is valid only inside its outer context and yields one decoded
+temporary stream at a time; consumers must exhaust each group within its context.
+Publication of a complete group does not acknowledge all its members as installed:
+the diagnostic checkpoint verifier must join each selected reference to its exact
+installed position and acknowledge only that verified reachability.
+
 Stage preserves an exact original generation, candidate, paged asset manifest and
 old/new record-address mapping in a private sibling operation directory. Apply
 requires explicit stopped writers, existing capture/recovery guards and unchanged
