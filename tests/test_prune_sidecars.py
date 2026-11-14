@@ -491,3 +491,42 @@ def test_post_manifest_substitution_or_metadata_appearance_refuses(tmp_path, fau
     with patch.object(storage, "_publish_receipt", side_effect=changed):
         result = operations.prune_file(path, request(path), now=NOW)
     assert result.status == "error" and pixel.exists() and path.read_bytes() == original
+
+
+def test_unselected_nested_descriptors_and_markers_remain_exact_spans(tmp_path):
+    pixel, ref = asset(tmp_path)
+    _, held = asset(tmp_path, b'{"retained_response":true}')
+    # Request event's raw_response ref is not selected and must remain exact.
+    held_bytes = (
+        json.dumps(held, separators=(", ", " : "))
+        .encode()
+        .replace(b'"redacted"', b'"red\\u0061cted"')
+    )
+    prior = (
+        b'"raw_response" : { "v":1, "sha256":"'
+        + held["sha256"].encode()
+        + b'", "bytes":'
+        + str(held["bytes"]).encode()
+        + b', "expired_at":"2026-01-01T00:00:00+00:00", "reason":"ret\\u0065ntion" }'
+    )
+    body = (
+        b'{"event":"llm:request","timestamp":"'
+        + OLD.encode()
+        + b'","data":{"provider_payloads":{"raw":'
+        + json.dumps(ref).encode()
+        + b',"raw_response" : '
+        + held_bytes
+        + b'},"provider_payloads_expired":{'
+        + prior
+        + b'},"keep":1.000}}\n'
+    )
+    # An existing marker with the SAME live field is intentionally protected.
+    # Use a prior `raw_request` marker instead to prove unselected spelling.
+    body = body.replace(prior, prior.replace(b'"raw_response"', b'"raw_request"'))
+    prior = prior.replace(b'"raw_response"', b'"raw_request"')
+    path = tmp_path / "events.jsonl"
+    path.write_bytes(body)
+    result = operations.prune_file(path, request(path), now=NOW)
+    assert result.status == "pruned" and not pixel.exists(), result.reason
+    changed = path.read_bytes()
+    assert held_bytes in changed and prior in changed and b'"keep":1.000' in changed

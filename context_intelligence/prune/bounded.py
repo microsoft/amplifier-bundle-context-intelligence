@@ -50,6 +50,34 @@ def _projection(index: Index, root: int) -> dict[str, Any]:
     return record
 
 
+def _members(
+    index: Index, node: int, output: BinaryIO, old: dict[str, Any], new: dict[str, Any]
+) -> None:
+    """Preserve every unselected descriptor/marker member as its original span."""
+    output.write(b"{")
+    emitted = set()
+    for key, start, end in index.db.execute(
+        "SELECT key,member_start,end FROM node WHERE parent=? ORDER BY start", (node,)
+    ):
+        if key not in new:
+            continue
+        if emitted:
+            output.write(b",")
+        if key in old and old[key] == new[key]:
+            _copy(index.source, output, start, end)
+        else:
+            output.write(json.dumps(key).encode() + b":")
+            output.write(json.dumps(new[key], ensure_ascii=True, allow_nan=False).encode())
+        emitted.add(key)
+    for key in new.keys() - emitted:
+        if emitted:
+            output.write(b",")
+        output.write(json.dumps(key).encode() + b":")
+        output.write(json.dumps(new[key], ensure_ascii=True, allow_nan=False).encode())
+        emitted.add(key)
+    output.write(b"}")
+
+
 def _data(
     index: Index, node: int, output: BinaryIO, old: dict[str, Any], new: dict[str, Any]
 ) -> None:
@@ -69,7 +97,9 @@ def _data(
             key
         ):
             output.write(json.dumps(key).encode() + b":")
-            output.write(json.dumps(new[key], ensure_ascii=True, allow_nan=False).encode())
+            child = index.child(node, key)
+            assert child is not None
+            _members(index, child, output, old.get(key, {}), new[key])
         else:
             _copy(index.source, output, member, finish)
     for key in ("provider_payloads", "provider_payloads_expired"):
