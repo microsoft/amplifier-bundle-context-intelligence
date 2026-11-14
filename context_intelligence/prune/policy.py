@@ -72,32 +72,92 @@ def event_timestamp(record: dict[str, Any]) -> datetime | None:
 class Policy:
     cutoff: datetime | None = None
     include_responses: bool = False
+    diagnostic_sidecars: bool = False
+    response_cutoff: datetime | None = None
 
     def __post_init__(self) -> None:
         if type(self.include_responses) is not bool:
             raise ValueError("include_responses must be a boolean")
+        if type(self.diagnostic_sidecars) is not bool:
+            raise ValueError("diagnostic_sidecars must be a boolean")
         if self.cutoff is not None and self.cutoff.utcoffset() is None:
             raise ValueError("cutoff must be timezone-aware")
+        if self.response_cutoff is not None:
+            if not self.include_responses:
+                raise ValueError("response_cutoff requires include_responses")
+            if self.response_cutoff.utcoffset() is None:
+                raise ValueError("response_cutoff must be timezone-aware")
 
 
-def prune_record(record: dict[str, Any], policy: Policy) -> tuple[dict[str, Any], bool]:
+def diagnostic_fields(record: dict[str, Any], policy: Policy) -> tuple[tuple[str, ...], bool]:
+    """Exact event/direction adapter. Never infer direction from arbitrary fields."""
+    event = record.get("event")
+    if event == "llm:request":
+        fields = ("raw", "raw_request") if policy.diagnostic_sidecars else ("raw",)
+        cutoff = policy.cutoff
+    elif event == "llm:response" and policy.include_responses:
+        fields = ("raw", "raw_response") if policy.diagnostic_sidecars else ("raw",)
+        cutoff = policy.response_cutoff if policy.response_cutoff is not None else policy.cutoff
+    else:
+        return (), False
+    if cutoff is not None:
+        timestamp = event_timestamp(record)
+        if timestamp is None:
+            return (), True
+        if timestamp >= cutoff:
+            return (), False
+    return fields, False
+
+
+def prune_record(
+    record: dict[str, Any], policy: Policy, *, sidecars: Any = None
+) -> tuple[dict[str, Any], bool]:
     """Return unchanged identity or a detached replacement; never mutate input.
 
     A raw dictionary with ANY $blob_ref key is retained, even if unrecognized:
     deleting a retrieval reference saves negligible bytes, not its remote blob.
     """
-    targets = ("llm:request", "llm:response") if policy.include_responses else ("llm:request",)
     data = record.get("data")
-    if record.get("event") not in targets or not isinstance(data, dict) or "raw" not in data:
+    if not isinstance(data, dict):
         return record, False
-    if isinstance(data["raw"], dict) and "$blob_ref" in data["raw"]:
+    if not policy.diagnostic_sidecars and (
+        "raw" not in data or (isinstance(data["raw"], dict) and "$blob_ref" in data["raw"])
+    ):
         return record, False
-    if policy.cutoff is not None:
-        timestamp = event_timestamp(record)
-        if timestamp is None:
-            return record, True
-        if timestamp >= policy.cutoff:
-            return record, False
+    # Preserve the original undated accounting contract for ordinary raw-only work.
+    keys = ("raw", "raw_request", "raw_response") if policy.diagnostic_sidecars else ("raw",)
+    if not any(key in data for key in keys) and not (
+        sidecars is not None and "provider_payloads" in data
+    ):
+        return record, False
+    fields, undated = diagnostic_fields(record, policy)
+    if not fields:
+        return record, undated
+    removed = {
+        key
+        for key in fields
+        if key in data and not (isinstance(data[key], dict) and "$blob_ref" in data[key])
+    }
+    new_data = {key: value for key, value in data.items() if key not in removed}
+    refs = data.get("provider_payloads")
+    if sidecars is not None and isinstance(refs, dict):
+        remaining = {
+            key: value
+            for key, value in refs.items()
+            if key not in fields or not sidecars.expires(value)
+        }
+        if remaining != refs:
+            expired = dict(data.get("provider_payloads_expired", {}))
+            for key, value in refs.items():
+                if key not in remaining:
+                    expired[key] = sidecars.tombstone(value)
+            new_data["provider_payloads_expired"] = expired
+            if remaining:
+                new_data["provider_payloads"] = remaining
+            else:
+                new_data.pop("provider_payloads", None)
+    if new_data == data:
+        return record, False
     replacement = dict(record)
-    replacement["data"] = {key: value for key, value in data.items() if key != "raw"}
+    replacement["data"] = new_data
     return replacement, False

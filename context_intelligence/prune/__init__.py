@@ -10,6 +10,7 @@ from .operations import PruneRequest, PruneSummary, iter_prune_tree, prune_file,
 from .policy import Policy, parse_duration, parse_timestamp, prune_record
 from .storage import FileResult, discover_events
 from .scheduled import ScheduleConfig, run_scheduled
+from .compound import optimize_retention_receipt
 
 __all__ = [
     "CaptureBusy",
@@ -24,6 +25,7 @@ __all__ = [
     "iter_prune_tree",
     "parse_duration",
     "parse_timestamp",
+    "optimize_retention_receipt",
     "prune_file",
     "prune_record",
     "replay_guard",

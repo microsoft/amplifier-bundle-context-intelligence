@@ -930,6 +930,171 @@ for result in iter_prune_tree(request):
 print(summary.to_dict())
 ```
 
+#### Historical capture optimization API
+
+`context_intelligence.optimize` exposes `preview(path, session_id=...)`,
+`stage(path, new_operation_dir, session_id=..., media=owner,
+writers_stopped=True, ...)`, and `apply`/`resume(operation_dir, media=owner,
+writers_stopped=True, ...)`. This is an explicit owner API, not a scheduled
+conversion, runtime hook, or automatic upgrade. Each file has independent state;
+there is no false whole-session/corpus atomicity.
+
+The CI adapter visits known structured Core PNG/JPEG image blocks in tool results
+and canonical raw message content. Its disk-backed span reader handles enormous
+single JSONL records and escaped strings without loading an entire line. It
+copies non-target spans, preserving opaque numeric spellings and unknown fields.
+Arbitrary JSON-looking tool/raw strings are protected: current loop producers do
+not establish that those strings are serialized rich-content envelopes. Streaming
+string decoding is not authority to promote arbitrary text or vendor formats.
+
+The injected `ImageOwner` owns actual pixel validation, original provenance/expiry,
+private diagnostic storage, reference-only replacement and reader compatibility.
+CI never imports Foundation/app code, manufactures acceptance from a digest,
+hydrates pixels for history/search, or calls historical ingestion. Unknown source
+policy must refuse; original screenshot TTL must never renew on conversion.
+Qualify the actual owner implementation before enabling a host conversion.
+
+For a multi-image original, `capture_group_sources` in
+`context_intelligence.optimize.capture` supplies a bounded
+`group_sources_for(snapshot, original)` callback to the injected group owner.
+Its open descriptor and `source_sha256` must identify the exact fenced original
+generation. The host supplies the same explicit `origin_for(snapshot)` policy to
+both adapters, plus `complete_group_for(snapshot, original)` attesting the
+**complete original group**, not merely all images visible in that capture.
+Equal original provenance selects known structured images across records in
+source-position order; no call identity, expiry, echo deduplication or missing
+group membership is inferred. Unknown policy or unsupported members refuse.
+The callback is valid only inside its outer context and yields one decoded
+temporary stream at a time; consumers must exhaust each group within its context.
+Publication of a complete group does not acknowledge all its members as installed:
+the diagnostic checkpoint verifier must join each selected reference to its exact
+installed position and acknowledge only that verified reachability.
+
+`context_intelligence.optimize.positions.capture_image_verifier` provides that
+CI-format position lookup without a host-owned JSON parser. Its context borrows
+the original and installed **seekable binary streams**, with `session_id`,
+`source_sha256`, `installed_sha256` and optional `poll`. The returned
+`read_selected(exact_original_snapshot)` admits only an original canonical image
+position and returns `{status, value, path}`; `value` is bounded to16KiB and
+`path` contains structural string keys/integer indices. JSON null is **present**.
+`absent` means only that the whole addressed raw direction field was removed;
+it is not proof of expiry. Missing tool slots, changed record identities, array
+cardinality or canonical roles refuse. The caller must still join the actual
+diagnostic reference to its selected manifest, maps, media closure and policy.
+An unchanged inline image is not a committed reference. These source-format
+checks neither establish original provenance nor authorize historical upload.
+
+The callable is a `CaptureImageVerifier`. For multiple selected manifest rows,
+`with read_selected.read_many(exact_original_snapshots) as results:` yields a
+single-pass iterator of the same strict, bounded results in input order (including
+duplicates). It reuses the outer two disk indexes and hashes both descriptors once
+at batch entry and once at normal batch exit after **full iterator exhaustion**,
+not per row; the outer context's normal final hash checks remain. Results are
+**provisional** until **both the batch and outer verifier contexts exit normally
+with their final checks successful**. Under its existing stopped/flush and FD/path
+custody the host must spool bounded facts and complete its own final proof checks
+before **any ACK**; it must not ACK inside either context. A caught
+iteration failure, early normal exit, or iterator `close()` refuses the batch.
+Saved iterators cannot be used after batch/outer closure. Single lookups, nested
+batches and recursive iteration cannot reenter an active operation, including
+through `poll` or input-iterable callbacks. Empty input is valid only after it is
+exhausted and the final checks pass; it grants no expiry/ACK authority. No extra
+capture lock, owner import, receipt authority or group reachability is added.
+One verifier and its contexts/iterators belong to one thread. The same-thread
+nonreentrancy checks are not a thread-safety guarantee. Generation hashes do not
+replace stopped-writer custody or prove that a concurrent writer did not modify
+and restore bytes between checks. Finite memory/throughput samples are not fleet
+or asymptotic-performance guarantees.
+
+Do not wrap stage/apply in another CI capture maintenance lock: it is
+nonreentrant, and each guarded operation owns that lock/recovery check itself.
+The host's real stopped-writer/flush boundary and exact original stream must
+span its conversion/checkpoint lifetime. Resume obtains the verified saved
+original generation, not a newly opened converted pathname. Separate stages
+recheck source identities and refuse intervening drift rather than claiming
+one atomic session-wide transaction.
+
+Stage preserves an exact original generation, candidate, paged asset manifest and
+old/new record-address mapping in a private sibling operation directory. Apply
+requires explicit stopped writers, existing capture/recovery guards and unchanged
+source/metadata. Assets are published/fsynced first, then a durable replacement
+intent precedes per-file replacement and readback. Resume reconciles saved hashes
+and journal states instead of repeating an unknown rename. Recovery originals are
+retained; `reclaimed_bytes` remains zero while those originals exist. Conversion,
+asset/reference/journal bytes and actual filesystem reclamation are distinct.
+POSIX durability is the qualified platform scope; no Windows parity is inferred.
+
+The permanent capture fence continues to deny network upload/recovery of converted
+history. Host indexes must update existing IDs and delivery state in place from
+the exact mapping, under their own maintenance fence; they may not delete/re-enroll
+records to manufacture a clean state. Ordinary native text projection remains
+reference-only and does not treat a media label/digest as evidence of seeing pixels.
+
+#### Explicit diagnostic sidecar owner API
+
+The Python API has a separate, opt-in `Policy(diagnostic_sidecars=True)`.
+It recognizes only direct `raw`/`raw_request` on `llm:request`, and, when
+`include_responses=True`, direct `raw`/`raw_response` on `llm:response`.
+`response_cutoff` selects a separate response age and requires response opt-in.
+The manual CLI and saved schedules do not silently enable this extension or
+change an installed request-only policy.
+
+The only recognized sidecar convention is
+`data.provider_payloads.<raw|raw_request|raw_response>` with `sha256`, `bytes`,
+`redacted`, `truncated`, and optional `limit_chars`, bound to **that exact
+`events.jsonl` parent** and `provider-payloads/<sha256>.json`.
+This is not `$blob_ref`, a media-session ref, or an invitation to traverse
+arbitrary similarly named JSON. All references in that owner must qualify.
+Recent, undated, response-protected, malformed, unknown, size-conflicting and
+generic-blob references pin assets. Unknown coverage protects the whole owner;
+known neighboring transcript, backup and recovery consumers also pin reclamation.
+No-reference assets are never automatically classified as orphans.
+
+Use the public `PruneRequest`/`prune_file` safety path, not storage internals.
+The same maintenance, recovery, execution, writer and inactivity guards remain.
+The adapter validates type, links, owner, digest, size and unchanged source.
+Reference metadata expires durably **before** unlink, with an explicit
+`data.provider_payloads_expired.<field>` marker:
+`{v:1,sha256,bytes,expired_at:<UTC timestamp>,reason:"retention"}`.
+Readers must recognize this exact marker; absence alone does not mean expired.
+
+An immutable `.diagnostic-retention-UUID.sqlite3` manifest is synced before
+replacement and bound by SHA-256 in the deny-replay receipt. Its
+`record_map(ordinal,old_offset,old_bytes,old_sha256,new_offset,new_bytes,new_sha256)`
+maps **every physical line**, including blanks and line endings, without event
+bodies. An owning host must qualify its maintenance/index handoff to preserve
+record IDs and deliveries rather than deleting/re-enrolling history. This library
+does not authorize historical ingestion or network backfill.
+
+`FileResult` separates event `bytes_saved`, asset files/bytes **planned**, and
+asset files/bytes actually **unlinked**. Manifests and journals add storage;
+logical counts are not observed filesystem reclamation. Post-replacement failure
+retains committed event accounting with incomplete/unknown asset durability.
+Crashes may leak extra bytes, never justify automatic replay or clearing fences.
+
+For an explicitly selected image-extraction **then** raw-expiry operation, the
+offline public request can set `verified_optimize=Path(<operation-directory>)`.
+This narrowly accepts only the exact verified Optimize journal, permanent fence,
+candidate source hash, metadata identity, original, asset manifest and record map.
+It requires `diagnostic_sidecars=True` and `writers_stopped=True`, not inactive
+or repeat scheduling. It does not accept an arbitrary preexisting prune receipt.
+
+The permanent fence remains byte-identical. Before the second per-file rewrite,
+an exclusive generation-bound attempt receipt is synced beside the source.
+`optimize_retention_receipt(path, fence_sha256)` returns that public receipt path,
+using SHA-256 of the exact permanent fence bytes. A stale operation-directory copy
+cannot evade this source-bound attempt; any existing attempt requires
+reconciliation, not replay. The second `FileResult.diagnostic_manifest` maps
+post-extraction to post-expiry bytes for the owning index's next in-place update.
+These are two recoverable stages, not one falsely atomic cross-file operation.
+
+The exact original recovery generation is still a consumer: its diagnostic
+assets remain held, reported in `asset_files_held_recovery` and
+`asset_bytes_held_recovery`, not planned or actual reclamation. Newly extracted
+assets made unreachable by selected raw expiry are likewise not automatically
+deleted. Zero physical savings during protected recovery is an honest result,
+not permission to discard original generations or repair unknown outcomes.
+
 #### Opt-in nightly local retention (Linux)
 
 The same CLI package also installs `context-intelligence-prune-schedule`.
@@ -1035,6 +1200,18 @@ include effective policy, cutoff, counts, fixed refusal categories, and timestam
 without raw payloads. Zero exit can mean completion, preview, or a busy skip,
 not necessarily bytes reclaimed. Disabled timers do not cancel a running job.
 Uninstall retains configuration, stable locks, and last-run evidence.
+Each run additionally reserves private, immutable
+`runs/<run_id>/{started,result}.json` evidence so the next `last-run.json`
+overwrite does not erase attribution. A started receipt alone means interrupted
+or unknown, not resumable success. Run reports retain status-by-reason counts and
+at most 32 sanitized error rows within an 8 KiB aggregate detail budget, plus an
+exact omitted count. Rows contain ordinal, lexical path SHA-256, status and fixed
+code; unavailable phase/errno are explicit `null`, never extracted from private
+exception text. Held-byte observations use only regular single-link source
+`lstat` sizes, with unknown coverage explicit. They are neither reclaimable-byte
+estimates nor sidecar accounting. Guard skips, genuine errors, partial state and
+nonzero exit semantics are unchanged. New reporting cannot reconstruct detailed
+causes already discarded by an older scheduler.
 The runtime limit is cooperative: it is checked between records, files, and
 before commitment. Parsing one large record or blocked filesystem I/O can delay
 that check. The systemd service supplies a separate outer termination budget.
