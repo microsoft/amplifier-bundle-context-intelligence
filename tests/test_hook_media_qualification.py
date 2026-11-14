@@ -307,6 +307,12 @@ def test_frozen_harness_manifest_and_build_argument_wiring():
         if isinstance(node, ast.Call)
         and isinstance(node.func, ast.Attribute)
         and node.func.attr == "add_argument"
-        and any(k.arg == "required" and k.value.value is True for k in node.keywords)
+        and node.args
+        and isinstance(node.args[0], ast.Constant)
+        and isinstance(node.args[0].value, str)
+        and any(
+            k.arg == "required" and isinstance(k.value, ast.Constant) and k.value.value is True
+            for k in node.keywords
+        )
     ]
     assert required and all(arg in dockerfile for arg in required)
