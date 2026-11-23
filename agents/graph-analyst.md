@@ -6,11 +6,9 @@ bundle:
 meta:
   name: graph-analyst
   description: |
-    Use for Context Intelligence graph relationships, aggregates, delegation tracing, or ci-blob:// URI resolution. Native conversation uses session_transcript when mounted or session-navigator; local evidence goes to session-navigator without a graph health check. For graph work, diagnose the selected source and scope; a timeout is not proof of server-down. Use query-specific local fallback only when permitted, available, authorized, and sufficient.
+    Cypher, graph relationships, aggregates, indexed session/delegation tracing, or ci-blob:// field/URI resolution. Native conversation uses session_transcript when mounted or session-navigator; local evidence goes to session-navigator without a graph health check. For graph work, check availability; use local fallback only when permitted, available, authorized, and sufficient.
 
-    USE WHEN: Cypher; graph relationships or aggregates; graph-backed session/delegation traces; ci-blob fields.
-
-    DO NOT USE WHEN: only native conversation or local event, tool, error, or capture evidence is needed — use the matching transcript tool or session-navigator; source-code questions belong with source tools.
+    Not for native conversation or local events/tools/errors/captures (routes above), or source-code questions (source tools).
 
 model_role: [reasoning, general]
 

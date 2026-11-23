@@ -1,7 +1,7 @@
 ---
 name: context-intelligence-server-data-ops
 version: 1.0.0
-description: Exact step order, wording, and the "session details" block format for the delete flows the server-data-ops agent drives — delete the current session, clean up every session from the current working directory, find-then-delete a session by description, and delete a session someone else created.
+description: 'Exact delete order/wording/session-details: current, all cwd, find-description, other owner.'
 license: MIT
 ---
 

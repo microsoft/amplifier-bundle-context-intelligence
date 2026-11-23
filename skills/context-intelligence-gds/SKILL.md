@@ -1,11 +1,6 @@
 ---
 name: context-intelligence-gds
-description: >
-  Use when about to write naive Cypher for a graph-topology question — pathfinding,
-  reachability, centrality/influence, community/clustering, structural similarity,
-  or similar event paths/trajectories (with/without time) — reach for Neo4j GDS or
-  APOC instead of hand-rolling traversals one hop at a time. WHEN/WHY layer;
-  graph-query's "Push Work to the Database" section is the HOW.
+description: 'GDS/APOC, not naive Cypher: paths/reachability, centrality/influence, community/clusters, structural similarity, (a)temporal trajectories; why; graph-query how.'
 license: MIT
 metadata:
   version: "1.2.0"

@@ -1,6 +1,6 @@
 ---
 name: context-intelligence-hill-climbing
-description: 'Use when an investigation needs more than one step — track it in todo as a hill climb so progress and dead leads leave an audit trail. Governs HOW you track the climb, not how you query or extract — that stays in graph-query / session-navigation.'
+description: 'Use when an investigation needs more than one step — track it in todo as a hill climb so progress and dead leads leave an audit trail.'
 version: 0.1.0
 license: MIT
 ---

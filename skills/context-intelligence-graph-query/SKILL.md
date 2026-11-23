@@ -1,11 +1,6 @@
 ---
 name: context-intelligence-graph-query
-description: >
-  Use when querying the context-intelligence property graph for session history,
-  tool call traces, LLM iteration analysis, execution scale metrics, agent
-  delegation trees, skill loading, and recipe orchestration. Covers all graph
-  layers, cross-layer SOURCED_FROM joins, SST navigation, blob handling, and
-  verified Cypher patterns.
+description: 'Query graph session history/tool traces/LLM iterations/execution scale/delegation trees/skill loading/recipe orchestration; layers/SOURCED_FROM/SST/blobs/verified Cypher.'
 license: MIT
 visibility:
   priority: 5
