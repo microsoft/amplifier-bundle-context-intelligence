@@ -1,6 +1,6 @@
 ---
 name: transcript
-description: Retrieve the prior user and assistant conversation verbatim from the current Context Intelligence capture, or named sessions. Use when a user asks to replay, quote, review, or act on a transcript.
+description: 'Replay/quote/review/act on verbatim user/assistant history: current CI capture or named sessions.'
 version: 1.2.0
 license: MIT
 user-invocable: true

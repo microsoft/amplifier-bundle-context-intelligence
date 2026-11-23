@@ -1,11 +1,7 @@
 ---
 name: workflow-pattern-analysis
 version: 1.0.0
-description: >
-  Use when asked how a workflow is failing, what separates a successful run from a failing
-  one, which steps are the most common failure points, or what patterns recur across
-  sessions — analyses failure/success patterns and signals across many runs using
-  context-intelligence session data.
+description: 'Cross-run: why failure, success/failure differences, common failing steps, recurring patterns.'
 user-invocable: true
 allowed-tools:
   - bash
