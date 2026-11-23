@@ -22,6 +22,7 @@ build-backend = "hatchling.build"
 
 [tool.uv]
 package = true
+override-dependencies = ["amplifier-bundle-context-intelligence"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["amplifier_module_tool_context_intelligence_upload"]
@@ -29,6 +30,9 @@ packages = ["amplifier_module_tool_context_intelligence_upload"]
 [tool.hatch.metadata]
 # Required to build a wheel that carries a PEP 508 direct-reference (git+https) dependency.
 allow-direct-references = true
+
+[tool.uv.sources]
+amplifier-bundle-context-intelligence = { path = "../..", editable = true }
 
 [dependency-groups]
 dev = [

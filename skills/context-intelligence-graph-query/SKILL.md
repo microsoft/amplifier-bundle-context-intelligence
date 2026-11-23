@@ -36,18 +36,29 @@ metadata:
 
 ## When the graph server is not configured
 
-If no context-intelligence server is configured, delegate local session lookups
-to `session-navigator`; do not issue Cypher to an absent endpoint. A query timeout
-alone does not prove the server unavailable. Diagnose the affected query using
-the failure guidance below rather than abandoning unrelated graph work.
+If the context-intelligence server is unavailable or not configured for this
+session, graph-based analysis cannot proceed here. This limits graph work, not
+all session evidence: conversation uses `session_transcript` when mounted, and
+local event, tool, error, or capture questions use `session-navigator` without a
+graph health check. Delegate only when permitted and available; a specialist
+performs its matching work itself, never delegates the same task to itself.
+Use authorized local fallback only when it can sufficiently answer the question;
+otherwise report the specific gap and any partial coverage. A failed query or
+timeout is not proof the server is down, and a graph miss is not proof of absence
+in local captures or other evidence layers. Diagnose only the affected query
+using the failure guidance below rather than abandoning unrelated graph work.
+Do not attempt Cypher against an absent endpoint or a server known to be unreachable.
 
 ---
 
 # Context Intelligence Graph Query
 
 This skill equips you to navigate and extract insights from the context-intelligence
-property graph using the `graph_query` tool. The graph holds a complete record of
-every Amplifier session — what happened, when, how things connect, and at what scale.
+property graph using the `graph_query` tool. The graph holds indexed session
+evidence — what happened, when, how things connect, and at what scale — only to
+the extent capture, forwarding, and indexing have supplied it. State the selected
+source, requested scope, observed coverage, and freshness rather than assuming a
+complete record of every Amplifier session.
 
 **Read the live schema from the server; read the meaning from this skill.** The
 server can always tell you the current shapes — labels, relationship types, property
@@ -85,6 +96,12 @@ RETURN DISTINCT propertyName AS property ORDER BY property LIMIT 25
 use `nodeLabels` membership for an intentional label census. The procedure may
 scan all nodes/properties before emitting rows, is not workspace-scoped, and
 `LIMIT 25` only truncates its output (possibly an incomplete catalog).
+
+For cost diagnosis, check the specific labels, sampled keys and timestamp types
+needed, plus relevant workspace/ID/timestamp index definitions through a permitted,
+available interface. Inspect a plan only through a surface that exposes it:
+`graph_query` returns rows and does not promise EXPLAIN/PROFILE plan metadata.
+Do not substitute a full property census or an unindexed count for those checks.
 
 **The three-layer shape (stable orientation, not a dictionary):**
 
@@ -129,20 +146,37 @@ OR a hook upload destination), pass `source: "<name>"`.
 ### Timeouts are query outcomes, not server-down verdicts
 
 Graph calls fall back to 120 seconds; blob/identity/upload defaults stay 30.
-Top-level `request_timeout` overrides the HTTP operation/phase budget for one call
-only: a positive finite JSON number, never a value inside `params`. The timeout
-error reports effective `error.request_timeout` and `retry_hint`, also in the
-agent-visible message. This is not a database or total-query deadline; auth and
-gateway budgets are independent and prior database work may continue.
+Precedence: top-level per-call `request_timeout` → tool config `request_timeout`
+→ coordinator config `request_timeout` → `AMPLIFIER_CONTEXT_INTELLIGENCE_QUERY_TIMEOUT`
+→ operation default. The shared operator setting also applies to blob/identity
+reads, with their 30-second fallback, not the hook's separate dispatch timeouts.
 
-Inspect scope, selective anchors, projections, bounded paths, and pagination
-first. Only when an intentionally complex query justifies more time and retrying
-is safe, make **at most one deliberate retry**, preserving intent, source,
-workspace, and params, with an explicit finite timeout **larger than the reported
-value**. Never blindly double or auto-loop; no retry is mandatory. Empty successful
-rows mean no matching data in that scope. Connection/config/auth/HTTP/decode errors
-need their own diagnosis, not timeout escalation. If needed, delegate only the
-affected query's local fallback to `session-navigator`.
+Operator values accept numeric strings and clamp finite values below 0.1 seconds
+to 0.1. Absent values continue down the chain; an unparseable or non-finite value
+at the selected tier uses the operation default, not a lower-precedence setting.
+An explicit per-call override must instead be a positive finite JSON number:
+strings, booleans, null, zero, negatives, and non-finite values return
+`validation_error` without sending the query. A valid override is not clamped
+and affects only that call; put it at the top level, never inside `params`.
+
+The timeout error reports effective `error.request_timeout` and `retry_hint`,
+also in the agent-visible message. This is an HTTP operation/phase budget, not
+a database or total-query deadline; auth and gateway budgets are independent
+and prior database work may continue. The tool neither retries automatically
+nor cancels database work.
+
+Inspect scope, selective anchors, projections, bounded paths, pagination, and
+available index/plan evidence first (plan metadata is not promised by
+`graph_query`). Only when a necessary, intentionally complex query justifies
+more time and retrying is safe, make **at most one deliberate retry**, preserving
+intent, source, workspace, and params, with an explicit finite timeout **larger
+than the reported value**. Never widen coverage, blindly double, or auto-loop;
+no retry is mandatory. Empty successful rows mean no matching data observed in
+that scope, not an outage. Connection/config/auth/HTTP/decode errors need their
+own diagnosis, not timeout escalation; never blindly retry health/auth failures.
+A timeout alone proves neither absent graph data nor the need for fallback.
+Use only the affected query's local fallback when permitted, available,
+authorized, and sufficient; otherwise report the specific gap and partial coverage.
 
 ---
 
@@ -165,6 +199,14 @@ MATCH (s:Session {workspace: $workspace})
 RETURN s.node_id AS session_id LIMIT 1
 ```
 
+For an authorized cross-workspace call, pass `workspace: "*"` and omit the
+`$workspace` predicate: the tool does not bind it in that mode. Choose
+`RETURN 1 AS connected` when only connectivity is needed, or
+`MATCH (s:Session) RETURN s.node_id AS session_id LIMIT 1` for existence across
+that authorized population. Connectivity says nothing about session coverage.
+Prefer a partitioned existence probe when a specific workspace is meaningful;
+do not widen a failed or empty scoped query to diagnose availability.
+
 ### The two real scoping levers
 
 Both live as first-class properties on nodes — confirm them by sampling:
@@ -183,7 +225,8 @@ Both live as first-class properties on nodes — confirm them by sampling:
 
 Anchor explicit workspace and selective session/ID predicates before traversal.
 This expresses the intended population, but does not guarantee an index exists
-or that the planner will use it. Verify the actual plan when cost matters.
+or that the planner will use it. Check relevant indexes and, when exposed through
+an available authorized interface, the actual plan when cost matters.
 
 To discover which workspaces exist before scoping, aggregate across all of them
 (use sparingly — this is an intentional cross-workspace census, not a cheap probe):

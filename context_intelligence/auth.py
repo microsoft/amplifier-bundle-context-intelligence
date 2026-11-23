@@ -344,6 +344,11 @@ def _make_cli_credential() -> Any:
     """
     from azure.identity import DefaultAzureCredential  # noqa: PLC0415
 
+    # When every credential in the chain fails, azure-identity logs a multi-line
+    # WARNING listing each one, on every retry. The logging handler already warns
+    # once per rate-limit window with the `az login` hint and records the full
+    # failure in the forwarding JSONL, so raise only this logger's threshold.
+    logging.getLogger("azure.identity._credentials.chained").setLevel(logging.ERROR)
     return DefaultAzureCredential()
 
 

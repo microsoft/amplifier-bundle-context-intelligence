@@ -9,10 +9,44 @@ Verifies:
 - Module docstrings are meaningful and present
 """
 
+import tomllib
 from pathlib import Path
+
+import pytest
 
 REPO_ROOT = Path(__file__).parent.parent
 CI_ROOT = REPO_ROOT / "context_intelligence"
+
+
+@pytest.mark.parametrize("module", ["upload", "recover"])
+def test_cli_development_uses_checkout_shared_library(module: str) -> None:
+    """Frozen CLI development must use this checkout, not Git main's older API."""
+    module_root = REPO_ROOT / "modules" / f"tool-context-intelligence-{module}"
+    manifest = tomllib.loads((module_root / "pyproject.toml").read_text(encoding="utf-8"))
+    shared_name = "amplifier-bundle-context-intelligence"
+    shared_requirements = [
+        dependency
+        for dependency in manifest["project"]["dependencies"]
+        if dependency.startswith(shared_name)
+    ]
+    assert shared_requirements == [
+        (
+            "amplifier-bundle-context-intelligence @ "
+            "git+https://github.com/microsoft/amplifier-bundle-context-intelligence@main"
+        )
+    ]
+
+    assert manifest["tool"]["uv"].get("override-dependencies") == [shared_name]
+    sources = manifest["tool"]["uv"].get("sources", {})
+    assert sources.get(shared_name) == {"path": "../..", "editable": True}
+    assert (module_root / sources[shared_name]["path"]).resolve() == REPO_ROOT.resolve()
+
+    lock = tomllib.loads((module_root / "uv.lock").read_text(encoding="utf-8"))
+    shared_entries = [package for package in lock["package"] if package["name"] == shared_name]
+    assert len(shared_entries) == 1
+    assert shared_entries[0]["source"] == {"editable": "../../"}
+    root_manifest = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    assert shared_entries[0]["version"] == root_manifest["project"]["version"]
 
 
 class TestFilesExist:

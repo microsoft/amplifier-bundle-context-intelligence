@@ -115,6 +115,7 @@ class TestDiskBreaker:
         result = await handler("tool:call", _evt())
 
         assert result.user_message_level == "warning"
+        assert result.user_message is not None
         assert "PERMANENT DATA LOSS" not in result.user_message
         assert result.user_message == result.user_message.replace("DISK FULL", "")  # no shouting
         # Still honest about what happened, without overclaiming.
@@ -138,6 +139,7 @@ class TestDiskBreaker:
         result = await handler("tool:call", _evt())
 
         assert result.user_message_level == "warning"
+        assert result.user_message is not None
         assert "still reaching the configured server" in result.user_message
         assert "not recoverable" not in result.user_message
 
@@ -160,6 +162,7 @@ class TestDiskBreaker:
         result = await handler("tool:call", _evt())
 
         assert result.user_message_level == "warning"
+        assert result.user_message is not None
         assert "not recoverable" in result.user_message
 
     async def test_open_breaker_skips_disk_writes(self, tmp_path, monkeypatch) -> None:

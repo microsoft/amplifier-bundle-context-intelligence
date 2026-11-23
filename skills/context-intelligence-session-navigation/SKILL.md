@@ -1,13 +1,26 @@
 ---
 name: context-intelligence-session-navigation
-description: 'Use when extracting session data directly from JSONL files — the fallback when the graph server is unavailable or outside graph-analyst.'
+description: 'Use for workspace-scoped local session discovery and event, tool, error, or capture inspection in JSONL files, independent of graph availability.'
 version: 0.2.0
 license: MIT
 ---
 
 # Context Intelligence Session Navigation
 
-This skill covers navigation of flat JSONL session files written by the `LoggingHandler`. These files are the universal baseline — always present regardless of whether graph stores are configured. Use shell tools (`jq`, `grep`, `wc`, `head`) to extract data safely.
+This skill covers bounded navigation of local JSONL captures written by the
+`LoggingHandler`. Capture presence must be observed, not assumed: logging may not
+have been enabled, the root may differ, or retained data may be incomplete.
+Local inspection needs no graph health check. For user/assistant conversation,
+use the mounted `session_transcript` tool rather than shell-extracting message
+bodies; preserve its capture-selection errors instead of silently switching readers.
+Use shell tools (`jq`, `grep`, `wc`, `head`) for bounded event and metadata work.
+
+Native CI captures use the nested `context-intelligence/events.jsonl` path below.
+Foundation session files outside that directory are a different evidence source,
+not interchangeable CI captures. Report which source and scope you inspected.
+A stored lifecycle label such as `running` is not proof of current liveness;
+neither that label nor the newest observed event timestamp guarantees completeness.
+State observed freshness and coverage, not an inferred current state.
 
 For the complete event-by-event field reference, see `context/event-schema.md`.
 For ready-to-use jq/grep recipes, see `context/safe-extraction-patterns.md`.

@@ -44,6 +44,68 @@ the reusable library itself takes explicit event and metadata paths. Stored capt
 replayed verbatim and can contain sensitive content; the logging hook's JSON sanitization
 is not redaction.
 
+Trusted hosts can opt in to reading an exact native capture outside the normal
+store with transcript-module mount config:
+
+```yaml
+capture_roots:
+  review_copy:
+    directory: /srv/captures/review-copy
+    session_id: example-session-full-id
+```
+
+The directory must contain literal `metadata.json` and `events.jsonl` files.
+For a Foundation-persisted conversation directory, explicitly add
+`capture_format: amplifier-transcript` to that trusted entry instead. That profile
+reads only `metadata.json` and `transcript.jsonl`; it does not probe events or
+backups. Omitted `capture_format` remains strict native `context-intelligence`
+with schema `1.0.0`. There is no format detection or fallback.
+
+This is a restricted local read grant, not a tool-supplied path or a change to
+hook storage. It is disabled by default. Call `session_transcript` with
+`{"capture_root":"review_copy","max_messages":1}`. Keep `capture_root` and the
+returned `next_after_event_line` as `after_event_line` on every follow-up; do
+not switch to `session_ids`. Each page includes the configured alias and canonical
+directory in `source`. Aliases match `^[A-Za-z][A-Za-z0-9_-]{0,63}$`;
+`session_ids` and `after_event_lines` cannot accompany an alias, even when empty.
+
+Configured reads require descriptor-relative no-follow operations (currently
+supported POSIX platforms). Unsupported platforms fail closed for this opt-in
+route; ordinary session resolution is unchanged. Symlinks, including directory
+ancestors, and nonregular capture files are refused. Directory identity is pinned
+at mount, and metadata must match the configured full session ID before events
+are opened. This does not make writable capture contents immutable. See the
+[transcript module contract](modules/tool-context-intelligence-transcript/README.md)
+for errors and pagination. Captures remain verbatim, not redacted: configuring an
+alias does not make their contents safe to share.
+
+The persisted profile projects only stored user/assistant text. String content
+is unchanged; ordered text blocks retain exact strings and original indices in
+JSON, with block boundaries labeled in text output. It omits tool/system/developer
+messages and known nontext blocks, reports omission counts, and marks unknown or
+malformed records `partial`. Stored reminder text is preserved with boolean
+context flags when present; stored roles do not prove human authorship. Missing
+timestamps, workspace and schema are `null`, not fabricated. Persisted pages add
+`source_format: amplifier-transcript`, `source_file: transcript.jsonl`, and
+`cursor_unit: physical_line` to `source`. Keep the alias when paging: the existing
+`event_line`/`after_event_line` names refer to physical lines of the selected file.
+This is a bounded text projection, not the CLI's display policy or a new persisted
+schema. It neither reconstructs provider continuation state nor certifies a full
+structured message.
+
+Every transcript page independently caps retained typed text blocks at **1,000**
+and consumed physical lines at **1,000**, alongside the existing message and
+content-character budgets. Empty text blocks count toward the block limit, not
+the character budget; strings retain their existing accounting. A whole message
+over the block limit fails with `message_too_many_parts`; otherwise it is deferred
+whole if only the remaining page budget is insufficient. The shared line limit
+also applies to ordinary/configured native reads and counts blank, ignored,
+omitted and malformed lines after the incoming cursor. A page can contain no
+messages and still have `has_more: true`: continue with its returned cursor.
+Only actual capture issues make a page `partial`, not a filled budget.
+The compatible text marker `MORE MESSAGES AVAILABLE` means unread physical
+input remains, not necessarily another eligible user/assistant message.
+
 For scripts outside an active Amplifier session, pass one or more capture directories:
 
 ```bash
@@ -777,6 +839,247 @@ working_dir string
 ```
 
 Optional fields (present only when set): `agent_name`, `parallel_group_id`, `recipe_name`, `recipe_step`.
+
+### Explicit local raw-payload pruning
+
+`context_intelligence.prune` is an offline Python library. The optional Click CLI
+is a separately installed wrapper, not a mounted agent tool or automatic hook policy:
+
+```bash
+uv tool install "git+https://github.com/microsoft/amplifier-bundle-context-intelligence@main#subdirectory=modules/tool-context-intelligence-prune"
+
+# Preview requests whose event timestamp is strictly older than two weeks:
+context-intelligence-prune ~/.amplifier/projects --older-than 14d
+
+# Apply only to old, released root sessions with matching existing execution locks:
+context-intelligence-prune ~/.amplifier/projects --older-than 14d --inactive-only --apply
+```
+
+`amplifier-event-prune` is an alias. No backups are made unless `--backup` is supplied.
+`--before` accepts an exclusive timezone-aware ISO8601 cutoff instead of `--older-than`;
+without either option, all selected records qualify regardless of timestamp.
+With an age filter, missing, invalid, or conflicting timestamps are retained and
+reported, with a nonzero exit code.
+Timestamp agreement retains all fractional digits, including nanoseconds.
+Calendar ISO8601 timestamps with seconds and whole-minute UTC offsets are
+recognized; other spellings are retained rather than guessing their precision.
+The default removes **only direct `data.raw` on `llm:request`**, retaining every
+event, usage/cost fields, nested extension fields, raw responses, and `$blob_ref`
+objects. Native CI 1.0.0 and hooks-logging `amplifier.log` 1.0.0 are supported;
+explicit unknown formats/versions and malformed files fail closed. Unchanged
+lines retain their original bytes; rewritten lines preserve exact JSON number
+tokens. `transcript.jsonl` and prompt transcript events are not changed.
+`--include-responses` is separately destructive: raw responses can be required
+for later graph-based assistant-content reconstruction.
+
+**Pruning may discard the only raw copy. No recovery ledger entry does not mean
+uploaded.** This utility neither contacts nor verifies a destination. The durable
+`events.jsonl.prune-receipt.json` fence is published and directory-synced *before*
+source replacement. Its `prepared` state is not proof of a completed replacement:
+compare the retained expected hash with the source after interruption.
+Every present receipt, even invalid or interrupted, makes this revision's upload
+and recovery tools refuse the **entire** capture before reading/delivery. Removing
+`data.raw` changes upload identity; no deduplication or partial replay is promised.
+Do not delete the receipt to bypass refusal or copy bare pruned logs into upload.
+Older/uncoordinated consumers cannot enforce this protocol; stop them first.
+
+Apply requires `--inactive-only` or a truthful `--writers-stopped` assertion.
+Inactive-only holds an existing matching Foundation root execution lock for the
+entire transaction and skips live, recent, child, legacy, foreign, and ambiguous
+sessions. It protects cooperating current hosts, **not arbitrary appenders**.
+Age, a terminal status, or an empty open-file snapshot alone cannot exclude a writer;
+an ignored advisory lock plus atomic rename can still lose concurrent appends.
+The minimum inactivity interval is `max(--min-idle, 14d, event cutoff age)`.
+For other logs, stop **all** writers before asserting `--writers-stopped`; the
+default one-hour mtime guard is only an additional filter, and `--min-idle 0s`
+disables that filter, not the stopped-writer requirement.
+
+Prune, upload, and recovery share stable, nonblocking `.maintenance.lock` sidecars.
+Contention skips/refuses rather than waits. Pruning fences the capture before
+inventorying recovery jobs, then checks one existing job lock and SQLite ledger
+at a time. Each ledger connection closes before its job lock is released; checked
+file identities remain subject to rechecks through commit. Recovery holds its
+job lock through publication or discard of staged scan results, so a scan that
+preceded the capture fence still causes pruning to refuse. Later scans cannot
+acquire the shared capture lock while pruning holds its exclusive fence.
+The matching Foundation execution lock stays held through replacement.
+All acquisitions are nonblocking, so contention releases/refuses rather than
+deadlocking. Upload holds one capture at a time through its count/read/delivery,
+not all selected captures.
+Recovery inventory checks both the CLI's standard
+`~/.local/state/context-intelligence/recovery` and the configured global
+`recovery_state_root`, plus explicit roots. Every source registered in a supported
+recovery V2 ledger is skipped, regardless of delivery state; no byte-offset/cursor
+is reset.
+The sole exception is an explicit, exact-job abandonment recorded by the matching
+[`context-intelligence-recover --retire-job`](modules/tool-context-intelligence-recover/README.md#permanently-abandon-one-catch-up-job)
+command after retiring that job's producer/launchers. This preserves its rows and
+unknown outcomes and prevents current clients resuming it. It releases only that
+job's exclusion, not another job's registration or any writer/age/replay guard.
+Supply every custom state root with repeated `--recovery-state-dir PATH`.
+Unknown, busy, or unreadable state refuses pruning; absent standard state does not
+prove delivery. Stop independent uncoordinated readers/recovery processes too.
+The adapter recognizes both historical path-bearing V2 jobs and source-capability
+pathless V2 jobs. Pathless membership uses the producer's absolute-path hash and
+conservatively checks native session/workspace identity too. All job states remain
+excluded, including accepted and quarantined sources.
+
+`recovery-source-enrollments.sqlite3` is a separate anti-reenrollment authority,
+not a delivery checkpoint. Its fixed filename **and** supported schema are validated
+read-only; enrollment itself neither permits nor excludes pruning. Unknown, corrupt,
+obsolete content-keyed, or unsafe authority files refuse. The adapter never constructs
+the producer's mutating registry class, reads raw capabilities, resets cursors, or
+migrates SQLite schemas. SQLite may maintain WAL shared-memory reader marks; this is
+not a promise that every `-shm` byte remains unchanged. Malformed or unreadable
+global settings, invalid authority paths, and unavailable placeholder expansions
+refuse pruning rather than silently selecting the default. Existing settings
+require PyYAML for strict validation; the standalone pruner installs `PyYAML>=6.0`
+as a runtime dependency. Lean library-only environments must supply it themselves:
+its absence still refuses rather than using the forgiving parser fallback.
+Absent or unconfigured settings use the standard root;
+explicit roots must exist. Include all custom job roots explicitly.
+This format compatibility does not upgrade older consumers: install coordinated
+upload/recovery clients before using the pruner alongside source-capability recovery.
+Files/ancestors must not be symlinks; this is a cooperative trusted-directory
+protocol, not protection against a hostile directory owner.
+This POSIX protocol requires capture directories writable by the current user
+and current-user-owned maintenance sidecars, even for readers. Read-only mounts
+and foreign-owned locks fail closed; there is no uncoordinated read fallback.
+
+Transactions are per-file, not per-tree. Rewrites need temporary space up to the
+rewritten file size, and memory scales with the largest event, not the whole log.
+If guard cleanup fails after replacement, the result retains its committed
+file/payload/byte counts and reports a warning with a nonzero exit code; the
+replacement is not undone.
+Preview leaves event content unchanged but can create stable lock sidecars.
+Receipts consume a small amount of space; reported bytes are source logical-byte
+reductions, not measured filesystem reclamation. Backups retain original raw data
+and defeat net space recovery. Remote graphs/blobs and their retention are unchanged.
+
+Python callers use the same safety/orchestration path without importing Click:
+
+```python
+from pathlib import Path
+from context_intelligence.prune import PruneRequest, PruneSummary, iter_prune_tree
+
+request = PruneRequest.from_options(Path("/captures"), older_than="14d")
+summary = PruneSummary()
+for result in iter_prune_tree(request):
+    summary.add(result)
+    print(result.status, result.path, result.bytes_saved)
+print(summary.to_dict())
+```
+
+#### Opt-in nightly local retention (Linux)
+
+The same CLI package also installs `context-intelligence-prune-schedule`.
+Scheduling, configuration, and execution live in the reusable
+`context_intelligence.prune.schedule` and `.scheduled` libraries; Click only
+parses options, renders JSON, and sets the exit code. No model, server, or
+credentials are required by this local job.
+
+Prerequisites: Linux with a working systemd user manager, and `uv` plus Python
+3.11+ for the documented installation. Install the standalone prune CLI
+separately; adding the bundle alone does not install it. For an unmerged revision,
+pin both the CLI and shared library to that revision as described below; `main`
+does not include unmerged changes.
+
+```bash
+# First installation saves the applying policy with the timer disabled:
+# 02:00 local time, payloads older than 60d, sessions inactive at least 7d.
+context-intelligence-prune-schedule install
+# Preview once; this does not change the saved applying policy.
+context-intelligence-prune-schedule run --dry-run
+# After reviewing the preview, enable future applying runs.
+context-intelligence-prune-schedule enable
+context-intelligence-prune-schedule status
+
+# Reconfigure owned units. Unspecified options reset to their defaults.
+context-intelligence-prune-schedule install --at 01:30 --older-than 14d \
+  --min-inactive 7d --root ~/.amplifier/projects --enable
+
+context-intelligence-prune-schedule disable
+context-intelligence-prune-schedule uninstall
+```
+
+Use a **dedicated, pinned pruner installation**, not Amplifier's shared Python
+environment: the service saves the absolute installed interpreter path, so keep
+that runtime installed. When testing an unmerged commit, pin both the CLI and its
+shared library to that same commit using `uv tool install --overrides`; the CLI's
+published dependency follows the repository's `main`. Install this module
+separately from Amplifier itself.
+The user systemd manager must be available. A lingering user manager is needed
+for execution while logged out; this command does not enable linger or install
+system software.
+
+Upgrading the package does not rewrite an existing saved configuration. To change
+an existing policy, rerun `install` with the desired options; unspecified options
+reset to their defaults.
+
+The default configuration is
+`~/.config/context-intelligence/local-prune/config.json`. `--config PATH` selects
+another policy path; it must not overlap the installation manifest, run/success
+reports, admission lock, or selected service/timer files (including path aliases
+and ancestor/descendant overlaps). `--name context-intelligence-local-prune-test`
+selects distinct test units. Configurable parameters include the daily `--at`
+time, root, ownership state root, repeated custom recovery roots, payload age,
+minimum inactivity, mtime guard, maximum runtime, and preview-only mode. Options
+are validated before publication. Management and execution share a stable,
+nonblocking admission lock. A busy run is reported as `skipped_busy`; management
+refuses rather than stopping a transaction. Foreign or modified unit files are
+not overwritten. Reconfiguration preserves the timer's prior enabled/active state
+unless `--enable` or `--disable` is explicit. A failed or unknown prior timer-state
+query refuses the update without changing prior files or timer state, even with
+an explicit enable/disable choice. Interrupted installation/removal
+retains an ownership manifest so missing files can be repaired without accepting
+modified surviving units; ordinary update failure restores the prior files and
+timer state.
+
+Installation saves any distinct resolved configured recovery authority as a
+required recovery root; reinstalling refreshes that saved policy. Pruning still
+checks current global settings as well as the saved root. An unavailable
+`${VAR:}` expansion refuses headless pruning with a nonzero exit even with a saved
+root; use a literal authority or a usable nonempty default for reproducible
+resolution. If current settings resolve elsewhere, both locations remain checked.
+
+**This is conditional retention, not a sixty-day cap on every log.** The job
+removes direct request `data.raw` older than `older_than` only from otherwise
+eligible sessions idle for at least `min_inactive`. It retains active, child,
+legacy, foreign, lock-held, recovery-registered, and ambiguous sessions regardless
+of payload age. The scheduled path never asserts stopped writers, removes raw
+responses, or creates raw backups. Inactivity must be at least one day and at
+least the mtime guard. Scheduled defaults are sixty days for payload age and seven
+days for inactivity; the unchanged manual CLI retains its coupled
+`max(14d, min-idle, cutoff age)` rule. Python callers can
+explicitly set `PruneRequest.min_inactive` to select a separate inactivity
+boundary; leaving it `None` preserves the legacy rule.
+
+Nightly runs explicitly enable repeat pruning under the same writer and recovery
+guards. **Every event remains; no event or session is deleted.** A permanent base
+`events.jsonl.prune-receipt.json` still denies upload/recovery of the entire
+capture. Repeat transactions leave that fence byte-identical and publish separate
+immutable `events.jsonl.prune-attempt-UUID.json` records before replacing current
+content. A prepared receipt never proves a prior replacement completed.
+Unrecognized fences fail closed; no receipt is removed to permit replay.
+Unchanged marked captures remain visible in the run's fenced/unconfirmed counts.
+Preserved file mtimes mean maintenance does not itself restart the inactivity
+clock. Genuine session resumption does: new data is pruned only after that session
+becomes eligible again.
+
+The timer is opt-in, user-scoped, and does not restart ingestion or other sessions.
+It uses machine local time, with no missed-run catch-up, randomized delay, or
+automatic retry. A nonexistent 02:00 during a daylight-saving transition can skip
+a run. Status distinguishes saved configuration, enabled/active timer state,
+next trigger, service result, and the latest bounded JSON run receipt. Results
+include effective policy, cutoff, counts, fixed refusal categories, and timestamps
+without raw payloads. Zero exit can mean completion, preview, or a busy skip,
+not necessarily bytes reclaimed. Disabled timers do not cancel a running job.
+Uninstall retains configuration, stable locks, and last-run evidence.
+The runtime limit is cooperative: it is checked between records, files, and
+before commitment. Parsing one large record or blocked filesystem I/O can delay
+that check. The systemd service supplies a separate outer termination budget.
+Status also reports linger availability and the age of the last successful run;
+the job does not enable lingering itself.
 
 ### Server-side graph (when server configured)
 

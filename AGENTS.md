@@ -157,6 +157,16 @@ The bar, from this repo's own history: the cost/token aggregation patterns were 
 with a negative control, **before** a single line was written into the skill. Ship queries you have
 watched return the right answer on real data — nothing less.
 
+## Transcript reader bounds
+
+Character budgets do not bound empty text blocks or message-free records. Keep
+independent aggregate retained-part and consumed-physical-line limits in the shared
+native/persisted reader. Admit each line's message, issues, omissions and cursor
+atomically; a deferred/lookahead line owns no effects on the current page. Test
+blank-line cursor progress, exact-boundary EOF and message-free continuation pages.
+Guard the iterator against a second lookahead and test aggregate exact-fit parts;
+ordinary native bounds must remain testable without configured secure-open support.
+
 ## Architecture note
 
 This bundle ships **layered, composable behaviours** — `context-intelligence-navigation` ⊂
@@ -166,6 +176,35 @@ This bundle ships **layered, composable behaviours** — `context-intelligence-n
 `skills/context-intelligence-graph-query/SKILL.md` (sourced from the server repo's `main`) and
 carries its own leading no-server guidance block — there is **no runtime skill fetching, syncing,
 or configuration knob**. See the README.
+
+Navigation and standalone transcript share the capture-independent `context-intelligence-transcript-read`
+behavior. Keep root navigation's delegate, skills and transcript tools; shared ownership does not
+reduce effective tool count or runtime schema cost. Standalone owns logging; navigation must not add it.
+
+Destructive retention uses `config.strict_global_recovery_state_root()`, not the
+forgiving settings readers. `prune.recovery.recovery_guard()` combines that
+authority with standard CLI state and explicit roots; `prune.operations.prune_file()`
+owns the mandatory guards for every caller. See the README's pruning and scheduling
+sections for the refusal and installed-policy contracts.
+Treat metadata as legacy-absent only on `lstat()` `FileNotFoundError`, never following `exists()`.
+Refuse metadata symlinks, including dangling links, before any prepared receipt or source mutation.
+Treat dangling native-history links and transfer fences as present; use non-following presence checks.
+Preserve history type/stamp validation and both transfer-fence checks before pruning or writing a receipt.
+Prove watch retries with `run(refresh=False)` after real capture-lock release, including stale pending cleanup; refresh-only success is not sufficient.
+Validate administrative CLI options by presence (`is not None`), not truthiness.
+Reject invalid combinations before constructing runners, creating state, or making network requests.
+Before trusting absent nonretired recovery membership, validate cursor-to-artifact
+references and canonical lowercase source IDs read-only. Keep this semantic check
+separate from schema-only retirement: explicit abandonment must not repair outcomes.
+Keep JSON/status refusals local to each capture. A parser failure must not erase
+validated snapshot facts, acknowledged offsets, or permanent `source-changed` quarantine.
+
+Matching numeric versions do not prove shared-library API compatibility.
+Verify installed CLIs against their declared sources, without `PYTHONPATH`.
+Distinguish editable checkout project resolution from non-editable wheels and
+standalone installs, whose production requirements still select Git `@main`.
+Before merge, pin candidate CLIs and their shared library to the same revision;
+recovery also needs the matching hook. See each CLI's installation guidance.
 
 ## Seam Awareness
 

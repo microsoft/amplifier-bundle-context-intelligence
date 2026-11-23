@@ -209,3 +209,21 @@ class TestAcceptanceCriteria:
         assert resolve_config is not None
         assert LOG_SCHEMA is not None
         assert AMPLIFIER_DIR is not None
+
+
+@pytest.mark.parametrize("damage", ["malformed", "unreadable"])
+def test_forgiving_recovery_helpers_keep_fallback_behavior(tmp_path, monkeypatch, damage):
+    from context_intelligence import config
+
+    settings = tmp_path / "settings.yaml"
+    settings.write_text("overrides: [\n", encoding="utf-8")
+    default = tmp_path / "standard"
+    monkeypatch.setattr(config, "DEFAULT_RECOVERY_STATE_ROOT", default)
+    if damage == "unreadable":
+
+        def deny(*args, **kwargs):
+            raise PermissionError("synthetic read denial")
+
+        monkeypatch.setattr(Path, "read_text", deny)
+    assert config.read_hook_config_block(settings) == {}
+    assert config.global_recovery_state_root(settings) == default
