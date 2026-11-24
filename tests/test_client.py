@@ -700,7 +700,7 @@ def _make_generic_handler(behavior: "_GenericBehavior"):
         def do_DELETE(self):  # noqa: N802
             self._respond()
 
-        def log_message(self, *args):  # silence server logs
+        def log_message(self, format: str, *args: object) -> None:  # silence server logs
             pass
 
     return _Handler
@@ -971,6 +971,37 @@ def _make_async_httpx_client(mock_response):
 
 class TestAsyncCIClientCypher:
     """AsyncCIClient.cypher() must POST to /cypher and return list[dict]."""
+
+    @pytest.mark.parametrize(
+        ("options", "expected_timeout"),
+        [
+            ({"timeout": 120.0}, 120.0),
+            ({"timeout": 300.0}, 300.0),
+            ({"timeout": 0.05}, 0.05),
+            ({}, 30.0),
+        ],
+    )
+    async def test_httpx_timeout_and_body_unchanged(self, options, expected_timeout):
+        """The transport budget never leaks into the existing Cypher POST body."""
+        from context_intelligence.client import AsyncCIClient
+
+        rows = [{"answer": 42}]
+        mock_http = _make_async_httpx_client(_make_async_mock_response({"results": rows}))
+        inner = mock_http.__aenter__.return_value
+        params = {"request_timeout": 999, "workspace": "parameter-workspace"}
+        with patch(
+            "context_intelligence.client.httpx.AsyncClient", return_value=mock_http
+        ) as constructor:
+            client = AsyncCIClient("http://localhost:8000", "synthetic-key", **options)
+            result = await client.cypher("synthetic query", workspace="*", params=params)
+        assert result == rows
+        constructor.assert_called_once_with(timeout=expected_timeout)
+        inner.post.assert_awaited_once_with(
+            "http://localhost:8000/cypher",
+            json={"query": "synthetic query", "params": params, "workspace": "*"},
+            headers={"Authorization": "Bearer synthetic-key"},
+        )
+        assert params == {"request_timeout": 999, "workspace": "parameter-workspace"}
 
     async def test_async_cypher_returns_results(self):
         """cypher() returns a list of dicts from the server response."""
@@ -1763,7 +1794,7 @@ def _make_blobs_handler(behavior: "_BlobsBehavior"):
             self.end_headers()
             self.wfile.write(behavior.body)
 
-        def log_message(self, *args):  # silence server logs
+        def log_message(self, format: str, *args: object) -> None:  # silence server logs
             pass
 
     return _Handler
@@ -2232,3 +2263,16 @@ class TestAsyncDeleteSessionPropagatesRetryAfter:
         assert ei.value.status_code == 404
         assert ei.value.error_code == "session_not_found"
         assert ei.value.retry_after is None
+
+
+@pytest.mark.parametrize(
+    ("make_handler", "behavior_type"),
+    [(_make_generic_handler, _GenericBehavior), (_make_blobs_handler, _BlobsBehavior)],
+    ids=["generic", "blobs"],
+)
+def test_handler_log_message_base_contract(make_handler, behavior_type):
+    """Both no-op handlers preserve positional and keyword format acceptance."""
+    handler = object.__new__(make_handler(behavior_type()))
+    assert handler.log_message("synthetic message") is None
+    assert handler.log_message("%s %s", "synthetic", object()) is None
+    assert handler.log_message(format="synthetic message") is None

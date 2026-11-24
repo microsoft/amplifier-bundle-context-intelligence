@@ -7,10 +7,14 @@ Patch path updated to amplifier_module_tool_context_intelligence_query.graph_que
 
 from __future__ import annotations
 
+import asyncio
 import os
+from copy import deepcopy
 from types import SimpleNamespace
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, PropertyMock, patch
+
+import pytest
 
 
 # ---------------------------------------------------------------------------
@@ -1202,3 +1206,433 @@ class TestGraphQuerySourceProvenanceOnFailure:
         assert result.error is not None
         assert result.error["type"] == "configuration_error"
         assert "source" not in result.error
+
+
+_TIMEOUT_VALIDATION_MESSAGE = (
+    "request_timeout must be a positive finite JSON number of seconds; "
+    "omit it to use the configured query timeout."
+)
+_TIMEOUT_RETRY_HINT = (
+    "The tool does not retry automatically. Inspect query scope, projections, and pagination first. "
+    "If an intentionally complex query still needs more time and retrying is safe, retry with a "
+    "larger top-level request_timeout in seconds. A client timeout is not a database deadline; "
+    "prior work may still be running."
+)
+_TIMEOUT_SOURCE = {"name": "only", "url": "http://only.example.com", "origin": "source"}
+
+
+class TestGraphQueryRequestTimeout:
+    """Invocation-local transport budgets, validation, and caller-visible failures."""
+
+    @pytest.fixture(autouse=True)
+    def _clean_ci_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        for key in os.environ:
+            if key.startswith("AMPLIFIER_CONTEXT_INTELLIGENCE_"):
+                monkeypatch.delenv(key)
+
+    @staticmethod
+    def _config() -> dict[str, Any]:
+        return {
+            "sources": {"only": {"url": "http://only.example.com", "api_key": "synthetic-key"}},
+            "workspace": "test-workspace",
+        }
+
+    def test_timeout_schema(self) -> None:
+        from amplifier_module_tool_context_intelligence_query.graph_query_tool import GraphQueryTool
+
+        tool = GraphQueryTool(_make_coordinator())
+        schema = tool.input_schema
+        timeout = schema["properties"]["request_timeout"]
+        assert timeout["type"] == "number"
+        assert timeout["exclusiveMinimum"] == 0
+        assert "default" not in timeout
+        assert "request_timeout" not in schema["required"]
+        for phrase in (
+            "seconds",
+            "invocation",
+            "shorter",
+            "longer",
+            "120",
+            "retry",
+            "not a database",
+        ):
+            assert phrase in timeout["description"]
+
+    @pytest.mark.parametrize(
+        ("configured", "overrides", "expected"),
+        [
+            (None, [{}], [120.0]),
+            (
+                45,
+                [
+                    {},
+                    {"request_timeout": 300},
+                    {"request_timeout": 5.5},
+                    {"request_timeout": 0.05},
+                    {},
+                ],
+                [45.0, 300.0, 5.5, 0.05, 45.0],
+            ),
+        ],
+    )
+    async def test_timeout_forwarding_and_no_state_leak(
+        self, configured: int | None, overrides: list[dict], expected: list[float]
+    ) -> None:
+        from context_intelligence.tool_resolver import ToolConfigResolver
+
+        from amplifier_module_tool_context_intelligence_query.graph_query_tool import GraphQueryTool
+
+        config = self._config()
+        if configured is not None:
+            config["request_timeout"] = configured
+        coordinator = _make_coordinator()
+        coordinator.config = {"workspace": "coordinator-workspace"}
+        resolver = ToolConfigResolver(config, coordinator)
+        tool = GraphQueryTool(coordinator, resolver)
+        config_before = deepcopy(config)
+        coordinator_before = deepcopy(coordinator.config)
+        params = {"nested": {"items": [1, 2]}, "request_timeout": 999}
+        params_before = deepcopy(params)
+        timeouts = []
+        for override in overrides:
+            invocation = {"query": "synthetic query", "params": params, **override}
+            invocation_before = deepcopy(invocation)
+            instance, constructor = _make_mock_async_ci_client([{"answer": 42}])
+            with patch(
+                "amplifier_module_tool_context_intelligence_query.graph_query_tool.AsyncCIClient",
+                constructor,
+            ):
+                result = await tool.execute(invocation)
+            constructor.assert_called_once()
+            timeouts.append(constructor.call_args.kwargs["timeout"])
+            instance.cypher.assert_awaited_once_with(
+                "synthetic query", "test-workspace", params=params_before
+            )
+            assert result.success is True
+            assert result.error is None
+            assert result.output == {"source": _TIMEOUT_SOURCE, "rows": [{"answer": 42}]}
+            assert invocation == invocation_before
+            assert params == params_before
+            assert config == config_before
+            assert coordinator.config == coordinator_before
+        assert timeouts == expected
+        assert all(type(value) is float for value in timeouts)
+
+    @pytest.mark.parametrize("configured", [None, 45])
+    async def test_timeout_is_not_a_cypher_parameter(self, configured: int | None) -> None:
+        from amplifier_module_tool_context_intelligence_query.graph_query_tool import GraphQueryTool
+
+        config = self._config()
+        if configured is not None:
+            config["request_timeout"] = configured
+        tool = GraphQueryTool(_make_coordinator(), _make_tool_resolver(config))
+        params = {"request_timeout": 999, "workspace": "param-workspace"}
+        for override, expected in [
+            ({}, 120.0 if configured is None else 45.0),
+            ({"request_timeout": 300}, 300.0),
+        ]:
+            invocation = {
+                "query": "synthetic query",
+                "params": params,
+                "source": "only",
+                "workspace": "*",
+                **override,
+            }
+            before = deepcopy(invocation)
+            instance, constructor = _make_mock_async_ci_client()
+            with patch(
+                "amplifier_module_tool_context_intelligence_query.graph_query_tool.AsyncCIClient",
+                constructor,
+            ):
+                result = await tool.execute(invocation)
+            assert result.success is True
+            assert result.output == {"source": _TIMEOUT_SOURCE, "rows": []}
+            assert constructor.call_args.kwargs["timeout"] == expected
+            assert constructor.call_args.kwargs["server_url"] == _TIMEOUT_SOURCE["url"]
+            instance.cypher.assert_awaited_once_with("synthetic query", "*", params=params)
+            assert invocation == before
+
+    @pytest.mark.parametrize(
+        "raw",
+        [
+            None,
+            True,
+            False,
+            "300",
+            "",
+            0,
+            -1,
+            float("nan"),
+            float("inf"),
+            float("-inf"),
+            10**1000,
+            [],
+            {},
+        ],
+        ids=[
+            "null",
+            "true",
+            "false",
+            "string",
+            "empty-string",
+            "zero",
+            "negative",
+            "nan",
+            "inf",
+            "negative-inf",
+            "overflow-int",
+            "list",
+            "dict",
+        ],
+    )
+    async def test_invalid_request_timeout_before_client(self, raw: Any) -> None:
+        from amplifier_module_tool_context_intelligence_query.graph_query_tool import GraphQueryTool
+
+        tool = GraphQueryTool(_make_coordinator(), _make_tool_resolver(self._config()))
+        _, constructor = _make_mock_async_ci_client()
+        with patch(
+            "amplifier_module_tool_context_intelligence_query.graph_query_tool.AsyncCIClient",
+            constructor,
+        ):
+            result = await tool.execute({"query": "synthetic query", "request_timeout": raw})
+        assert result.success is False
+        assert result.error == {
+            "type": "validation_error",
+            "message": _TIMEOUT_VALIDATION_MESSAGE,
+            "source": _TIMEOUT_SOURCE,
+        }
+        assert result.output == _TIMEOUT_VALIDATION_MESSAGE
+        constructor.assert_not_called()
+
+    async def test_large_finite_override_has_no_maximum(self) -> None:
+        from amplifier_module_tool_context_intelligence_query.graph_query_tool import GraphQueryTool
+
+        tool = GraphQueryTool(_make_coordinator(), _make_tool_resolver(self._config()))
+        instance, constructor = _make_mock_async_ci_client()
+        with patch(
+            "amplifier_module_tool_context_intelligence_query.graph_query_tool.AsyncCIClient",
+            constructor,
+        ):
+            result = await tool.execute({"query": "synthetic query", "request_timeout": 1e100})
+        assert result.success is True
+        assert constructor.call_args.kwargs["timeout"] == 1e100
+        instance.cypher.assert_awaited_once()
+
+    async def test_timeout_error_priority_and_discovery(self) -> None:
+        from context_intelligence.tool_resolver import ToolConfigResolver
+
+        from amplifier_module_tool_context_intelligence_query.graph_query_tool import GraphQueryTool
+
+        two_sources = self._config()
+        two_sources["sources"]["other"] = {"url": "http://other.example.com", "api_key": "key"}
+        cases = [
+            (
+                self._config(),
+                {"source": "unknown", "query": "synthetic query"},
+                {
+                    "type": "unknown_source",
+                    "message": "context-intelligence: unknown source 'unknown'. Connectable set: only.",
+                    "valid_sources": ["only"],
+                },
+            ),
+            (
+                two_sources,
+                {"query": "synthetic query"},
+                {
+                    "type": "ambiguous_source_selection",
+                    "message": "context-intelligence: 2 sources are configured (only, other) but no "
+                    "`source` was specified. Pass source=<name> to select one.",
+                    "valid_sources": ["only", "other"],
+                },
+            ),
+            (
+                {"sources": {"bad": {"url": "", "api_key": ""}}},
+                {"query": "synthetic query"},
+                {
+                    "type": "source_misconfigured",
+                    "message": "context-intelligence source 'bad' misconfigured: bad: missing url, "
+                    "bad: missing api_key. Set url and api_key (static) or auth_resource "
+                    "(entra) under overrides.tool-context-intelligence-query.config.sources.bad.",
+                },
+            ),
+            (
+                {},
+                {"query": "synthetic query"},
+                {
+                    "type": "configuration_error",
+                    "message": "context-intelligence server URL not configured",
+                },
+            ),
+            (
+                self._config(),
+                {},
+                {
+                    "type": "validation_error",
+                    "message": "query is required unless list_sources=true",
+                    "source": _TIMEOUT_SOURCE,
+                },
+            ),
+            (
+                self._config(),
+                {"query": "synthetic query", "params": "bad"},
+                {
+                    "type": "validation_error",
+                    "message": "params must be a dict, got 'str'",
+                    "source": _TIMEOUT_SOURCE,
+                },
+            ),
+        ]
+        _, constructor = _make_mock_async_ci_client()
+        with patch(
+            "amplifier_module_tool_context_intelligence_query.graph_query_tool.AsyncCIClient",
+            constructor,
+        ):
+            for config, invocation, expected in cases:
+                tool = GraphQueryTool(_make_coordinator(), _make_tool_resolver(config))
+                result = await tool.execute({**invocation, "request_timeout": None})
+                assert result.success is False
+                assert result.error == expected
+                assert result.output == expected["message"]
+
+            # Guard only the discovery fast path: no timeout resolution is allowed.
+            with patch.object(
+                ToolConfigResolver,
+                "query_request_timeout",
+                new_callable=PropertyMock,
+                side_effect=AssertionError("discovery must not resolve a timeout"),
+            ) as lookup:
+                tool = GraphQueryTool(_make_coordinator(), _make_tool_resolver(self._config()))
+                result = await tool.execute({"list_sources": True, "request_timeout": None})
+                lookup.assert_not_called()
+            assert result.success is True
+            assert result.error is None
+            assert result.output == {"connectable_set": [_TIMEOUT_SOURCE]}
+        constructor.assert_not_called()
+
+    @pytest.mark.parametrize(
+        ("configured", "override", "effective"),
+        [
+            (None, {}, 120.0),
+            (45, {}, 45.0),
+            (45, {"request_timeout": 300}, 300.0),
+            (45, {"request_timeout": 0.05}, 0.05),
+        ],
+    )
+    @pytest.mark.parametrize("status_code", [None, 408])
+    async def test_timeout_error_is_agent_visible(
+        self, configured: int | None, override: dict, effective: float, status_code: int | None
+    ) -> None:
+        from context_intelligence.client import CIClientError
+
+        from amplifier_module_tool_context_intelligence_query.graph_query_tool import GraphQueryTool
+
+        config = self._config()
+        if configured is not None:
+            config["request_timeout"] = configured
+        tool = GraphQueryTool(_make_coordinator(), _make_tool_resolver(config))
+        instance, constructor = _make_mock_async_ci_client()
+        instance.cypher.side_effect = CIClientError(
+            "synthetic timeout",
+            error_type="timeout",
+            status_code=status_code,
+            url="http://only.example.com/cypher",
+        )
+        with patch(
+            "amplifier_module_tool_context_intelligence_query.graph_query_tool.AsyncCIClient",
+            constructor,
+        ):
+            result = await tool.execute({"query": "synthetic query", **override})
+        message = (
+            f"query failed against only: synthetic timeout"
+            f" Effective HTTP request_timeout={effective:g} seconds. {_TIMEOUT_RETRY_HINT}"
+        )
+        assert result.success is False
+        assert result.error is not None
+        assert result.error == {
+            "message": message,
+            "type": "timeout",
+            "source": _TIMEOUT_SOURCE,
+            "request_timeout": effective,
+            "retry_hint": _TIMEOUT_RETRY_HINT,
+            **({"status_code": status_code} if status_code is not None else {}),
+        }
+        assert constructor.call_args.kwargs["timeout"] == effective
+        assert type(result.error["request_timeout"]) is float
+        assert result.output == result.error["message"]
+        assert result.get_serialized_output() == message
+        assert result.model_dump()["output"] == message
+        instance.cypher.assert_awaited_once_with("synthetic query", "test-workspace", params={})
+        constructor.assert_called_once()
+
+    async def test_other_results_and_cancellation_unchanged(self) -> None:
+        from context_intelligence.client import CIClientError
+
+        from amplifier_module_tool_context_intelligence_query.graph_query_tool import GraphQueryTool
+
+        tool = GraphQueryTool(_make_coordinator(), _make_tool_resolver(self._config()))
+        errors = [
+            ("auth_error", None),
+            ("connection_error", None),
+            ("decode_error", None),
+            ("http_status", 500),
+            ("http_status", 504),
+        ]
+        for error_type, status_code in errors:
+            instance, constructor = _make_mock_async_ci_client()
+            instance.cypher.side_effect = CIClientError(
+                "synthetic failure",
+                error_type=error_type,
+                status_code=status_code,
+                url="http://only.example.com/cypher",
+            )
+            with patch(
+                "amplifier_module_tool_context_intelligence_query.graph_query_tool.AsyncCIClient",
+                constructor,
+            ):
+                result = await tool.execute({"query": "synthetic query", "request_timeout": 300})
+            assert result.success is False
+            assert result.error == {
+                "type": error_type,
+                "message": "query failed against only: synthetic failure",
+                "source": _TIMEOUT_SOURCE,
+                **({"status_code": status_code} if status_code is not None else {}),
+            }
+            assert result.output == "query failed against only: synthetic failure"
+            instance.cypher.assert_awaited_once()
+            constructor.assert_called_once()
+
+        instance, constructor = _make_mock_async_ci_client()
+        instance.cypher.side_effect = asyncio.CancelledError()
+        with (
+            patch(
+                "amplifier_module_tool_context_intelligence_query.graph_query_tool.AsyncCIClient",
+                constructor,
+            ),
+            pytest.raises(asyncio.CancelledError),
+        ):
+            await tool.execute({"query": "synthetic query"})
+        instance.cypher.assert_awaited_once()
+        constructor.assert_called_once()
+
+        # A retry belongs to a separately invoked caller, never to execute().
+        first, constructor = _make_mock_async_ci_client()
+        first.cypher.side_effect = CIClientError(
+            "slow", error_type="timeout", url="http://only.example.com/cypher"
+        )
+        retry, _ = _make_mock_async_ci_client([{"answer": 42}])
+        constructor.side_effect = [first, retry]
+        with patch(
+            "amplifier_module_tool_context_intelligence_query.graph_query_tool.AsyncCIClient",
+            constructor,
+        ):
+            failed = await tool.execute({"query": "synthetic query"})
+            assert failed.success is False
+            assert constructor.call_count == 1
+            first.cypher.assert_awaited_once()
+            result = await tool.execute({"query": "synthetic query", "request_timeout": 300})
+        assert [c.kwargs["timeout"] for c in constructor.call_args_list] == [120.0, 300.0]
+        first.cypher.assert_awaited_once()
+        retry.cypher.assert_awaited_once()
+        assert result.success is True
+        assert result.error is None
+        assert result.output == {"source": _TIMEOUT_SOURCE, "rows": [{"answer": 42}]}

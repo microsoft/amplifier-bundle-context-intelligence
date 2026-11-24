@@ -56,32 +56,50 @@ specific evidence gap rather than claiming all session evidence is unavailable.
 
 ---
 
-## ⛔ CRITICAL: Server Availability Check
+## ⛔ CRITICAL: Scoped Availability and Failure Diagnosis
 
 **Run only before graph work, after loading the graph-query skill. Transcript and
 local evidence work require no graph availability round trip.**
 
-### Health Check Query
+When availability is uncertain, choose one minimal probe for the intended source
+and authorized scope, not a whole-graph count. For a specific workspace, use a
+scoped existence probe (add selective session/identity predicates when required):
 
 ```cypher
-MATCH (s:Session)
-RETURN count(s) AS session_count
-LIMIT 1
+MATCH (s:Session {workspace: $workspace})
+RETURN s.node_id AS session_id LIMIT 1
 ```
 
-Use `graph_query` with this query. The `$workspace` parameter is auto-injected — you only need to provide the Cypher.
-
-### Decision Logic
+The tool binds `$workspace` only for a specific workspace; it does **not** insert
+filtering predicates. For authorized cross-workspace work, pass `workspace: "*"`:
+it does not bind `$workspace`. Use `RETURN 1 AS connected` for connectivity alone,
+or `MATCH (s:Session) RETURN s.node_id AS session_id LIMIT 1` when session existence
+across that authorized population is needed; neither references `$workspace`.
+Connectivity does not establish session coverage. Prefer the partitioned probe
+when a specific workspace is meaningful; never widen scope to diagnose a miss.
 
 | Result | Action |
 |--------|--------|
-| Returns `session_count > 0` | Proceed with graph analysis |
-| Returns `session_count = 0` | No sessions observed in the selected graph; consider the conditional local fallback in Section 3 |
-| Tool error / server unreachable | Report the actual failure; consider the conditional local fallback in Section 3 |
-| Timeout | The query failed; this is not proof the server is down. Consider the conditional local fallback in Section 3 |
+| Successful row | The selected probe succeeded; an existence row proves only a match in its scope |
+| Successful empty existence result | Reachable but no matching sessions observed in that scope; verify scope, then consider Section 3 only for that need |
+| Connection/config/auth/HTTP/decode error | Report the actual type and source when present; diagnose that failure, not a timeout |
+| Timeout | Report effective `error.request_timeout` and `retry_hint`; this alone does not establish server-down |
 
-Do not repeatedly retry a failed query. Preserve its error and source identity when
-present; use Section 3 only if local evidence can answer the requested question.
+Do not retry failed health probes or auth failures blindly. Graph-only fallback
+is 120 seconds (blob/identity defaults stay 30); an explicit top-level
+`request_timeout` is a positive finite JSON number, not a Cypher param. See the
+skill for precedence and validation. First inspect scope, selective anchors,
+projections, paths, pagination, and available index/plan evidence. Plan metadata
+is not promised by `graph_query`. Only for a necessary, intentionally complex
+query with a safe retry may you make **at most one deliberate retry** using a
+finite timeout larger than the reported value. Preserve query intent, source,
+workspace, and params; never widen coverage, auto-loop, or blindly double.
+This HTTP phase/operation budget is not a database or total deadline; auth/gateway
+budgets are independent and prior work may continue. The tool neither retries
+automatically nor cancels database work. No retry is mandatory.
+If the affected query still cannot supply the evidence, use Section 3's
+conditional local fallback or report the gap; do not abandon unrelated working
+graph queries or infer absent graph data from a timeout.
 
 ---
 
@@ -141,19 +159,21 @@ Apply to every query — unbounded results overflow context.
 
 | Rule | Detail |
 |------|--------|
-| **LIMIT always** | Default 25 rows. No LIMIT without counting first. |
-| **Count before fetching** | `RETURN count(*) AS total` first if unsure. If > 50, paginate with SKIP + LIMIT. |
-| **Bound traversals** | `*1..3` not `*`. Unbounded traversals on large graphs return everything. |
-| **Project fields, not nodes** | `RETURN tc.tool_name, tc.result_success` not `RETURN tc`. Full nodes: 50–150 tok each. Projected rows: 15–30 tok each. |
-| **Aggregate over scan** | Use `count()`, `avg()`, `max()` rather than returning all rows for distribution queries. |
+| **Bound output** | Usually 25 rows. LIMIT is not a work budget for scans, joins, procedures, or aggregations. |
+| **Scope first** | Explicit workspace predicates and selective session/ID anchors; no guaranteed index use or cheap count-before-fetch. |
+| **Bound traversals** | Use a finite depth such as `*1..3`, not bare `*`. |
+| **Project fields** | Return the needed scalar fields, not whole nodes. Aggregate only when the question requires it. |
+| **Page deliberately** | Use the skill's timestamp + unique-ID typed keyset, or its ID-only alternative for null timestamps. SKIP only for small stable totally ordered sets. |
+
+For schema discovery, prefer the skill's scoped known-label `keys()` sample when
+sufficient; it can miss rare properties and is not guaranteed cheap. A deliberate
+`db.schema.nodeTypeProperties()` census may scan the whole graph regardless of
+output LIMIT. Its `nodeType` is a full multi-label combination; use `nodeLabels`
+membership for an intentional label census, not singleton equality.
 
 ```cypher
--- ❌ FATAL
-MATCH (s:Session {workspace: $workspace})-[:HAS_EXECUTION|HAS_PART*]->(n) RETURN n
-
--- ✅ SAFE
-MATCH (s:Session {workspace: $workspace})-[:HAS_EXECUTION|HAS_PART*1..3]->(tc:ToolCall)
-RETURN tc.tool_name, tc.result_success ORDER BY tc.started_at LIMIT 25
+MATCH (s:Session {workspace: $workspace})
+RETURN s.node_id AS session_id ORDER BY session_id LIMIT 25
 ```
 
 ---
@@ -212,7 +232,10 @@ Load skill: context-intelligence-hill-climbing
 
 ### Using graph_query
 
-The `graph_query` tool auto-injects `$workspace` — provide only the Cypher query.
+The `graph_query` tool binds the effective workspace as `$workspace`; write explicit
+workspace predicates. Omit the top-level `workspace` to use configuration, or set
+it deliberately. A specific workspace overrides `params.workspace`; `"*"` inserts
+no workspace parameter override and adds no filtering. Pass other parameters in `params`.
 Results are returned as `{"source": {name, url, origin}, "rows": [...]}` — read
 your data from `rows` and ALWAYS report `source.name` in your answer (see
 "Always State the Source" above). Call with `list_sources: true` to see the
@@ -260,18 +283,19 @@ When graph work cannot proceed, use `session-navigator` only if delegation is
 permitted, the specialist is available, and authorized local evidence can
 sufficiently answer the question. A graph miss does not prove local absence, and
 local records do not automatically substitute for graph relationships or aggregates.
-Otherwise report the specific gap, including any partial coverage:
+Fallback is query-specific, not automatic after a timeout. Otherwise report the
+specific gap, including any partial coverage:
 
 ```
 Delegate to: session-navigator
-Reason: [observed graph failure or missing coverage, not an inferred outage]
-Task: [bounded question answerable from local evidence]
+Reason: [observed graph failure or missing coverage; cite source when present, not an inferred outage]
+Task: [affected bounded question answerable from local evidence]
 Scope: [authorized session/workspace scope]
 ```
 
 ### Hard Rules for This Section
 
-- **Never retry the server repeatedly** — On a failed health check, use the conditional fallback above or report the gap. Do not attempt 2, 3, or more retries within the same session.
+- **No retry loops** — On a failed health check, use the conditional fallback above or report the gap. Only a necessary complex-query timeout can warrant the single deliberate safe retry described above; never blindly retry health/auth failures.
 - **Never read local JSONL files yourself** — You do not have safe JSONL extraction patterns. The session-navigator agent specializes in safe JSONL extraction. Attempting to grep or cat events.jsonl directly risks a session crash.
 - **Never recurse the same investigation on yourself** — Delegating the **same task** back to `graph-analyst` is an infinite loop. Use `session-navigator` for JSONL-based fallback. For **independent parallel sub-tasks**, self-delegation via `delegate(agent="self", context_depth="none")` IS safe and encouraged — see Section 3.1.
 - **Never escalate to an external session-data-analysis agent directly** — session-navigator handles local escalation if needed and permitted. Do not invent an unavailable fallback.
